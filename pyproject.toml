@@ -1,13 +1,27 @@
 [project]
 name = "agent-company"
-version = "0.1.0"
+version = "0.2.0"
 description = "An AI software-development company built from specialized CrewAI agents"
 readme = { file = "ReadMe.mdx", content-type = "text/markdown" }
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "crewai[anthropic]",
     "python-dotenv",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "sqlalchemy>=2.0",
+    "httpx>=0.27",
+    "jsonschema>=4.20",
 ]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.2"]
+
+[project.scripts]
+agent-company = "agent_company.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
 
 [build-system]
 requires = ["hatchling"]
@@ -15,3 +29,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_company"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

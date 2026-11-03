@@ -1,94 +1,244 @@
 # Agent Company
 
 An AI software-development company made of specialized agents that share one
-project context and are coordinated by an orchestrator.
+project context and are coordinated by a General Manager. You give it a goal;
+the agents research, plan, build, test and review in a loop until the goal
+passes the quality gate, and they learn from every attempt.
 
 Guiding principle: what matters most is not how many agents you run. It's
 combining capable models, specialized roles, shared project context, reliable
 tools, and a controlled orchestration system.
 
-## Roles
+## What it does
 
-| Agent | Responsibility | Status |
+1. **Goal**: you enter a goal (dashboard, API or CLI), optionally with URLs to
+   research, an existing git repository and quality commands such as `uv run pytest -q`.
+2. **Research**: the research room crawls the URLs (following their links),
+   files the pages as knowledge and summarises what is relevant.
+3. **Plan**: the General Manager splits the goal into task contracts: role,
+   skills, dependencies, priority and acceptance conditions.
+4. **Staff**: each task gets the best idle agent of that role. A busy agent is
+   cloned; a role nobody has is recruited as a new specialist and linked to the
+   most similar agents so it starts from their experience.
+5. **Execute**: the scheduler runs the task graph in parallel where it can, in
+   an isolated git worktree on its own branch.
+6. **Quality gate**: every contract is checked, reviewer verdicts are read and the
+   quality commands run in the worktree.
+7. **Loop**: if the gate fails, the findings go back to research and planning,
+   and the next iteration starts (up to `MAX_ITERATIONS`).
+8. **Learn**: every participating agent gets a lesson, XP and skill growth, and
+   its playbook is updated. Collaborators are linked, and related agents see each
+   other's lessons.
+9. **Approve**: passing work waits for an administrator, then the branch is merged
+   locally. Nothing is pushed or deployed.
+
+## Services (CDAF)
+
+| Service | Module | What it does |
 | --- | --- | --- |
-| CEO / Orchestrator | Project planning, task allocation, coordination | Implemented |
-| Architect | Architecture and technical specifications | Implemented |
-| Developer (Backend) | Writes and modifies code, API and database | Implemented |
-| QA / Tester | Tests software and identifies bugs | Implemented |
-| Research | Researches technologies and generates insights | Planned |
-| Frontend / UI-UX | Interface design and UI | Planned |
-| DevOps | Builds, deployment, infrastructure | Planned |
+| Agent Registry | `registry.py`, `org.py` | Rooms, roles, skills, permissions, model preference, status, hierarchy, similarity links, staffing (reuse, clone, recruit) |
+| Task Scheduler | `scheduler.py` | Persisted tasks, priorities, dependency DAG, process-wide concurrency limit, one writer per worktree |
+| Model Router | `router.py` | Model catalog, role routes, availability (keys, CLIs, limits), OpenRouter catalog |
+| Contract Engine | `contracts.py` | Task input/output JSON schemas and acceptance conditions; plan validation (unique keys, known dependencies, no cycles) |
+| Execution Adapter | `executors.py` | CrewAI LLM (any provider), Claude Code CLI, Codex CLI, offline simulator |
+| Git Worktree Manager | `worktrees.py` | One branch and worktree per goal under `data/worktrees/`; sandbox checks; local merge |
+| Quality Gate | `quality.py` | Contracts, reviewer verdicts, test/lint/type commands, approval |
+| Cost and Usage Monitor | `usage.py` | Tokens and cost per run, daily and weekly windows, limits, reset times, active sessions |
 
-We start with four agents and add the others once the workflow is reliable.
+The rest: `loop.py` (the circular goal loop), `learning.py` (lessons, XP,
+playbooks), `research.py` (crawler, knowledge search, rotation), `auth.py`
+(users), `api.py` plus `static/` (API and dashboard), and `crew.py` (the classic
+four-agent CrewAI pipeline).
 
-## Architecture
+## Organisation
 
-```
-                 CEO / AI Orchestrator
-        (planning · task allocation · coordination)
-                          │
-            ┌─────────────┴─────────────┐
-     Architect Agent              Research Agent
-     (specifications)          (research & insights)
-            └─────────────┬─────────────┘
-       ┌──────────────┬───┴──────────┬──────────────┐
-  Backend Agent  Frontend Agent   QA Agent     DevOps Agent
-  (API & DB)     (UI & UX)        (testing)    (build & deploy)
-       └──────────────┴───┬──────────┴──────────────┘
-              Shared Development Environment
-        (Git · Files · Tasks · Database · Test results)
-```
+Every room in the design exists, and each role has one seeded agent:
 
-## Technology stack
+| Division | Rooms |
+| --- | --- |
+| Management | Company General Manager, Administrative Management Room, Agent Management Room |
+| Development | Development Flow (Architect, Backend Developer, QA, Frontend, DevOps) |
+| Research | Information Collection Room, External Data Room (rotational), Analysis Room, Comprehensive Analysis Room |
+| Learning | New Technology Lab, New Technology Introduction Room, Study Room, New Technology Classroom |
+| Business | Product Introduction Room, Sales Room |
+| Security | Security Room, Network Security Room, Security Guard |
 
-| Component | Choice | Status |
+The core pipeline (General Manager, Architect, Developer, QA) and the research
+rooms are enabled. The other roles are registered but disabled until the pipeline
+is reliable; enable them on the Agents page. A plan that asks for a disabled role
+gets the Developer (for write tasks) or QA (for read tasks) instead. Every agent
+reports to a superior (the General Manager at the top). Agent names cannot be edited.
+
+## Which agent uses which model
+
+The defaults put strong models on planning and design, a coding agent on code, a
+mid-tier model on review and cheap or free models on bulk reading. Change any
+route on the Models page.
+
+| Role | Default route | Why |
 | --- | --- | --- |
-| Coding agent | Claude Code (VS Code extension) | In use |
-| Second assistant | OpenAI ChatGPT / Codex (VS Code extension) | In use |
-| Multi-agent framework | CrewAI (AutoGen as alternative) | In use |
-| Workflow orchestration | LangGraph | Later |
-| Local model runtime | Ollama | Later |
-| Model downloads | Hugging Face | Later |
-| Agent development | Python | In use |
-| Shared code | Git | In use |
-| Project dashboard | React / Next.js | Later |
-| Database | PostgreSQL | Later |
+| General Manager, Architect | Claude Opus 5.5 | Planning and design decide everything downstream |
+| Developer, Frontend, DevOps, Lab | Claude Code | Real file and tool access in the worktree |
+| QA, Security, Analysts | Claude Sonnet 5.5 | Careful review at a lower price |
+| Research Lead, others | Claude Haiku 5.5 | High-volume summarising |
+| External Data, Study Room | OpenRouter Free router | Bulk collection at no token cost |
 
-Agent frameworks are not the AI brain. CrewAI runs the agents, but each agent
-still needs a model, from an API provider or a local runtime.
+For each agent the router tries, in order: the agent's own model preference, then
+its role's route, then `MODEL` from `.env`, then the offline simulator. It skips
+any model whose key or CLI is missing, that is disabled, or that has reached its
+daily or weekly token limit, and it records why. A goal therefore always runs,
+offline at worst.
+
+### Claude Code
+
+Claude Code writes the code. With `ENABLE_CLAUDE_CODE=1`, Developer tasks run
+`claude -p` inside the goal's worktree. Claude Code may read, edit and write files
+there, and through Bash it may only run tests and `git status`/`git diff`. It uses
+your `claude` login (Claude subscription), or `ANTHROPIC_API_KEY` when that is set.
+The run's tokens and cost are recorded. You can also keep working in VS Code with
+Claude Code on this repository as usual; `CLAUDE.md` tells it the conventions.
+
+### OpenRouter
+
+Models page → **OpenRouter models**: search OpenRouter's public catalog (free
+models first, with prices per 1M tokens and context size) and add one with a
+click. Any model id can also be added by hand as `openrouter/<vendor>/<model>`.
+OpenRouter models need `OPENROUTER_API_KEY`. A key without credits can use the
+free (`:free`) models, which have daily request limits.
+
+### Asking ChatGPT from an agent
+
+A ChatGPT subscription covers the ChatGPT app, not programmatic use. An agent that
+calls OpenAI models uses the OpenAI API (`OPENAI_API_KEY`, model id `openai/<model>`),
+which is billed per token. Free options are OpenRouter's free models and local
+models through Ollama (`ollama/<model>` plus `OLLAMA_API_BASE`). The Codex CLI
+(`ENABLE_CODEX=1`) can use an eligible ChatGPT plan, subject to that plan's limits.
+
+## Research
+
+**Research** page → **Collect a website**: give a URL and a link depth. Depth 0
+fetches only that page; depth 1 also fetches every page it links to on the same
+site; depth 2 goes one level further (at most 200 pages per run). The crawler obeys
+robots.txt, reads only HTML and text, and refuses private or loopback addresses
+unless `ALLOW_PRIVATE_CRAWL=1`. Collected pages are searchable and are given to the
+agents working on matching goals.
+
+The External Data Room works **in rotation**. Add sources on the Research page;
+each visit (`ROTATION_INTERVAL` seconds, or **Run next**) assigns the next due
+source to the next agent on the roster, so the work and the experience are spread
+across the room.
+
+The learning pipeline: new information (crawl) → research (summaries) → knowledge
+(documents) → experiments (goal iterations) → evaluation (quality gate) → improved
+agents (lessons and playbooks).
+
+## Users
+
+The dashboard asks only for a name and has a **Register** button. The browser
+creates a random device secret, kept in its storage; the server stores only its
+hash. The first account becomes the administrator. Later registrations wait on the
+**Users** page until an administrator approves them; the waiting screen checks
+every 10 seconds and signs in automatically once approved. After that, the
+registered browser signs in by itself with no password; other computers are
+refused. Administrators can reject, disable, enable, reset a computer, promote or
+delete accounts. Only administrators can point a goal at an existing repository
+or set its quality commands, because those run commands on the server.
+
+## Technology choices
+
+| Layer | Choice | Why |
+| --- | --- | --- |
+| Language | Python 3.12+ with `uv` | One language for agents, orchestration and API; CrewAI is Python |
+| Agent models | CrewAI `LLM` | One interface to Anthropic, OpenAI, OpenRouter, Ollama and others |
+| Coding agents | Claude Code CLI, Codex CLI | Real file and tool access inside a worktree |
+| API | FastAPI + Uvicorn | Typed, fast, small |
+| Database | SQLite by default; PostgreSQL via `DATABASE_URL` | Zero setup to start; same schema on PostgreSQL |
+| Queue | In-process scheduler persisted in the DB | Enough for one machine; Redis + BullMQ when it runs on several |
+| Dashboard | Static HTML/CSS/JS served by the API | No build step; light and dark themes |
+| Tests | pytest | Every test runs offline with its own database |
+
+The design's suggested Node.js / Next.js / Redis stack is what
+`/home/luca/AgentForge` already uses for its website. This repository is the
+Python agent engine, so it stays with the stack CrewAI needs and adds Redis or a
+Next.js front end only when one machine is no longer enough.
 
 ## Setup
 
-Requirements: Python 3.12 and [uv](https://docs.astral.sh/uv/).
+Requirements: Python 3.12+, [uv](https://docs.astral.sh/uv/) and git.
 
 ```bash
-uv sync                 # installs CrewAI into .venv
-cp .env.example .env    # then set MODEL and the matching API key
+uv sync                 # installs dependencies into .venv
+cp .env.example .env    # set MODEL and the keys you have; everything is optional
+uv run pytest -q        # runs offline
 ```
-
-`MODEL` uses the LiteLLM `provider/model` format, for example
-`anthropic/claude-sonnet-5-5`, `openai/<model-name>`, or `ollama/<model-name>`.
-A Claude.ai or ChatGPT subscription login (as used by the VS Code extensions)
-is not an API key; the crew needs a real provider key or a local Ollama model.
 
 ## Run
 
 ```bash
-uv run python -m agent_company "Build a REST API for a todo list with FastAPI"
+uv run python -m agent_company serve        # dashboard: http://127.0.0.1:4900
+uv run python -m agent_company goal "Build a REST API for a todo list with FastAPI" \
+    --check "uv run pytest -q" --url https://fastapi.tiangolo.com/tutorial/
+uv run python -m agent_company approve 1    # merge goal 1 after review
+uv run python -m agent_company models       # what each role would use right now
+uv run python -m agent_company agents       # agents by room
+uv run python -m agent_company crawl https://docs.crewai.com/ --depth 1
+uv run python -m agent_company "Build a REST API for a todo list"   # classic crew -> output/
 ```
 
-The four agents run in sequence: plan → specification → implementation →
-QA review. Each step's output is written to `output/`.
+Without any key, goals run on the offline simulator: the whole loop runs
+(planning, staffing, worktree, gate, learning, approval) with placeholder content.
+Set `EXECUTOR=offline` to force that, for example in tests.
 
-## Alternatives from the original recommendation
+A goal without `--repo` gets a fresh git workspace in `data/workspaces/`. With
+`--repo`, the agents work in a worktree of that repository on branch
+`agents/goal-<id>`, and approval merges that branch into the branch it started
+from (the repository must be on that branch, with no uncommitted changes).
 
-```bash
-pip install -U "autogen-agentchat" "autogen-ext"   # AutoGen
-pip install -U langgraph                           # LangGraph
-```
+Known limits: the worktree and branch stay in place after approval (remove them
+with `git worktree remove` when you no longer need them). A goal interrupted by a
+restart resumes at the iteration it was on, but without the previous gate's
+findings.
 
 ## Safety
 
-If agents ever modify a website, restart services, or deploy code, run them
-inside isolated development environments with restricted permissions. Never
-give an agent unrestricted access to a production server.
+- Agents never edit the main checkout. File-changing executors run only inside
+  `data/worktrees/`, and file blocks that point outside the worktree are refused.
+- Claude Code's Bash access is limited to tests and read-only git; Codex runs in its
+  `workspace-write` sandbox. This is not a container: for untrusted goals, run the
+  service in a disposable VM or container with no production credentials.
+- Nothing is pushed or deployed. Merging is local and needs approval
+  (`REQUIRE_APPROVAL=1`, the default).
+- Web pages, repository files and tool output are passed to agents as untrusted
+  data, and the crawler refuses private network addresses.
+
+## References
+
+Frameworks and agents:
+[CrewAI](https://github.com/crewAIInc/crewAI) ·
+[AutoGen](https://github.com/microsoft/autogen) ·
+[Microsoft Agent Framework](https://github.com/microsoft/agent-framework) ·
+[LangGraph](https://github.com/langchain-ai/langgraph) ·
+[MetaGPT](https://github.com/FoundationAgents/MetaGPT) ·
+[OpenHands](https://github.com/OpenHands/OpenHands) ·
+[SWE-agent](https://github.com/SWE-agent/SWE-agent) ·
+[mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent) ·
+[Aider](https://github.com/Aider-AI/aider) ·
+[Open Interpreter](https://github.com/openinterpreter/openinterpreter) ·
+[Dify](https://github.com/langgenius/dify) ·
+[Flowise](https://github.com/FlowiseAI/Flowise) ·
+[Claude Code](https://github.com/anthropics/claude-code)
+
+Protocols, models and docs:
+[A2A protocol](https://a2a-protocol.org/latest/) ·
+[Model Context Protocol](https://modelcontextprotocol.io/) ·
+[OpenAI agents guide](https://developers.openai.com/api/docs/guides/agents) ·
+[Microsoft Agent Framework docs](https://learn.microsoft.com/en-us/agent-framework/) ·
+[OpenHands docs](https://docs.openhands.dev/) ·
+[Hugging Face models](https://huggingface.co/models) ·
+[Ollama library](https://ollama.com/library) ·
+[LM Studio](https://lmstudio.ai/) ·
+[OpenRouter models](https://openrouter.ai/models) ·
+[Neo4j GenAI ecosystem](https://neo4j.com/labs/genai-ecosystem/) ·
+[Google SRE workbook](https://sre.google/workbook/table-of-contents/)
+
+Local copies of the specifications and repositories are in `/home/luca/update/`.

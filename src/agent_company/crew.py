@@ -2,40 +2,54 @@ import os
 
 from crewai import LLM, Agent, Crew, Process, Task
 
+from agent_company import router
 
-def build_crew() -> Crew:
+
+def llm_for(role: str) -> LLM:
+    """The role's model from the Model Router; MODEL from .env when the route is not an LLM."""
+    choice = router.resolve(role)
+    if choice.kind == "llm":
+        return LLM(model=choice.model_id)
     model = os.environ.get("MODEL")
     if not model:
-        raise SystemExit("MODEL is not set. Copy .env.example to .env and fill it in.")
-    llm = LLM(model=model)
+        raise SystemExit(
+            f"No API model is available for {role} ({choice.reason}). Set MODEL and its key in .env."
+        )
+    return LLM(model=model)
+
+
+def build_crew() -> Crew:
+    from agent_company.api import bootstrap
+
+    bootstrap()
 
     orchestrator = Agent(
         role="CEO / Orchestrator",
         goal="Turn a client request into a clear, scoped project plan with assigned work",
         backstory="You run an AI software company. You plan projects, split them into "
         "tasks and make sure each specialist knows exactly what to deliver.",
-        llm=llm,
+        llm=llm_for("general_manager"),
     )
     architect = Agent(
         role="Software Architect",
         goal="Design the architecture and write a technical specification for the plan",
         backstory="You are a senior architect who favours simple, well-tested designs "
         "and writes specifications developers can implement without guessing.",
-        llm=llm,
+        llm=llm_for("architect"),
     )
     developer = Agent(
         role="Backend Developer",
         goal="Implement the specification as working, readable code",
         backstory="You are an experienced backend engineer who writes APIs and "
         "database code that follows the specification exactly.",
-        llm=llm,
+        llm=llm_for("developer"),
     )
     qa = Agent(
         role="QA Engineer",
         goal="Find bugs and gaps between the code and the specification",
         backstory="You are a meticulous tester. You write test cases, review code "
         "against the spec and report concrete, reproducible problems.",
-        llm=llm,
+        llm=llm_for("qa"),
     )
 
     plan = Task(
