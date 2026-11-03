@@ -1,0 +1,17 @@
+[project]
+name = "agent-company"
+version = "0.1.0"
+description = "An AI software-development company built from specialized CrewAI agents"
+readme = { file = "ReadMe.mdx", content-type = "text/markdown" }
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "crewai[anthropic]",
+    "python-dotenv",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_company"]

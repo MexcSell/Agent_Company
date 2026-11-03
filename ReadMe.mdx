@@ -1,0 +1,94 @@
+# Agent Company
+
+An AI software-development company made of specialized agents that share one
+project context and are coordinated by an orchestrator.
+
+Guiding principle: what matters most is not how many agents you run. It's
+combining capable models, specialized roles, shared project context, reliable
+tools, and a controlled orchestration system.
+
+## Roles
+
+| Agent | Responsibility | Status |
+| --- | --- | --- |
+| CEO / Orchestrator | Project planning, task allocation, coordination | Implemented |
+| Architect | Architecture and technical specifications | Implemented |
+| Developer (Backend) | Writes and modifies code, API and database | Implemented |
+| QA / Tester | Tests software and identifies bugs | Implemented |
+| Research | Researches technologies and generates insights | Planned |
+| Frontend / UI-UX | Interface design and UI | Planned |
+| DevOps | Builds, deployment, infrastructure | Planned |
+
+We start with four agents and add the others once the workflow is reliable.
+
+## Architecture
+
+```
+                 CEO / AI Orchestrator
+        (planning · task allocation · coordination)
+                          │
+            ┌─────────────┴─────────────┐
+     Architect Agent              Research Agent
+     (specifications)          (research & insights)
+            └─────────────┬─────────────┘
+       ┌──────────────┬───┴──────────┬──────────────┐
+  Backend Agent  Frontend Agent   QA Agent     DevOps Agent
+  (API & DB)     (UI & UX)        (testing)    (build & deploy)
+       └──────────────┴───┬──────────┴──────────────┘
+              Shared Development Environment
+        (Git · Files · Tasks · Database · Test results)
+```
+
+## Technology stack
+
+| Component | Choice | Status |
+| --- | --- | --- |
+| Coding agent | Claude Code (VS Code extension) | In use |
+| Second assistant | OpenAI ChatGPT / Codex (VS Code extension) | In use |
+| Multi-agent framework | CrewAI (AutoGen as alternative) | In use |
+| Workflow orchestration | LangGraph | Later |
+| Local model runtime | Ollama | Later |
+| Model downloads | Hugging Face | Later |
+| Agent development | Python | In use |
+| Shared code | Git | In use |
+| Project dashboard | React / Next.js | Later |
+| Database | PostgreSQL | Later |
+
+Agent frameworks are not the AI brain. CrewAI runs the agents, but each agent
+still needs a model, from an API provider or a local runtime.
+
+## Setup
+
+Requirements: Python 3.12 and [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync                 # installs CrewAI into .venv
+cp .env.example .env    # then set MODEL and the matching API key
+```
+
+`MODEL` uses the LiteLLM `provider/model` format, for example
+`anthropic/claude-sonnet-5-5`, `openai/<model-name>`, or `ollama/<model-name>`.
+A Claude.ai or ChatGPT subscription login (as used by the VS Code extensions)
+is not an API key; the crew needs a real provider key or a local Ollama model.
+
+## Run
+
+```bash
+uv run python -m agent_company "Build a REST API for a todo list with FastAPI"
+```
+
+The four agents run in sequence: plan → specification → implementation →
+QA review. Each step's output is written to `output/`.
+
+## Alternatives from the original recommendation
+
+```bash
+pip install -U "autogen-agentchat" "autogen-ext"   # AutoGen
+pip install -U langgraph                           # LangGraph
+```
+
+## Safety
+
+If agents ever modify a website, restart services, or deploy code, run them
+inside isolated development environments with restricted permissions. Never
+give an agent unrestricted access to a production server.
