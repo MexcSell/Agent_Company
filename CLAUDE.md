@@ -22,6 +22,9 @@ feature came from.
 - `tests/` – pytest; every test gets its own temp DATA_DIR and runs offline
 - `data/` – SQLite DB, workspaces, worktrees, uploads (git-ignored)
 - `docs/feature-gap.md` – features taken from AgentForge, /home/thomas/bit and /home/luca/update
+- `docs/requirements/` – implementable requirements derived from every document in /home/luca/update
+  (one file per spec, IDs `Sxx-FR/R/D/G-nn`, status per item, suggested order in its README;
+  diagrams in `images/`, sources of non-retained images in `images/SOURCES.md`)
 
 ## Conventions
 
