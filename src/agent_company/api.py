@@ -457,6 +457,10 @@ def create_app(start_background: bool = True) -> FastAPI:
         if path.startswith("/static/"):
             h["Cache-Control"] = ("public, max-age=31536000, immutable" if request.query_params.get("v")
                                   else "public, max-age=604800" if path.startswith("/static/vendor/") else "no-cache")
+        elif path.startswith("/api/uploads/") and "cache-control" not in h:
+            h["Cache-Control"] = "private, max-age=3600"  # attachments never change: not fetched again on each re-render
+        elif path.startswith("/api/files/raw") and "cache-control" not in h:
+            h["Cache-Control"] = "private, no-cache"  # previews revalidate (ETag, cheap 304) so edits show at once
         elif path.startswith("/api/") and "cache-control" not in h:
             h["Cache-Control"] = "no-store"
         return response

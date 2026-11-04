@@ -296,10 +296,9 @@ td.row > * { margin: 2px 4px 2px 0; }
 .btn:active:not(:disabled), .icon-btn:active { transform: scale(.95); }
 .card.agent:hover, .card.lay:hover, .org-node:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
 .rail button:hover svg { transform: scale(1.1); } .rail button svg { transition: transform .15s; }
-.rail button.active svg { animation: bounce .35s ease; }
-@keyframes bounce { 40% { transform: scale(1.18); } }
+
 .list-item.selected { box-shadow: inset 3px 0 0 var(--accent); }
-.badge { animation: pop .3s ease both; }
+
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 /* Settings → Navigation */

@@ -222,6 +222,7 @@ function show(id) {
   $("#view").classList.remove("flush", "fit");
   const v = VIEWS.find((x) => x.id === id); $("#view-title").textContent = v.title; renderRail();
   $("#view").classList.remove("enter"); void $("#view").offsetWidth; $("#view").classList.add("enter");
+  clearTimeout(show.enterTimer); show.enterTimer = setTimeout(() => $("#view").classList.remove("enter"), 700);  // live re-renders don't animate
   clearInterval(refreshTimer); render(); updateBadges();
   // Live events push changes; polling stays as a slower fallback when the stream is down.
   refreshTimer = setInterval(() => { if (!liveOk) refreshNow(); }, 5000);
@@ -458,9 +459,14 @@ function iconize(root) {
     b.classList.add("icon");
   });
 }
+// At most every 300 ms, and only where buttons live (not terminals or the rail).
 let iconizeQueued = false;
-new MutationObserver(() => { if (!iconizeQueued) { iconizeQueued = true; requestAnimationFrame(() => { iconizeQueued = false; iconize(document.body); }); } })
-  .observe(document.documentElement, { childList: true, subtree: true });
+const iconizeObserver = new MutationObserver(() => {
+  if (iconizeQueued) return;
+  iconizeQueued = true;
+  setTimeout(() => { iconizeQueued = false; ["#view", "#modal", "#auth"].forEach((sel) => { const el = $(sel); if (el) iconize(el); }); }, 300);
+});
+addEventListener("DOMContentLoaded", () => ["#view", "#modal", "#auth"].forEach((sel) => $(sel) && iconizeObserver.observe($(sel), { childList: true, subtree: true })));
 
 // --- start (called after every view file has loaded) ----------------------------
 function start() {
