@@ -267,6 +267,7 @@ class ClaudeBody(BaseModel):
     cwd: str = ""
     session_id: str = ""
     model: str = ""
+    title: str = Field(default="", max_length=200)
     attachments: list[str] = Field(default_factory=list, max_length=10)
 
 
@@ -924,7 +925,8 @@ def create_app(start_background: bool = True) -> FastAPI:
     def claude_start(body: ClaudeBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         images = projects.uploads(body.attachments) if body.attachments else []
         try:
-            run = workspace.start(body.prompt, body.cwd, admin["name"], body.session_id, body.model, images)
+            run = workspace.start(body.prompt, body.cwd, admin["name"], body.session_id, body.model, images,
+                                  body.title)
         except RuntimeError as e:
             raise HTTPException(503, str(e)) from e
         _audit(admin, "workspace_claude", run.cwd, after={"run": run.id, "prompt": body.prompt[:200],

@@ -20,6 +20,10 @@ conversation itself. Nothing is sent to those sessions; the only way the panel a
 The history window lists every session that has a transcript, running or not (`history`):
 its title (renamed, AI-written or first prompt), folder and last activity. An ended session can
 be opened read-only, resumed in this panel (`--resume`), or deleted with its transcript.
+
+Each conversation of the panel gets a short title: `-p` sessions get no AI title from Claude
+Code, so the first prompt is summarised by a quick Haiku call (`make_title`) and passed as
+`--name` on every prompt, which records it in the transcript like a rename.
 """
 
 from __future__ import annotations
@@ -48,6 +52,8 @@ TRANSCRIPT_TAIL = 2_000_000  # bytes read from the end of a transcript the first
 SESSIONS_TTL = 3.0
 MAX_EVENTS = 400  # conversation events kept per watched session
 MAX_WATCHED = 64
+TITLE_MODEL = "haiku"
+_helper_pids: set[int] = set()  # title helpers register as sessions too: never listed
 
 
 def available() -> dict[str, Any]:
@@ -160,10 +166,12 @@ def normalise(raw: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 class Run:
-    def __init__(self, prompt: str, cwd: str, owner: str, session_id: str, model: str, images: list[dict[str, Any]]):
+    def __init__(self, prompt: str, cwd: str, owner: str, session_id: str, model: str, images: list[dict[str, Any]],
+                 title: str = ""):
         self.id = uuid.uuid4().hex[:12]
-        self.prompt, self.cwd, self.owner, self.model = prompt, cwd, owner, model
-        self.session_id = session_id
+        self.prompt, self.cwd, self.owner, self.model, self.title = prompt, cwd, owner, model, title
+        self.resume = bool(session_id)
+        self.session_id = session_id or str(uuid.uuid4())  # known before Claude Code starts
         self.images = images
         self.status = "running"
         self.events: list[dict[str, Any]] = []
@@ -179,7 +187,7 @@ class Run:
     def to_dict(self, after: int = 0) -> dict[str, Any]:
         with self.lock:
             return {"id": self.id, "prompt": self.prompt, "cwd": self.cwd, "status": self.status,
-                    "session_id": self.session_id, "model": self.model, "started": self.started,
+                    "session_id": self.session_id, "title": self.title, "model": self.model, "started": self.started,
                     "ended": self.ended, "images": [{"id": i["id"], "name": i["name"]} for i in self.images],
                     "events": self.events[after:], "next": len(self.events)}
 
@@ -193,8 +201,9 @@ def _command(run: Run) -> list[str]:
            "--allowedTools", ",".join(ALL_TOOLS)]
     for folder in sorted({str(Path(i["path"]).parent) for i in run.images}):
         cmd += ["--add-dir", folder]
-    if run.session_id:
-        cmd += ["--resume", run.session_id]
+    cmd += ["--resume" if run.resume else "--session-id", run.session_id]
+    if run.title:
+        cmd += ["--name", run.title]
     if run.model and run.model != "default":
         cmd += ["--model", run.model]
     return cmd
@@ -207,8 +216,59 @@ def _prompt_text(run: Run) -> str:
     return f"{run.prompt}\n\nAttached files (open them with the Read tool):\n{files}"
 
 
+def _env() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k not in {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"}}
+
+
+def _fallback_title(prompt: str) -> str:
+    line = next((x.strip() for x in prompt.splitlines() if x.strip()), "")
+    line = re.sub(r"\s+", " ", line)
+    return line if len(line) <= 48 else line[:47].rsplit(" ", 1)[0] + "…"
+
+
+def make_title(prompt: str) -> str:
+    """A short, meaningful name for a conversation from its first prompt (Haiku, else the first line)."""
+    exe = shutil.which("claude")
+    if exe:
+        ask = ("Write a short title (2 to 6 words, no quotes, no trailing period) naming the task in this request "
+               "to a coding assistant. Answer with the title only.\n\n<request>\n" + prompt[:4000] + "\n</request>")
+        try:
+            proc = subprocess.Popen([exe, "-p", "--model", TITLE_MODEL, "--no-session-persistence", "--max-turns", "1",
+                                     "--tools", "", "--output-format", "text"], cwd=Path.home(), env=_env(), text=True,
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            _helper_pids.add(proc.pid)
+            try:
+                out, _ = proc.communicate(ask, timeout=45)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                out = ""
+            finally:
+                _helper_pids.discard(proc.pid)
+            line = next((x.strip() for x in (out or "").splitlines() if x.strip()), "")
+            line = line.strip("\"'`*# ").rstrip(".")
+            if proc.returncode == 0 and 0 < len(line) <= 80 and not line.lower().startswith(("error", "i ")):
+                return line
+        except OSError:
+            pass
+    return _fallback_title(prompt)
+
+
+def _title_later(run: Run) -> None:
+    try:
+        title = make_title(run.prompt)
+    except Exception:  # noqa: BLE001 - a title is cosmetic; never let it break a run
+        title = _fallback_title(run.prompt)
+    if not run.title:
+        run.title = title
+
+
+def _run_title(session_id: str) -> str:
+    """The title this server gave a conversation whose transcript does not carry it yet (first prompt)."""
+    return next((r.title for r in reversed(list(RUNS.values())) if r.session_id == session_id and r.title), "")
+
+
 def start(prompt: str, cwd: str, owner: str, session_id: str = "", model: str = "",
-          images: list[dict[str, Any]] | None = None) -> Run:
+          images: list[dict[str, Any]] | None = None, title: str = "") -> Run:
     if not prompt.strip():
         raise ValueError("write a prompt first")
     if not available()["available"]:
@@ -226,22 +286,26 @@ def start(prompt: str, cwd: str, owner: str, session_id: str = "", model: str = 
                          "wait for it to finish, or stop it from the sessions window")
     if model and model not in MODELS and not re.fullmatch(r"[\w.\-\[\]]{2,80}", model):
         raise ValueError("bad model name")
-    run = Run(prompt, str(folder), owner, session_id, model, images or [])
+    title = re.sub(r"\s+", " ", title or "").strip()[:80]
+    run = Run(prompt, str(folder), owner, session_id, model, images or [], title)
+    # A conversation whose first prompt failed before Claude Code wrote anything starts afresh under its id.
+    run.resume = bool(session_id) and _transcript_path(session_id) is not None
     with _runs_lock:
         RUNS[run.id] = run
         while len(RUNS) > MAX_RUNS:
             old = RUNS.popitem(last=False)[1]
             if old.status == "running":
                 stop(old.id)
-    env = {k: v for k, v in os.environ.items() if k not in {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"}}
     try:
-        run.proc = subprocess.Popen(_command(run), cwd=folder, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        run.proc = subprocess.Popen(_command(run), cwd=folder, env=_env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True, bufsize=1, start_new_session=True)
     except OSError as e:
         run.status, run.ended = "failed", time.time()
         run.add({"kind": "error", "text": f"could not start Claude Code: {e}"})
         return run
     threading.Thread(target=_pump, args=(run, _prompt_text(run)), daemon=True, name=f"claude-{run.id}").start()
+    if not run.title:  # the panel sends it with every later prompt (`--name`)
+        threading.Thread(target=_title_later, args=(run,), daemon=True, name=f"claude-title-{run.id}").start()
     return run
 
 
@@ -350,7 +414,7 @@ def sessions(refresh: bool = False) -> list[dict[str, Any]]:
         except (OSError, ValueError, TypeError, AttributeError):
             continue
         sid = str(d.get("sessionId") or "")
-        if not pid or not _SESSION_RE.fullmatch(sid) or not _alive(pid, str(d.get("procStart") or "")):
+        if not pid or pid in _helper_pids or not _SESSION_RE.fullmatch(sid) or not _alive(pid, str(d.get("procStart") or "")):
             continue
         s = {"pid": pid, "session_id": sid, "cwd": str(d.get("cwd") or ""), "name": str(d.get("name") or sid[:8]),
              "status": str(d.get("status") or "idle"), "entrypoint": str(d.get("entrypoint") or ""),
@@ -358,6 +422,8 @@ def sessions(refresh: bool = False) -> list[dict[str, Any]]:
              "started": (d.get("startedAt") or 0) / 1000, "updated": (d.get("updatedAt") or 0) / 1000}
         if sid not in found or s["updated"] > found[sid]["updated"]:  # resumed in a newer process
             found[sid] = s
+    for s in found.values():
+        s["title"] = _title_of(s["session_id"])
     out = sorted(found.values(), key=lambda s: (s["status"] != "busy", -s["updated"]))
     _sessions_cache = (time.time(), out)
     return out
@@ -629,7 +695,8 @@ def session_status(session_id: str, after: int = 0) -> dict[str, Any]:
         current = open_calls[-1] if open_calls else {"name": "", "input": {}, "since": snap["last_activity"]}
     configured = _agent_files(claude_home()) + (_agent_files(Path(cwd) / ".claude") if cwd else [])
     return {
-        **snap, "session_id": session_id, "live": live is not None, "status": status, "process": live,
+        **snap, "session_id": session_id, "title": _title_of(session_id) if tr else "", "live": live is not None,
+        "status": status, "process": live,
         "transcript": str(tr.path) if tr else "", "cwd": cwd,
         "version": snap["version"] or (live or {}).get("version", ""),
         "entrypoint": (live or {}).get("entrypoint") or snap["entrypoint"],
@@ -750,7 +817,7 @@ def history(query: str = "", limit: int = 200) -> dict[str, Any]:
             continue  # opened and closed without a prompt
         proc = live.get(sid)
         row = {**s, "session_id": sid, "updated": st.st_mtime, "size": st.st_size,
-               "title": s["custom_title"] or s["ai_title"] or s["first_prompt"].split("\n")[0][:120] or sid[:8],
+               "title": s["custom_title"] or s["ai_title"] or _run_title(sid) or s["first_prompt"].split("\n")[0][:120] or sid[:8],
                "status": proc["status"] if proc else "ended", "pid": proc["pid"] if proc else 0,
                "cwd": s["cwd"] or (proc or {}).get("cwd", ""),
                "entrypoint": (proc or {}).get("entrypoint") or s["entrypoint"]}
@@ -763,6 +830,29 @@ def history(query: str = "", limit: int = 200) -> dict[str, Any]:
                                        ("title", "cwd", "first_prompt", "last_prompt", "session_id", "git_branch"))]
     rows.sort(key=lambda r: (r["status"] == "ended", -r["updated"]))
     return {"total": len(rows), "items": rows[:max(1, limit)]}
+
+
+_titles: dict[str, tuple[float, str]] = {}
+TITLE_TTL = 30.0
+
+
+def _title_of(session_id: str) -> str:
+    """A live session's name from its transcript: renamed, AI-written, else its first prompt."""
+    at, title = _titles.get(session_id, (0.0, ""))
+    if time.time() - at < TITLE_TTL:
+        return title
+    path = _transcript_path(session_id)
+    title = ""
+    if path is not None:
+        try:
+            s = _summary(path, path.stat().st_size)
+            title = s["custom_title"] or s["ai_title"] or _run_title(session_id) or _fallback_title(s["first_prompt"])
+        except OSError:
+            pass
+    _titles[session_id] = (time.time(), title)
+    if len(_titles) > 500:
+        _titles.pop(next(iter(_titles)))
+    return title
 
 
 def delete_session(session_id: str) -> dict[str, Any]:

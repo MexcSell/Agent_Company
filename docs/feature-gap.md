@@ -119,6 +119,7 @@ Machines code):
 | Terminal: real PTY shells over WebSockets (ssh works), coloured prompt and typed commands, sessions survive reloads | done (`terminal.py`, `static/console.js`) |
 | Claude Code panel: streamed thinking, tool calls and results, answers with copy buttons, image attachments, resumed sessions | done (`workspace.py`, `static/claude.js`) |
 | Claude Code sessions window: running sessions on the host (open, stop) and the history of every session with a transcript (search, open read-only, resume in the panel, delete) | done (`workspace.py`, `static/claude.js`) |
+| Claude Code panel tabs: one per conversation (+ opens another and keeps the rest, each with its own draft), named by a short Haiku title of the first prompt (`--name`), other live sessions as tabs named by their transcript title (an ended one continues in place), a prompt that outlived a server restart followed live in its own tab, never twice | done (`workspace.py`, `static/claude.js`) |
 
 Browser libraries are vendored in `static/vendor/` (xterm.js 5.5.0 + fit addon 0.10.0, pdf.js 3.11.174,
 mammoth 1.8.0, noVNC 1.7.0 with its licences, unchanged from AXoR) so the dashboard needs no CDN; pdf.js runs with `isEvalSupported: false`.

@@ -1,6 +1,7 @@
 import io
 import os
 import json
+import re
 import secrets
 import time
 import zipfile
@@ -203,6 +204,7 @@ def test_claude_panel_runs_resumes_and_attaches_images(admin, root, monkeypatch)
     monkeypatch.setattr(workspace.shutil, "which", lambda _: "/usr/bin/claude")
     monkeypatch.setattr(workspace.subprocess, "Popen", fake)
     monkeypatch.setattr(workspace, "_version", lambda exe: "2.1.310")
+    monkeypatch.setattr(workspace, "make_title", lambda prompt: "Look around")
     info = admin.get("/api/workspace/claude").json()
     assert info["available"] is True and info["version"] == "2.1.310" and info["account"]["method"]
     up = admin.post("/api/uploads", files={"file": ("shot.png", b"\x89PNG\r\n\x1a\n", "image/png")}).json()
@@ -213,7 +215,7 @@ def test_claude_panel_runs_resumes_and_attaches_images(admin, root, monkeypatch)
         if d["status"] != "running":
             break
         time.sleep(0.02)
-    assert d["status"] == "done" and d["session_id"].startswith("11111111")
+    assert d["status"] == "done" and d["session_id"].startswith("11111111") and d["title"] == "Look around"
     assert [e["kind"] for e in d["events"]] == ["init", "thinking", "tool_use", "tool_result", "text", "result", "log"]
     assert admin.get(f"/api/workspace/claude/{run['id']}?after=5").json()["events"][0]["kind"] == "result"
     cmd, kw = FakeProc.calls[0]
@@ -221,13 +223,50 @@ def test_claude_panel_runs_resumes_and_attaches_images(admin, root, monkeypatch)
     assert cmd[cmd.index("--model") + 1] == "sonnet" and "--add-dir" in cmd
     assert "-rf what is here?" not in cmd  # the prompt goes through stdin, never argv
     assert written[0].startswith("-rf what is here?") and "shot.png" in written[0]
-    # A follow-up resumes the same Claude session.
-    admin.post("/api/workspace/claude", json={"prompt": "and now?", "cwd": str(root), "session_id": d["session_id"]})
+    # A new conversation gets its session id up front, so the panel knows it before Claude Code answers.
+    first = cmd[cmd.index("--session-id") + 1]
+    assert "--resume" not in cmd and "--name" not in cmd and re.fullmatch(r"[0-9a-f-]{36}", first)
+    # A follow-up resumes the same Claude session under the conversation's title.
+    folder = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / "-x"
+    folder.mkdir(parents=True)
+    (folder / f"{d['session_id']}.jsonl").write_text("{}\n")
+    admin.post("/api/workspace/claude", json={"prompt": "and now?", "cwd": str(root), "session_id": d["session_id"],
+                                              "title": "Look around"})
     cmd2, _ = FakeProc.calls[1]
-    assert cmd2[cmd2.index("--resume") + 1] == d["session_id"]
+    assert cmd2[cmd2.index("--resume") + 1] == d["session_id"] and cmd2[cmd2.index("--name") + 1] == "Look around"
+    # A conversation whose first prompt never reached Claude Code has no transcript: it starts under its id.
+    admin.post("/api/workspace/claude", json={"prompt": "again", "cwd": str(root), "session_id": first})
+    cmd3, _ = FakeProc.calls[2]
+    assert "--resume" not in cmd3 and cmd3[cmd3.index("--session-id") + 1] == first
     assert admin.post("/api/workspace/claude", json={"prompt": "x", "session_id": "bad id; rm"}).status_code == 400
     assert any(r["action"] == "workspace_claude" for r in admin.get("/api/audit").json()["records"])
     assert member_of(admin).post("/api/workspace/claude", json={"prompt": "x"}).status_code == 403
+
+
+def test_make_title_asks_haiku_without_tools_and_falls_back(monkeypatch):
+    seen = {}
+
+    class Proc:
+        pid, returncode = 4242, 0
+
+        def __init__(self, cmd, **kw):
+            seen["cmd"], seen["listed"] = cmd, set(workspace._helper_pids)
+
+        def communicate(self, text, timeout=None):
+            seen["listed"] |= set(workspace._helper_pids)
+            seen["text"] = text
+            return '"Fix the login redirect."\n', ""
+
+    monkeypatch.setattr(workspace.shutil, "which", lambda _: "/usr/bin/claude")
+    monkeypatch.setattr(workspace.subprocess, "Popen", Proc)
+    assert workspace.make_title("the login page sends me back to /\nplease fix") == "Fix the login redirect"
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("--model") + 1] == "haiku" and cmd[cmd.index("--tools") + 1] == ""
+    assert "--no-session-persistence" in cmd and "the login page" in seen["text"]
+    assert 4242 in seen["listed"] and 4242 not in workspace._helper_pids  # hidden from the sessions list while it runs
+    monkeypatch.setattr(workspace.shutil, "which", lambda _: None)
+    assert workspace.make_title("\n  Explain   the build step by step and also every single flag it takes please") \
+        == "Explain the build step by step and also every…"
 
 
 def test_claude_panel_reports_missing_cli(admin, monkeypatch):
@@ -280,6 +319,20 @@ def test_claude_sessions_list_only_live_processes(admin, tmp_path):
     got = admin.get("/api/workspace/claude-sessions").json()
     assert [s["session_id"] for s in got] == [SID]
     assert got[0]["status"] == "busy" and got[0]["entrypoint"] == "claude-vscode" and got[0]["name"] == "app-1"
+    assert got[0]["title"] == ""  # nothing written yet
+    # The tab name comes from the transcript (AI title, rename, else the first prompt), not the derived name.
+    workspace._titles.clear()
+    (tmp_path / "claude" / "projects" / "-srv-app" / f"{SID}.jsonl").write_text(
+        _line(type="user", message={"content": "Fix the login bug"}) + "\n"
+        + json.dumps({"type": "ai-title", "aiTitle": "Login bug fix", "sessionId": SID}) + "\n")
+    assert workspace.sessions(refresh=True)[0]["title"] == "Login bug fix"
+    assert admin.get(f"/api/workspace/claude-sessions/{SID}").json()["title"] == "Login bug fix"
+    # A title helper registers like a session: it is never listed.
+    workspace._helper_pids.add(os.getpid())
+    try:
+        assert workspace.sessions(refresh=True) == []
+    finally:
+        workspace._helper_pids.discard(os.getpid())
     assert member_of(admin).get("/api/workspace/claude-sessions").status_code == 403
 
 

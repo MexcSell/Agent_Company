@@ -18,7 +18,7 @@ feature came from.
   `machines.py` (Machines view, from AXoR in /home/thomas/axor-3.0.zip: Linux/Windows KVM VMs as Docker
   containers with a noVNC console relayed over a WebSocket; admin-only; cleanup never prunes them);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
-  (Workspace Claude Code panel: live host sessions, session history with resume/stop/delete); `api.py`; `static/` (dashboard, plain JS, one file per area;
+  (Workspace Claude Code panel: a tab per conversation, titled by Haiku; live host sessions, session history with resume/stop/delete); `api.py`; `static/` (dashboard, plain JS, one file per area;
   `workspace.js` + `viewer.js` + `console.js` + `claude.js` are the Workspace home page, sharing
   `window.WSP`; `vendor/` holds xterm.js, pdf.js, mammoth and noVNC); `crew.py` (classic crew); `__main__.py` (CLI)
 - `evals/` – benchmark suites (JSON)
