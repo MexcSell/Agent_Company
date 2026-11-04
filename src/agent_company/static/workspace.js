@@ -11,6 +11,7 @@ window.WSP = window.WSP || {};
     root: store.get("ac.wsp.root") || "", roots: [], dirs: new Map(), items: new Map(), open: new Set(read("ac.wsp.open", [])),
     sel: new Set(), anchor: null, clip: null, tabs: [], active: null, el: null,
     sizes: { left: 260, right: 400, term: 260, ...read("ac.wsp.sizes", {}) }, termHidden: store.get("ac.wsp.termHidden") === "1",
+    win: { min: new Set(read("ac.wsp.min", [])), max: store.get("ac.wsp.max") || null }, git: {}, filter: "", panes: [], noClaude: false,
   });
   const saveOpen = () => store.set("ac.wsp.open", JSON.stringify([...S.open].slice(-300)));
   const parentOf = (p) => p.slice(0, p.lastIndexOf("/")) || "/";
@@ -102,33 +103,67 @@ window.WSP = window.WSP || {};
         <button class="icon-btn sm" data-x="newdir" title="New folder">${svg("M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 10v6M9 13h6")}</button>
         <button class="icon-btn sm" data-x="upload" title="Upload files">${svg("M12 16V4M7 9l5-5 5 5M4 20h16")}</button>
         <button class="icon-btn sm" data-x="refresh" title="Refresh">${svg("M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7")}</button>
-        <button class="icon-btn sm" data-x="collapse" title="Collapse folders">${svg("M8 4l4 4 4-4M8 20l4-4 4 4")}</button></div>
+        <button class="icon-btn sm" data-x="collapse" title="Collapse folders">${svg("M8 4l4 4 4-4M8 20l4-4 4 4")}</button>
+        <button class="icon-btn sm" data-x="filter" title="Filter files by name (Ctrl+F in the explorer)">${svg("M3 5h18l-7 8v6l-4 2v-8z")}</button>
+        <button class="icon-btn sm" data-x="split" title="Split: add another explorer pane (+)">${svg("M12 5v14M5 12h14")}</button>
+        ${winBtns("explorer")}</div>
+      <div class="wx-filter" id="wx-filter" hidden><input id="wx-filter-q" type="search" placeholder="Filter by name…" aria-label="Filter files"></div>
+      ${strip("explorer", "Explorer")}
       <div class="wx-root"><select id="wx-roots" aria-label="Folder"></select><button class="icon-btn sm" id="wx-close-root" title="Close this folder" hidden>✕</button></div>
       <div class="wx-tree" id="wx-tree" tabindex="0" role="tree" aria-label="Files"></div>
       <div class="wx-status muted" id="wx-status"></div>
+      <div class="wx-panes" id="wx-panes"></div>
       <input type="file" id="wx-file" multiple hidden>
     </aside>
     <div class="wgut v" data-g="left" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
     <section class="wm">
-      <div class="we"><div class="we-tabs" id="we-tabs" role="tablist"></div><div class="we-hosts" id="we-hosts"></div></div>
+      <div class="we"><div class="we-bar"><div class="we-tabs" id="we-tabs" role="tablist"></div><span class="we-acts">${winBtns("editor")}</span></div><div class="we-hosts" id="we-hosts"></div></div>
       <div class="wgut h" data-g="term" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
       <div class="wt" id="wt"></div>
     </section>
     <div class="wgut v" data-g="right" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
     <aside class="wc" id="wc" aria-label="Claude Code"></aside>`;
+  // Every window of the Workspace can be minimised (a slim strip) or maximised (fills the Workspace).
+  function winBtns(pane) {
+    return `<button class="icon-btn sm win-btn" data-win="min" data-pane="${pane}" title="Minimise">${svg("M5 19h14")}</button>`
+      + `<button class="icon-btn sm win-btn" data-win="max" data-pane="${pane}" title="Maximise / restore">${svg("M4 4h16v16H4z")}</button>`;
+  }
+  function strip(pane, label) {
+    return `<button class="win-strip" data-win="restore" data-pane="${pane}" title="Restore ${label}"><span>${label}</span></button>`;
+  }
+  W.winBtns = winBtns; W.winStrip = strip;
   function svg(d) { return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`; }
   W.svg = svg;
 
   function applySizes() {
     const narrow = matchMedia("(max-width: 900px)").matches;
+    const { min } = S.win, max = S.win.max;
     S.el.classList.toggle("narrow", narrow);
-    S.el.style.gridTemplateColumns = narrow ? "1fr" : `${S.sizes.left}px 5px minmax(240px, 1fr) 5px ${S.sizes.right}px`;
-    S.el.querySelector(".wm").style.gridTemplateRows = S.termHidden ? "minmax(0, 1fr) 0 0" : `minmax(120px, 1fr) 5px ${S.sizes.term}px`;
-    S.el.querySelector(".wm").classList.toggle("term-hidden", S.termHidden);
+    ["explorer", "editor", "terminal", "claude"].forEach((p) => { S.el.classList.toggle(`min-${p}`, min.has(p) && max !== p); S.el.classList.toggle(`max-${p}`, max === p); });
+    S.el.classList.toggle("no-claude", S.noClaude);
+    S.el.querySelectorAll(".win-btn[data-win=max]").forEach((b) => (b.innerHTML = svg(max === b.dataset.pane ? "M8 8h12v12H8zM4 16V4h12" : "M4 4h16v16H4z")));
+    const left = max === "explorer" ? "minmax(0, 1fr)" : max ? "0px" : min.has("explorer") ? "34px" : `${S.sizes.left}px`;
+    const right = S.noClaude ? "0px" : max === "claude" ? "minmax(0, 1fr)" : max ? "0px" : min.has("claude") ? "34px" : `${S.sizes.right}px`;
+    const mid = max === "explorer" || max === "claude" ? "0px" : "minmax(240px, 1fr)";
+    S.el.style.gridTemplateColumns = narrow ? "1fr" : `${left} ${max ? "0px" : "5px"} ${mid} ${max || S.noClaude ? "0px" : "5px"} ${right}`;
+    const termOff = S.termHidden || max === "editor";
+    const rows = max === "terminal" ? "34px 0 minmax(0, 1fr)" : termOff ? "minmax(0, 1fr) 0 0"
+      : min.has("terminal") ? "minmax(0, 1fr) 0 32px" : min.has("editor") ? `34px 5px minmax(0, 1fr)` : `minmax(120px, 1fr) 5px ${S.sizes.term}px`;
+    S.el.querySelector(".wm").style.gridTemplateRows = rows;
+    S.el.querySelector(".wm").classList.toggle("term-hidden", termOff);
     W.fitTerminals?.();
+    requestAnimationFrame(() => W.fitTerminals?.());  // once the new grid is laid out
   }
+  W.win = (pane, action) => {
+    const w = S.win;
+    if (action === "max") { w.max = w.max === pane ? null : pane; w.min.delete(pane); }
+    else if (action === "min") { if (w.max === pane) w.max = null; w.min.has(pane) ? w.min.delete(pane) : w.min.add(pane); if (pane === "terminal" && S.termHidden) W.toggleTerminal(true); }
+    else { w.min.delete(pane); if (w.max && w.max !== pane) w.max = null; }
+    store.set("ac.wsp.min", JSON.stringify([...w.min])); store.set("ac.wsp.max", w.max || "");
+    applySizes();
+  };
   W.toggleTerminal = (show = S.termHidden) => { S.termHidden = !show; store.set("ac.wsp.termHidden", S.termHidden ? "1" : ""); applySizes(); if (show) W.focusTerminal?.(); };
-  W.maximizeTerminal = () => { const h = S.el.querySelector(".wm").clientHeight; S.sizes.term = S.sizes.term > h * 0.7 ? 260 : h - 130; S.termHidden = false; applySizes(); };
+  W.maximizeTerminal = () => { S.termHidden = false; W.win("terminal", "max"); };
   function wireGutters() {
     S.el.querySelectorAll(".wgut").forEach((g) => (g.onpointerdown = (e) => {
       e.preventDefault();
@@ -192,6 +227,9 @@ window.WSP = window.WSP || {};
     const dirs = [S.root, ...[...S.open].filter((p) => p.startsWith(S.root + "/") && shown(p))];
     const fresh = new Map(S.dirs);
     let rootOk = false;
+    api(`/api/files/git-status?path=${encodeURIComponent(S.root)}`).then((g) => {
+      if (JSON.stringify(g) !== JSON.stringify(S.git)) { S.git = g; renderTree(); }
+    }).catch(() => {});
     await Promise.all(dirs.map(async (d) => { try { fresh.set(d, (await api(`/api/files/list?path=${encodeURIComponent(d)}`)).items.filter((it) => it.name !== ".git")); if (d === S.root) rootOk = true; } catch { fresh.delete(d); if (d !== S.root) S.open.delete(d); } }));
     if (!rootOk) { status("This folder is not available."); S.dirs.clear(); return renderTree(); }
     const before = JSON.stringify([...S.dirs.entries()].filter(([k]) => fresh.has(k)).map(([k, v]) => [k, v.map((i) => i.name + i.size + i.modified)]));
@@ -217,13 +255,20 @@ window.WSP = window.WSP || {};
   function renderTree() {
     const tree = S.el.querySelector("#wx-tree");
     if (!S.root) { tree.innerHTML = `<div class="wx-empty"><p class="muted">No folder open.</p><button class="btn primary" data-x="openfolder">Open folder</button></div>`; return; }
-    const rows = visibleRows();
+    let rows = visibleRows();
+    const q = S.filter.trim().toLowerCase();
+    if (q) {  // keep matching rows and the folders that lead to them
+      const keep = new Set();
+      rows.forEach(({ it }) => { if (it.name.toLowerCase().includes(q)) { keep.add(it.path); for (let d = parentOf(it.path); d.length > S.root.length; d = parentOf(d)) keep.add(d); } });
+      rows = rows.filter(({ it }) => keep.has(it.path));
+    }
     const cut = new Set(S.clip?.cut ? S.clip.paths : []);
+    const G = { M: "modified", A: "added", D: "deleted", U: "untracked", R: "renamed", C: "copied", dot: "contains changes" };
     tree.innerHTML = rows.map(({ it, depth }) => {
-      const open = it.dir && S.open.has(it.path);
-      return `<div class="tr${S.sel.has(it.path) ? " sel" : ""}${cut.has(it.path) ? " cut" : ""}${S.active === it.path ? " act" : ""}" role="treeitem" data-path="${esc(it.path)}"${it.dir ? ` data-dir="1" aria-expanded="${open}"` : ""} draggable="true" style="--d:${depth}"
-        title="${esc(it.name)}${it.dir ? "" : ` · ${W.size(it.size)}`}"><span class="chev${open ? " open" : ""}">${it.dir ? "›" : ""}</span>${W.fileIcon(it.name, it.dir, 16, open)}<span class="tn">${esc(it.name)}</span></div>`;
-    }).join("") || '<div class="wx-empty muted">Empty folder. Drop files here to upload.</div>';
+      const open = it.dir && S.open.has(it.path), g = S.git[it.path];
+      return `<div class="tr${S.sel.has(it.path) ? " sel" : ""}${cut.has(it.path) ? " cut" : ""}${S.active === it.path ? " act" : ""}${g ? ` g-${g}` : ""}" role="treeitem" data-path="${esc(it.path)}"${it.dir ? ` data-dir="1" aria-expanded="${open}"` : ""} draggable="true" style="--d:${depth}"
+        title="${esc(it.name)}${it.dir ? "" : ` · ${W.size(it.size)}`}${g ? ` · ${G[g]}` : ""}"><span class="chev${open ? " open" : ""}">${it.dir ? "›" : ""}</span>${W.fileIcon(it.name, it.dir, 16, open)}<span class="tn">${esc(it.name)}</span>${g ? `<span class="gd">${g === "dot" ? "●" : g}</span>` : ""}</div>`;
+    }).join("") || `<div class="wx-empty muted">${q ? "No file matches the filter." : "Empty folder. Drop files here to upload."}</div>`;
   }
 
   async function toggleDir(path, force) {
@@ -279,8 +324,12 @@ window.WSP = window.WSP || {};
       if (!row) { S.sel.clear(); renderTree(); }
       W.menu(e.clientX, e.clientY, menuFor(row ? S.el.querySelector(`.tr[data-path="${CSS.escape(row.dataset.path)}"]`) : null));
     };
+    const fq = S.el.querySelector("#wx-filter-q");
+    fq.oninput = () => { S.filter = fq.value; renderTree(); };
+    fq.onkeydown = (e) => { if (e.key === "Escape") { e.preventDefault(); toggleFilter(false); tree.focus(); } };
     tree.onkeydown = (e) => {
       const sel = [...S.sel], one = sel.length === 1 ? sel[0] : null, mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); toggleFilter(true); return; }
       if (e.key === "Delete" && sel.length) { e.preventDefault(); act.delete(sel); }
       else if (e.key === "F2" && one) { e.preventDefault(); act.rename(one); }
       else if (e.key === "Enter" && one) { e.preventDefault(); S.items.get(one)?.dir ? toggleDir(one) : W.openPath(one); }
@@ -338,6 +387,13 @@ window.WSP = window.WSP || {};
     if (x === "upload") return act.upload(dir);
     if (x === "refresh") return refresh().then(() => toast("Refreshed"));
     if (x === "collapse") { S.open.clear(); saveOpen(); renderTree(); }
+    if (x === "filter") return toggleFilter();
+    if (x === "split") return addPane();
+  }
+  function toggleFilter(show) {
+    const box = S.el.querySelector("#wx-filter"), on = show ?? box.hidden;
+    box.hidden = !on;
+    if (on) box.querySelector("input").focus(); else { S.filter = ""; box.querySelector("input").value = ""; renderTree(); }
   }
 
   function menuFor(row) {
@@ -376,10 +432,31 @@ window.WSP = window.WSP || {};
     ].filter((x, i, arr) => x && !(x === "-" && (i === 0 || arr.slice(0, i).filter(Boolean).pop() === "-")));
   }
 
+  // VS Code-style inline input in the tree (new file, new folder, rename): Enter accepts, Esc cancels.
+  function inlineInput({ dir, depth, after, value = "", folder = false, onDone }) {
+    const tree = S.el.querySelector("#wx-tree");
+    const row = document.createElement("div");
+    row.className = "tr tr-input"; row.style.setProperty("--d", depth);
+    row.innerHTML = `<span class="chev"></span>${W.fileIcon(value || (folder ? "folder" : "file"), folder, 16)}<input class="tr-edit" spellcheck="false" autocomplete="off" aria-label="${folder ? "Folder" : "File"} name">`;
+    if (after) after.after(row); else tree.prepend(row);
+    const input = row.querySelector("input");
+    input.value = value;
+    const dot = value.lastIndexOf(".");
+    input.focus(); input.setSelectionRange(0, dot > 0 && !folder ? dot : value.length);
+    let done = false;
+    const finish = (ok) => { if (done) return; done = true; const v = input.value.trim(); row.remove(); if (ok && v && v !== value) onDone(v); else renderTree(); };
+    input.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); finish(true); } else if (e.key === "Escape") { e.preventDefault(); finish(false); } };
+    input.onblur = () => finish(true);
+    input.onclick = (e) => e.stopPropagation();
+  }
+  const depthOf = (path) => (path === S.root ? -1 : path.slice(S.root.length + 1).split("/").length - 1);
   const act = {
     async create(dir, folder) {
-      const name = prompt(folder ? "New folder name" : "New file name (folders/allowed/too.txt)");
-      if (!name) return;
+      if (dir !== S.root && !S.open.has(dir)) await toggleDir(dir, true);
+      const dirRow = dir === S.root ? null : S.el.querySelector(`.tr[data-path="${CSS.escape(dir)}"]`);
+      inlineInput({ dir, depth: depthOf(dir) + 1, after: dirRow, folder, onDone: (name) => act.createNamed(dir, name, folder) });
+    },
+    async createNamed(dir, name, folder) {
       try {
         const r = await api("/api/files/create", { method: "POST", body: { path: `${dir}/${name}`, folder } });
         if (dir !== S.root) S.open.add(dir);
@@ -389,8 +466,12 @@ window.WSP = window.WSP || {};
     },
     upload(dir) { S.uploadDir = dir; S.el.querySelector("#wx-file").click(); },
     async rename(path) {
+      const row = S.el.querySelector(`.tr[data-path="${CSS.escape(path)}"]`);
+      if (row) { row.hidden = true; inlineInput({ depth: depthOf(path), after: row, value: baseName(path), folder: !!row.dataset.dir, onDone: (n) => act.renameTo(path, n) }); return; }
       const name = prompt("New name", baseName(path));
-      if (!name || name === baseName(path)) return;
+      if (name && name !== baseName(path)) act.renameTo(path, name);
+    },
+    async renameTo(path, name) {
       try { const r = await api("/api/files/move", { method: "POST", body: { src: path, dest: `${parentOf(path)}/${name}` } }); retarget(path, r.path); S.sel.clear(); S.sel.add(r.path); await refresh(); } catch (e) { toast(e.message); }
     },
     async duplicate(path) {
@@ -489,6 +570,70 @@ window.WSP = window.WSP || {};
     await refresh(); toast(`Uploaded ${n} file(s)`);
   }
 
+  // --- more explorer panes ("+"): the first explorer is the project's and stays; each added pane has its own
+  // folder (chosen from the registered roots, or any folder from "/" through the picker) and can be closed.
+  function addPane(root) {
+    const pane = { id: Math.random().toString(36).slice(2, 8), root: root || S.root, open: new Set(), dirs: new Map() };
+    S.panes.push(pane); savePanes(); renderPane(pane); loadPane(pane);
+  }
+  const savePanes = () => store.set("ac.wsp.panes", JSON.stringify(S.panes.map((p) => p.root)));
+  function paneEl(pane) {
+    let el = S.el.querySelector(`.wx-pane[data-pane="${pane.id}"]`);
+    if (!el) {
+      el = document.createElement("section");
+      el.className = "wx-pane"; el.dataset.pane = pane.id;
+      el.innerHTML = `<div class="wx-pane-head"><select aria-label="Folder"></select>
+        <button class="icon-btn sm" data-pa="refresh" title="Refresh">${svg("M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7")}</button>
+        <button class="icon-btn sm" data-pa="collapse" title="Collapse folders">${svg("M8 4l4 4 4-4M8 20l4-4 4 4")}</button>
+        <button class="icon-btn sm" data-pa="close" title="Close this pane">${svg("M6 6l12 12M18 6L6 18")}</button></div><div class="wx-pane-tree" tabindex="0" role="tree"></div>`;
+      S.el.querySelector("#wx-panes").append(el);
+      el.querySelector("select").onchange = async (e) => {
+        if (e.target.value === "__open") {
+          const dir = await pickFolder("/");
+          if (dir) { try { const r = await api("/api/files/roots", { method: "POST", body: { path: dir } }); S.roots = await api("/api/files/roots"); renderRoots(); pane.root = r.path; } catch (x) { toast(x.message); } }
+        } else pane.root = e.target.value;
+        pane.open.clear(); pane.dirs.clear(); savePanes(); renderPane(pane); loadPane(pane);
+      };
+      el.querySelector(".wx-pane-head").onclick = (e) => {
+        const b = e.target.closest("[data-pa]"); if (!b) return;
+        if (b.dataset.pa === "close") { S.panes = S.panes.filter((x) => x !== pane); savePanes(); el.remove(); }
+        if (b.dataset.pa === "refresh") { pane.dirs.clear(); loadPane(pane); }
+        if (b.dataset.pa === "collapse") { pane.open.clear(); renderPane(pane); }
+      };
+      el.querySelector(".wx-pane-tree").onclick = async (e) => {
+        const row = e.target.closest(".tr"); if (!row) return;
+        const path = row.dataset.path;
+        if (row.dataset.dir) { if (pane.open.has(path)) pane.open.delete(path); else { pane.open.add(path); if (!pane.dirs.has(path)) await loadPane(pane, path); } renderPane(pane); }
+        else W.openPath(path);
+      };
+      el.querySelector(".wx-pane-tree").oncontextmenu = (e) => {
+        const row = e.target.closest(".tr"); if (!row) return;
+        e.preventDefault();
+        const path = row.dataset.path, dir = row.dataset.dir ? path : parentOf(path);
+        W.menu(e.clientX, e.clientY, [!row.dataset.dir && { label: "Open", act: () => W.openPath(path) }, { label: "Open in terminal", act: () => W.newTerminal(dir) },
+          { label: "Copy path", act: () => W.copyText(path, "Path copied") }, { label: "Ask Claude about this", act: () => W.claudeMention?.([path]) }]);
+      };
+      el.querySelector(".wx-pane-tree").ondragstart = (e) => { const row = e.target.closest(".tr"); if (row) { e.dataTransfer.setData("text/x-paths", JSON.stringify([row.dataset.path])); e.dataTransfer.setData("text/plain", row.dataset.path); } };
+    }
+    return el;
+  }
+  async function loadPane(pane, path = pane.root) {
+    try { const d = await api(`/api/files/list?path=${encodeURIComponent(path)}`); pane.dirs.set(path, d.items.filter((it) => it.name !== ".git")); }
+    catch (e) { pane.dirs.set(path, []); if (path === pane.root) toast(e.message); }
+    renderPane(pane);
+  }
+  function renderPane(pane) {
+    const el = paneEl(pane), sel = el.querySelector("select");
+    sel.innerHTML = S.roots.map((r) => `<option value="${esc(r.path)}">${esc(r.name)} · ${esc(r.path)}</option>`).join("") + '<option value="__open">＋ Open folder from / …</option>';
+    sel.value = pane.root;
+    const rows = [];
+    const walk = (dir, depth) => { for (const it of pane.dirs.get(dir) || []) { rows.push({ it, depth }); if (it.dir && pane.open.has(it.path)) walk(it.path, depth + 1); } };
+    walk(pane.root, 0);
+    el.querySelector(".wx-pane-tree").innerHTML = rows.map(({ it, depth }) => { const open = it.dir && pane.open.has(it.path);
+      return `<div class="tr" data-path="${esc(it.path)}"${it.dir ? ' data-dir="1"' : ""} draggable="true" style="--d:${depth}" title="${esc(it.path)}"><span class="chev${open ? " open" : ""}">${it.dir ? "›" : ""}</span>${W.fileIcon(it.name, it.dir, 16, open)}<span class="tn">${esc(it.name)}</span></div>`; }).join("")
+      || '<div class="wx-empty muted">Empty folder.</div>';
+  }
+
   // --- editor tabs ------------------------------------------------------------------------
   const viewActions = {
     changed: () => renderTabs(),
@@ -559,20 +704,31 @@ window.WSP = window.WSP || {};
   W.reloadCleanTabs = () => S.tabs.forEach((t) => { if (!t.dirty) { t.file = null; t.text = null; t.pdf = null; t.stamp = Date.now(); W.renderView(t, t.host, viewActions); } });
 
   // --- view ------------------------------------------------------------------------------
-  async function viewWorkspace() {
+  // The Workspace and the File Manager are the same windows: the File Manager hides Claude Code.
+  async function viewWorkspace(quiet, noClaude = false) {
     $("#view").classList.add("flush");
     if (S.el) {
-      if (S.el.parentNode !== $("#view")) { $("#view").replaceChildren(S.el); applySizes(); refresh(); }
+      S.noClaude = noClaude;
+      if (S.el.parentNode !== $("#view")) { $("#view").replaceChildren(S.el); refresh(); }
+      applySizes();
       return;
     }
+    S.noClaude = noClaude;
     S.el = document.createElement("div");
     S.el.className = "wsp";
     S.el.innerHTML = LAYOUT;
     $("#view").replaceChildren(S.el);
     applySizes(); wireGutters(); wireExplorer(); renderTabs();
     W.initTerminals(S.el.querySelector("#wt"));
-    W.initClaude(S.el.querySelector("#wc"));
+    W.initClaude(S.el.querySelector("#wc")).then(() => {
+      const head = S.el.querySelector(".wc-head");
+      head?.insertAdjacentHTML("beforeend", winBtns("claude"));
+      S.el.querySelector("#wc").insertAdjacentHTML("afterbegin", strip("claude", "Claude Code"));
+      applySizes();
+    });
+    S.el.addEventListener("click", (e) => { const b = e.target.closest("[data-win]"); if (b) { e.stopPropagation(); W.win(b.dataset.pane, b.dataset.win); } });
     await loadRoots();
+    for (const r of read("ac.wsp.panes", [])) if (S.roots.some((x) => x.path === r)) addPane(r);
     const saved = read("ac.wsp.tabs", { open: [] });
     for (const p of saved.open || []) await W.openPath(p);
     if (saved.active && S.tabs.some((t) => t.path === saved.active)) activate(S.tabs.find((t) => t.path === saved.active));
@@ -591,5 +747,6 @@ window.WSP = window.WSP || {};
     });
   }
 
-  registerView({ id: "workspace", title: "Workspace", icon: "workspace", admin: true }, viewWorkspace, 0);
+  registerView({ id: "workspace", title: "Workspace", icon: "workspace", admin: true }, (q) => viewWorkspace(q, false), 0);
+  W.viewFileManager = (q) => viewWorkspace(q, true);
 })();

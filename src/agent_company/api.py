@@ -824,6 +824,10 @@ def create_app(start_background: bool = True) -> FastAPI:
     def file_list(path: str, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         return files.listing(path)
 
+    @app.get("/api/files/git-status")
+    def files_git_status(path: str, _: dict[str, Any] = Depends(admin_user)) -> dict[str, str]:
+        return files.git_status(path)
+
     @app.get("/api/files/read")
     def file_read(path: str, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         return files.read(path)

@@ -373,3 +373,35 @@ table.csv .c4 { color: var(--t-kw); } table.csv .c5 { color: var(--t-num); } tab
 .wc-hacts { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
 .wc-hacts .btn { padding: 2px 9px; font-size: 12px; }
 .wc-hempty { padding: 14px 6px; text-align: center; }
+
+/* windows: minimise to a strip, maximise to the whole Workspace */
+.win-btn { opacity: .7; } .win-btn:hover { opacity: 1; }
+.win-strip { display: none; }
+.wsp.min-explorer .wx > :not(.win-strip), .wsp.min-claude .wc > :not(.win-strip) { display: none !important; }
+.wsp.min-explorer .wx > .win-strip, .wsp.min-claude .wc > .win-strip { display: flex; }
+.win-strip { flex: 1; align-items: flex-start; justify-content: center; padding-top: 12px; border: 0; background: var(--panel); color: var(--muted); cursor: pointer; font: 700 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.win-strip span { writing-mode: vertical-rl; }
+.win-strip:hover { color: var(--accent); background: var(--panel-2); }
+.wsp.max-explorer > :not(.wx), .wsp.max-claude > :not(.wc) { display: none; }
+.wsp.max-editor .wx, .wsp.max-editor .wc, .wsp.max-terminal .wx, .wsp.max-terminal .wc, .wsp.max-editor .wgut.v, .wsp.max-terminal .wgut.v { display: none; }
+.wsp.max-terminal .we-hosts, .wsp.min-editor .we-hosts { display: none; }
+.wsp.no-claude > .wc, .wsp.no-claude > .wgut[data-g="right"] { display: none; }
+.we-bar { display: flex; align-items: stretch; background: var(--panel-2); border-bottom: 1px solid var(--border); flex: none; }
+.we-bar .we-tabs { flex: 1; border-bottom: 0; min-width: 0; }
+.we-acts { display: flex; align-items: center; gap: 2px; padding: 0 4px; flex: none; }
+/* explorer: filter, inline names, git decorations, extra panes */
+.wx-filter { padding: 0 8px 6px; } .wx-filter input { font-size: 12.5px; padding: 3px 8px; }
+.tr-input { cursor: default; } .tr-edit { flex: 1; min-width: 0; height: 21px; padding: 0 4px; font-size: 13px; border-radius: 3px; border-color: var(--accent); }
+.tr .gd { margin-left: auto; padding-left: 8px; font: 700 11px var(--mono); flex: none; }
+.tr.g-M .tn, .tr.g-M .gd { color: #d29922; } .tr.g-U .tn, .tr.g-U .gd, .tr.g-A .tn, .tr.g-A .gd { color: #3fb950; }
+.tr.g-D .tn, .tr.g-D .gd { color: var(--bad); text-decoration: line-through; } .tr.g-R .tn, .tr.g-R .gd { color: #58a6ff; }
+.tr.g-dot .gd { color: #d29922; font-size: 9px; }
+:root:not([data-theme="dark"]) .tr.g-M .tn, :root:not([data-theme="dark"]) .tr.g-M .gd { color: #9a6700; }
+.wx-panes { display: contents; }
+.wx-pane { flex: 1 1 0; min-height: 90px; display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+.wx-pane-head { display: flex; gap: 2px; align-items: center; padding: 4px 6px; background: var(--panel-2); }
+.wx-pane-head select { font-size: 12px; padding: 2px 4px; min-width: 0; flex: 1; }
+.wx-pane-tree { flex: 1; overflow: auto; font-size: 13px; padding: 2px 0 12px; outline: none; }
+.wx > .wx-tree { flex: 1 1 0; min-height: 90px; }
+.wx-head { flex-wrap: wrap; row-gap: 2px; }
+.wx-head .wx-title { min-width: 70px; }

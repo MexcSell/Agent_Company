@@ -27,7 +27,7 @@ window.WSP = window.WSP || {};
       <button class="icon-btn sm" data-t="new" title="New terminal">${W.svg("M12 5v14M5 12h14")}</button>
       <button class="icon-btn sm" data-t="reconnect" title="Reconnect the terminal">${W.svg("M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7")}</button>
       <button class="icon-btn sm" data-t="clear" title="Clear">${W.svg("M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13")}</button>
-      <button class="icon-btn sm" data-t="max" title="Maximise / restore">${W.svg("M4 14v6h6M20 10V4h-6M4 20l7-7M20 4l-7 7")}</button>
+      ${W.winBtns ? W.winBtns("terminal") : ""}
       <button class="icon-btn sm" data-t="hide" title="Hide panel (Ctrl+\`)">${W.svg("M6 9l6 6 6-6")}</button></div>
       <div class="wt-hosts"></div>`;
     el.querySelector(".wt-bar").onclick = (e) => {

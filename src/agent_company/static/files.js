@@ -1,5 +1,6 @@
 "use strict";
-// File manager (administrators): panes with multi-select, drag to move, copy/paste, viewer and editor.
+// Folder picker, file preview modal and Markdown rendering used across the dashboard (projects, research).
+// The File Manager page itself is the Workspace without Claude Code (workspace.js).
 
 const FILE_ICON = { folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z", python: "M8 6l-6 6 6 6M16 6l6 6-6 6", javascript: "M8 6l-6 6 6 6M16 6l6 6-6 6", typescript: "M8 6l-6 6 6 6M16 6l6 6-6 6", markdown: "M4 6h16v12H4zM7 15V9l2.5 3L12 9v6M15 9v6l2-2 2 2", json: "M8 4c-2 0-2 2-2 4s-2 4-2 4 2 2 2 4 0 4 2 4M16 4c2 0 2 2 2 4s2 4 2 4-2 2-2 4 0 4-2 4", image: "M4 5h16v14H4zM8 10a1.5 1.5 0 1 0 0-.1M20 16l-5-5-8 8", shell: "M4 17l6-5-6-5M12 19h8", file: "M6 2h9l5 5v15H6zM14 2v6h6" };
 const fileIcon = (k) => `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${FILE_ICON[k] || FILE_ICON.file}"/></svg>`;
@@ -151,4 +152,6 @@ function pickFolder(start) {
   });
 }
 
-registerView({ id: "files", title: "File Manager", icon: "folder", admin: true }, viewFiles);
+// The File Manager is the Workspace's explorer, preview and terminal (workspace.js), without Claude Code; its "+"
+// adds explorer panes. The pane code above stays for reference by nothing else and is not registered.
+registerView({ id: "files", title: "File Manager", icon: "folder", admin: true }, (q) => WSP.viewFileManager(q));

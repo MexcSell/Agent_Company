@@ -305,3 +305,40 @@ def folders(path: str = "") -> dict[str, Any]:
         pass
     return {"path": str(p), "parent": str(p.parent) if p.parent != p else None, "folders": subs[:500],
             "git": (p / ".git").exists()}
+
+
+def git_status(path: str) -> dict[str, str]:
+    """VS Code-style decorations for the explorer: {absolute path: M|A|D|U|R|C} for changed files under `path`
+    (a folder inside a git work tree), and "dot" for folders that contain changes. Empty outside git."""
+    import subprocess
+
+    p = resolve(path)
+    try:
+        top = subprocess.run(["git", "-C", str(p), "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                             timeout=10)
+        if top.returncode != 0:
+            return {}
+        root = Path(top.stdout.strip())
+        out = subprocess.run(["git", "-C", str(root), "status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+                             capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    marks: dict[str, str] = {}
+    parts = out.split("\0")
+    i = 0
+    while i < len(parts):
+        entry = parts[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        xy, rel = entry[:2], entry[3:]
+        if xy[0] in "RC":
+            i += 1  # the original name follows a rename or copy
+        code = "U" if xy == "??" else "D" if "D" in xy else "A" if "A" in xy else xy[0] if xy[0] in "RC" else "M"
+        full = root / rel.rstrip("/")
+        marks[str(full)] = code
+        for parent in full.parents:
+            if parent == root or root not in parent.parents:
+                break
+            marks.setdefault(str(parent), "dot")
+    return {k: v for k, v in marks.items() if k == str(p) or k.startswith(str(p) + "/")}
