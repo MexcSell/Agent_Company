@@ -118,6 +118,8 @@ no ML):
 - Record the isolation level of each run: L0 text-only (HTTP models), L1 read-only tools,
   L2 worktree write (Claude Code / Codex `workspace-write`). L3 (container/gVisor) is `open`,
   needed before agents run untrusted code from outside sources.
+  `containers.py` can install and start Docker and LXD VMs (administrator's tools), which L3 can
+  build on, but no agent run uses them yet: that alone is not isolation.
 - Every executor run has a timeout and output-size limit; exceeding it terminates the run
   (SEC-013).
 

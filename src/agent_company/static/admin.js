@@ -99,8 +99,63 @@ async function viewSystem() {
     <div class="card"><h2>Repository</h2><table>${row("Path", `<code>${esc(st.repository.path)}</code>`)}${row("Branch", esc(st.repository.branch))}${row("Last commit", esc(st.repository.head))}${row("Uncommitted changes", st.repository.uncommitted_changes ? `<span class="pill pending">${st.repository.uncommitted_changes}</span> approved platform goals cannot merge until these are committed` : "none")}</table></div>
     <div class="card"><h2>Safe restart</h2>${sup && sup.running ? `<table>${row("Supervisor", `pid ${sup.pid} · server pid ${sup.child_pid} · ${sup.restarts} restart(s)`)}${row("Last restart", sup.last_restart ? ago(new Date(sup.last_restart * 1000).toISOString()) : "never")}${sup.pending ? row("Pending", esc(sup.pending)) : ""}${sup.last_error ? row("Last problem", `<span class="pill failed">refused</span> ${esc(sup.last_error)}`) : ""}</table>
       <p class="muted">Code changes are checked, tried on a side port and swapped in once no goal is running.</p><button class="btn primary" id="sys-restart">Restart safely</button>`
-      : `<p class="muted">Not supervised. Start the service with <code>uv run python -m agent_company supervise</code> to get automatic, safe restarts when the code changes (for example after approving a platform goal).</p>`}</div></div>`;
+      : `<p class="muted">Not supervised. Start the service with <code>uv run python -m agent_company supervise</code> to get automatic, safe restarts when the code changes (for example after approving a platform goal).</p>`}</div></div>
+    <div class="grid halves" id="sys-host" style="margin-top:12px"><div class="card"><h2>Docker and virtual machines</h2><span class="muted">Checking…</span></div></div>`;
   $("#sys-restart") && ($("#sys-restart").onclick = async () => { try { await api("/api/system/restart", { method: "POST" }); toast("Restart requested"); } catch (e) { toast(e.message); } });
+  hostCards();
+}
+
+// Docker and LXD virtual machines on this host (administrator's tools; agents never reach them).
+async function hostCards() {
+  const box = $("#sys-host");
+  if (!box) return;
+  let h;
+  try { h = await api("/api/containers"); } catch (e) { box.innerHTML = `<div class="card"><h2>Docker and virtual machines</h2><span class="muted">${esc(e.message)}</span></div>`; return; }
+  const d = h.docker, v = h.vm, busy = h.jobs.some((j) => j.status === "running");
+  const row = (k, val) => `<tr><td class="muted">${k}</td><td>${val}</td></tr>`;
+  const dis = busy ? "disabled" : "";
+  const dockerBody = !d.installed
+    ? `<p class="muted">Docker is not installed.</p><button class="btn primary" data-host="docker/install" ${dis}>Install Docker</button>`
+    : `<table>${row("Daemon", d.running ? `${pill("active")} ${esc(d.version || "")}` : `${pill("failed")} stopped${d.error ? ` <span class="muted">${esc(d.error)}</span>` : ""}`)}${row("Start at boot", d.enabled ? "yes" : "no")}${d.running ? row("Containers", `${d.containers_running} running of ${d.containers} · ${d.images} images`) : ""}${d.disk.map((x) => row(esc(x.Type), `${esc(x.Size)} · reclaimable ${esc(x.Reclaimable)}`)).join("")}</table>
+      <div class="row" style="margin-top:8px">${d.running ? `<button class="btn" data-host="docker/restart" data-sure="Restart Docker? Running containers restart too." ${dis}>Restart</button><button class="btn danger" data-host="docker/stop" data-sure="Stop Docker? Every running container on this host stops, including other people's." ${dis}>Stop</button><button class="btn" id="dk-clean" ${dis}>Clean up…</button>` : `<button class="btn primary" data-host="docker/start" ${dis}>Start Docker</button>`}</div>`;
+  const vmReady = v.lxd_installed && v.lxd_initialized;
+  const vmBody = `<table>${row("KVM", v.kvm ? `${pill("active")} /dev/kvm` : `${pill("failed")} missing${v.cpu_virtualization ? "" : " (no VT-x/AMD-V)"}`)}${row("LXD", vmReady ? pill("active") : v.lxd_installed ? "installed, not initialised" : "not installed")}</table>
+    ${vmReady ? `${v.instances.length ? `<div class="table-wrap"><table>${v.instances.map((i) => `<tr><td><strong>${esc(i.name)}</strong><div class="muted">${esc(i.type)} · ${esc(i.image)}${i.cpus ? ` · ${esc(i.cpus)} CPU` : ""}${i.memory ? ` · ${esc(i.memory)}` : ""}</div></td><td>${pill(i.status === "Running" ? "active" : "paused")} ${esc(i.status)}<div class="muted">${i.ipv4.map(esc).join(", ")}</div></td><td class="row">${i.status === "Running" ? `<button class="btn sm" data-host="vms/${esc(i.name)}/stop" ${dis}>Stop</button>` : `<button class="btn sm" data-host="vms/${esc(i.name)}/start" ${dis}>Start</button>`}<button class="btn sm danger" data-host="vms/${esc(i.name)}/delete" data-sure="Delete ${esc(i.name)} and its disk?" ${dis}>Delete</button></td></tr>`).join("")}</table></div>` : '<p class="muted">No instances yet.</p>'}
+      <form id="vm-form" class="row" style="margin-top:8px"><input id="vm-name" required placeholder="name" pattern="[a-z][a-z0-9\\-]{0,62}" style="width:120px"><input id="vm-image" value="ubuntu:24.04" style="width:130px"><select id="vm-kind" style="width:auto"><option value="vm">VM</option><option value="ct">container</option></select><input id="vm-cpus" type="number" min="1" value="2" style="width:60px" title="CPUs"><input id="vm-mem" value="4GiB" style="width:70px" title="Memory"><button class="btn primary" ${dis}>Launch</button></form>`
+    : v.kvm ? `<button class="btn primary" data-host="lxd/install" style="margin-top:8px" ${dis}>${v.lxd_installed ? "Initialise LXD" : "Install LXD"}</button>` : ""}`;
+  const jobs = h.jobs.length ? `<div class="card"><h2>Jobs</h2><div class="events">${h.jobs.map((j) => `<details><summary>${pill(j.status)} ${esc(j.kind.replace("_", " "))} <strong>${esc(j.target)}</strong> <span class="muted">${ago(new Date(j.started * 1000).toISOString())}</span></summary><pre style="white-space:pre-wrap;max-height:240px;overflow:auto">${esc(j.output || j.commands.join("\n"))}</pre></details>`).join("")}</div><p class="muted">Full log: <code>data/logs/containers.log</code></p></div>` : "";
+  box.innerHTML = `<div class="card"><h2>Docker</h2>${dockerBody}</div><div class="card"><h2>Virtual machines (LXD)</h2>${vmBody}</div>${jobs}`;
+  const run = async (path, body) => { try { await api(`/api/containers/${path}`, { method: "POST", body }); toast("Started"); hostCards(); } catch (e) { toast(e.message); } };
+  box.querySelectorAll("[data-host]").forEach((b) => (b.onclick = () => { if (b.dataset.sure && !confirm(b.dataset.sure)) return; run(b.dataset.host); }));
+  $("#vm-form") && ($("#vm-form").onsubmit = (e) => { e.preventDefault(); run("vms", { name: $("#vm-name").value.trim(), image: $("#vm-image").value.trim(), vm: $("#vm-kind").value === "vm", cpus: Number($("#vm-cpus").value), memory: $("#vm-mem").value.trim() }); });
+  $("#dk-clean") && ($("#dk-clean").onclick = () => cleanupModal());
+  if (busy) setTimeout(() => $("#sys-host") === box && hostCards(), 3000);
+}
+
+async function cleanupModal() {
+  const opts = () => ({ all_images: $("#cl-all").checked, volumes: $("#cl-vol").checked, older_than: $("#cl-age").value.trim() });
+  const show = async () => {
+    $("#cl-out").innerHTML = '<span class="muted">Checking…</span>';
+    try {
+      const r = await api("/api/containers/cleanup", { method: "POST", body: opts() });
+      const list = (xs, f) => xs.length ? `<ul>${xs.slice(0, 50).map((x) => `<li>${f(x)}</li>`).join("")}${xs.length > 50 ? `<li class="muted">… ${xs.length - 50} more</li>` : ""}</ul>` : '<p class="muted">none</p>';
+      $("#cl-out").innerHTML = `<h3>Stopped containers (${r.stopped_containers.length})</h3>${list(r.stopped_containers, (c) => `${esc(c.name)} <span class="muted">[${esc(c.image)}] ${esc(c.status)}</span>`)}
+        <h3>${r.all_images ? "Images no container uses" : "Dangling images"} (${r.images.length})</h3>${list(r.images, (i) => `${esc(i.name)} <span class="muted">${esc(i.id)} · ${esc(i.size)}</span>`)}
+        <p>Custom networks: ${r.custom_networks} (only those with no container are removed) · Build cache reclaimable: ${esc(r.build_cache_reclaimable)}${r.unused_anonymous_volumes !== undefined ? ` · Unused anonymous volumes: ${r.unused_anonymous_volumes}` : ""}</p>
+        <p class="muted">Only things older than ${esc(r.older_than)} are removed. Running containers, the images they use and named volumes are never touched.</p>`;
+    } catch (e) { $("#cl-out").innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+  };
+  modal(`<h2>Clean up Docker</h2><div class="row"><label class="row"><input type="checkbox" id="cl-all"> also tagged images no container uses (must be pulled or built again)</label></div>
+    <div class="row"><label class="row"><input type="checkbox" id="cl-vol"> also unused anonymous volumes</label></div>
+    <div class="row">Older than <input id="cl-age" value="24h" style="width:70px"><button class="btn" id="cl-check">Check again</button><button class="btn danger" id="cl-apply">Remove</button></div><div id="cl-out"></div>`);
+  $("#cl-check").onclick = show;
+  $("#cl-all").onchange = show;
+  $("#cl-vol").onchange = show;
+  $("#cl-apply").onclick = async () => {
+    if (!confirm("Remove what is listed?")) return;
+    try { await api("/api/containers/cleanup", { method: "POST", body: { ...opts(), apply: true } }); toast("Clean-up started"); $("#modal").hidden = true; hostCards(); } catch (e) { toast(e.message); }
+  };
+  show();
 }
 
 registerView({ id: "system", title: "System", icon: "system", admin: true }, viewSystem);

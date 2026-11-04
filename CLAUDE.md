@@ -14,6 +14,7 @@ feature came from.
   proposals, uploads); `learning.py` + `evolution.py`; `performance.py` (defects, certification,
   metrics); `evaluation.py` (eval harness); `research.py`; `governance.py` (audit, notifications,
   command policy); `prefs.py` (DB settings); `gitsync.py` (push with each user's own GitHub token or SSH key, `data/git-keys/`); `files.py`; `supervisor.py` + `system.py`;
+  `containers.py` (Docker and LXD VMs on the host: install, start, clean up; admin-only);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
   (Workspace Claude Code panel); `api.py`; `static/` (dashboard, plain JS, one file per area;
   `workspace.js` + `viewer.js` + `console.js` + `claude.js` are the Workspace home page, sharing
@@ -41,6 +42,8 @@ feature came from.
   command filter, Claude Code with every tool allowed in the opened folder), are admin-only, and
   every session/prompt is audited. Do not route them through the sandbox, and do not loosen
   `ClaudeCodeExecutor`/`CLAUDE_BASH` because of them. Workspace WebSockets must check the Origin.
+  The same holds for `containers.py` (Docker, LXD VMs): admin API and CLI only, audited; agents
+  and executors never call it.
 - DB writes inside an open `session()` must use that session (`log_event(..., s=s)`,
   `notify(..., s=s)`), never a second connection: SQLite allows one writer.
 - New tables/columns: add them to `db.py`; `_add_missing_columns` migrates existing databases.
@@ -59,4 +62,5 @@ feature came from.
   `systemctl restart|status agent-company`, log in `data/logs/agent-company.log`
 - `uv run python -m agent_company goal "<goal>" --check "<cmd>" [--allow 'src/*'] [--protect-tests]`
 - `uv run python -m agent_company eval --suite smoke --label <name> [--repeats 3]` / `eval --compare a b`
+- `uv run python -m agent_company host status|install-docker|docker-start|cleanup [--yes]|install-lxd|launch <name> [--container]|stop|delete <name>`
 - `uv run python -m agent_company "<request>"` – classic four-agent crew

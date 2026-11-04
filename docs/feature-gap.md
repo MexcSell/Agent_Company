@@ -49,6 +49,11 @@ Status: `done` = implemented in this repository, `skip` = deliberately not taken
 | Reviewer from a different model family than the driver | done (`avoid_provider` for QA/security tasks) |
 | Eval harness: run benchmark goals N times, pass rate / cost / time / end reason, compare labels | done (`evaluation.py`, `evals/smoke.json`, `eval` CLI, Performance view) |
 | Local OpenAI-compatible model server (llama-server, LM Studio, vLLM) via base URL | done (model `base_url`, `api_key_env`) |
+| Docker on the host: detect, install (apt `docker.io`), start/stop/restart the daemon | done (`containers.py`, System view → Docker, `host` CLI) |
+| `scripts/docker-cleanup.sh`: dry-run report, then prune stopped containers, dangling (or all unused) images, unused networks, build cache, optionally anonymous volumes, older than an age | done (`containers.cleanup`, System view → Clean up…, `host cleanup [--yes]`) |
+| Virtual machines: install/initialise LXD, launch Ubuntu (or other) VMs or system containers on KVM, start/stop/delete | done (`containers.install_lxd`, `launch`, `instance_action`; System view → Virtual machines) |
+| Background image builds (`phase-6/tools/build_bg.sh`: nice/ionice, pinned cores, one at a time) | skip: Agent Company builds no images; host jobs already run one at a time |
+| Harbor task Dockerfiles (`eval/make_tb_tasks.py`) | skip: eval-specific; our eval harness runs goals in worktrees |
 
 ## From /home/luca/update (ASEAO specs, SPEC11-14, guides)
 

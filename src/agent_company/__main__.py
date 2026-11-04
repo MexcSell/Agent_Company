@@ -7,6 +7,7 @@
   python -m agent_company models                 model catalog, availability and routes
   python -m agent_company agents                 agents by room
   python -m agent_company approve <goal id>      merge a goal that passed the gate
+  python -m agent_company host status|cleanup|launch <name>|...   Docker and LXD VMs on this host
 """
 
 from __future__ import annotations
@@ -17,7 +18,45 @@ import sys
 
 from dotenv import load_dotenv
 
-COMMANDS = {"serve", "goal", "crawl", "models", "agents", "approve", "crew", "rotate", "eval", "supervise"}
+COMMANDS = {"serve", "goal", "crawl", "models", "agents", "approve", "crew", "rotate", "eval", "supervise", "host"}
+
+
+def _host(args: argparse.Namespace) -> None:
+    from agent_company import containers, governance
+
+    act = args.action
+    if act in ("launch", "start", "stop", "restart", "delete") and not args.name:
+        raise SystemExit(f"host {act} needs an instance name")
+    try:
+        if act == "status":
+            print(json.dumps({k: v for k, v in containers.status().items() if k != "jobs"}, indent=2))
+            return
+        if act == "cleanup":
+            out = containers.cleanup(args.yes, args.all_images, args.volumes, args.older_than)
+            job = out.pop("job", None)
+            print(json.dumps(out, indent=2))
+            if not job:
+                print("Dry run. Re-run with --yes to remove the above.")
+                return
+        elif act == "install-docker":
+            job = containers.install_docker()
+        elif act.startswith("docker-"):
+            job = containers.docker_service(act.split("-", 1)[1])
+        elif act == "install-lxd":
+            job = containers.install_lxd()
+        elif act == "launch":
+            job = containers.launch(args.name, args.image, not args.container, args.cpus, args.memory, args.disk)
+        else:
+            job = containers.instance_action(args.name, act)
+    except containers.HostError as e:
+        raise SystemExit(str(e)) from e
+    governance.audit("cli", f"host_{act.replace('-', '_')}", args.name or "", after={"job": job["id"]},
+                     severity="high")
+    done = containers.wait(job["id"])
+    print(done["output"].rstrip())
+    print(f"{done['kind']}: {done['status']}")
+    if done["status"] != "done":
+        raise SystemExit(1)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -60,6 +99,19 @@ def main(argv: list[str] | None = None) -> None:
     ev.add_argument("--compare", nargs=2, metavar=("A", "B"))
     a = sub.add_parser("approve")
     a.add_argument("goal_id", type=int)
+    h = sub.add_parser("host", help="Docker and LXD virtual machines on this host")
+    h.add_argument("action", choices=["status", "install-docker", "docker-start", "docker-stop", "docker-restart",
+                                      "cleanup", "install-lxd", "launch", "start", "stop", "restart", "delete"])
+    h.add_argument("name", nargs="?", help="instance name (launch, start, stop, restart, delete)")
+    h.add_argument("--image", default="ubuntu:24.04")
+    h.add_argument("--container", action="store_true", help="launch a system container instead of a VM")
+    h.add_argument("--cpus", type=int, default=2)
+    h.add_argument("--memory", default="4GiB")
+    h.add_argument("--disk", default="")
+    h.add_argument("--yes", action="store_true", help="cleanup: remove, not just list")
+    h.add_argument("--all-images", action="store_true")
+    h.add_argument("--volumes", action="store_true")
+    h.add_argument("--older-than", default="24h")
     args = p.parse_args(argv)
 
     if args.cmd == "crew":
@@ -84,6 +136,10 @@ def main(argv: list[str] | None = None) -> None:
         from agent_company.supervisor import Supervisor
 
         Supervisor(args.port, args.host).run()
+        return
+
+    if args.cmd == "host":  # needs no model: runs before bootstrap
+        _host(args)
         return
 
     from agent_company.api import bootstrap

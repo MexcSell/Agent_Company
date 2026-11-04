@@ -19,6 +19,7 @@ from starlette.background import BackgroundTask
 
 from agent_company import (
     auth,
+    containers,
     evaluation,
     evolution,
     files,
@@ -180,6 +181,22 @@ class NoticeBody(BaseModel):
 def _audit(user: dict[str, Any], action: str, target: Any = "", before: dict[str, Any] | None = None,
            after: dict[str, Any] | None = None, severity: str = "info") -> None:
     governance.audit(f"user:{user['name']}", action, str(target), before, after, severity)
+
+
+class CleanupBody(BaseModel):
+    apply: bool = False
+    all_images: bool = False
+    volumes: bool = False
+    older_than: str = "24h"
+
+
+class VmBody(BaseModel):
+    name: str = Field(min_length=1, max_length=63)
+    image: str = "ubuntu:24.04"
+    vm: bool = True
+    cpus: int = 2
+    memory: str = "4GiB"
+    disk: str = ""
 
 
 class AgentBody(BaseModel):
@@ -541,6 +558,56 @@ def create_app(start_background: bool = True) -> FastAPI:
                                      "(start it with `python -m agent_company supervise`)")
         _audit(admin, "system_restart", "service", severity="high")
         return {"requested": True}
+
+    # --- Docker and virtual machines (administrators' tools, never agents') ---
+    def _host(call: Any) -> dict[str, Any]:
+        try:
+            return call()
+        except containers.HostError as e:
+            raise HTTPException(409, str(e)) from e
+
+    @app.get("/api/containers")
+    def containers_status(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return containers.status()
+
+    @app.post("/api/containers/docker/install")
+    def docker_install(admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _host(containers.install_docker)
+        _audit(admin, "docker_install", "docker", after={"job": out["id"]}, severity="high")
+        return out
+
+    @app.post("/api/containers/docker/{action}")
+    def docker_service(action: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _host(lambda: containers.docker_service(action))
+        _audit(admin, f"docker_{action}", "docker", after={"job": out["id"]}, severity="high")
+        return out
+
+    @app.post("/api/containers/cleanup")
+    def docker_cleanup(body: CleanupBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _host(lambda: containers.cleanup(**body.model_dump()))
+        if body.apply:
+            _audit(admin, "docker_cleanup", "docker", after={**body.model_dump(), "job": out["job"]["id"]},
+                   severity="high")
+        return out
+
+    @app.post("/api/containers/lxd/install")
+    def lxd_install(admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _host(containers.install_lxd)
+        _audit(admin, "lxd_install", "lxd", after={"job": out["id"]}, severity="high")
+        return out
+
+    @app.post("/api/containers/vms")
+    def vm_launch(body: VmBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _host(lambda: containers.launch(**body.model_dump()))
+        _audit(admin, "vm_launch", body.name, after={**body.model_dump(), "job": out["id"]}, severity="high")
+        return out
+
+    @app.post("/api/containers/vms/{name}/{action}")
+    def vm_action(name: str, action: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _host(lambda: containers.instance_action(name, action))
+        _audit(admin, f"vm_{action}", name, after={"job": out["id"]},
+               severity="high" if action == "delete" else "info")
+        return out
 
     # --- file manager (administrators) ---
     @app.get("/api/files/roots")
