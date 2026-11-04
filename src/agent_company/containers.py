@@ -75,7 +75,20 @@ def _can_elevate() -> bool:
 # --- status -----------------------------------------------------------------------------------
 
 
-def docker_status() -> dict[str, Any]:
+_df_cache: tuple[float, list[dict[str, Any]]] = (0.0, [])
+
+
+def _disk(fresh: bool = False) -> list[dict[str, Any]]:
+    """`docker system df`: seconds of disk scanning on a big host, so status polls reuse it for a minute."""
+    global _df_cache
+    if fresh or time.monotonic() - _df_cache[0] > 60:
+        rows = [{k: d.get(k) for k in ("Type", "TotalCount", "Active", "Size", "Reclaimable")}
+                for d in _json_lines(_run(["docker", "system", "df", "--format", "json"], 60).stdout)]
+        _df_cache = (time.monotonic(), rows)
+    return _df_cache[1]
+
+
+def docker_status(fresh: bool = False) -> dict[str, Any]:
     out: dict[str, Any] = {"installed": shutil.which("docker") is not None, "running": False, "version": None,
                            "enabled": None, "containers": 0, "containers_running": 0, "images": 0, "disk": []}
     if not out["installed"]:
@@ -92,8 +105,7 @@ def docker_status() -> dict[str, Any]:
         return out
     out.update(running=True, version=info.get("ServerVersion"), containers=info.get("Containers", 0),
                containers_running=info.get("ContainersRunning", 0), images=info.get("Images", 0))
-    out["disk"] = [{k: d.get(k) for k in ("Type", "TotalCount", "Active", "Size", "Reclaimable")}
-                   for d in _json_lines(_run(["docker", "system", "df", "--format", "json"], 60).stdout)]
+    out["disk"] = _disk(fresh)
     return out
 
 
@@ -235,7 +247,7 @@ def cleanup(apply: bool = False, all_images: bool = False, volumes: bool = False
     """
     if not AGE_RE.match(older_than):
         raise HostError("older_than must look like 24h, 90m or 3600s")
-    d = docker_status()
+    d = docker_status(fresh=True)
     if not d["running"]:
         raise HostError("Docker is not running")
     stopped = [{"name": c.get("Names"), "image": c.get("Image"), "status": c.get("Status")}

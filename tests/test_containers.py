@@ -29,6 +29,7 @@ class FakeHost:
                             lambda p: {containers.LXD: lxd, "/dev/kvm": True}.get(p, real_exists(p)))
         monkeypatch.setattr(containers.os, "geteuid", lambda: 0 if root else 1000)
         monkeypatch.setattr(containers, "_run", self.run)
+        monkeypatch.setattr(containers, "_df_cache", (0.0, []))
 
     def run(self, cmd, timeout=30):
         self.calls.append(cmd)
@@ -56,6 +57,15 @@ class FakeHost:
         elif "prune" in cmd or "launch" in cmd:
             self.block.wait(5)
         return subprocess.CompletedProcess(cmd, rc, out, "")
+
+
+def test_status_polls_reuse_the_disk_scan(monkeypatch):
+    host = FakeHost(monkeypatch)
+    containers.status()
+    assert containers.status()["docker"]["disk"][1]["Reclaimable"] == "4GB"
+    assert sum(c[:3] == ["docker", "system", "df"] for c in host.calls) == 1
+    containers.cleanup()  # the clean-up report always scans afresh
+    assert sum(c[:3] == ["docker", "system", "df"] for c in host.calls) == 2
 
 
 def test_cleanup_dry_run_lists_and_never_prunes(monkeypatch):
