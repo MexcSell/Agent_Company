@@ -464,7 +464,6 @@ $("#theme").onclick = toggleTheme;
 $("#layout").onclick = layoutPicker;
 applyLayout();
 window.addEventListener("resize", () => applyProjectLayout());
-$("#logout").onclick = async () => { await api("/api/auth/logout", { method: "POST" }).catch(() => {}); clearInterval(refreshTimer); liveSource?.close(); liveSource = null; me = null; authScreen("register", "Signed out. Register again or reload to sign in on this computer."); };
 applyTheme(store.get("ac.theme"));
 api("/api/auth/me").then(boot).catch(tryDevice);
 }

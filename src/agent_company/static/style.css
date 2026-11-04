@@ -181,7 +181,6 @@ pre.code { max-height: 70vh; }
   #whoami { display: none; }
   .topbar { padding: 0 8px; }
   .topbar h1 { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #logout { padding: 4px 8px; white-space: nowrap; }
 }
 td.row { display: table-cell; }
 td.row > * { margin: 2px 4px 2px 0; }
