@@ -26,7 +26,8 @@ window.WSP = window.WSP || {};
     logs: new Map(), provider: store.get(K + ".provider") || "claude", models: {} };
   try { C.closed = new Set(JSON.parse(store.get(K + ".closed") || "[]")); } catch { /* ignore */ }
   const ENTRY = { "claude-vscode": "VS Code", cli: "Terminal", "sdk-cli": "SDK", "sdk-ts": "SDK", "sdk-py": "SDK", "claude-desktop": "Desktop", "claude-jetbrains": "JetBrains" };
-  const PLACEHOLDER = "Ask Claude Code to read, change, run or explain anything in this folder…  Enter sends · Shift+Enter new line · paste or drop images · /status /tasks /agents /history";
+  const PLACEHOLDER = opt.projectId ? "Tell the General Manager what you want…  Enter sends · Shift+Enter new line · paste or drop images"
+    : "Ask Claude Code to read, change, run or explain anything in this folder…  Enter sends · Shift+Enter new line · paste or drop images · /status /tasks /agents /history";
   const newConv = (o = {}) => ({ id: `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, session: "", cwd: "", title: "", runs: [], provider: C.provider, ...o });
   const PROV = { claude: { label: "Claude Code", logo: "✳" }, codex: { label: "Codex", logo: "◎" }, copilot: { label: "Copilot", logo: "⬡" } };
   const provOf = (c) => (c?.provider && PROV[c.provider] ? c.provider : "claude");
@@ -457,8 +458,13 @@ window.WSP = window.WSP || {};
         log.innerHTML = `<div class="cc-error">The <code>claude</code> command is not installed on the server. Install Claude Code (<code>npm i -g @anthropic-ai/claude-code</code>) and sign in with <code>claude</code> in the terminal below.</div>`;
         return;
       }
-      log.innerHTML = `<div class="cc-empty"><div class="wc-logo big">✳</div><h3>Claude Code</h3><p class="muted">Works in the folder open in the explorer, with full access: it can read and edit files, run commands and search the web.</p>
-        <div class="cc-suggest">${["Explain how this project is structured", "Run the tests and fix what fails", "Find TODOs and summarise them", "Review the latest git changes"].map((s) => `<button type="button" class="btn sm">${esc(s)}</button>`).join("")}</div></div>`;
+      const gm = !!opt.projectId, p = provOf(c);
+      const ideas = gm ? ["Which agents does this project need? Staff them.", "Set up this project's .claude/ configuration (agents, rules, skills, hooks)", "Start a goal: add tests for the main module and make them pass", "Status: what is the team working on?"]
+        : ["Explain how this project is structured", "Run the tests and fix what fails", "Find TODOs and summarise them", "Review the latest git changes"];
+      log.innerHTML = `<div class="cc-empty"><div class="wc-logo big" data-p="${p}">${gm ? "★" : PROV[p].logo}</div><h3>${gm ? "General Manager" : PROV[p].label}</h3><p class="muted">${gm
+        ? `The company's General Manager (${esc(PROV[p].label)}), in this project's folder. Tell it what you want: it decides which agents, skills and plugins are needed, keeps <code>.claude/</code> up to date, and runs the agent loop until the goal is met.`
+        : "Works in the folder open in the explorer, with full access: it can read and edit files, run commands and search the web."}</p>
+        <div class="cc-suggest">${ideas.map((s) => `<button type="button" class="btn sm">${esc(s)}</button>`).join("")}</div></div>`;
       log.querySelectorAll(".cc-suggest button").forEach((b) => (b.onclick = () => { const ta = C.el.querySelector("#wc-input"); ta.value = b.dataset.say || b.textContent; ta.oninput(); ta.focus(); }));
       return;
     }

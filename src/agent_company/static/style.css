@@ -392,3 +392,28 @@ td.row > * { margin: 2px 4px 2px 0; }
 .org-tree ul.wrap::before { top: -24px; height: 22px; }
 .org-tree ul.wrap > li { padding-top: 0; }
 .org-tree ul.wrap > li::before, .org-tree ul.wrap > li::after { display: none; }
+/* Projects: GM panel / orders in the middle, agents and organisation on the right, optional files */
+.proj-main { display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow: hidden !important; }
+.proj-head .btn.icon.on { color: var(--accent); border-color: var(--accent); }
+.proj-modes { margin: 2px 0 0; }
+.proj-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.proj-body > .wc { flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.proj-body .msgs { flex: 1; min-height: 0; }
+.proj-rail { display: flex; flex-direction: column; gap: 10px; overflow: hidden !important; }
+.proj-rail-top { flex: 1 1 55%; min-height: 0; overflow: auto; }
+.proj-rail-org { flex: 1 1 45%; min-height: 0; overflow: auto; border-top: 1px solid var(--border); padding-top: 6px; }
+.proj-rail-org h3 { margin-top: 0; }
+.porg-tree, .porg-tree ul { list-style: none; margin: 0; padding-left: 14px; }
+.porg-tree { padding-left: 0; }
+.porg-tree li { position: relative; padding: 2px 0; }
+.porg-tree ul li::before { content: ""; position: absolute; left: -9px; top: 0; bottom: 50%; width: 8px; border-left: 1.5px solid var(--border); border-bottom: 1.5px solid var(--border); border-bottom-left-radius: 4px; }
+.porg { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 6px; font-size: 12.5px; cursor: pointer; color: var(--muted); }
+.porg svg { width: 14px; height: 14px; }
+.porg.on { color: var(--text); background: var(--panel-2); font-weight: 600; }
+.porg.busy { color: var(--warn); }
+.porg:hover { background: var(--hover, var(--panel-2)); color: var(--text); }
+.proj-files { overflow: auto; }
+.pfiles { display: flex; flex-direction: column; margin-top: 6px; }
+.pfile { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 5px; cursor: pointer; font-size: 13px; }
+.pfile:hover { background: var(--panel-2); }
+.proj-av { color: #db2777; }

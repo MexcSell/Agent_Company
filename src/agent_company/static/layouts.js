@@ -54,9 +54,11 @@ function projectArrangement() {
 function applyProjectLayout() {
   const grid = $(".proj");
   if (!grid) return;
-  const { order, sizes, vertical } = projectArrangement();
-  const panes = { list: $(".proj-side"), chat: $(".proj-main"), agents: $(".proj-rail") };
+  const arr = projectArrangement(), vertical = arr.vertical, sizes = { files: 22, ...arr.sizes };
+  const order = grid.classList.contains("with-files") ? [...arr.order, "files"] : arr.order;
+  const panes = { list: $(".proj-side"), chat: $(".proj-main"), agents: $(".proj-rail"), files: $(".proj-files") };
   Object.entries(panes).forEach(([k, el]) => { if (el) el.style.display = order.includes(k) ? "" : "none"; });
+  if (panes.files) panes.files.hidden = !order.includes("files");
   grid.querySelectorAll(".gutter").forEach((g) => g.remove());
   grid.classList.toggle("vertical", vertical);
   const tracks = [];
@@ -76,10 +78,11 @@ function applyProjectLayout() {
 
 function startResize(e, grid, left, right) {
   e.preventDefault();
-  const { sizes } = projectArrangement();
+  const sizes = { files: 22, ...projectArrangement().sizes };
   const total = sizes[left] + sizes[right];
-  const a = grid.querySelector(left === "list" ? ".proj-side" : left === "chat" ? ".proj-main" : ".proj-rail").getBoundingClientRect();
-  const b = grid.querySelector(right === "list" ? ".proj-side" : right === "chat" ? ".proj-main" : ".proj-rail").getBoundingClientRect();
+  const sel = { list: ".proj-side", chat: ".proj-main", agents: ".proj-rail", files: ".proj-files" };
+  const a = grid.querySelector(sel[left]).getBoundingClientRect();
+  const b = grid.querySelector(sel[right]).getBoundingClientRect();
   const span = a.width + b.width;
   const move = (ev) => {
     const share = Math.min(0.85, Math.max(0.15, (ev.clientX - a.left) / span));

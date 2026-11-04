@@ -381,14 +381,15 @@ async function permissionsForm(u) {
   const all = p.projects === "all";
   const box = (k, label) => `<label class="row"><input type="checkbox" data-perm="${k}" style="width:auto" ${p[k] ? "checked" : ""}> ${label}</label>`;
   modal(`<h2>Permissions · ${esc(u.name)}</h2><form id="pm">
-    <h3>Projects</h3><label class="row"><input type="checkbox" id="pm-all" style="width:auto" ${all ? "checked" : ""}> Every regular project (the protected platform project is always admin-only)</label>
-    <div id="pm-list" style="margin-left:24px">${list.filter((x) => !x.protected).map((x) => `<label class="row"><input type="checkbox" data-pid="${x.id}" style="width:auto" ${all || p.projects.includes(x.id) ? "checked" : ""} ${all ? "disabled" : ""}> ${esc(x.name)}</label>`).join("") || '<span class="muted">No projects.</span>'}</div>
+    <h3>Projects</h3><p class="muted">A user always sees the projects they created. The protected platform project is always admin-only.</p><label class="row"><input type="checkbox" id="pm-all" style="width:auto" ${all ? "checked" : ""}> Every regular project</label>
+    <div id="pm-list" style="margin-left:24px">${list.filter((x) => !x.protected).map((x) => `<label class="row"><input type="checkbox" data-pid="${x.id}" style="width:auto" ${all || (Array.isArray(p.projects) && p.projects.includes(x.id)) ? "checked" : ""} ${all ? "disabled" : ""}> ${esc(x.name)}</label>`).join("") || '<span class="muted">No projects.</span>'}</div>
     <h3>Capabilities</h3>${box("run", "Give orders, start goals, ask the research room (without it: read only)")}${box("create_projects", "Create projects (in a new workspace)")}${box("manage_agents", "Manage agents and evolution")}${box("manage_models", "Manage models and routes")}
-    <div class="row" style="margin-top:12px"><button class="btn primary">Save</button></div></form>`);
+    <div class="row" style="margin-top:12px"><button class="btn icon primary" title="Save" aria-label="Save">${icon("save", 16)}</button></div></form>`);
   $("#pm-all").onchange = (e) => document.querySelectorAll("[data-pid]").forEach((c) => (c.disabled = e.target.checked));
   $("#pm").onsubmit = async (e) => {
     e.preventDefault();
-    const body = { projects: $("#pm-all").checked ? "all" : [...document.querySelectorAll("[data-pid]:checked")].map((c) => Number(c.dataset.pid)) };
+    const ticked = [...document.querySelectorAll("[data-pid]:checked")].map((c) => Number(c.dataset.pid));
+    const body = { projects: $("#pm-all").checked ? "all" : ticked.length ? ticked : "own" };
     document.querySelectorAll("[data-perm]").forEach((c) => (body[c.dataset.perm] = c.checked));
     try { await api(`/api/users/${u.id}/permissions`, { method: "PUT", body }); $("#modal").hidden = true; toast("Saved"); viewUsers(); } catch (err) { toast(err.message); }
   };
