@@ -812,8 +812,8 @@ def create_app(start_background: bool = True) -> FastAPI:
             writer.close()
             try:
                 await ws.close()
-            except RuntimeError:
-                pass  # the browser went first
+            except Exception:  # noqa: BLE001 - the browser went first (RuntimeError or ClientDisconnected)
+                pass
 
     # --- file manager (administrators) ---
     @app.get("/api/files/roots")
