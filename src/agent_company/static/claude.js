@@ -23,7 +23,7 @@ window.WSP = window.WSP || {};
   const C = { el: null, convs: [], tab: "", drafts: {}, open: new Set(), history: [], hpos: -1, model: store.get(K + ".model") || "default",
     sessions: [], names: {}, view: { sid: "", events: [], next: 0, d: null }, info: "", cli: null, dtimer: 0, following: "",
     closed: new Set(), hist: { open: false, tab: "running", q: "", items: [], total: 0, at: 0, timer: 0 },
-    logs: new Map(), provider: store.get(K + ".provider") || "claude", models: {} };
+    logs: new Map(), provider: opt.provider || store.get(K + ".provider") || "claude", models: {} };
   try { C.closed = new Set(JSON.parse(store.get(K + ".closed") || "[]")); } catch { /* ignore */ }
   const ENTRY = { "claude-vscode": "VS Code", cli: "Terminal", "sdk-cli": "SDK", "sdk-ts": "SDK", "sdk-py": "SDK", "claude-desktop": "Desktop", "claude-jetbrains": "JetBrains" };
   const PLACEHOLDER = opt.projectId ? "Tell the General Manager what you want…  Enter sends · Shift+Enter new line · paste or drop images"
@@ -203,7 +203,7 @@ window.WSP = window.WSP || {};
     const c = cur(), p = c ? provOf(c) : "claude", info = C.models[p];
     const ps = C.el.querySelector("#wc-prov");
     ps.innerHTML = Object.entries(PROV).map(([k, v]) => { const m = C.models[k]; return `<option value="${k}" ${m && !m.available ? "disabled" : ""}>${v.label}${m && !m.available ? " (not installed)" : ""}</option>`; }).join("");
-    ps.value = p; ps.disabled = !c || !!c.session || busy(c);
+    ps.value = p; ps.disabled = !c || !!c.session || busy(c) || !!opt.provider;
     ps.title = c?.session ? "This conversation stays with its agent: start a new conversation for another" : "Which agent this conversation talks to";
     C.el.querySelector(".wc-head .wc-logo").textContent = PROV[p].logo;
     C.el.querySelector(".wc-head .wc-logo").dataset.p = p;

@@ -41,7 +41,7 @@ async function viewProjects(quiet) {
   }));
   $("#proj-list").querySelectorAll("[data-check]").forEach((c) => (c.onchange = () => toggleCheck(Number(c.dataset.check))));
   if ($("#p-del")) $("#p-del").disabled = projectChecked.size === 0;
-  if (selectedProject !== null) await projectMain(selectedProject, quiet && lastMessageId > 0);
+  if (selectedProject !== null) await projectMain(selectedProject, quiet);  // projectMain keeps what is already shown
 }
 
 function toggleCheck(id) {
@@ -113,28 +113,34 @@ function renderMessages(append) {
 
 // The General Manager as Claude Code in the project's folder (administrators): one panel per project, kept.
 function gmPanel(d) {
-  let g = gmPanels.get(d.id);
+  const prov = d.gm?.kind === "codex" ? "codex" : "claude", key = `${d.id}:${prov}`;
+  let g = gmPanels.get(key);
   if (!g) {
     const el = document.createElement("aside");
     el.className = "wc proj-gm";
-    const panel = WSP.makeClaudePanel({ key: `ac.proj.${d.id}.gm`, root: () => d.path, projectId: () => d.id });
+    const panel = WSP.makeClaudePanel({ key: `ac.proj.${d.id}.gm${prov === "claude" ? "" : "." + prov}`, root: () => d.path, projectId: () => d.id, provider: prov });
     g = { el, panel, ready: panel.init(el) };
-    gmPanels.set(d.id, g);
+    gmPanels.set(key, g);
   }
   return g;
 }
 
 async function projectMain(id, incremental) {
   const d = await api(`/api/projects/${id}`);
-  const gmOk = me.is_admin;  // the Claude Code GM is the administrators' tool (CLAUDE.md); everyone has Orders
+  // The GM conversation is a CLI agent (Claude Code or Codex, whichever the GM resolves to now) and the
+  // administrators' tool (CLAUDE.md); with an API model as GM, or for other users, orders go to the agent loop.
+  const cli = ["claude_code", "codex"].includes(d.gm?.kind);
+  const gmOk = me.is_admin && cli;
   const mode = gmOk ? projectMode : "orders";
   const main = $("#proj-main");
-  if (!incremental || main.dataset.pid !== String(id) || main.dataset.mode !== mode) {
-    main.dataset.pid = id; main.dataset.mode = mode;
+  const gmKey = `${mode}:${d.gm?.kind}:${d.gm?.model}`;
+  if (!incremental || main.dataset.pid !== String(id) || main.dataset.mode !== gmKey) {
+    main.dataset.pid = id; main.dataset.mode = gmKey;
     main.innerHTML = `<div class="row nowrap proj-head"><div class="grow"><h2 style="margin:0">${esc(d.name)} ${d.protected ? '<span class="pill">protected</span>' : ""}</h2><div class="muted mono ellipsis">${esc(d.path)}${d.github_url ? " · " + esc(d.github_url) : ""}</div></div>
         ${me.is_admin ? ib("edit", "Edit the project", 'id="p-edit"', "sm") + ib("download", "Write the company catalog into this project's .claude/ (agents, rules, skills, commands, hooks, .mcp.json)", 'id="p-config"', "sm") + ib("git", d.github_url ? "Sync to GitHub" : "Set a GitHub URL first", `id="p-sync" ${d.github_url ? "" : "disabled"}`, "sm") + ib("workspace", "Open the folder in the Workspace", 'id="p-wsp"', "sm") : ""}
         ${ib("folder", projectFiles ? "Hide files" : "Show files", 'id="p-files"', `sm ${projectFiles ? "on" : ""}`)}${ib("stop", "Stop the project's running goals", 'id="p-stop"', "sm danger")}</div>
-      <div class="ag-tabs small proj-modes" role="tablist">${gmOk ? `<button role="tab" data-pmode="gm" aria-selected="${mode === "gm"}">${icon("general_manager", 14)} General Manager</button>` : ""}<button role="tab" data-pmode="orders" aria-selected="${mode === "orders"}">${icon("send", 14)} Orders &amp; reports</button></div>
+      <div class="ag-tabs small proj-modes" role="tablist">${gmOk ? `<button role="tab" data-pmode="gm" aria-selected="${mode === "gm"}">${icon("general_manager", 14)} General Manager</button>` : ""}<button role="tab" data-pmode="orders" aria-selected="${mode === "orders"}">${icon("send", 14)} Orders &amp; reports</button>
+        <span class="grow"></span><span class="muted gm-is" title="${esc(d.gm?.reason || "")}">GM: ${esc(d.gm?.model || "–")}${cli ? "" : " · orders go to the agent loop"}</span></div>
       <div id="p-props"></div><div class="proj-body" id="proj-body"></div>`;
     main.querySelectorAll("[data-pmode]").forEach((b) => (b.onclick = () => { projectMode = b.dataset.pmode; store.set("ac.project.mode", projectMode); projectMain(id); }));
     $("#p-edit") && ($("#p-edit").onclick = () => projectForm(d));

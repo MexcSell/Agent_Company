@@ -417,3 +417,4 @@ td.row > * { margin: 2px 4px 2px 0; }
 .pfile { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 5px; cursor: pointer; font-size: 13px; }
 .pfile:hover { background: var(--panel-2); }
 .proj-av { color: #db2777; }
+.gm-is { font-size: 12px; padding-bottom: 4px; }

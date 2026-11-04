@@ -1355,7 +1355,16 @@ def create_app(start_background: bool = True) -> FastAPI:
         with session() as s:
             goals = [_goal_dict(g) for g in s.scalars(select(Goal).where(Goal.project_id == p.id)
                                                        .order_by(Goal.id.desc()).limit(50))]
-        return projects.project_dict(p) | {"members": projects.members(p.id), "goals": goals,
+        gm = None
+        if p.manager_id:  # who the owner talks to: the GM's model now (Claude Code, Codex, an API model, another agent's)
+            from agent_company.db import Agent
+
+            with session() as s:
+                a = s.get(Agent, p.manager_id)
+                pref = a.model_pref if a else None
+            c = router.resolve("general_manager", pref)
+            gm = {"model": c.name, "kind": c.kind, "reason": c.reason}
+        return projects.project_dict(p) | {"gm": gm, "members": projects.members(p.id), "goals": goals,
                                            "proposals": [x for x in projects.list_proposals(user)
                                                          if x["project_id"] == p.id][:30]}
 

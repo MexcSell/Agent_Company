@@ -288,10 +288,13 @@ def _command(run: Run) -> list[str]:
 
 
 def _prompt_text(run: Run) -> str:
+    prompt = run.prompt
+    if run.provider == "codex" and run.system and not run.resume:  # Codex has no system-prompt flag: first prompt carries it
+        prompt = f"{run.system}\n\n---\n\n{prompt}"
     if not run.images:
-        return run.prompt
+        return prompt
     files = "\n".join(f"- {i['path']} ({i['name']})" for i in run.images)
-    return f"{run.prompt}\n\nAttached files (open them with the Read tool):\n{files}"
+    return f"{prompt}\n\nAttached files (open them with the Read tool):\n{files}"
 
 
 def _env() -> dict[str, str]:
