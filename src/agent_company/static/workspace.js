@@ -58,8 +58,11 @@ window.WSP = window.WSP || {};
     const g = IMG.has(ext) ? GLYPH.image : AUD.has(ext) ? GLYPH.audio : VID.has(ext) ? GLYPH.video : null;
     if (g) return `<svg class="fico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${g[0]}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${g[1]}"/></svg>`;
     const b = NAMES[lower] || (lower.startsWith(".env") ? NAMES[".env"] : null) || EXT[ext] || (lower.startsWith("readme") ? NAMES["readme.md"] : null);
-    if (!b) return `<svg class="fico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="#8a94a3" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h9l5 5v15H6zM14 2v6h6"/></svg>`;
-    return `<span class="fbadge${b.label.length > 2 ? " l3" : ""}" style="--c:${b.color};--s:${size}px" aria-hidden="true">${esc(b.label)}</span>`;
+    if (!b) return `<svg class="fico fdoc" width="${size}" height="${size}" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 1h6.3L13.8 5.3v8.9c0 .5-.4.8-.8.8H3.2c-.5 0-.8-.3-.8-.8V1.8c0-.5.3-.8.8-.8z" fill="#8a94a3" fill-opacity=".85"/><path d="M9.5 1v3.5c0 .5.3.8.8.8h3.5z" fill="#fff" fill-opacity=".45"/><path d="M5 8.5h6M5 10.5h6M5 12.5h4" stroke="#fff" stroke-width=".9" stroke-opacity=".8"/></svg>`;
+    // A coloured page with a folded corner and the type's short name: the look of VS Code icon themes.
+    const n = b.label.length, fs = n <= 1 ? 7.4 : n === 2 ? 6.4 : 4.9;
+    return `<svg class="fico fdoc" width="${size}" height="${size}" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 1h6.3L13.8 5.3v8.9c0 .5-.4.8-.8.8H3.2c-.5 0-.8-.3-.8-.8V1.8c0-.5.3-.8.8-.8z" fill="${b.color}"/>`
+      + `<path d="M9.5 1v3.5c0 .5.3.8.8.8h3.5z" fill="#fff" fill-opacity=".45"/><text x="8.1" y="${n <= 2 ? 12.6 : 12.2}" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-weight="800" font-size="${fs}" fill="#fff" letter-spacing="-.2">${esc(b.label)}</text></svg>`;
   };
   const KIND = { py: "python", js: "javascript", mjs: "javascript", jsx: "javascript", ts: "typescript", tsx: "typescript", json: "json", ipynb: "json", md: "markdown", mdx: "markdown",
     html: "html", htm: "html", vue: "html", svelte: "html", xml: "xml", css: "css", scss: "css", less: "css", sh: "shell", bash: "shell", zsh: "shell", toml: "toml", ini: "toml", cfg: "toml", env: "env",
