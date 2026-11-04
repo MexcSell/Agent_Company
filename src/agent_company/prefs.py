@@ -24,13 +24,15 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "auto_push": (bool, "Push approved work to the project's GitHub remote"),
     "quality_commands": (list, "Default quality commands for goals that set none"),
     "executor": (str, "'auto' (Model Router) or 'offline' (simulator)"),
+    "transport": (str, "How browsers connect: 'https' (encrypted, default) or 'http' (sealed cookie only)"),
 }
 LIMITS: dict[str, tuple[float, float]] = {
     "max_iterations": (1, 10), "max_parallel": (1, 16), "command_timeout": (10, 7200),
     "rotation_interval": (0, 86400), "max_proposal_goals": (0, 20), "goal_budget_usd": (0, 10_000),
     "goal_time_budget": (0, 7 * 86400),
 }
-CHOICES: dict[str, set[str]] = {"proposal_policy": {"user", "superiors"}, "executor": {"auto", "offline"}}
+CHOICES: dict[str, set[str]] = {"proposal_policy": {"user", "superiors"}, "executor": {"auto", "offline"},
+                                "transport": {"https", "http"}}
 
 
 def _coerce(key: str, value: Any) -> Any:
@@ -84,6 +86,10 @@ def set_value(key: str, value: Any) -> Any:
     if key not in SCHEMA:
         raise ValueError(f"unknown setting {key!r}")
     v = _coerce(key, value)
+    if key == "transport":  # reconfigure nginx first; a failure leaves the setting unchanged
+        from agent_company import transport
+
+        transport.apply(v)
     with session() as s:
         row = s.get(Setting, key)
         if row is None:
@@ -95,6 +101,10 @@ def set_value(key: str, value: Any) -> Any:
 
 
 def clear(key: str) -> None:
+    if key == "transport":  # back to the .env value
+        from agent_company import transport
+
+        transport.apply(config.load_settings().transport)
     with session() as s:
         row = s.get(Setting, key)
         if row is not None:

@@ -89,9 +89,14 @@ def _new_session(s, user_id: int) -> str:  # noqa: ANN001
     return token
 
 
-def register(name: str, device_secret: str, device_info: dict[str, Any] | None = None
-             ) -> tuple[dict[str, Any], str | None]:
-    """Create (or re-bind) an account. Returns (user, session token or None if pending)."""
+def register(name: str, device_secret: str, device_info: dict[str, Any] | None = None,
+             may_become_admin: bool = True) -> tuple[dict[str, Any], str | None]:
+    """Create (or re-bind) an account. Returns (user, session token or None if pending).
+
+    `may_become_admin=False` (a request from another computer) refuses to create the
+    first administrator: the server listens on the network, and the first account gets
+    the Workspace shell, so it must be created from the server itself (localhost).
+    """
     name = (name or "").strip()
     if not NAME_RE.match(name):
         raise AuthError(400, "invalid_name", "Names are 3-32 letters, digits, dots, dashes or underscores.")
@@ -120,6 +125,10 @@ def register(name: str, device_secret: str, device_info: dict[str, Any] | None =
             return user_dict(existing), None
         first = s.scalar(select(func.count()).select_from(User).where(User.is_admin,
                                                                       User.status == "active")) == 0
+        if first and not may_become_admin:
+            raise AuthError(403, "setup_local_only",
+                            "No administrator yet: create the first account from the server itself "
+                            "(http://localhost:4900, e.g. through an SSH or VS Code port forward).")
         u = User(name=name, device_hash=dh, device_info=info, is_admin=first,
                  status="active" if first else "pending", approved_at=now() if first else None)
         s.add(u)

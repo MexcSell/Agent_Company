@@ -9,12 +9,21 @@ from agent_company.api import create_app
 
 @pytest.fixture
 def app():
-    with TestClient(create_app(start_background=False)) as c:
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as c:
         yield c
 
 
 def secret():
     return secrets.token_urlsafe(32)
+
+
+def test_first_administrator_only_from_the_server_itself(app):
+    remote = TestClient(app.app, client=("203.0.113.7", 40000))
+    r = remote.post("/api/auth/register", json={"name": "intruder", "device_secret": secret()})
+    assert r.status_code == 403 and r.json()["code"] == "setup_local_only"
+    assert app.post("/api/auth/register", json={"name": "luca", "device_secret": secret()}).json()["user"]["is_admin"]
+    r = remote.post("/api/auth/register", json={"name": "visitor", "device_secret": secret()})
+    assert r.status_code == 200 and r.json()["user"]["status"] == "pending"
 
 
 def test_device_registration_and_approval_flow(app):

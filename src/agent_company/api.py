@@ -10,11 +10,12 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile, WebSocket
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from starlette.background import BackgroundTask
 
 from agent_company import (
     auth,
@@ -30,7 +31,10 @@ from agent_company import (
     registry,
     research,
     router,
+    terminal,
+    transport,
     usage,
+    workspace,
 )
 from agent_company.config import settings
 from agent_company.db import Agent, Event, Goal, Task, session
@@ -56,8 +60,23 @@ def reset_after_restart() -> None:
 
 # --- auth dependencies --------------------------------------------------------------
 
+def _client_ip(conn: Request | WebSocket) -> str | None:
+    return conn.client.host if conn.client else None
+
+
+def _session_token(conn: Request | WebSocket) -> str | None:
+    """The session token in the sealed cookie, if it belongs to this browser (and IP, over HTTP)."""
+    return transport.unseal(conn.cookies.get(COOKIE), conn.headers.get("user-agent"), _client_ip(conn))
+
+
+def _wrong_scheme(conn: Request | WebSocket) -> bool:
+    """Behind nginx (X-Forwarded-Proto set), a request on the scheme the Settings page did not choose."""
+    proto = conn.headers.get("x-forwarded-proto")
+    return proto is not None and proto != settings().transport
+
+
 def current_user(request: Request) -> dict[str, Any]:
-    u = auth.user_for_token(request.cookies.get(COOKIE))
+    u = auth.user_for_token(_session_token(request))
     if u is None:
         raise HTTPException(401, "sign in required")
     return u
@@ -80,8 +99,11 @@ def allowed(perm: str):  # noqa: ANN201
 
 
 def _set_cookie(request: Request, response: Response, token: str) -> None:
-    response.set_cookie(COOKIE, token, max_age=auth.SESSION_DAYS * 86400, httponly=True, samesite="lax",
-                        secure=request.url.scheme == "https", path="/")
+    """Sealed (AES-GCM) and bound to the browser; over plain HTTP also bound to the client IP."""
+    https = request.url.scheme == "https"
+    value = transport.seal(token, request.headers.get("user-agent"), None if https else _client_ip(request))
+    response.set_cookie(COOKIE, value, max_age=auth.SESSION_DAYS * 86400, httponly=True, samesite="lax",
+                        secure=https, path="/")
 
 
 _signups: dict[str, deque[float]] = defaultdict(deque)
@@ -184,6 +206,47 @@ class PathsBody(BaseModel):
     paths: list[str]
 
 
+class PathBody(BaseModel):
+    path: str
+
+
+class CompressBody(BaseModel):
+    paths: list[str] = Field(min_length=1)
+    name: str = ""
+
+
+class TerminalBody(BaseModel):
+    cwd: str = ""
+    cols: int = Field(default=120, ge=2, le=1000)
+    rows: int = Field(default=32, ge=2, le=500)
+
+
+class ClaudeBody(BaseModel):
+    prompt: str = Field(min_length=1, max_length=100_000)
+    cwd: str = ""
+    session_id: str = ""
+    model: str = ""
+    attachments: list[str] = Field(default_factory=list, max_length=10)
+
+
+def ws_admin(ws: WebSocket) -> dict[str, Any] | None:
+    """WebSocket auth: an administrator's session cookie and a same-origin page.
+
+    Browsers do not apply CORS to WebSockets, so without the Origin check any site the
+    administrator visits could open a shell here with their cookie.
+    """
+    from urllib.parse import urlparse
+
+    origin = ws.headers.get("origin")
+    hosts = {ws.headers.get("host"), *(h.strip() for h in ws.headers.get("x-forwarded-host", "").split(",") if h.strip())}
+    if origin and urlparse(origin).netloc not in hosts:  # X-Forwarded-Host: behind a reverse proxy
+        return None
+    if _wrong_scheme(ws):
+        return None
+    user = auth.user_for_token(_session_token(ws))
+    return user if user and user["is_admin"] else None
+
+
 class EvalBody(BaseModel):
     suite: str
     label: str = Field(pattern=r"^[\w.-]{1,64}$")
@@ -243,6 +306,10 @@ def create_app(start_background: bool = True) -> FastAPI:
         app.state.queue = None
         app.state.rotation = None
         if start_background:
+            try:  # nginx in front (MANAGE_NGINX=1): certificates and the site for the chosen scheme
+                transport.apply(settings().transport)
+            except Exception as e:  # noqa: BLE001 - the app itself must still come up
+                print(f"[transport] nginx not configured: {e}", flush=True)
             reset_after_restart()
             app.state.queue = loop.GoalQueue(workers=2)
             app.state.queue.start()
@@ -252,8 +319,21 @@ def create_app(start_background: bool = True) -> FastAPI:
         yield
         if app.state.rotation:
             app.state.rotation.stop.set()
+        terminal.close_all()
+        workspace.stop_all()
 
     app = FastAPI(title="Agent Company", version="0.2.0", lifespan=lifespan)
+
+    @app.middleware("http")
+    async def _scheme_gate(request: Request, call_next):  # noqa: ANN001, ANN202
+        """Requests on the other scheme get a hand-off page (pages) or 421 (API), never data."""
+        if _wrong_scheme(request) and request.url.path not in transport.EXEMPT:
+            target = settings().transport
+            if request.url.path.startswith("/api/"):
+                return JSONResponse({"code": "wrong_scheme", "detail": f"This server uses {target.upper()} now.",
+                                     "scheme": target}, status_code=421)
+            return HTMLResponse(transport.handoff_page(target), headers={"Cache-Control": "no-store"})
+        return await call_next(request)
 
     @app.exception_handler(auth.AuthError)
     async def _auth_error(_: Request, e: auth.AuthError) -> JSONResponse:
@@ -283,7 +363,8 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.post("/api/auth/register")
     def register(body: RegisterBody, request: Request, response: Response) -> dict[str, Any]:
         _rate_limit(request)
-        user, token = auth.register(body.name, body.device_secret, body.device_info)
+        local = bool(request.client) and request.client.host in ("127.0.0.1", "::1")
+        user, token = auth.register(body.name, body.device_secret, body.device_info, may_become_admin=local)
         if token:
             _set_cookie(request, response, token)
         return {"user": user, "signed_in": token is not None}
@@ -296,7 +377,7 @@ def create_app(start_background: bool = True) -> FastAPI:
 
     @app.post("/api/auth/logout")
     def logout(request: Request, response: Response) -> dict[str, Any]:
-        auth.logout(request.cookies.get(COOKIE))
+        auth.logout(_session_token(request))
         response.delete_cookie(COOKIE, path="/")
         return {"ok": True}
 
@@ -464,10 +545,47 @@ def create_app(start_background: bool = True) -> FastAPI:
         return files.read(path)
 
     @app.get("/api/files/raw")
-    def file_raw(path: str, _: dict[str, Any] = Depends(admin_user)) -> FileResponse:
+    def file_raw(path: str, download: bool = False, admin: dict[str, Any] = Depends(admin_user)) -> FileResponse:
         p = files.resolve(path)
-        return FileResponse(p, headers={"X-Content-Type-Options": "nosniff",
-                                        "Content-Security-Policy": "default-src 'none'; img-src 'self'"})
+        if p.is_dir():
+            raise HTTPException(400, "that is a folder; download it as a zip")
+        if download:
+            _audit(admin, "file_download", str(p))
+        return FileResponse(p, filename=p.name if download else None,
+                            content_disposition_type="attachment" if download else "inline",
+                            headers={"X-Content-Type-Options": "nosniff",
+                                     "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'"})
+
+    @app.get("/api/files/archive")
+    def file_archive(paths: list[str] = Query(...), admin: dict[str, Any] = Depends(admin_user)) -> FileResponse:
+        tmp, name = files.download_archive(paths)
+        _audit(admin, "file_download", ", ".join(paths)[:256], after={"zip": name})
+        return FileResponse(tmp, filename=name, media_type="application/zip",
+                            background=BackgroundTask(tmp.unlink, missing_ok=True))
+
+    @app.post("/api/files/compress")
+    def file_compress(body: CompressBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = files.compress(body.paths, body.name)
+        _audit(admin, "file_compress", out["path"], after={"from": body.paths[:20]})
+        return out
+
+    @app.post("/api/files/extract")
+    def file_extract(body: PathBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = files.extract(body.path)
+        _audit(admin, "file_extract", body.path, after=out)
+        return out
+
+    @app.post("/api/files/roots")
+    def file_root_add(body: PathBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, str]:
+        out = files.add_root(body.path)
+        _audit(admin, "folder_open", out["path"], severity="high")
+        return out
+
+    @app.delete("/api/files/roots")
+    def file_root_remove(path: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        files.remove_root(path)
+        _audit(admin, "folder_close", path)
+        return {"ok": True}
 
     @app.put("/api/files/write")
     def file_write(body: WriteBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
@@ -506,6 +624,120 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.get("/api/files/folders")
     def file_folders(path: str = "", _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         return files.folders(path)
+
+    # --- workspace: terminals (administrators; the admin's own console, not an agent) ---
+    @app.get("/api/terminal/sessions")
+    def terminal_list(_: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
+        return terminal.list_sessions()
+
+    @app.post("/api/terminal/sessions")
+    async def terminal_open(body: TerminalBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        sess = terminal.create(body.cwd, admin["name"], body.cols, body.rows)
+        _audit(admin, "terminal_open", sess.cwd, after={"id": sess.id}, severity="high")
+        return sess.to_dict()
+
+    @app.delete("/api/terminal/sessions/{sid}")
+    def terminal_close(sid: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        terminal.get(sid)
+        terminal.close(sid)
+        _audit(admin, "terminal_close", sid)
+        return {"ok": True}
+
+    @app.websocket("/api/terminal/sessions/{sid}/ws")
+    async def terminal_ws(ws: WebSocket, sid: str) -> None:
+        import asyncio
+        import json as _json
+
+        from starlette.websockets import WebSocketDisconnect
+
+        if ws_admin(ws) is None:
+            await ws.close(code=4403)
+            return
+        sess = terminal.SESSIONS.get(sid)
+        if sess is None:
+            await ws.close(code=4404)
+            return
+        await ws.accept()
+        q = sess.attach()
+
+        async def outgoing() -> None:
+            if sess.buffer:
+                await ws.send_bytes(bytes(sess.buffer))
+            if not sess.alive:
+                await ws.send_text(_json.dumps({"t": "exit", "code": sess.exit_code}))
+                return
+            while True:
+                data = await q.get()
+                if data is None:
+                    await ws.send_text(_json.dumps({"t": "exit", "code": sess.exit_code}))
+                    return
+                while not q.empty():  # coalesce bursts into one frame
+                    more = q.get_nowait()
+                    if more is None:
+                        q.put_nowait(None)
+                        break
+                    data += more
+                await ws.send_bytes(data)
+
+        async def incoming() -> None:
+            while True:
+                msg = await ws.receive()
+                if msg["type"] == "websocket.disconnect":
+                    return
+                if msg.get("bytes"):
+                    sess.write(msg["bytes"])
+                elif msg.get("text"):
+                    try:
+                        m = _json.loads(msg["text"])
+                    except ValueError:
+                        continue
+                    if m.get("t") == "in":
+                        sess.write(str(m.get("data", "")).encode())
+                    elif m.get("t") == "resize":
+                        sess.resize(int(m.get("cols") or 80), int(m.get("rows") or 24))
+
+        # Either side ending (shell exit, browser gone, send to a closed socket) ends the
+        # connection; the shell itself keeps running for the next attach.
+        tasks = [asyncio.create_task(outgoing()), asyncio.create_task(incoming())]
+        try:
+            _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
+        finally:
+            sess.detach(q)
+            for t in tasks:
+                if t.done() and not t.cancelled():
+                    t.exception()  # retrieved, so asyncio does not log it
+            try:
+                await ws.close()
+            except (RuntimeError, WebSocketDisconnect):
+                pass
+
+    # --- workspace: Claude Code panel (administrators) ---
+    @app.get("/api/workspace/claude")
+    def claude_info(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return workspace.available()
+
+    @app.post("/api/workspace/claude")
+    def claude_start(body: ClaudeBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        images = projects.uploads(body.attachments) if body.attachments else []
+        try:
+            run = workspace.start(body.prompt, body.cwd, admin["name"], body.session_id, body.model, images)
+        except RuntimeError as e:
+            raise HTTPException(503, str(e)) from e
+        _audit(admin, "workspace_claude", run.cwd, after={"run": run.id, "prompt": body.prompt[:200],
+                                                         "resume": body.session_id or None}, severity="high")
+        return run.to_dict()
+
+    @app.get("/api/workspace/claude/{run_id}")
+    def claude_events(run_id: str, after: int = 0, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return workspace.get(run_id).to_dict(max(0, after))
+
+    @app.post("/api/workspace/claude/{run_id}/stop")
+    def claude_stop(run_id: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        run = workspace.stop(run_id)
+        _audit(admin, "workspace_claude_stop", run.cwd, after={"run": run_id})
+        return {"status": run.status}
 
     @app.get("/api/defects")
     def defects(status: str = "", goal_id: int | None = None, _: dict[str, Any] = Depends(current_user)
@@ -864,6 +1096,17 @@ def create_app(start_background: bool = True) -> FastAPI:
         return out
 
     # --- settings, notifications, audit ---
+    @app.get("/api/tls/ca.crt")
+    def tls_ca() -> FileResponse:
+        """The company CA (public: a computer needs it before it can trust the site)."""
+        return FileResponse(transport.ca_path(), media_type="application/x-x509-ca-cert",
+                            filename="agent-company-ca.crt")
+
+    @app.get("/api/tls")
+    def tls_info(request: Request, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return {**transport.info(), "current_scheme": request.url.scheme,
+                "behind_proxy": request.headers.get("x-forwarded-proto") is not None}
+
     @app.get("/api/settings")
     def settings_get(_: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
         return prefs.describe()

@@ -28,7 +28,7 @@ def test_restart_request_needs_a_running_supervisor():
 def test_system_status_and_restart_api():
     st = system.status()
     assert st["host"]["cpus"] and st["service"]["pid"] and "branch" in st["repository"]
-    with TestClient(create_app(start_background=False)) as app:
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
         app.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
         assert app.get("/api/system").json()["work"]["running_tasks"] == 0
         assert app.post("/api/system/restart").status_code == 409

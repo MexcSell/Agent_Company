@@ -144,7 +144,7 @@ def test_lifecycle_and_manual_agents():
 
 
 def test_evolution_api():
-    with TestClient(create_app(start_background=False)) as app:
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
         app.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
         a = app.post("/api/agents", json={"role": "translator", "title": "Translator"}).json()
         assert app.post(f"/api/agents/{a['id']}/clone").json()["parent_id"] == a["id"]

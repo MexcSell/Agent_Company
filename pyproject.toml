@@ -13,6 +13,7 @@ dependencies = [
     "httpx>=0.27",
     "jsonschema>=4.20",
     "python-multipart>=0.0.9",
+    "cryptography>=50.0.2",
 ]
 
 [project.optional-dependencies]

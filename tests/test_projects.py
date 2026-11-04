@@ -177,15 +177,14 @@ def test_push_to_remote_with_gitignore_and_user_branch(tmp_path):
 
 
 def test_project_api_flow():
-    with TestClient(create_app(start_background=False)) as app:
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
         from agent_company import auth
         from agent_company.db import User
 
         secret = secrets.token_urlsafe(32)  # bind the fixture's admin to this client's device and sign in
         with session() as s:
             s.get(User, 1).device_hash = auth._hash(secret)
-        _, tok = auth.device_login(secret)
-        app.cookies.set("ac_session", tok)
+        assert app.post("/api/auth/device", json={"device_secret": secret}).status_code == 200
         pid = app.post("/api/projects", json={"name": "Web", "quality_commands": ["test -f WORKLOG.md"]}).json()["id"]
         up = app.post("/api/uploads", files={"file": ("note.txt", b"hello", "text/plain")}).json()
         assert app.get(f"/api/uploads/{up['id']}").content == b"hello"
@@ -210,7 +209,7 @@ def test_permissions_limit_what_a_member_can_see_and_do():
 
     a = projects.create("Open one")
     b = projects.create("Restricted one")
-    with TestClient(create_app(start_background=False)) as app:
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
         from agent_company.db import User
 
         admin_secret, member_secret = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
@@ -218,8 +217,8 @@ def test_permissions_limit_what_a_member_can_see_and_do():
             s.get(User, 1).device_hash = auth._hash(admin_secret)
             s.get(User, 2).device_hash = auth._hash(member_secret)
         member = TestClient(app.app)
-        member.cookies.set("ac_session", auth.device_login(member_secret)[1])
-        app.cookies.set("ac_session", auth.device_login(admin_secret)[1])
+        assert member.post("/api/auth/device", json={"device_secret": member_secret}).status_code == 200
+        assert app.post("/api/auth/device", json={"device_secret": admin_secret}).status_code == 200
         assert {p["name"] for p in member.get("/api/projects").json()} == {"Open one", "Restricted one"}
         assert app.put("/api/users/2/permissions", json={"projects": [a["id"]], "run": False}).status_code == 200
         assert [p["name"] for p in member.get("/api/projects").json()] == ["Open one"]

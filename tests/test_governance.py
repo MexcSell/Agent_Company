@@ -95,7 +95,7 @@ def test_notifications_visibility_and_read_state():
 
 
 def test_settings_notifications_and_audit_api():
-    with TestClient(create_app(start_background=False)) as app:
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
         app.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
         other = TestClient(app.app)
         other.post("/api/auth/register", json={"name": "member", "device_secret": secrets.token_urlsafe(32)})

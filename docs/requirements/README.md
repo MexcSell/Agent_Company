@@ -1,0 +1,82 @@
+# Requirements from `/home/luca/update/`
+
+Implementable requirements derived from every document in `/home/luca/update/`, checked against
+the code as of 2026-11-04. `docs/feature-gap.md` is the short status list; these files are the
+detail an implementer works from.
+
+## Files
+
+| File | Source document(s) |
+| --- | --- |
+| [SPEC-01-governance.md](SPEC-01-governance.md) | ASEAO SPEC01.docx |
+| [SPEC-02-registry.md](SPEC-02-registry.md) | ASEAO SPEC02.docx |
+| [SPEC-03-recruitment.md](SPEC-03-recruitment.md) | ASEAO SPEC.03docx.docx |
+| [SPEC-04-orchestration.md](SPEC-04-orchestration.md) | ASEAO SPEC04.docx |
+| [ASEAO05-projects.md](ASEAO05-projects.md) | ASEAO05.docx |
+| [ASEAO06-research.md](ASEAO06-research.md) | ASEAO06.docx |
+| [ASEAO07-analysis.md](ASEAO07-analysis.md) | ASEAO07.docx |
+| [ASEAO08-engineering.md](ASEAO08-engineering.md) | ASEAO08.docx, extensions/analysis_results.md |
+| [ASEAO09-quality.md](ASEAO09-quality.md) | ASEAO09.docx |
+| [ASEAO10-innovation.md](ASEAO10-innovation.md) | ASEAO10.docx |
+| [SPEC-11-knowledge.md](SPEC-11-knowledge.md) | SPEC11.docx |
+| [SPEC-12-relationships.md](SPEC-12-relationships.md) | SPEC12.docx |
+| [SPEC-13-learning.md](SPEC-13-learning.md) | SPEC13.docx |
+| [SPEC-14-security.md](SPEC-14-security.md) | SPEC14.docx, ASEAO_SPEC-14_Enterprise_Security_Governance.pdf |
+| [SPEC-15-dashboard.md](SPEC-15-dashboard.md) | master specification (.rtf) only |
+| [guides-and-other-sources.md](guides-and-other-sources.md) | 1.txt, guides, AgentForge website spec, AWS frameworks guide, 2.pdf |
+| [images/SOURCES.md](images/SOURCES.md) | which images were kept, which were not, and their sources |
+
+The master specification (`I am trying to download documents related to this.rtf`) gives one
+acceptance criterion per spec; each file quotes it at the top.
+
+Not used: `978-3-032-22940-3 (1).pdf` (no extractable text), `AXoR-Design-System-Requirements.pdf`
+(another product). The cloned framework repositories are code, not specifications.
+
+## Conventions
+
+- **IDs.** `Sxx-FR-nn` keeps the spec's own functional-requirement number; `Sxx-R-nn` is a
+  requirement written here (it cites the spec section); `Sxx-D-nn` is a defect in the current
+  code against the spec; `Sxx-G-nn` is gated; `AT-`, `KT-`, `AR-`, `LE-`, `SEC-` refer to the
+  spec's acceptance tests.
+- **Status.** `done (symbol)` met in code; `partial` part met, the rest in the linked `R`;
+  `open` to implement; `gated` waits until more roles are enabled (CLAUDE.md: only the core
+  pipeline and research rooms are on until the pipeline is reliable, defined in G-R-04);
+  `skip (reason)` deliberately not taken.
+- **Stack.** The specs assume PostgreSQL, Neo4j, Qdrant, Redis, NATS, containers and an ABAC
+  engine. Requirements here are adapted to this repository (SQLite with one writer, FastAPI,
+  plain JS, executors in `data/worktrees/`). Where that is impossible the item is `skip` with a
+  reason; nothing is silently rewritten.
+- **Acceptance.** Every `R` ends with an acceptance condition that can become a pytest test
+  (offline, temp `DATA_DIR`).
+- Diagrams that define behaviour are in `images/` and are transcribed in text where used.
+
+## Suggested order
+
+The `.rtf` roadmap builds organisation first; this repository already has the core pipeline, so
+the order is safety and correctness of that pipeline first, then management, then expansion.
+
+1. **Safety and correctness now**: S14-R-01 emergency stop, S12-D-01 collaboration only from
+   verified outcomes, S13-D-01/D-02 stricter playbook promotion, S08-R-03 review with logic
+   verification, S08-R-04 change boundaries, S04-R-05 durable recovery, S04-R-06 retry policy,
+   S14-R-03 behaviour rules.
+2. **Pipeline quality**: S04-R-01 blackboard, S04-R-02 decision records, S04-R-04 workflow
+   states, S11-R-01/R-03/R-05 knowledge with provenance, scoped retrieval and poisoning
+   protection, S09-R-01 staged gates, S03-R-02 duplicate prevention, G-R-01 contract fields,
+   G-R-03 failure-mode tests, G-R-04 measured enablement gate.
+3. **Management**: ASEAO05 milestones, risks/blockers, insights, action items, topics; SPEC-02
+   versions and health; S06-R-02 source monitoring; S14-R-04 incidents; S14-R-05 classification;
+   SPEC-15 views.
+4. **Later**: SPEC-13 experiments and learning plans, SPEC-12 mentoring and network view,
+   S11-R-07 knowledge graph, G-R-05 MCP, G-R-06 A2A, then gated rooms one at a time.
+
+![Specification dependency map](images/spec01-spec-dependency-map.png)
+
+Reference architecture of AgentForge (the dashboard/engine this project took features from):
+
+![AgentForge architecture](images/agentforge-architecture.png)
+
+*One process serves the browser and drives agent CLIs: browser → (optional Caddy TLS) → server
+(REST, WebSockets, static UI, auth) + orchestrator (plan, staff, execute DAG, verify, report,
+sync, evolve; file leases, proposals, digests) under a safe-restart supervisor → PostgreSQL,
+agent CLIs (Claude Code, Codex) editing project working trees, HTTP model providers (read-only),
+GitHub (source-only push).*

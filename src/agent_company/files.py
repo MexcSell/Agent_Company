@@ -1,5 +1,6 @@
-"""File manager (administrators): browse, view, edit, create, rename, move, delete and
-upload files inside the project folders and the data directory.
+"""File manager (administrators): browse, view, edit, create, rename, move, delete,
+upload, compress, extract and download files inside the project folders, the data
+directory and folders an administrator opened in the Workspace ("Open folder").
 
 Every path is resolved and must stay under one of the roots (no `..`, no symlink
 escapes), `.git` internals are read-only, and files over 2 MB are not opened as
@@ -10,37 +11,82 @@ anywhere, but never file contents outside the roots.
 from __future__ import annotations
 
 import mimetypes
+import os
 import shutil
+import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
 
 from agent_company.config import settings
-from agent_company.db import Project, session
+from agent_company.db import Project, Setting, session
 
 MAX_TEXT = 2 * 1024 * 1024
 KINDS = {".py": "python", ".js": "javascript", ".mjs": "javascript", ".ts": "typescript", ".tsx": "typescript",
          ".jsx": "javascript", ".json": "json", ".md": "markdown", ".mdx": "markdown", ".html": "html",
          ".css": "css", ".sh": "shell", ".toml": "toml", ".yaml": "yaml", ".yml": "yaml", ".sql": "sql",
          ".go": "go", ".rs": "rust", ".rb": "ruby", ".java": "java", ".txt": "text", ".csv": "csv",
-         ".lock": "text", ".cfg": "text", ".ini": "text", ".env": "env", ".gitignore": "text"}
+         ".lock": "text", ".cfg": "text", ".ini": "text", ".env": "env", ".gitignore": "text",
+         ".c": "c", ".h": "c", ".cpp": "cpp", ".hpp": "cpp", ".cc": "cpp", ".cs": "csharp", ".php": "php",
+         ".kt": "kotlin", ".swift": "swift", ".lua": "lua", ".r": "r", ".dart": "dart", ".scala": "scala",
+         ".vue": "html", ".svelte": "html", ".xml": "xml", ".diff": "diff", ".patch": "diff", ".log": "log",
+         ".tsv": "csv", ".ipynb": "json", ".bash": "shell", ".zsh": "shell", ".ps1": "shell",
+         "dockerfile": "docker", "makefile": "make", ".dockerignore": "text",
+         ".pdf": "pdf", ".docx": "docx", ".svg": "svg", ".xlsx": "sheet", ".xls": "sheet", ".pptx": "slides",
+         ".zip": "archive", ".tar": "archive", ".gz": "archive", ".tgz": "archive", ".bz2": "archive",
+         ".xz": "archive", ".7z": "archive", ".rar": "archive"}
+EXTRA_ROOTS = "files.extra_roots"  # Setting key: folders opened in the Workspace
+ARCHIVES = (".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz")
 
 
 class FileError(ValueError):
     pass
 
 
+def _extra_roots() -> list[str]:
+    with session() as s:
+        row = s.get(Setting, EXTRA_ROOTS)
+        return list((row.value or {}).get("v") or []) if row else []
+
+
 def roots() -> list[dict[str, str]]:
     with session() as s:
         out = [{"name": p.name, "path": str(Path(p.path).resolve())} for p in s.scalars(select(Project)) if p.path]
     out.append({"name": "data", "path": str(settings().data_dir.resolve())})
+    out += [{"name": Path(r).name or r, "path": r, "opened": "1"} for r in _extra_roots()]
     seen, uniq = set(), []
     for r in out:
         if r["path"] not in seen and Path(r["path"]).exists():
             seen.add(r["path"])
             uniq.append(r)
     return uniq
+
+
+def add_root(path: str) -> dict[str, str]:
+    """Open a folder anywhere on the host as a file-manager root (Workspace "Open folder")."""
+    p = Path(path or "").expanduser().resolve()
+    if not path or not p.is_dir():
+        raise FileError(f"{p} is not a folder")
+    with session() as s:
+        row = s.get(Setting, EXTRA_ROOTS)
+        current = list((row.value or {}).get("v") or []) if row else []
+        if str(p) not in current:
+            current.append(str(p))
+        if row is None:
+            s.add(Setting(key=EXTRA_ROOTS, value={"v": current}))
+        else:
+            row.value = {"v": current}
+    return {"name": p.name or str(p), "path": str(p)}
+
+
+def remove_root(path: str) -> None:
+    target = str(Path(path).expanduser().resolve())
+    with session() as s:
+        row = s.get(Setting, EXTRA_ROOTS)
+        if row is not None:
+            row.value = {"v": [r for r in (row.value or {}).get("v") or [] if r != target]}
 
 
 def resolve(path: str, must_exist: bool = True) -> Path:
@@ -65,8 +111,14 @@ def _writable(p: Path) -> Path:
 def kind_of(p: Path) -> str:
     if p.is_dir():
         return "folder"
-    return KINDS.get(p.suffix.lower()) or KINDS.get(p.name.lower()) or (
-        "image" if (mimetypes.guess_type(p.name)[0] or "").startswith("image/") else "file")
+    known = KINDS.get(p.suffix.lower()) or KINDS.get(p.name.lower())
+    if known:
+        return known
+    mime = mimetypes.guess_type(p.name)[0] or ""
+    for prefix in ("image", "audio", "video"):
+        if mime.startswith(prefix + "/"):
+            return prefix
+    return "file"
 
 
 def listing(path: str) -> dict[str, Any]:
@@ -162,6 +214,81 @@ def upload(folder: str, name: str, data: bytes) -> dict[str, Any]:
     target = _writable(resolve(str(d / safe), must_exist=False))
     target.write_bytes(data)
     return {"path": str(target), "size": len(data)}
+
+
+def _unique(p: Path, keep_suffix: bool = True) -> Path:
+    """`p`, or "name (2).ext", "name (3).ext"… if taken (folders: "name (2)")."""
+    if not p.exists():
+        return p
+    if not keep_suffix:
+        stem, suffix = p.name, ""
+    else:
+        stem, suffix = (p.name[: -len(".tar.gz")], ".tar.gz") if p.name.endswith(".tar.gz") else (p.stem, p.suffix)
+    n = 2
+    while (p.parent / f"{stem} ({n}){suffix}").exists():
+        n += 1
+    return p.parent / f"{stem} ({n}){suffix}"
+
+
+def _zip_into(items: list[Path], target: Path) -> None:
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
+        for item in items:
+            if item.is_dir():
+                z.write(item, arcname=item.name)
+                for f in sorted(item.rglob("*")):
+                    if f == target or f.is_symlink():
+                        continue
+                    if f.is_dir() or f.is_file():
+                        z.write(f, arcname=str(Path(item.name) / f.relative_to(item)))
+            else:
+                z.write(item, arcname=item.name)
+
+
+def compress(paths: list[str], name: str = "") -> dict[str, Any]:
+    """Zip files and folders into an archive next to the first one."""
+    items = [resolve(p) for p in paths]
+    if not items:
+        raise FileError("nothing to compress")
+    folder = items[0].parent
+    default = f"{items[0].name}.zip" if len(items) == 1 else "Archive.zip"
+    safe = Path(name).name if name else default
+    if not safe.lower().endswith(".zip"):
+        safe += ".zip"
+    target = _writable(resolve(str(_unique(folder / safe)), must_exist=False))
+    _zip_into(items, target)
+    return {"path": str(target), "size": target.stat().st_size}
+
+
+def download_archive(paths: list[str]) -> tuple[Path, str]:
+    """A temporary zip of `paths` for download; the caller deletes it after sending."""
+    items = [resolve(p) for p in paths]
+    if not items:
+        raise FileError("nothing to download")
+    tmp_dir = settings().data_dir / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(suffix=".zip", dir=tmp_dir)
+    os.close(fd)
+    _zip_into(items, Path(tmp))
+    return Path(tmp), (f"{items[0].name}.zip" if len(items) == 1 else "download.zip")
+
+
+def extract(path: str) -> dict[str, Any]:
+    """Unpack a zip or tar archive into a new folder beside it (no paths outside that folder)."""
+    src = resolve(path)
+    lower = src.name.lower()
+    suffix = next((a for a in sorted(ARCHIVES, key=len, reverse=True) if lower.endswith(a)), None)
+    if suffix is None or src.is_dir():
+        raise FileError("only .zip and .tar(.gz/.bz2/.xz) archives can be extracted")
+    dest = _writable(resolve(str(_unique(src.parent / src.name[: -len(suffix)], keep_suffix=False)), must_exist=False))
+    try:
+        if suffix == ".zip":  # shutil's zip unpacker drops absolute and ".." member names itself
+            shutil.unpack_archive(str(src), str(dest))
+        else:
+            shutil.unpack_archive(str(src), str(dest), filter="data")
+    except (shutil.ReadError, zipfile.BadZipFile, OSError, ValueError) as e:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise FileError(f"could not extract {src.name}: {e}") from e
+    return {"path": str(dest)}
 
 
 def folders(path: str = "") -> dict[str, Any]:

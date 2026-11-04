@@ -88,7 +88,7 @@ def test_eval_harness_runs_compares_and_never_merges(tmp_path):
 
 def test_bundled_suite_loads_and_api():
     assert {s["name"] for s in evaluation.list_suites()} >= {"smoke"}
-    with TestClient(create_app(start_background=False)) as app:
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
         app.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
         gid = loop.create_goal("Make it", quality_commands=["test -f NOPE"], max_iterations=1)
         loop.run_goal(gid)

@@ -14,8 +14,10 @@ feature came from.
   proposals, uploads); `learning.py` + `evolution.py`; `performance.py` (defects, certification,
   metrics); `evaluation.py` (eval harness); `research.py`; `governance.py` (audit, notifications,
   command policy); `prefs.py` (DB settings); `gitsync.py`; `files.py`; `supervisor.py` + `system.py`;
-  `auth.py` (device sign-in, permissions); `api.py`; `static/` (dashboard, plain JS, one file per
-  area); `crew.py` (classic crew); `__main__.py` (CLI)
+  `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
+  (Workspace Claude Code panel); `api.py`; `static/` (dashboard, plain JS, one file per area;
+  `workspace.js` + `viewer.js` + `console.js` + `claude.js` are the Workspace home page, sharing
+  `window.WSP`; `vendor/` holds xterm.js, pdf.js and mammoth); `crew.py` (classic crew); `__main__.py` (CLI)
 - `evals/` – benchmark suites (JSON)
 - `tests/` – pytest; every test gets its own temp DATA_DIR and runs offline
 - `data/` – SQLite DB, workspaces, worktrees, uploads (git-ignored)
@@ -31,6 +33,11 @@ feature came from.
 - Agents must not get access to production servers. Executors that change files run only inside
   `data/worktrees/` (`worktrees.ensure_sandboxed`); commands pass `governance.check_command`;
   merging needs approval; pushing only on `/sync` or AUTO_PUSH.
+- Exception, by decision of the owner: the Workspace terminal and Claude Code panel are the
+  administrator's own tools, not goal-loop agents. They run host-wide as the server user (no
+  command filter, Claude Code with every tool allowed in the opened folder), are admin-only, and
+  every session/prompt is audited. Do not route them through the sandbox, and do not loosen
+  `ClaudeCodeExecutor`/`CLAUDE_BASH` because of them. Workspace WebSockets must check the Origin.
 - DB writes inside an open `session()` must use that session (`log_event(..., s=s)`,
   `notify(..., s=s)`), never a second connection: SQLite allows one writer.
 - New tables/columns: add them to `db.py`; `_add_missing_columns` migrates existing databases.
@@ -42,6 +49,11 @@ feature came from.
 - `uv run pytest -q` – run the tests
 - `uv run python -m agent_company supervise` – API + dashboard on http://127.0.0.1:4900 with safe restarts
 - `uv run python -m agent_company serve` – the same without the supervisor
+- `deploy/agent-company.service` – systemd unit (installed, enabled): starts `supervise` at boot.
+  The app listens on 127.0.0.1:4910; nginx serves port 4900 to other computers over HTTPS (own CA
+  in `data/tls/`, default) or HTTP, switched on Settings -> Connection (`transport.py` writes the
+  nginx site, MANAGE_NGINX=1). The first (admin) account can only be registered from localhost.
+  `systemctl restart|status agent-company`, log in `data/logs/agent-company.log`
 - `uv run python -m agent_company goal "<goal>" --check "<cmd>" [--allow 'src/*'] [--protect-tests]`
 - `uv run python -m agent_company eval --suite smoke --label <name> [--repeats 3]` / `eval --compare a b`
 - `uv run python -m agent_company "<request>"` – classic four-agent crew

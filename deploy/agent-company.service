@@ -1,0 +1,34 @@
+# systemd unit: starts Agent Company (supervisor + API + dashboard) at boot and keeps it up.
+# Install:  sudo cp deploy/agent-company.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#           sudo systemctl enable --now agent-company
+# The app listens on 127.0.0.1:PORT (.env); nginx serves PUBLIC_PORT to other computers over HTTPS
+# or HTTP (Settings -> Connection) and is configured by the app itself (MANAGE_NGINX=1).
+# Adjust WorkingDirectory and the log path if the checkout lives elsewhere.
+[Unit]
+Description=Agent Company dashboard (supervisor + API server)
+Wants=network-online.target nginx.service
+After=network-online.target nginx.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/luca/Agent_Company
+# A service gets no login shell: claude/codex live in ~/.local/bin, which only .bashrc adds to PATH.
+Environment=HOME=/root
+Environment=SHELL=/bin/bash
+Environment=PATH=/home/luca/Agent_Company/.venv/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONUNBUFFERED=1
+# The venv's python directly (not `uv run`), so boot does not depend on uv or the network.
+ExecStart=/home/luca/Agent_Company/.venv/bin/python -m agent_company supervise
+Restart=always
+RestartSec=3
+# SIGTERM the supervisor (it stops its server child), then sweep leftovers.
+KillMode=mixed
+TimeoutStopSec=30
+StandardOutput=append:/home/luca/Agent_Company/data/logs/agent-company.log
+StandardError=append:/home/luca/Agent_Company/data/logs/agent-company.log
+
+[Install]
+WantedBy=multi-user.target

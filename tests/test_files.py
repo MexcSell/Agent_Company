@@ -64,7 +64,7 @@ def test_folder_picker_lists_names_only(tmp_path):
 
 
 def test_file_api_is_admin_only_and_audited(root):
-    with TestClient(create_app(start_background=False)) as app:
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
         app.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
         assert any(r["path"] == str(root) for r in app.get("/api/files/roots").json())
         assert app.put("/api/files/write", json={"path": str(root / "n.txt"), "text": "hey"}).status_code == 200

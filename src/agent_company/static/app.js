@@ -11,6 +11,7 @@ const dur = (sec) => { const h = Math.floor(sec / 3600), m = Math.floor((sec % 3
 // --- icons (24px stroke icons) --------------------------------------------------
 const P = {
   dashboard: "M3 3h8v8H3zM13 3h8v5h-8zM13 10h8v11h-8zM3 13h8v8H3z",
+  workspace: "M3 4h18v16H3zM8 4v16M11.5 10l2.5 2-2.5 2M15.5 14h2.5",
   goals: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 4a6 6 0 1 0 0 12 6 6 0 0 0 0-12zm0 4a2 2 0 1 0 0 4 2 2 0 0 0 0-4z",
   agents: "M16 11a4 4 0 1 0-8 0M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1M12 3v4",
   models: "M12 2l9 5v10l-9 5-9-5V7zM12 22V12M21 7l-9 5-9-5",
@@ -53,10 +54,21 @@ const store = {
   del(k) { try { localStorage.removeItem(k); } catch { /* ignore */ } },
 };
 
+// A scheme switch (HTTP <-> HTTPS, see transport.py) hands the device secret over in the
+// URL fragment, which never leaves the browser. Keep it only if this origin has none yet.
+(function takeHandoff() {
+  const m = location.hash.match(/^#ac-device=([^&]+)/);
+  if (!m) return;
+  const s = decodeURIComponent(m[1]);
+  if (/^[A-Za-z0-9_-]{32,128}$/.test(s) && !store.get("ac.device")) store.set("ac.device", s);
+  history.replaceState(null, "", location.pathname + location.search);
+})();
+
 // --- API ------------------------------------------------------------------------
 async function api(path, opts = {}) {
   const res = await fetch(path, { credentials: "same-origin", headers: { "Content-Type": "application/json" }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 421 && data.code === "wrong_scheme") { location.reload(); throw new Error(data.detail); }  // the hand-off page moves this tab
   if (!res.ok) { const e = new Error(data.detail || data.code || res.statusText); e.status = res.status; e.code = data.code; throw e; }
   return data;
 }
@@ -114,7 +126,7 @@ async function tryDevice() {
 const VIEWS = [];
 const VIEW_FNS = {};
 function registerView(view, fn, at = VIEWS.length) { VIEWS.splice(at, 0, view); VIEW_FNS[view.id] = fn; }
-let current = store.get("ac.view") || "dashboard", refreshTimer = null, badges = {};
+let current = store.get("ac.view") || "workspace", refreshTimer = null, badges = {};
 
 async function boot() {
   try { me = await api("/api/auth/me"); } catch { return tryDevice(); }
@@ -136,6 +148,7 @@ async function updateBadges() {
 }
 function show(id) {
   current = id; store.set("ac.view", id);
+  $("#view").classList.remove("flush");
   const v = VIEWS.find((x) => x.id === id); $("#view-title").textContent = v.title; renderRail();
   clearInterval(refreshTimer); render(); updateBadges();
   // Live events push changes; polling stays as a slower fallback when the stream is down.
@@ -150,7 +163,11 @@ function connectLive() {
   liveSource = new EventSource("/api/stream");
   liveSource.onopen = () => { liveOk = true; };
   liveSource.onmessage = () => { clearTimeout(liveTimer); liveTimer = setTimeout(refreshNow, 250); };
-  liveSource.onerror = () => { liveOk = false; liveSource.close(); liveSource = null; setTimeout(() => me && connectLive(), 10000); };
+  liveSource.onerror = () => {
+    liveOk = false; liveSource.close(); liveSource = null;
+    api("/api/auth/me").catch(() => {});  // a 421 here (scheme switched) moves the tab via the hand-off page
+    setTimeout(() => me && connectLive(), 10000);
+  };
 }
 async function render(quiet) {
   const fn = VIEW_FNS[current];

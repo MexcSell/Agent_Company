@@ -45,6 +45,11 @@ class Settings:
     goal_time_budget: int = 0  # seconds, 0 = no limit
     auto_push: bool = False
     allow_preexisting_failures: bool = False
+    # How browsers reach the dashboard (transport.py): "https" (default) or "http".
+    transport: str = "https"
+    public_port: int = 4900  # the port nginx listens on when MANAGE_NGINX=1
+    manage_nginx: bool = False  # write the nginx site and reload nginx (only the real server)
+    nginx_dir: str = "/etc/nginx"
 
     @property
     def worktrees_dir(self) -> Path:
@@ -80,6 +85,10 @@ def load_settings() -> Settings:
         goal_time_budget=_int("GOAL_TIME_BUDGET", 0),
         auto_push=_bool("AUTO_PUSH", False),
         allow_preexisting_failures=_bool("ALLOW_PREEXISTING_FAILURES", False),
+        transport=(os.environ.get("TRANSPORT") or "https").lower(),
+        public_port=_int("PUBLIC_PORT", 4900),
+        manage_nginx=_bool("MANAGE_NGINX", False),
+        nginx_dir=os.environ.get("NGINX_DIR") or "/etc/nginx",
     )
 
 

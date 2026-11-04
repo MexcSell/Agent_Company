@@ -1,7 +1,7 @@
 """Command line.
 
   python -m agent_company "<request>"            classic four-agent CrewAI pipeline (output/)
-  python -m agent_company serve                  API + dashboard on http://127.0.0.1:4900
+  python -m agent_company serve                  API + dashboard on http://127.0.0.1:PORT (nginx in front: transport.py)
   python -m agent_company goal "<goal>" [...]    run one goal through the circular loop
   python -m agent_company crawl <url>            collect a site (and its linked pages)
   python -m agent_company models                 model catalog, availability and routes

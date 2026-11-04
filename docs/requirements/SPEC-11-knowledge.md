@@ -1,0 +1,89 @@
+# SPEC-11 — Organizational knowledge, long-term memory and knowledge graph
+
+Source: `/home/luca/update/SPEC11.docx`. Master criterion (`.rtf`): *a newly recruited agent can
+retrieve verified experiences from relevant historical projects and cite the source of its
+inherited knowledge.* The `.rtf` also requires, on every new task, a search over: similar previous
+projects, agents who did similar tasks, technologies used, successful implementations, failed
+approaches, relevant research and company standards — delivered as a curated package.
+
+Today: `Lesson` (agent, goal, text, outcome) is written by `loop._learn_from` and read by
+`learning.experience_context`, which picks the **latest** lessons of the agent and of related
+agents. Retrieval is not task-relevant, not project-scoped, unreviewed, without provenance and
+without secret screening. Research documents are searched by keyword (`research.search`).
+
+Stack decision: stay on SQLite. Neo4j, Qdrant and Redis are `skip` (single host, one writer); the
+graph is an edge table and search is SQLite FTS5. Revisit only if retrieval evaluations
+(S11-R-08) show the need.
+
+## Specific requirements
+
+### S11-R-01 Knowledge items with type, evidence class and provenance — §3.1, §6.1
+- Extend `lessons` (via `_add_missing_columns`) or add `knowledge` with: `type`
+  (`episodic|semantic|procedural|architectural|research|operational|capability|organizational|negative`),
+  `evidence_class` (`FACT|MEASURED|INFERENCE|HYPOTHESIS|ASSUMPTION|PREDICTION|UNKNOWN`),
+  `project_id`, `goal_id`, `task_id`, `agent_id`, `sources` (run IDs, commits, URLs, report IDs),
+  `technologies` (list), `status` (`draft|approved|rejected|superseded|expired`), `version`,
+  `supersedes_id`, `review_due_at`, `classification` (SPEC-14 S14-R-05), `created_at`.
+- Lessons from failures are stored as `negative` with environment and conditions; one failure is
+  never generalised into a rule (§3.1.4).
+- Acceptance: KT-001, KT-002 — every new item names the goal/run it came from.
+
+### S11-R-02 Structured experience reports — §9.1
+- After a task, the lesson step produces JSON: objective, actions, outcome, evidence refs,
+  failures, successful approach, reusable lesson, limitations. Observable actions only, no
+  hidden reasoning (§4.1). Stored on the knowledge item.
+- Acceptance: KT-011.
+
+### S11-R-03 Task-relevant, project-scoped retrieval — §8, §14
+- Replace recency-only selection in `learning.experience_context` with ranked retrieval over
+  approved knowledge: FTS5 keyword relevance on task title/contract + technology overlap +
+  verification status + recency − contradiction penalty (§8.3). Weights are settings, tuned by
+  S11-R-08.
+- Scope filter is applied **before** ranking: same project, or items with no project, or
+  `public/internal` items of other projects (SPEC-14 S14-R-05).
+- Each returned item carries: id, excerpt, source reference, status, last reviewed date,
+  limitations, contradiction warning. Prompt wraps them as data, not instructions (KT-017).
+- The package for a task includes: similar past tasks (same files/technologies), agents who did
+  them (from `relationships`), failed approaches, relevant research documents, project
+  standards (CLAUDE.md/README of the repo).
+- Acceptance: KT-007, KT-009, KT-010, KT-018 — a goal of project B never sees a confidential
+  lesson from project A; a newly cloned agent receives lessons of its template's history with
+  their source goal IDs.
+
+### S11-R-04 Contradiction handling — §6.3
+- When a new item states the opposite of an approved one on the same subject (same technology +
+  overlapping terms, judged by the lesson step), both are kept, linked with `CONTRADICTS`, and a
+  review is queued (the instructor or a reviewer of a different provider). The resolution and its
+  rationale are recorded; nothing is silently overwritten.
+- Acceptance: KT-006.
+
+### S11-R-05 Memory-poisoning protection — §10.4
+- Before storing: secret scan (reuse `checks.scan_secrets` patterns) → quarantine on hit (KT-016);
+  prompt-injection scan (reuse `research.injection_flags`) → `rejected` with reason.
+- Items that would change procedures or playbooks (`procedural`, `organizational`) start as
+  `draft` and need review before retrieval; `episodic` items from passing gates may auto-approve.
+- No agent approves its own item. Rejection and rollback are possible per version.
+- Retrieval events are logged (item IDs per task) (KT-021).
+
+### S11-R-06 Lifecycle: versioning, expiry, deletion — §10.3
+- New versions supersede old ones (KT-013); items past `review_due_at` drop out of retrieval
+  until reviewed (KT-014); deletion removes the item, its FTS row and graph edges (KT-015).
+
+### S11-R-07 Knowledge graph (edge table) — §7
+- Table `kg_edges`: `src_type`, `src_id`, `rel`, `dst_type`, `dst_id`, `weight`, `evidence`,
+  `created_at`. Entity types reuse existing tables: agent, project, goal, task, knowledge, source,
+  decision, incident, technology (string), skill.
+- Relations: `CREATED, USED, DEPENDS_ON, SUPPORTS, CONTRADICTS, DERIVED_FROM, APPLIES_TO,
+  SUPERSEDES, VERIFIED_BY, EXPERIENCED_IN, ASSIGNED_TO, COLLABORATED_WITH`.
+- Edges are written as side effects (lesson stored → `CREATED`, `APPLIES_TO` technology; task →
+  `ASSIGNED_TO`; decision → `SUPPORTS` evidence). `relationships` stays the agent-agent store.
+- API `GET /api/knowledge/graph?entity=type:id&depth=2` (paginated, KT-019); a graph view in the
+  dashboard is `open` (P2).
+
+### S11-R-08 Retrieval evaluation — §8.3, KT-023
+- A small eval set (`evals/retrieval.json`: task → expected knowledge IDs) and a metric
+  (recall@5) so ranking weights are changed only when the metric improves.
+
+### Not taken
+- Embedding/vector search: `open` (P2) — add only if S11-R-08 shows keyword+FTS is insufficient.
+- Legal holds, backup expiry policies: `skip` (single-user deployment).
