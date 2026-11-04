@@ -61,6 +61,23 @@ def _ua_hash(user_agent: str | None) -> str:
     return hashlib.sha256((user_agent or "").encode()).hexdigest()[:16]
 
 
+def encrypt_text(text: str, purpose: bytes) -> str:
+    """Encrypt a stored secret (e.g. a user's GitHub token). `purpose` keeps kinds apart."""
+    nonce = os.urandom(12)
+    ct = AESGCM(_cookie_key()).encrypt(nonce, text.encode(), purpose)
+    return base64.urlsafe_b64encode(nonce + ct).decode().rstrip("=")
+
+
+def decrypt_text(blob: str | None, purpose: bytes) -> str | None:
+    if not blob:
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(blob + "=" * (-len(blob) % 4))
+        return AESGCM(_cookie_key()).decrypt(raw[:12], raw[12:], purpose).decode()
+    except Exception:  # noqa: BLE001 - wrong key or tampered: treat as absent
+        return None
+
+
 def seal(token: str, user_agent: str | None, ip: str | None = None) -> str:
     """Encrypt a session token for the cookie, bound to the browser (and the IP, if given)."""
     payload: dict[str, Any] = {"t": token, "u": _ua_hash(user_agent)}

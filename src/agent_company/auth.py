@@ -78,8 +78,15 @@ def user_dict(u: User) -> dict[str, Any]:
             "device_bound": u.device_hash is not None, "device_info": u.device_info,
             "created_at": u.created_at.isoformat(),
             "approved_at": u.approved_at.isoformat() if u.approved_at else None,
-            "git": {"name": u.git_name or "", "email": u.git_email or "", "branch": u.git_branch or ""},
+            "git": {"name": u.git_name or "", "email": u.git_email or "", "branch": u.git_branch or "",
+                    "token": bool(u.git_token), "ssh_key": _has_ssh_key(u.id)},
             "permissions": permissions_of(u)}
+
+
+def _has_ssh_key(user_id: int) -> bool:
+    from agent_company.gitsync import key_path
+
+    return key_path(user_id).exists()
 
 
 def _new_session(s, user_id: int) -> str:  # noqa: ANN001
@@ -236,3 +243,6 @@ def delete_user(actor_id: int, user_id: int) -> None:
         s.execute(update(Goal).where(Goal.created_by == u.id).values(created_by=None))
         s.execute(delete(UserSession).where(UserSession.user_id == u.id))
         s.delete(u)
+    from agent_company.gitsync import delete_ssh_key
+
+    delete_ssh_key(user_id)  # the token goes with the row

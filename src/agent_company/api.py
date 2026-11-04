@@ -82,6 +82,13 @@ def current_user(request: Request) -> dict[str, Any]:
     return u
 
 
+def self_or_admin(user_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    """A user's own Git settings, or any user's for an administrator."""
+    if user["id"] != user_id and not user["is_admin"]:
+        raise HTTPException(403, "only your own Git settings")
+    return user
+
+
 def admin_user(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     if not user["is_admin"]:
         raise HTTPException(403, "administrators only")
@@ -287,6 +294,10 @@ class GitIdentityBody(BaseModel):
     name: str = ""
     email: str = ""
     branch: str = ""
+
+
+class GitTokenBody(BaseModel):
+    token: str = Field(min_length=1, max_length=255)
 
 
 class RouteBody(BaseModel):
@@ -1088,12 +1099,45 @@ def create_app(start_background: bool = True) -> FastAPI:
         _audit(admin, "user_permissions", out["name"], after=out["permissions"], severity="high")
         return out
 
+    @app.get("/api/users/{user_id}/git")
+    def user_git_get(user_id: int, _: dict[str, Any] = Depends(self_or_admin)) -> dict[str, Any]:
+        return {"identity": gitsync.identity_for(user_id), **gitsync.access_status(user_id)}
+
     @app.put("/api/users/{user_id}/git")
-    def user_git(user_id: int, body: GitIdentityBody, admin: dict[str, Any] = Depends(admin_user)
+    def user_git(user_id: int, body: GitIdentityBody, actor: dict[str, Any] = Depends(self_or_admin)
                  ) -> dict[str, Any]:
         out = gitsync.set_identity(user_id, body.name, body.email, body.branch)
-        _audit(admin, "user_git_identity", user_id, after=out)
+        _audit(actor, "user_git_identity", user_id, after=out)
         return out
+
+    @app.put("/api/users/{user_id}/git/token")
+    def user_git_token(user_id: int, body: GitTokenBody, actor: dict[str, Any] = Depends(self_or_admin)
+                       ) -> dict[str, Any]:
+        gitsync.set_token(user_id, body.token)
+        _audit(actor, "user_git_token_set", user_id, severity="high")  # never the value
+        return gitsync.access_status(user_id)
+
+    @app.delete("/api/users/{user_id}/git/token")
+    def user_git_token_clear(user_id: int, actor: dict[str, Any] = Depends(self_or_admin)) -> dict[str, Any]:
+        gitsync.clear_token(user_id)
+        _audit(actor, "user_git_token_removed", user_id)
+        return gitsync.access_status(user_id)
+
+    @app.post("/api/users/{user_id}/git/ssh-key")
+    def user_git_key(user_id: int, actor: dict[str, Any] = Depends(self_or_admin)) -> dict[str, Any]:
+        gitsync.create_ssh_key(user_id)
+        _audit(actor, "user_git_ssh_key_created", user_id, severity="high")
+        return gitsync.access_status(user_id)
+
+    @app.delete("/api/users/{user_id}/git/ssh-key")
+    def user_git_key_delete(user_id: int, actor: dict[str, Any] = Depends(self_or_admin)) -> dict[str, Any]:
+        gitsync.delete_ssh_key(user_id)
+        _audit(actor, "user_git_ssh_key_deleted", user_id)
+        return gitsync.access_status(user_id)
+
+    @app.post("/api/users/{user_id}/git/test")
+    def user_git_test(user_id: int, _: dict[str, Any] = Depends(self_or_admin)) -> dict[str, Any]:
+        return gitsync.test_access(user_id)
 
     # --- settings, notifications, audit ---
     @app.get("/api/tls/ca.crt")

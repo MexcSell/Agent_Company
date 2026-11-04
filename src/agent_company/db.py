@@ -394,6 +394,7 @@ class User(Base):
     git_name: Mapped[str] = mapped_column(String(128), default="")
     git_email: Mapped[str] = mapped_column(String(256), default="")
     git_branch: Mapped[str] = mapped_column(String(128), default="")
+    git_token: Mapped[str] = mapped_column(Text, default="")  # GitHub token, encrypted (gitsync.set_token)
 
 
 class UserSession(Base):

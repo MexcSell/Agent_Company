@@ -132,6 +132,7 @@ async function boot() {
   try { me = await api("/api/auth/me"); } catch { return tryDevice(); }
   $("#auth").hidden = true; $("#app").hidden = false;
   $("#whoami").textContent = me.name + (me.is_admin ? " · admin" : "");
+  $("#my-git").onclick = () => gitForm(me);
   renderRail(); show(VIEWS.some((v) => v.id === current && (!v.admin || me.is_admin)) ? current : "dashboard");
   connectLive();
 }
@@ -451,11 +452,34 @@ async function permissionsForm(u) {
     try { await api(`/api/users/${u.id}/permissions`, { method: "PUT", body }); $("#modal").hidden = true; toast("Saved"); viewUsers(); } catch (err) { toast(err.message); }
   };
 }
-function gitForm(u) {
-  modal(`<h2>Git identity · ${esc(u.name)}</h2><p class="muted">Work this user ordered is committed and pushed under this name and email, to this branch. Empty fields use the repository's own settings.</p><form id="gf">
-    <label>Name</label><input id="gf-name" value="${esc(u.git.name)}"><label>Email</label><input id="gf-email" type="email" value="${esc(u.git.email)}"><label>Branch</label><input id="gf-branch" value="${esc(u.git.branch)}" placeholder="main">
-    <div class="row" style="margin-top:12px"><button class="btn primary">Save</button></div></form>`);
-  $("#gf").onsubmit = async (e) => { e.preventDefault(); try { await api(`/api/users/${u.id}/git`, { method: "PUT", body: { name: $("#gf-name").value, email: $("#gf-email").value, branch: $("#gf-branch").value } }); $("#modal").hidden = true; toast("Saved"); viewUsers(); } catch (err) { toast(err.message); } };
+async function gitForm(u) {
+  let st;
+  try { st = await api(`/api/users/${u.id}/git`); } catch (err) { return toast(err.message); }
+  const id = st.identity || {};
+  const plain = location.protocol === "http:" && !["localhost", "127.0.0.1"].includes(location.hostname);
+  modal(`<h2>Git settings · ${esc(u.name)}</h2>
+    <p class="muted">Work ${u.id === me.id ? "you order" : "this user orders"} is committed under this name and email, to this branch, and pushed to each project's GitHub URL with the GitHub access below. Empty fields use the repository's own settings.</p>
+    <form id="gf"><label>Name</label><input id="gf-name" value="${esc(id.name || "")}"><label>Email</label><input id="gf-email" type="email" value="${esc(id.email || "")}"><label>Branch</label><input id="gf-branch" value="${esc(id.branch || "")}" placeholder="the project's current branch">
+    <div class="row" style="margin-top:12px"><button class="btn primary">Save</button></div></form>
+    <h3 style="margin-top:18px">GitHub access</h3>
+    <p class="muted">Use a token <em>or</em> an SSH key; the token wins if both are set. Without either, pushes use the server's own GitHub login, which may not have access to ${u.id === me.id ? "your" : "this user's"} repositories.</p>
+    ${plain ? '<p class="pill failed" style="display:inline-block">This page is on HTTP: a token typed here crosses the network unencrypted. Switch to HTTPS first.</p>' : ""}
+    <div class="card" style="margin:8px 0"><strong>Token</strong> <span class="muted">${st.token ? `set (${esc(st.token_hint)})` : "not set"}</span>
+      <p class="muted">GitHub → Settings → Developer settings → Fine-grained tokens: choose the repositories, give <em>Contents: Read and write</em>. The token is stored encrypted and never shown again.</p>
+      <div class="row"><input id="gf-token" type="password" autocomplete="off" placeholder="github_pat_…" class="grow"><button class="btn" id="gf-token-save">Save token</button>${st.token ? '<button class="btn" id="gf-token-del">Remove</button>' : ""}</div></div>
+    <div class="card" style="margin:8px 0"><strong>SSH key</strong> <span class="muted">${st.ssh_key ? "created" : "none"}</span>
+      ${st.ssh_key ? `<p class="muted">Add this public key on GitHub → Settings → SSH and GPG keys → New SSH key (signed in as the account that owns the repositories).</p><textarea readonly rows="3" class="mono" style="width:100%">${esc(st.ssh_key)}</textarea><div class="row"><button class="btn" id="gf-key-copy">Copy</button><button class="btn" id="gf-key-del">Delete key</button></div>`
+        : '<p class="muted">The server creates a key pair; only the public half leaves the server.</p><button class="btn" id="gf-key-new">Create SSH key</button>'}</div>
+    <div class="row"><button class="btn" id="gf-test">Test GitHub access</button><span id="gf-test-out" class="muted grow"></span></div>`);
+  const reopen = () => gitForm(u);
+  const call = async (path, method, body) => { try { await api(`/api/users/${u.id}/git${path}`, { method, body }); reopen(); } catch (err) { toast(err.message); } };
+  $("#gf").onsubmit = async (e) => { e.preventDefault(); try { await api(`/api/users/${u.id}/git`, { method: "PUT", body: { name: $("#gf-name").value, email: $("#gf-email").value, branch: $("#gf-branch").value } }); toast("Saved"); if (current === "users") viewUsers(); } catch (err) { toast(err.message); } };
+  $("#gf-token-save").onclick = () => { const v = $("#gf-token").value.trim(); if (v) call("/token", "PUT", { token: v }); };
+  $("#gf-token-del") && ($("#gf-token-del").onclick = () => confirm("Remove the GitHub token?") && call("/token", "DELETE"));
+  $("#gf-key-new") && ($("#gf-key-new").onclick = () => call("/ssh-key", "POST"));
+  $("#gf-key-del") && ($("#gf-key-del").onclick = () => confirm("Delete the SSH key? Also remove it from GitHub.") && call("/ssh-key", "DELETE"));
+  $("#gf-key-copy") && ($("#gf-key-copy").onclick = async () => { try { await navigator.clipboard.writeText(st.ssh_key); toast("Copied"); } catch { toast("Select the text and copy it"); } });
+  $("#gf-test").onclick = async () => { $("#gf-test-out").textContent = "Testing…"; try { const r = await api(`/api/users/${u.id}/git/test`, { method: "POST" }); $("#gf-test-out").textContent = r.message; } catch (err) { $("#gf-test-out").textContent = err.message; } };
 }
 
 // --- start (called after every view file has loaded) ----------------------------

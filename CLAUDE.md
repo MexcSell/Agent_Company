@@ -13,7 +13,7 @@ feature came from.
   goal loop, budgets, best-iteration rollback, handovers); `projects.py` (projects, command window,
   proposals, uploads); `learning.py` + `evolution.py`; `performance.py` (defects, certification,
   metrics); `evaluation.py` (eval harness); `research.py`; `governance.py` (audit, notifications,
-  command policy); `prefs.py` (DB settings); `gitsync.py`; `files.py`; `supervisor.py` + `system.py`;
+  command policy); `prefs.py` (DB settings); `gitsync.py` (push with each user's own GitHub token or SSH key, `data/git-keys/`); `files.py`; `supervisor.py` + `system.py`;
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
   (Workspace Claude Code panel); `api.py`; `static/` (dashboard, plain JS, one file per area;
   `workspace.js` + `viewer.js` + `console.js` + `claude.js` are the Workspace home page, sharing
