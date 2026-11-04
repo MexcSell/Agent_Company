@@ -110,6 +110,7 @@ Status: `done` = implemented in this repository, `skip` = deliberately not taken
 | Viewer: coloured code with line numbers and editing, Markdown preview, CSV tables, JSON, images, SVG, PDF (pdf.js), DOCX (mammoth), audio/video | done (`static/viewer.js`) |
 | Terminal: real PTY shells over WebSockets (ssh works), coloured prompt and typed commands, sessions survive reloads | done (`terminal.py`, `static/console.js`) |
 | Claude Code panel: streamed thinking, tool calls and results, answers with copy buttons, image attachments, resumed sessions | done (`workspace.py`, `static/claude.js`) |
+| Claude Code sessions window: running sessions on the host (open, stop) and the history of every session with a transcript (search, open read-only, resume in the panel, delete) | done (`workspace.py`, `static/claude.js`) |
 
 Browser libraries are vendored in `static/vendor/` (xterm.js 5.5.0 + fit addon 0.10.0, pdf.js 3.11.174,
 mammoth 1.8.0) so the dashboard needs no CDN; pdf.js runs with `isEvalSupported: false`.

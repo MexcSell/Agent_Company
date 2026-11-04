@@ -172,6 +172,14 @@ window.WSP = window.WSP || {};
     S.root = path; store.set("ac.wsp.root", path); S.sel.clear(); S.anchor = null;
     renderRoots(); await refresh(); W.onRoot?.(path);
   }
+  // Show `path` in the explorer, opening it as a root first if needed (resuming a session in its folder).
+  W.openRoot = async (path) => {
+    if (!S.roots.some((r) => r.path === path)) {
+      const r = await api("/api/files/roots", { method: "POST", body: { path } });
+      S.roots = await api("/api/files/roots"); path = r.path;
+    }
+    await setRoot(path);
+  };
   async function openFolder() {
     const dir = await pickFolder(S.root || "");
     if (!dir) { renderRoots(); return; }

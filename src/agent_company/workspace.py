@@ -14,7 +14,12 @@ The panel also shows what Claude Code is doing on this host - its own answer to 
 listed from Claude Code's session registry (`~/.claude/sessions/<pid>.json`, busy/idle), and
 its transcript (`~/.claude/projects/<folder>/<session>.jsonl`) is read incrementally for the
 model, token use, running subagents and background commands, the todo list and the
-conversation itself. Read-only: nothing is sent to those sessions.
+conversation itself. Nothing is sent to those sessions; the only way the panel acts on one is
+`stop_session` (SIGTERM to its process, after the administrator confirms), which is audited.
+
+The history window lists every session that has a transcript, running or not (`history`):
+its title (renamed, AI-written or first prompt), folder and last activity. An ended session can
+be opened read-only, resumed in this panel (`--resume`), or deleted with its transcript.
 """
 
 from __future__ import annotations
@@ -213,6 +218,12 @@ def start(prompt: str, cwd: str, owner: str, session_id: str = "", model: str = 
         raise ValueError(f"{folder} is not a folder")
     if session_id and not _SESSION_RE.fullmatch(session_id):
         raise ValueError("bad session id")
+    # A run outlives a service restart (its own process group) while RUNS does not: resuming a
+    # conversation that is still working would put two processes on one transcript.
+    busy = next((s for s in sessions(refresh=True) if s["session_id"] == session_id), None) if session_id else None
+    if busy is not None:
+        raise ValueError(f"this conversation is still running in another process (pid {busy['pid']}): "
+                         "wait for it to finish, or stop it from the sessions window")
     if model and model not in MODELS and not re.fullmatch(r"[\w.\-\[\]]{2,80}", model):
         raise ValueError("bad model name")
     run = Run(prompt, str(folder), owner, session_id, model, images or [])
@@ -624,3 +635,153 @@ def session_status(session_id: str, after: int = 0) -> dict[str, Any]:
         "entrypoint": (live or {}).get("entrypoint") or snap["entrypoint"],
         "current": current, "agents": agents, "tasks": tasks, "configured_agents": configured,
     }
+
+
+def stop_session(session_id: str) -> dict[str, Any]:
+    """End a live Claude Code session on this host (SIGTERM to its process)."""
+    if not _SESSION_RE.fullmatch(session_id or ""):
+        raise ValueError("bad session id")
+    run = next((r for r in RUNS.values() if r.session_id == session_id and r.status == "running"), None)
+    if run is not None:  # one of this panel's prompts: stop it the usual way
+        stop(run.id)
+        return {"session_id": session_id, "pid": run.proc.pid if run.proc else 0, "panel": True}
+    live = next((s for s in sessions(refresh=True) if s["session_id"] == session_id), None)
+    if live is None:
+        raise KeyError(f"session {session_id}")
+    if live["pid"] == os.getpid():
+        raise ValueError("that is this server's own process")
+    try:
+        os.kill(live["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except PermissionError as e:
+        raise ValueError(f"not allowed to stop process {live['pid']}") from e
+    global _sessions_cache
+    _sessions_cache = (0.0, [])  # the process exits shortly: the next listing looks again
+    return {"session_id": session_id, "pid": live["pid"], "panel": False}
+
+
+# --- history: every session with a transcript --------------------------------------------------
+
+HISTORY_HEAD = 65_536  # bytes read from the start of a transcript: folder, branch, first prompt
+HISTORY_TAIL = 131_072  # and from its end: renamed / AI title, last prompt
+_history_cache: dict[str, tuple[tuple[float, int], dict[str, Any]]] = {}
+
+
+def _prompt_of(raw: dict[str, Any]) -> str:
+    if raw.get("isMeta") or raw.get("isSidechain"):
+        return ""
+    content = (raw.get("message") or {}).get("content")
+    blocks = content if isinstance(content, list) else [{"type": "text", "text": content or ""}]
+    if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in blocks):
+        return ""
+    texts = [str(b.get("text") or "") for b in blocks if isinstance(b, dict) and b.get("type") == "text"]
+    return "\n".join(x for x in texts if x.strip() and not x.lstrip().startswith("<")).strip()
+
+
+def _summary(path: Path, size: int) -> dict[str, Any]:
+    """What the history window shows for one transcript, from its head and tail only."""
+    with path.open("rb") as f:
+        head = f.read(HISTORY_HEAD)
+        tail = b""
+        if size > HISTORY_HEAD:
+            f.seek(max(HISTORY_HEAD, size - HISTORY_TAIL))
+            tail = f.read()
+            if size - HISTORY_TAIL > HISTORY_HEAD:
+                tail = tail[tail.find(b"\n") + 1:]  # drop the cut line
+    out: dict[str, Any] = {"cwd": "", "git_branch": "", "entrypoint": "", "version": "", "started": 0.0,
+                           "first_prompt": "", "last_prompt": "", "custom_title": "", "ai_title": ""}
+    for line in (head + b"\n" + tail).splitlines():
+        if not line.strip():
+            continue
+        try:
+            raw = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        t = raw.get("type")
+        if t == "custom-title" and raw.get("customTitle"):
+            out["custom_title"] = str(raw["customTitle"])[:200]
+        elif t == "ai-title" and raw.get("aiTitle"):
+            out["ai_title"] = str(raw["aiTitle"])[:200]
+        elif t == "last-prompt" and raw.get("lastPrompt"):
+            out["last_prompt"] = str(raw["lastPrompt"])[:500]
+        elif t in {"user", "assistant"} and not raw.get("isSidechain"):
+            for key, field in (("cwd", "cwd"), ("gitBranch", "git_branch"), ("entrypoint", "entrypoint"),
+                               ("version", "version")):
+                if raw.get(key) and not out[field]:
+                    out[field] = str(raw[key])
+            if not out["started"]:
+                out["started"] = _ts(raw.get("timestamp"))
+            if t == "user":
+                prompt = _prompt_of(raw)
+                if prompt:
+                    out["first_prompt"] = out["first_prompt"] or prompt[:500]
+                    out["last_prompt"] = prompt[:500]
+    return out
+
+
+def history(query: str = "", limit: int = 200) -> dict[str, Any]:
+    """Every Claude Code session on this host that left a transcript, newest first, with live ones marked."""
+    live = {s["session_id"]: s for s in sessions()}
+    found: dict[str, dict[str, Any]] = {}
+    paths = list((claude_home() / "projects").glob("*/*.jsonl"))
+    for gone in set(_history_cache) - {str(p) for p in paths}:
+        _history_cache.pop(gone, None)
+    for path in paths:
+        sid = path.stem
+        if not _SESSION_RE.fullmatch(sid):
+            continue
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        key = str(path)
+        cached = _history_cache.get(key)
+        if cached is None or cached[0] != (st.st_mtime, st.st_size):
+            try:
+                cached = ((st.st_mtime, st.st_size), _summary(path, st.st_size))
+            except OSError:
+                continue
+            _history_cache[key] = cached
+        s = cached[1]
+        if not (s["first_prompt"] or s["custom_title"] or s["ai_title"]) and sid not in live:
+            continue  # opened and closed without a prompt
+        proc = live.get(sid)
+        row = {**s, "session_id": sid, "updated": st.st_mtime, "size": st.st_size,
+               "title": s["custom_title"] or s["ai_title"] or s["first_prompt"].split("\n")[0][:120] or sid[:8],
+               "status": proc["status"] if proc else "ended", "pid": proc["pid"] if proc else 0,
+               "cwd": s["cwd"] or (proc or {}).get("cwd", ""),
+               "entrypoint": (proc or {}).get("entrypoint") or s["entrypoint"]}
+        if sid not in found or row["updated"] > found[sid]["updated"]:  # in two project folders: the newer
+            found[sid] = row
+    rows = list(found.values())
+    q = query.strip().lower()
+    if q:
+        rows = [r for r in rows if any(q in str(r[k]).lower() for k in
+                                       ("title", "cwd", "first_prompt", "last_prompt", "session_id", "git_branch"))]
+    rows.sort(key=lambda r: (r["status"] == "ended", -r["updated"]))
+    return {"total": len(rows), "items": rows[:max(1, limit)]}
+
+
+def delete_session(session_id: str) -> dict[str, Any]:
+    """Delete an ended session's transcript, its subagent transcripts and its file checkpoints."""
+    if not _SESSION_RE.fullmatch(session_id or ""):
+        raise ValueError("bad session id")
+    if any(s["session_id"] == session_id for s in sessions(refresh=True)):
+        raise ValueError("the session is still running: stop it first")
+    home = claude_home()
+    paths = list((home / "projects").glob(f"*/{session_id}.jsonl"))
+    if not paths:
+        raise KeyError(f"session {session_id}")
+    for p in paths:
+        p.unlink(missing_ok=True)
+        _history_cache.pop(str(p), None)
+        if (p.parent / session_id).is_dir():
+            shutil.rmtree(p.parent / session_id, ignore_errors=True)
+    if (home / "file-history" / session_id).is_dir():
+        shutil.rmtree(home / "file-history" / session_id, ignore_errors=True)
+    with _watch_lock:
+        _watch.pop(session_id, None)
+    return {"session_id": session_id, "deleted": [str(p) for p in paths]}

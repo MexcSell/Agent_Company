@@ -192,7 +192,7 @@ table.csv .c4 { color: var(--t-kw); } table.csv .c5 { color: var(--t-num); } tab
 .wt-host .xterm-viewport { scrollbar-width: thin; }
 
 /* Claude Code panel */
-.wc { display: flex; flex-direction: column; background: var(--panel); }
+.wc { display: flex; flex-direction: column; background: var(--panel); position: relative; }
 .wc.drop { box-shadow: inset 0 0 0 2px var(--claude); }
 .wc-head { display: flex; align-items: center; gap: 7px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--border); flex: none; white-space: nowrap; min-height: 41px; }
 .wc-head select { width: auto; font-size: 12px; padding: 2px 4px; }
@@ -328,3 +328,29 @@ table.csv .c4 { color: var(--t-kw); } table.csv .c5 { color: var(--t-num); } tab
 .cc-notice { font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px dashed var(--border); color: var(--muted); }
 .cc-notice code { background: none; padding: 0; }
 .cc-notice.ok > span:first-child { color: var(--ok); font-weight: 700; } .cc-notice.err > span:first-child { color: var(--bad); font-weight: 700; }
+/* Sessions window (claude.js): running now and history, over the conversation */
+.wc-hist { position: absolute; inset: 41px 0 0 0; z-index: 5; display: flex; flex-direction: column; background: var(--panel); border-top: 1px solid var(--border); box-shadow: var(--shadow); }
+.wc-hist[hidden] { display: none; }
+.wc-hist-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--panel-2); flex: none; }
+.wc-hist-head input { flex: 1; min-width: 80px; font-size: 12.5px; padding: 3px 8px; }
+.wc-hist-tabs { display: flex; gap: 2px; flex: none; }
+.wc-hist-tabs button { border: 0; background: none; color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 600; padding: 4px 9px; border-radius: 5px; cursor: pointer; }
+.wc-hist-tabs button:hover { color: var(--text); background: var(--hover); }
+.wc-hist-tabs button.on { color: var(--claude); background: color-mix(in srgb, var(--claude) 12%, transparent); }
+.wc-count { font-weight: 500; font-size: 11px; opacity: .8; }
+.wc-hist-body { flex: 1; min-height: 0; overflow: auto; padding: 6px 8px 10px; }
+.wc-hlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.wc-hrow { display: flex; align-items: flex-start; gap: 9px; padding: 8px; border-radius: 7px; border: 1px solid transparent; }
+.wc-hrow:hover { background: var(--hover); }
+.wc-hrow.on { border-color: color-mix(in srgb, var(--claude) 40%, var(--border)); }
+.wc-hrow.ended .wc-htitle b { font-weight: 600; }
+.wc-hrow > .wc-dot { margin-top: 5px; flex: none; }
+.wc-hmain { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.wc-htitle { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.wc-htitle b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.wc-htitle .wc-badge { flex: none; }
+.wc-hsub, .wc-hprompt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+.wc-hmeta { font-size: 11px; }
+.wc-hacts { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.wc-hacts .btn { padding: 2px 9px; font-size: 12px; }
+.wc-hempty { padding: 14px 6px; text-align: center; }

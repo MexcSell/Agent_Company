@@ -30,6 +30,7 @@ def env(tmp_path, monkeypatch):
 
     workspace._sessions_cache = (0.0, [])
     workspace._watch.clear()
+    workspace._history_cache.clear()
     api._signups.clear()  # the registration rate limit is per process; start each test fresh
     bootstrap()
     yield tmp_path

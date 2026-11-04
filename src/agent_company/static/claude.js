@@ -7,16 +7,18 @@
 // (VS Code, terminal, SDK) as a read-only view of its conversation. The drawer answers
 // /status, /tasks and /agents (typed in the prompt box or opened with the header button) for
 // the selected tab: model, context, background commands, todos, subagents and agent types.
+// The sessions window (clock button, /history or /resume) lists the running sessions (open,
+// stop) and every earlier one with a transcript (open read-only, resume here, delete).
 window.WSP = window.WSP || {};
 (() => {
   const W = window.WSP;
   const C = { el: null, runs: [], uploads: [], busy: false, open: new Set(), history: [], hpos: -1,
     session: store.get("ac.wsp.claude.session") || "", sessionCwd: store.get("ac.wsp.claude.cwd") || "", model: store.get("ac.wsp.claude.model") || "default",
     tab: "chat", sessions: [], names: {}, view: { sid: "", events: [], next: 0, d: null }, info: "", cli: null, dtimer: 0,
-    closed: new Set() };
+    closed: new Set(), hist: { open: false, tab: "running", q: "", items: [], total: 0, at: 0, timer: 0 } };
   try { C.closed = new Set(JSON.parse(store.get("ac.wsp.claude.closed") || "[]")); } catch { /* ignore */ }
   const ENTRY = { "claude-vscode": "VS Code", cli: "Terminal", "sdk-cli": "SDK", "sdk-ts": "SDK", "sdk-py": "SDK", "claude-desktop": "Desktop", "claude-jetbrains": "JetBrains" };
-  const saveRuns = () => store.set("ac.wsp.claude.runs", JSON.stringify(C.runs.map((r) => r.id).slice(-30)));
+  const saveRuns = () => store.set("ac.wsp.claude.runs", JSON.stringify(C.runs.filter((r) => !r.divider && !r.transcript).map((r) => r.id).slice(-30)));
   const saveClosed = () => store.set("ac.wsp.claude.closed", JSON.stringify([...C.closed]));
   const saveSession = () => { store.set("ac.wsp.claude.session", C.session); store.set("ac.wsp.claude.cwd", C.sessionCwd); };
 
@@ -24,6 +26,7 @@ window.WSP = window.WSP || {};
     C.el = el;
     el.innerHTML = `<div class="wc-head"><span class="wc-logo" aria-hidden="true">✳</span><strong>Claude Code</strong><span class="wc-dot" title="idle"></span><span class="grow"></span>
         <select id="wc-model" class="wc-chat-only" aria-label="Model" title="Model"></select>
+        <button class="icon-btn sm" id="wc-hist-btn" title="Sessions: running now and history (/history)" aria-expanded="false">${W.svg("M12 7v5l3 2M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4")}</button>
         <button class="icon-btn sm" id="wc-info-btn" title="Status, tasks and agents (/status, /tasks, /agents)" aria-expanded="false">${W.svg("M3 12h4l3-8 4 16 3-8h4")}</button>
         <button class="icon-btn sm wc-chat-only" id="wc-new" title="New conversation">${W.svg("M12 5v14M5 12h14")}</button></div>
       <div class="wc-tabs" id="wc-tabs" role="tablist" aria-label="Claude Code sessions"></div>
@@ -32,11 +35,18 @@ window.WSP = window.WSP || {};
           <button type="button" class="icon-btn sm" id="wc-info-close" title="Close">×</button></div>
         <div class="wc-info-body" id="wc-info-body"></div>
       </div>
+      <div class="wc-hist" id="wc-hist" role="dialog" aria-label="Claude Code sessions" hidden>
+        <div class="wc-hist-head"><div class="wc-hist-tabs" role="tablist">${["running", "history"].map((t) => `<button type="button" role="tab" data-hist="${t}">${t === "running" ? "Running" : "History"} <span class="wc-count" data-count="${t}"></span></button>`).join("")}</div>
+          <input type="search" id="wc-hist-q" placeholder="Search title, folder, prompt, id…" aria-label="Search sessions">
+          <button type="button" class="icon-btn sm" id="wc-hist-reload" title="Refresh">${W.svg("M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7")}</button>
+          <button type="button" class="icon-btn sm" id="wc-hist-close" title="Close (Esc)">×</button></div>
+        <div class="wc-hist-body" id="wc-hist-body"></div>
+      </div>
       <div class="wc-log" id="wc-log" aria-live="polite"></div>
       <div class="wc-ro muted" id="wc-ro" hidden></div>
       <form class="wc-composer" id="wc-form">
         <div class="wc-att" id="wc-att"></div>
-        <textarea id="wc-input" rows="3" placeholder="Ask Claude Code to read, change, run or explain anything in this folder…  Enter sends · Shift+Enter new line · paste or drop images · /status /tasks /agents"></textarea>
+        <textarea id="wc-input" rows="3" placeholder="Ask Claude Code to read, change, run or explain anything in this folder…  Enter sends · Shift+Enter new line · paste or drop images · /status /tasks /agents /history"></textarea>
         <div class="wc-row"><label class="icon-btn sm" for="wc-file" title="Attach images or files">${W.svg("M21 12.5l-8.5 8.5a6 6 0 0 1-8.5-8.5L13 3.5a4 4 0 0 1 5.7 5.7L9.6 18.3a2 2 0 0 1-2.8-2.8L15 7.3")}</label>
           <input type="file" id="wc-file" multiple hidden accept="image/*,text/*,.json,.yaml,.yml,.md,.pdf">
           <span class="wc-cwd muted mono grow" id="wc-cwd"></span>
@@ -84,6 +94,15 @@ window.WSP = window.WSP || {};
     el.addEventListener("toggle", (e) => { const k = e.target.dataset?.k; if (k) e.target.open ? C.open.add(k) : C.open.delete(k); }, true);
     W.onRoot = () => renderCwd();
     renderCwd();
+    el.querySelector("#wc-hist-btn").onclick = () => openHist(!C.hist.open);
+    el.querySelector("#wc-hist-close").onclick = () => openHist(false);
+    el.querySelector("#wc-hist-reload").onclick = () => loadHist();
+    el.querySelectorAll("[data-hist]").forEach((b) => (b.onclick = () => { C.hist.tab = b.dataset.hist; renderHist(); }));
+    const hq = el.querySelector("#wc-hist-q");
+    let hqTimer = 0;
+    hq.oninput = () => { C.hist.q = hq.value; renderHist(); clearTimeout(hqTimer); hqTimer = setTimeout(loadHist, 300); };
+    el.querySelector("#wc-hist").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); openHist(false); } });
+    el.querySelector("#wc-hist-body").addEventListener("click", (e) => { const b = e.target.closest("[data-hact]"); if (b) histAction(b.dataset.hact, b.dataset.sid); });
     el.querySelector("#wc-info-btn").onclick = () => openInfo(C.info ? "" : "status");
     el.querySelector("#wc-info-close").onclick = () => openInfo("");
     el.querySelectorAll("[data-info]").forEach((b) => (b.onclick = () => openInfo(b.dataset.info)));
@@ -114,7 +133,8 @@ window.WSP = window.WSP || {};
     try { ids = JSON.parse(store.get("ac.wsp.claude.runs") || "[]"); } catch { /* ignore */ }
     const runs = await Promise.all(ids.map((id) => api(`/api/workspace/claude/${id}`).catch(() => null)));
     C.runs = runs.filter(Boolean);
-    C.history = C.runs.map((r) => r.prompt);
+    if (!C.runs.length && C.session) await showTranscript(C.session);  // a resumed conversation, after a reload
+    C.history = C.runs.filter((r) => r.prompt).map((r) => r.prompt);
     if (C.runs.length || !el.querySelector(".cc-error")) renderLog();
     const running = C.runs.find((r) => r.status === "running");
     if (running) { setBusy(true); poll(running); }
@@ -164,8 +184,13 @@ window.WSP = window.WSP || {};
     const ta = C.el.querySelector("#wc-input");
     const prompt = ta.value.trim();
     // `claude -p` cannot run interactive slash commands: the panel answers these itself.
-    const slash = prompt.match(/^\/(status|tasks|agents)$/i);
-    if (slash) { ta.value = ""; ta.oninput(); return openInfo(slash[1].toLowerCase()); }
+    const slash = prompt.match(/^\/(status|tasks|agents|history|resume)$/i);
+    if (slash) {
+      ta.value = ""; ta.oninput();
+      const cmd = slash[1].toLowerCase();
+      if (cmd === "history" || cmd === "resume") { C.hist.tab = cmd === "resume" ? "history" : C.hist.tab; return openHist(true); }
+      return openInfo(cmd);
+    }
     if (C.uploads.some((u) => u.pending)) return toast("Wait for the attachments to finish uploading");
     if (!prompt && !C.uploads.length) return;
     if (!W.root()) return toast("Open a folder in the explorer first");
@@ -268,6 +293,10 @@ window.WSP = window.WSP || {};
   function runHtml(run) {
     if (run.divider) return `<div class="cc-divider"><span>${esc(run.divider)}</span></div>`;
     const results = new Map(run.events.filter((e) => e.kind === "tool_result").map((e) => [e.tool_use_id, e]));
+    if (run.transcript) {  // an earlier conversation, resumed: its transcript, then the new prompts
+      const events = run.events.map((e) => eventHtml(run, e, results, false)).join("");
+      return `<div class="cc-divider"><span>Earlier in this conversation${run.title ? ` · ${esc(run.title)}` : ""}</span></div>${run.partial ? '<div class="cc-divider"><span>Earlier history not loaded</span></div>' : ""}${events || '<p class="muted">No earlier conversation found.</p>'}<div class="cc-divider"><span>Continue below</span></div>`;
+    }
     const imgs = (run.images || []).map((i) => `<a href="/api/uploads/${esc(i.id)}" target="_blank" rel="noopener"><img src="/api/uploads/${esc(i.id)}" alt="${esc(i.name)}" class="cc-thumb"></a>`).join("");
     const events = run.events.map((e, i) => eventHtml(run, e, results, i === run.events.length - 1)).join("");
     const working = run.status === "running" ? `<div class="cc-working"><span class="spin"></span> Working… <span class="muted">Esc to stop</span></div>` : run.status === "stopped" && !run.events.some((e) => e.kind === "error") ? '<div class="cc-error">Stopped.</div>' : "";
@@ -303,7 +332,9 @@ window.WSP = window.WSP || {};
   const chatSid = () => C.runs.find((r) => r.status === "running" && r.session_id)?.session_id || C.session;
   const viewSid = () => (C.tab === "chat" ? chatSid() : C.tab);
   const sessionRun = () => ({ id: "session", events: C.view.events, status: C.view.d?.status === "busy" ? "running" : "done" });
-  const others = () => C.sessions.filter((s) => !panelSids().has(s.session_id));
+  // The panel's own session gets a tab too while it works without the panel knowing (a run that
+  // outlived a server restart), so it can be followed and stopped.
+  const others = () => C.sessions.filter((s) => !panelSids().has(s.session_id) || (!C.busy && s.status === "busy"));
 
   async function pollSessions() {
     if (!C.el?.isConnected) return;
@@ -315,9 +346,135 @@ window.WSP = window.WSP || {};
         const live = new Set(C.sessions.map((s) => s.session_id));
         if ([...C.closed].some((id) => !live.has(id))) { C.closed = new Set([...C.closed].filter((id) => live.has(id))); saveClosed(); }
         renderTabs();
+        if (C.hist.open) renderHist();
       } catch { /* signed out or offline: try again later */ }
     }
     setTimeout(pollSessions, 3000);
+  }
+
+  // --- sessions window: running now and history -----------------------------------------------
+  const size = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+  const histRow = (sid) => C.hist.items.find((r) => r.session_id === sid);
+  function openHist(show) {
+    const H = C.hist;
+    H.open = show;
+    C.el.querySelector("#wc-hist").hidden = !show;
+    C.el.querySelector("#wc-hist-btn").setAttribute("aria-expanded", String(show));
+    clearTimeout(H.timer);
+    if (!show) return;
+    renderHist(); loadHist();
+    C.el.querySelector("#wc-hist-q").focus();
+  }
+  async function loadHist() {
+    const H = C.hist;
+    clearTimeout(H.timer);
+    if (!H.open || !C.el?.isConnected) return;
+    try {
+      const q = H.q.trim();
+      const d = await api(`/api/workspace/claude-history?limit=300${q ? `&q=${encodeURIComponent(q)}` : ""}`);
+      if (q !== H.q.trim()) return;  // typed on meanwhile: the newer request will render
+      H.items = d.items; H.total = d.total; H.at = Date.now(); H.error = "";
+    } catch (e) { H.error = e.message; }
+    renderHist();
+    H.timer = setTimeout(loadHist, 15000);
+  }
+  // Running: every live session (this panel's first). History: every session with a transcript.
+  function runningRows() {
+    const q = C.hist.q.trim().toLowerCase(), mine = panelSids();
+    const rows = C.sessions.map((s) => {
+      const h = histRow(s.session_id) || {};
+      return { ...h, ...s, title: h.title || s.name, panel: C.busy && mine.has(s.session_id), last_prompt: h.last_prompt || "" };
+    });
+    if (C.busy && !rows.some((r) => r.panel)) {
+      const run = C.runs.find((r) => r.status === "running");
+      rows.unshift({ session_id: run?.session_id || "", title: firstLine(run?.prompt, 80) || "This panel", cwd: run?.cwd || W.root(), status: "busy", panel: true, started: run?.started || 0, entrypoint: "sdk-cli" });
+    }
+    rows.sort((a, b) => b.panel - a.panel);
+    return q ? rows.filter((r) => [r.title, r.cwd, r.last_prompt, r.session_id, r.git_branch].some((x) => String(x || "").toLowerCase().includes(q))) : rows;
+  }
+  function renderHist() {
+    const H = C.hist, body = C.el?.querySelector("#wc-hist-body");
+    if (!body || !H.open) return;
+    const running = runningRows();
+    C.el.querySelector('[data-count="running"]').textContent = C.sessions.length || (C.busy ? 1 : 0) || "";
+    C.el.querySelector('[data-count="history"]').textContent = H.at ? H.total : "";
+    C.el.querySelectorAll("[data-hist]").forEach((b) => { b.classList.toggle("on", b.dataset.hist === H.tab); b.setAttribute("aria-selected", String(b.dataset.hist === H.tab)); });
+    const btn = (act, sid, label, cls = "", title = "") => `<button type="button" class="btn sm ${cls}" data-hact="${act}" data-sid="${esc(sid)}"${title ? ` title="${esc(title)}"` : ""}>${label}</button>`;
+    const row = (r, acts) => `<li class="wc-hrow${r.status === "ended" ? " ended" : ""}${r.session_id && r.session_id === viewSid() ? " on" : ""}">
+        <span class="wc-dot${r.status === "busy" ? " busy" : r.status === "ended" ? " off" : ""}"></span>
+        <div class="wc-hmain"><div class="wc-htitle"><b>${esc(r.title || r.session_id.slice(0, 8))}</b>${r.panel ? '<span class="wc-badge">this panel</span>' : ""}${r.entrypoint && !r.panel ? `<span class="wc-badge">${esc(ENTRY[r.entrypoint] || r.entrypoint)}</span>` : ""}${r.status !== "ended" ? `<span class="wc-badge ${esc(r.status)}">${r.status === "busy" ? "working" : esc(r.status)}</span>` : ""}</div>
+          <div class="muted mono wc-hsub" title="${esc(r.cwd || "")}">${esc(r.cwd || "")}${r.git_branch ? ` · ⎇ ${esc(r.git_branch)}` : ""}</div>
+          ${r.last_prompt ? `<div class="wc-hprompt" title="${esc(r.last_prompt)}">${esc(firstLine(r.last_prompt, 160))}</div>` : ""}
+          <div class="muted wc-hmeta">${[r.updated ? `active ${since(r.updated)} ago` : "", r.started && r.status !== "ended" ? `up ${since(r.started)}` : "", r.size ? size(r.size) : "", r.pid ? `pid ${r.pid}` : "", r.session_id ? `<span class="mono">${esc(r.session_id.slice(0, 8))}</span>` : ""].filter(Boolean).join(" · ")}</div>
+          <div class="wc-hacts">${acts}</div></div></li>`;
+    let html;
+    if (H.tab === "running") {
+      html = running.length ? `<ul class="wc-hlist">${running.map((r) => row(r, (r.session_id || r.panel ? btn("open", r.panel ? "chat" : r.session_id, "Open") : "") + btn("stop", r.panel ? "panel" : r.session_id, "Stop", "danger", r.panel ? "Stop the running prompt" : "End this Claude Code process"))).join("")}</ul>`
+        : `<p class="muted wc-hempty">${H.q ? "No running session matches." : "No Claude Code session is running on this host."}</p>`;
+    } else {
+      const items = H.items;
+      html = H.error ? `<div class="cc-error">${esc(H.error)}</div>` : !H.at ? '<div class="cc-working"><span class="spin"></span> Loading…</div>'
+        : items.length ? `<ul class="wc-hlist">${items.map((r) => row({ ...r, panel: panelSids().has(r.session_id) && r.session_id === C.session }, btn("open", r.session_id, "Open", "", "Read-only view of the conversation")
+            + (r.status === "ended" ? btn("resume", r.session_id, "Resume", "primary", "Continue this conversation in this panel") + btn("delete", r.session_id, "Delete", "danger", "Delete the transcript") : ""))).join("")}</ul>${H.total > items.length ? `<p class="muted wc-hempty">Showing ${items.length} of ${H.total}: search to narrow down.</p>` : ""}`
+        : `<p class="muted wc-hempty">${H.q ? "No session matches." : "No earlier sessions yet."}</p>`;
+    }
+    if (body.innerHTML !== html) { const top = body.scrollTop; body.innerHTML = html; body.scrollTop = top; }
+  }
+  async function histAction(act, sid) {
+    const r = histRow(sid) || C.sessions.find((s) => s.session_id === sid) || {};
+    const label = r.title || r.name || sid.slice(0, 8);
+    if (act === "open") {
+      openHist(false);
+      if (sid === "chat" || (panelSids().has(sid) && !others().some((s) => s.session_id === sid))) return selectTab("chat");
+      if (C.closed.delete(sid)) saveClosed();
+      C.names[sid] = C.names[sid] || { name: label, cwd: r.cwd, entrypoint: r.entrypoint, session_id: sid };
+      return selectTab(sid);
+    }
+    if (act === "stop") {
+      if (sid === "panel" || (C.busy && sid === chatSid())) return stop();
+      if (!confirm(`Stop the Claude Code session "${label}"${r.pid ? ` (pid ${r.pid})` : ""}?\n\nIts process gets SIGTERM, as when its window is closed. Unsaved work in it may be lost; the transcript stays and can be resumed.`)) return;
+      try { await api(`/api/workspace/claude-sessions/${encodeURIComponent(sid)}/stop`, { method: "POST" }); toast(`Stopped ${label}`); }
+      catch (e) { toast(e.message); }
+      C.sessions = await api("/api/workspace/claude-sessions").catch(() => C.sessions);
+      renderTabs(); renderHist(); setTimeout(loadHist, 1500);
+      return;
+    }
+    if (act === "delete") {
+      if (!confirm(`Delete the session "${label}"?\n\nIts transcript (${r.size ? size(r.size) : "the conversation"}), subagent transcripts and file checkpoints are removed from ~/.claude. This cannot be undone.`)) return;
+      try { await api(`/api/workspace/claude-history/${encodeURIComponent(sid)}`, { method: "DELETE" }); toast(`Deleted ${label}`); }
+      catch (e) { return toast(e.message); }
+      C.hist.items = C.hist.items.filter((x) => x.session_id !== sid); C.hist.total = Math.max(0, C.hist.total - 1);
+      if (C.closed.delete(sid)) saveClosed();
+      if (C.tab === sid) selectTab("chat");
+      renderHist();
+      return;
+    }
+    if (act === "resume") return resume(r);
+  }
+  // Continue an ended session here: open its folder in the explorer, show its conversation,
+  // and let the next prompt run with --resume.
+  async function resume(r) {
+    if (C.busy) return toast("Stop the running prompt first");
+    if (r.status && r.status !== "ended") return toast("That session is still running: open it, or stop it first");
+    if (r.cwd && r.cwd !== W.root()) {
+      try { await W.openRoot(r.cwd); } catch (e) { return toast(`Cannot open ${r.cwd}: ${e.message}`); }
+    }
+    if (!W.root()) return toast("Open a folder in the explorer first");
+    C.session = r.session_id; C.sessionCwd = W.root(); saveSession();
+    C.runs = []; saveRuns();
+    openHist(false); selectTab("chat");
+    await showTranscript(r.session_id, r.title);
+    C.history = []; C.hpos = -1;
+    toast(`Resumed: ${r.title || r.session_id.slice(0, 8)}`);
+    C.el.querySelector("#wc-input").focus();
+  }
+  async function showTranscript(sid, title = "") {
+    let d = null;
+    try { d = await api(`/api/workspace/claude-sessions/${encodeURIComponent(sid)}?after=0`); } catch { /* deleted or never written */ }
+    if (C.session !== sid) return;
+    C.runs.unshift({ id: `resume-${sid}`, transcript: true, session_id: sid, title: title || histRow(sid)?.title || C.names[sid]?.name || "", prompt: "",
+      events: d?.events || [], status: "done", partial: d?.partial_history });
+    renderLog();
   }
   function renderTabs() {
     const box = C.el?.querySelector("#wc-tabs");

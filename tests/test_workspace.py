@@ -362,3 +362,88 @@ def test_claude_session_that_ended_reports_unfinished_work(admin, tmp_path):
     d = admin.get(f"/api/workspace/claude-sessions/{SID}").json()
     assert not d["live"] and d["status"] == "ended" and d["current"] is None
     assert d["tasks"][0]["status"] == "ended"
+
+
+def _session_file(home, pid, sid, status="idle"):
+    stat = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    (home / "sessions" / f"{pid}.json").write_text(json.dumps({
+        "pid": pid, "sessionId": sid, "cwd": "/srv/app", "procStart": stat[19], "name": sid[:8], "status": status,
+        "entrypoint": "cli", "startedAt": 1, "updatedAt": 2}))
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="needs /proc")
+def test_claude_history_lists_running_and_ended_sessions_and_deletes(admin, tmp_path):
+    home, folder = _claude_host(tmp_path, _line(type="user", cwd="/srv/app", message={"content": "Fix the login bug"}),
+                                json.dumps({"type": "custom-title", "sessionId": SID, "customTitle": "Login fix"}))
+    renamed, titled, plain, empty = ("dddddddd-0000-0000-0000-00000000000" + x for x in "1234")
+    other = home / "projects" / "-srv-web"
+    other.mkdir()
+    (other / f"{titled}.jsonl").write_text("\n".join([
+        _line(type="user", cwd="/srv/web", gitBranch="dev", entrypoint="claude-vscode", message={"content": "Add dark mode"}),
+        json.dumps({"type": "ai-title", "aiTitle": "Dark mode toggle", "sessionId": titled}),
+        _line(type="user", cwd="/srv/web", message={"content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]}),
+        _line(type="user", cwd="/srv/web", message={"content": "Now the tests"})]) + "\n")
+    (other / f"{plain}.jsonl").write_text(_line(type="user", cwd="/srv/web", message={"content": "Explain the build\nin detail"}) + "\n")
+    (other / f"{empty}.jsonl").write_text(json.dumps({"type": "queue-operation", "sessionId": empty}) + "\n")
+    (other / f"{renamed}.jsonl").write_text(  # a long transcript: the title is read from its tail
+        _line(type="user", cwd="/srv/web", message={"content": "Start"}) + "\n"
+        + "".join(_line(type="assistant", message={"content": [{"type": "text", "text": "x" * 1000}]}) + "\n" for _ in range(300))
+        + json.dumps({"type": "custom-title", "sessionId": renamed, "customTitle": "Renamed late"}) + "\n")
+    (other / plain / "subagents").mkdir(parents=True)
+    (other / plain / "subagents" / "agent-1.jsonl").write_text("{}\n")
+    (home / "file-history" / plain).mkdir(parents=True)
+    os.utime(other / f"{titled}.jsonl", (time.time() + 10, time.time() + 10))  # the most recent ended session
+
+    d = admin.get("/api/workspace/claude-history").json()
+    rows = {r["session_id"]: r for r in d["items"]}
+    assert d["total"] == 4 and empty not in rows  # opened and closed without a prompt: not history
+    assert d["items"][0]["session_id"] == SID and rows[SID]["status"] == "busy" and rows[SID]["title"] == "Login fix"
+    assert d["items"][1]["session_id"] == titled
+    t = rows[titled]
+    assert t["status"] == "ended" and t["title"] == "Dark mode toggle" and t["cwd"] == "/srv/web" and t["git_branch"] == "dev"
+    assert t["first_prompt"] == "Add dark mode" and t["last_prompt"] == "Now the tests" and t["entrypoint"] == "claude-vscode"
+    assert rows[plain]["title"] == "Explain the build" and rows[renamed]["title"] == "Renamed late"
+    assert [r["session_id"] for r in admin.get("/api/workspace/claude-history?q=dark").json()["items"]] == [titled]
+    assert admin.get("/api/workspace/claude-history?q=srv/app").json()["total"] == 1
+
+    # Deleting: never a running session; an ended one goes with its subagents and checkpoints.
+    assert admin.delete(f"/api/workspace/claude-history/{SID}").status_code == 400
+    assert admin.delete(f"/api/workspace/claude-history/{plain}").status_code == 200
+    assert not (other / f"{plain}.jsonl").exists() and not (other / plain).exists()
+    assert not (home / "file-history" / plain).exists() and (other / f"{titled}.jsonl").exists()
+    assert admin.get("/api/workspace/claude-history").json()["total"] == 3
+    assert admin.delete(f"/api/workspace/claude-history/{plain}").status_code == 404
+    assert admin.delete("/api/workspace/claude-history/..%2Fx").status_code in (400, 404)
+    audit = admin.get("/api/audit").json()["records"]
+    assert any(a["action"] == "workspace_claude_session_delete" and a["target"] == plain for a in audit)
+    m = member_of(admin)
+    assert m.get("/api/workspace/claude-history").status_code == 403
+    assert m.delete(f"/api/workspace/claude-history/{titled}").status_code == 403
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="needs /proc")
+def test_claude_session_stop_ends_the_process(admin, tmp_path, monkeypatch):
+    import subprocess
+    import sys
+
+    home, _ = _claude_host(tmp_path)  # SID runs as this very process: never stopped
+    assert admin.post(f"/api/workspace/claude-sessions/{SID}/stop").status_code == 400
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        sid = "eeeeeeee-0000-0000-0000-000000000001"
+        _session_file(home, proc.pid, sid)
+        workspace._sessions_cache = (0.0, [])
+        # A conversation still working elsewhere (a run that outlived a restart) is not resumed twice.
+        monkeypatch.setattr(workspace.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(workspace, "_version", lambda exe: "2.1.310")
+        busy = admin.post("/api/workspace/claude", json={"prompt": "go on", "cwd": str(tmp_path), "session_id": sid})
+        assert busy.status_code == 400 and "still running" in busy.json()["detail"]
+        r = admin.post(f"/api/workspace/claude-sessions/{sid}/stop")
+        assert r.status_code == 200 and r.json()["pid"] == proc.pid
+        assert proc.wait(timeout=10) != 0
+        assert sid not in {s["session_id"] for s in admin.get("/api/workspace/claude-sessions").json()}
+        assert admin.post(f"/api/workspace/claude-sessions/{sid}/stop").status_code == 404
+        assert any(a["action"] == "workspace_claude_session_stop" for a in admin.get("/api/audit").json()["records"])
+        assert member_of(admin).post(f"/api/workspace/claude-sessions/{SID}/stop").status_code == 403
+    finally:
+        proc.kill()

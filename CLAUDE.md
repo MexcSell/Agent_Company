@@ -16,7 +16,7 @@ feature came from.
   command policy); `prefs.py` (DB settings); `gitsync.py` (push with each user's own GitHub token or SSH key, `data/git-keys/`); `files.py`; `supervisor.py` + `system.py`;
   `containers.py` (Docker and LXD VMs on the host: install, start, clean up; admin-only);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
-  (Workspace Claude Code panel); `api.py`; `static/` (dashboard, plain JS, one file per area;
+  (Workspace Claude Code panel: live host sessions, session history with resume/stop/delete); `api.py`; `static/` (dashboard, plain JS, one file per area;
   `workspace.js` + `viewer.js` + `console.js` + `claude.js` are the Workspace home page, sharing
   `window.WSP`; `vendor/` holds xterm.js, pdf.js and mammoth); `crew.py` (classic crew); `__main__.py` (CLI)
 - `evals/` – benchmark suites (JSON)

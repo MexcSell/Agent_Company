@@ -807,7 +807,7 @@ def create_app(start_background: bool = True) -> FastAPI:
                                                          "resume": body.session_id or None}, severity="high")
         return run.to_dict()
 
-    # Every Claude Code session on the host (VS Code, terminal, SDK, this panel), read-only.
+    # Every Claude Code session on the host (VS Code, terminal, SDK, this panel): viewed, stopped on request.
     @app.get("/api/workspace/claude-sessions")
     def claude_sessions(_: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
         return workspace.sessions()
@@ -815,6 +815,24 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.get("/api/workspace/claude-sessions/{session_id}")
     def claude_session(session_id: str, after: int = 0, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         return workspace.session_status(session_id, max(0, after))
+
+    @app.post("/api/workspace/claude-sessions/{session_id}/stop")
+    def claude_session_stop(session_id: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = workspace.stop_session(session_id)
+        _audit(admin, "workspace_claude_session_stop", session_id, after=out, severity="high")
+        return out
+
+    # History: every session with a transcript, running or ended.
+    @app.get("/api/workspace/claude-history")
+    def claude_history(q: str = "", limit: int = 200, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return workspace.history(q[:200], max(1, min(limit, 1000)))
+
+    @app.delete("/api/workspace/claude-history/{session_id}")
+    def claude_history_delete(session_id: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = workspace.delete_session(session_id)
+        _audit(admin, "workspace_claude_session_delete", session_id, after={"files": len(out["deleted"])},
+               severity="high")
+        return out
 
     @app.get("/api/workspace/claude/{run_id}")
     def claude_events(run_id: str, after: int = 0, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
