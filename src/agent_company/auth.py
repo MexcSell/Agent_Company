@@ -31,7 +31,7 @@ SECRET_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 SESSION_DAYS = 30
 # What a non-administrator may do. Administrators may do everything.
 DEFAULT_PERMISSIONS: dict[str, Any] = {
-    "projects": "all",         # "all" regular projects, or a list of project ids
+    "projects": "own",         # "own" (projects they created), "all" regular projects, or a list of ids (plus own)
     "run": True,               # give orders, start goals, ask the research room
     "create_projects": False,  # create projects (in a new workspace; folders and commands stay admin-only)
     "manage_agents": False,    # create, clone, pause, retire and edit agents; evolution actions
@@ -51,9 +51,9 @@ def set_permissions(user_id: int, perms: dict[str, Any]) -> dict[str, Any]:
     bad = set(perms) - set(DEFAULT_PERMISSIONS)
     if bad:
         raise AuthError(400, "unknown_permission", f"unknown permission(s): {', '.join(sorted(bad))}")
-    projects = perms.get("projects", "all")
-    if projects != "all" and not (isinstance(projects, list) and all(isinstance(x, int) for x in projects)):
-        raise AuthError(400, "bad_projects", "projects is \"all\" or a list of project ids")
+    projects = perms.get("projects", "own")
+    if projects not in ("all", "own") and not (isinstance(projects, list) and all(isinstance(x, int) for x in projects)):
+        raise AuthError(400, "bad_projects", "projects is \"own\", \"all\" or a list of project ids")
     with session() as s:
         u = s.get(User, user_id)
         if u is None:

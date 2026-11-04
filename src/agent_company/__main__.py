@@ -8,6 +8,7 @@
   python -m agent_company agents                 agents by room
   python -m agent_company approve <goal id>      merge a goal that passed the gate
   python -m agent_company host status|cleanup|launch <name>|...   Docker and LXD VMs on this host
+  python -m agent_company gm status|agents|create-agent|add|goal|configure|study ...   the GM's toolbox (gm.py)
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import sys
 
 from dotenv import load_dotenv
 
-COMMANDS = {"serve", "goal", "crawl", "models", "agents", "approve", "crew", "rotate", "eval", "supervise", "host"}
+COMMANDS = {"serve", "goal", "crawl", "models", "agents", "approve", "crew", "rotate", "eval", "supervise", "host", "gm"}
 
 
 def _host(args: argparse.Namespace) -> None:
@@ -66,6 +67,13 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(__doc__)
     if argv[0] not in COMMANDS:
         argv = ["crew", *argv]
+    if argv[0] == "gm":  # the General Manager's toolbox has its own parser
+        from agent_company import gm
+        from agent_company.api import bootstrap
+
+        bootstrap()
+        gm.main(argv[1:])
+        return
     p = argparse.ArgumentParser(prog="agent_company")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("crew").add_argument("request", nargs="+")

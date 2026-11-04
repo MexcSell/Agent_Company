@@ -48,6 +48,14 @@ def set_status(task_id: int, status: str, **fields: object) -> None:
             t.finished_at = now()
         for k, v in fields.items():
             setattr(t, k, v)
+        info = {"task_id": t.id, "goal_id": t.goal_id, "key": t.key, "title": t.title, "status": status,
+                "agent_id": t.agent_id, "role": t.role}
+    from agent_company import hooks
+
+    if status == "running":
+        hooks.emit("TaskCreated", **info)
+    elif status in {"done", "failed", "skipped"}:
+        hooks.emit("TaskCompleted", **info)
 
 
 def run_dag(task_ids: list[int], worker: Callable[[int], bool], worktree: str,

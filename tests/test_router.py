@@ -5,13 +5,26 @@ from agent_company.config import reset_settings
 
 
 def test_falls_back_to_offline_without_credentials():
-    c = router.resolve("general_manager")
+    c = router.resolve("architect")
     assert c.kind == "offline" and "ANTHROPIC_API_KEY" in c.reason
+    gm = router.resolve("general_manager")
+    assert router.list_routes()["general_manager"] == "Claude Code", "the GM is Claude Code by default"
+    assert gm.kind == "offline" and "ENABLE_CLAUDE_CODE" in gm.reason
+
+
+def test_gm_can_use_another_agents_model(monkeypatch):
+    from agent_company import registry
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    other = registry.create_agent("data_engineer")
+    registry.update_agent(other["id"], {"model_pref": "Claude Haiku 5.5"})
+    c = router.resolve("general_manager", model_pref=f"agent:{other['id']}")
+    assert c.name == "Claude Haiku 5.5" and "data engineer" in c.reason.lower()
 
 
 def test_uses_route_when_key_present(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
-    assert router.resolve("general_manager").name == "Claude Opus 5.5"
+    assert router.resolve("architect").name == "Claude Opus 5.5"
     assert router.resolve("qa").name == "Claude Sonnet 5.5"
     # developer routes to Claude Code, which is off by default -> next candidate is offline
     assert router.resolve("developer").kind == "offline"

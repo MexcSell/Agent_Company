@@ -18,7 +18,9 @@ from sqlalchemy import func, select
 from starlette.background import BackgroundTask
 
 from agent_company import (
+    agentdefs,
     auth,
+    catalog,
     containers,
     evaluation,
     evolution,
@@ -27,6 +29,7 @@ from agent_company import (
     governance,
     loop,
     machines,
+    mcp,
     performance,
     prefs,
     projects,
@@ -50,6 +53,7 @@ def bootstrap() -> None:
     registry.seed()
     router.seed()
     projects.seed()
+    catalog.seed()
     prefs.load()
 
 
@@ -269,6 +273,60 @@ class ClaudeBody(BaseModel):
     model: str = ""
     title: str = Field(default="", max_length=200)
     attachments: list[str] = Field(default_factory=list, max_length=10)
+    provider: str = "claude"  # claude | codex | copilot
+    project_id: int | None = None  # the project's General Manager: runs in its folder with the GM's instructions
+
+
+class McpServerBody(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    description: str = ""
+    transport: str = "stdio"
+    command: str = ""
+    args: list[str] = Field(default_factory=list)
+    url: str = ""
+    env: dict[str, str] = Field(default_factory=dict)
+    headers: dict[str, str] = Field(default_factory=dict)
+    everyone: bool = True
+    enabled: bool = True
+
+
+class McpCatalogBody(BaseModel):
+    values: dict[str, str] = Field(default_factory=dict)
+
+
+class McpToolsBody(BaseModel):
+    allowed: list[str] = Field(default_factory=list)
+
+
+class McpGrantsBody(BaseModel):
+    agent_ids: list[int] = Field(default_factory=list)
+    everyone: bool | None = None
+
+
+class McpCallBody(BaseModel):
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class CatalogBody(BaseModel):
+    kind: str
+    name: str = Field(min_length=1, max_length=64)
+    description: str = ""
+    content: str = ""
+    source: str = ""
+
+
+class DefinitionBody(BaseModel):
+    text: str = Field(min_length=10, max_length=200_000)
+
+
+class EmergencyBody(BaseModel):
+    on: bool
+    reason: str = ""
+
+
+class UiBody(BaseModel):
+    value: Any
 
 
 def ws_admin(ws: WebSocket) -> dict[str, Any] | None:
@@ -362,6 +420,9 @@ def create_app(start_background: bool = True) -> FastAPI:
             if settings().rotation_interval > 0:
                 app.state.rotation = research.RotationThread(settings().rotation_interval)
                 app.state.rotation.start()
+            app.state.study = agentdefs.StudyThread()
+            app.state.study.start()
+            threading.Thread(target=lambda: agentdefs.sync_all("registered"), daemon=True).start()
         yield
         if app.state.rotation:
             app.state.rotation.stop.set()
@@ -380,6 +441,23 @@ def create_app(start_background: bool = True) -> FastAPI:
                                      "scheme": target}, status_code=421)
             return HTMLResponse(transport.handoff_page(target), headers={"Cache-Control": "no-store"})
         return await call_next(request)
+
+    @app.middleware("http")
+    async def _headers(request: Request, call_next):  # noqa: ANN001, ANN202
+        """Security headers on every answer; versioned static files (?v=…) are cached for a year."""
+        response = await call_next(request)
+        h = response.headers
+        h.setdefault("X-Content-Type-Options", "nosniff")
+        h.setdefault("X-Frame-Options", "SAMEORIGIN")
+        h.setdefault("Referrer-Policy", "same-origin")
+        h.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        path = request.url.path
+        if path.startswith("/static/"):
+            h["Cache-Control"] = ("public, max-age=31536000, immutable" if request.query_params.get("v")
+                                  else "public, max-age=604800" if path.startswith("/static/vendor/") else "no-cache")
+        elif path.startswith("/api/") and "cache-control" not in h:
+            h["Cache-Control"] = "no-store"
+        return response
 
     @app.exception_handler(auth.AuthError)
     async def _auth_error(_: Request, e: auth.AuthError) -> JSONResponse:
@@ -483,6 +561,7 @@ def create_app(start_background: bool = True) -> FastAPI:
                      ) -> dict[str, Any]:
         out = registry.update_agent(agent_id, changes)
         _audit(admin, "agent_update", out["name"], after=changes)
+        agentdefs.sync(agent_id, f"settings changed by {admin['name']}: {', '.join(sorted(changes))}")
         return out
 
     @app.post("/api/agents")
@@ -924,12 +1003,19 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.post("/api/workspace/claude")
     def claude_start(body: ClaudeBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         images = projects.uploads(body.attachments) if body.attachments else []
+        cwd, system = body.cwd, ""
+        if body.project_id is not None:  # the project's General Manager (gm.py), in the project's folder
+            from agent_company import gm
+
+            p = projects.project_dict(projects.get(body.project_id, admin))
+            cwd, system = p["path"], gm.system_prompt(p)
         try:
-            run = workspace.start(body.prompt, body.cwd, admin["name"], body.session_id, body.model, images,
-                                  body.title)
+            run = workspace.start(body.prompt, cwd, admin["name"], body.session_id, body.model, images,
+                                  body.title, body.provider, system)
         except RuntimeError as e:
             raise HTTPException(503, str(e)) from e
         _audit(admin, "workspace_claude", run.cwd, after={"run": run.id, "prompt": body.prompt[:200],
+                                                         "provider": body.provider, "project": body.project_id,
                                                          "resume": body.session_id or None}, severity="high")
         return run.to_dict()
 
@@ -1242,8 +1328,8 @@ def create_app(start_background: bool = True) -> FastAPI:
             raise HTTPException(403, "only administrators can choose a work folder or quality commands")
         out = projects.create(body.name, body.path, body.github_url, body.description, body.quality_commands,
                               created_by=admin["id"])
-        granted = admin["permissions"].get("projects", "all")
-        if not admin["is_admin"] and granted != "all":
+        granted = admin["permissions"].get("projects", "own")
+        if not admin["is_admin"] and isinstance(granted, list):
             auth.set_permissions(admin["id"], {"projects": [*granted, out["id"]]})
         _audit(admin, "project_create", out["name"], after={"path": out["path"], "github_url": out["github_url"]})
         return out
@@ -1415,14 +1501,192 @@ def create_app(start_background: bool = True) -> FastAPI:
     def audit_list(action: str = "", _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         return {"records": governance.list_audit(action=action), "chain": governance.verify_audit()}
 
+    # --- Tools & MCP (mcp.py): administrators manage servers; agents get them through grants ---
+    def _mcp(call: Any) -> Any:
+        try:
+            return call()
+        except mcp.McpError as e:
+            raise HTTPException(502, str(e)) from e
+
+    @app.get("/api/mcp")
+    def mcp_list(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return mcp.list_servers()
+
+    @app.get("/api/mcp/calls")
+    def mcp_calls(_: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
+        return mcp.recent_calls()
+
+    @app.post("/api/mcp/servers")
+    def mcp_add(body: McpServerBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = mcp.save_server(body.model_dump(), admin["name"])
+        _audit(admin, "mcp_server_add", out["name"], after={"transport": out["transport"], "url": out["url"],
+                                                           "command": out["command"]}, severity="high")
+        return out
+
+    @app.put("/api/mcp/servers/{server_id}")
+    def mcp_update(server_id: int, body: McpServerBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = mcp.save_server(body.model_dump(), admin["name"], server_id)
+        _audit(admin, "mcp_server_update", out["name"], after={"transport": out["transport"]}, severity="high")
+        return out
+
+    @app.delete("/api/mcp/servers/{server_id}")
+    def mcp_delete(server_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        name = mcp.get_server(server_id)["name"]
+        mcp.delete_server(server_id)
+        _audit(admin, "mcp_server_delete", name)
+        return {"ok": True}
+
+    @app.post("/api/mcp/catalog/{key}")
+    def mcp_from_catalog(key: str, body: McpCatalogBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _mcp(lambda: mcp.add_from_catalog(key, body.values, admin["name"]))
+        _audit(admin, "mcp_server_add", out["name"], after={"catalog": key}, severity="high")
+        return out
+
+    @app.post("/api/mcp/servers/{server_id}/test")
+    def mcp_test(server_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _mcp(lambda: mcp.test(server_id))
+        _audit(admin, "mcp_server_test", out["name"], after={"tools": len(out["tools"])})
+        return out
+
+    @app.put("/api/mcp/servers/{server_id}/tools")
+    def mcp_tools(server_id: int, body: McpToolsBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = mcp.set_tools(server_id, body.allowed)
+        _audit(admin, "mcp_tools_allow", out["name"], after={"allowed": body.allowed}, severity="high")
+        return out
+
+    @app.put("/api/mcp/servers/{server_id}/grants")
+    def mcp_grants(server_id: int, body: McpGrantsBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = mcp.set_grants(server_id, body.agent_ids, body.everyone)
+        _audit(admin, "mcp_grants", out["name"], after={"agents": body.agent_ids, "everyone": body.everyone})
+        return out
+
+    @app.post("/api/mcp/servers/{server_id}/call")
+    def mcp_call(server_id: int, body: McpCallBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        _audit(admin, "mcp_tool_call", f"{server_id}:{body.tool}")
+        return _mcp(lambda: mcp.call(server_id, body.tool, body.arguments, f"user:{admin['name']}"))
+
+    # --- catalog: skills, plugins, rules, commands, hooks (catalog.py) ---
+    @app.get("/api/catalog")
+    def catalog_list(kind: str = "", _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        return catalog.list_items(kind)
+
+    @app.post("/api/catalog")
+    def catalog_add(body: CatalogBody, admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        out = catalog.add(body.kind, body.name, body.description, body.content, body.source, f"user:{admin['name']}")
+        _audit(admin, "catalog_add", f"{out['kind']}:{out['name']}")
+        return out
+
+    @app.patch("/api/catalog/{item_id}")
+    def catalog_update(item_id: int, changes: dict[str, Any], admin: dict[str, Any] = Depends(allowed("manage_agents"))
+                       ) -> dict[str, Any]:
+        out = catalog.update(item_id, changes)
+        _audit(admin, "catalog_update", f"{out['kind']}:{out['name']}", after={k: v for k, v in changes.items() if k != "content"})
+        return out
+
+    @app.delete("/api/catalog/{item_id}")
+    def catalog_delete(item_id: int, admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        catalog.delete(item_id)
+        _audit(admin, "catalog_delete", item_id)
+        return {"ok": True}
+
+    @app.post("/api/projects/{project_id}/claude-config")
+    def project_claude_config(project_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        """Write the catalog (and the active agents) into the project's .claude/ (administrators)."""
+        from agent_company.db import Agent
+
+        p = projects.get(project_id, admin)
+        with session() as s:
+            ids = list(s.scalars(select(Agent.id).where(Agent.enabled, Agent.lifecycle == "active",
+                                                        Agent.parent_id.is_(None))))
+        written = catalog.export_claude(Path(p.path), ids)
+        _audit(admin, "project_claude_config", p.name, after={"written": written[:50]}, severity="high")
+        return {"written": written, "path": p.path}
+
+    # --- agent definition files: the agent's body, versioned (agentdefs.py) ---
+    @app.get("/api/agents/{agent_id}/definition")
+    def agent_definition(agent_id: int, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return agentdefs.read(agent_id)
+
+    @app.put("/api/agents/{agent_id}/definition")
+    def agent_definition_put(agent_id: int, body: DefinitionBody, admin: dict[str, Any] = Depends(allowed("manage_agents"))
+                             ) -> dict[str, Any]:
+        out = agentdefs.write_text(agent_id, body.text, admin["name"])
+        _audit(admin, "agent_definition_edit", agent_id, severity="high")
+        return out
+
+    @app.post("/api/learning/study")
+    def learning_study(agent_id: int | None = None, admin: dict[str, Any] = Depends(allowed("manage_agents"))
+                       ) -> dict[str, Any]:
+        out = agentdefs.study(agent_id)
+        _audit(admin, "learning_study", out.get("studied") or "", after=out)
+        return out
+
+    @app.get("/api/hooks")
+    def hooks_recent(_: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
+        from agent_company import hooks
+
+        return hooks.recent()
+
+    # --- emergency stop (S14-R-01, level E5) ---
+    @app.get("/api/emergency")
+    def emergency_get(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return governance.emergency() or {"on": False}
+
+    @app.post("/api/emergency")
+    def emergency_set(body: EmergencyBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        if body.on and len(body.reason.strip()) < 3:
+            raise HTTPException(400, "give a reason")
+        return governance.set_emergency(body.on, f"user:{admin['name']}", body.reason)
+
+    # --- dashboard layout shared by every user (rail order: Settings → Navigation) ---
+    @app.get("/api/ui/{key}")
+    def ui_get(key: str, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return {"key": key, "value": prefs.get_ui(key)}
+
+    @app.put("/api/ui/{key}")
+    def ui_put(key: str, body: UiBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        value = prefs.set_ui(key, body.value)
+        _audit(admin, "ui_layout", key, after={"value": value})
+        return {"key": key, "value": value}
+
+    @app.get("/api/projects-defaults")
+    def projects_defaults(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return {"base": str(projects.default_base())}
+
     # --- dashboard ---
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
     @app.get("/")
-    def index() -> FileResponse:
-        return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
+    def index() -> HTMLResponse:
+        return HTMLResponse(_index_html(), headers={"Cache-Control": "no-cache"})
 
     return app
+
+
+_INDEX: tuple[float, str] = (0.0, "")
+
+
+def _index_html() -> str:
+    """index.html with every /static/ file it loads versioned by content hash, so browsers cache them for
+    good and fetch a file again only when it changed (no revalidation round trip per file per page load)."""
+    import hashlib
+    import re
+
+    global _INDEX
+    files = list(STATIC.glob("*.js")) + list(STATIC.glob("*.css")) + [STATIC / "index.html"]
+    stamp = max(f.stat().st_mtime for f in files)
+    if _INDEX[0] == stamp:
+        return _INDEX[1]
+
+    def version(m: re.Match[str]) -> str:
+        f = STATIC / m.group(2)
+        if not f.is_file():
+            return m.group(0)
+        return f"{m.group(1)}/static/{m.group(2)}?v={hashlib.sha256(f.read_bytes()).hexdigest()[:10]}{m.group(3)}"
+
+    html = re.sub(r'((?:src|href)=")/static/([\w./-]+\.(?:js|css))(")', version, (STATIC / "index.html").read_text())
+    _INDEX = (stamp, html)
+    return html
 
 
 def _visible_project_ids(s: Any, user: dict[str, Any]) -> set[int] | None:

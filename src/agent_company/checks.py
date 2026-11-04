@@ -134,6 +134,8 @@ def _changed_with_status(worktree: Path, base: str) -> list[tuple[str, str]]:
 def scope_violations(worktree: Path, base: str, allowed: list[str], protect_tests: bool) -> list[str]:
     problems = []
     for status, path in _changed_with_status(worktree, base):
+        if path.startswith((".claude/", ".mcp.json")):  # the goal's spec artifacts and Claude Code configuration
+            continue
         if allowed and not any(fnmatch.fnmatch(path, pat) or path.startswith(pat.rstrip("*").rstrip("/") + "/")
                                for pat in allowed):
             problems.append(f"{path}: outside the allowed paths ({', '.join(allowed)})")

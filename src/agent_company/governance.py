@@ -158,3 +158,42 @@ def check_command(cmd: str) -> str | None:
         if pattern.search(cmd):
             return reason
     return None
+
+
+# --- emergency stop (docs/requirements/SPEC-14-security.md, S14-R-01 level E5) -----------------
+
+EMERGENCY_KEY = "_emergency"
+
+
+def emergency() -> dict[str, Any] | None:
+    """The active emergency stop ({actor, reason, at}) or None."""
+    from agent_company.db import Setting
+
+    with session() as s:
+        row = s.get(Setting, EMERGENCY_KEY)
+        return dict(row.value) if row and (row.value or {}).get("on") else None
+
+
+def set_emergency(on: bool, actor: str, reason: str = "") -> dict[str, Any]:
+    """E5: all autonomous execution stops. Running and queued goals are cancelled, new agent runs are
+    refused until an administrator lifts it. The Workspace (the administrator's own tools) is not affected."""
+    from agent_company.db import Goal, Setting, now
+
+    cancelled: list[int] = []
+    with session() as s:
+        row = s.get(Setting, EMERGENCY_KEY)
+        value = {"on": on, "actor": actor, "reason": reason[:500], "at": now().isoformat()}
+        if row is None:
+            s.add(Setting(key=EMERGENCY_KEY, value=value))
+        else:
+            row.value = value
+        if on:
+            for g in s.scalars(select(Goal).where(Goal.status.in_(["queued", "running"]))):
+                g.status = "cancelled"
+                cancelled.append(g.id)
+    audit(actor, "emergency_stop" if on else "emergency_lift", "all autonomous execution",
+          after={"reason": reason, "cancelled_goals": cancelled}, severity="high")
+    notify("Emergency stop" if on else "Emergency stop lifted",
+           (f"{actor}: {reason}. {len(cancelled)} goal(s) cancelled." if on else f"Lifted by {actor}."),
+           level="error" if on else "success", source="emergency")
+    return {**value, "cancelled_goals": cancelled}

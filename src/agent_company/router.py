@@ -42,7 +42,7 @@ BUILTIN_MODELS: list[tuple[str, str, str, float, float, str]] = [
 # Recommended routing: strong models plan and design, the coding agent writes code,
 # a mid model reviews, cheap or free models do bulk reading and collection.
 DEFAULT_ROUTES: dict[str, str] = {
-    "general_manager": "Claude Opus 5.5",
+    "general_manager": "Claude Code",  # the owner's choice: the GM is Claude Code (change it on the GM's card)
     "architect": "Claude Opus 5.5",
     "developer": "Claude Code",
     "frontend": "Claude Code",
@@ -60,6 +60,7 @@ DEFAULT_ROUTES: dict[str, str] = {
 DEFAULT_ROUTE_OTHER = "Claude Haiku 5.5"
 # Model used for a role's retries after a failed gate (escalation, as in /home/thomas/bit).
 DEFAULT_ESCALATIONS: dict[str, str] = {
+    "general_manager": "Claude Opus 5.5",
     "qa": "Claude Opus 5.5", "security": "Claude Opus 5.5", "analyst": "Claude Opus 5.5",
     "research": "Claude Sonnet 5.5", "external_data": "Claude Haiku 5.5",
 }
@@ -114,6 +115,7 @@ def seed() -> None:
         if default and not s.scalars(select(ModelEntry).where(ModelEntry.model_id == default)).first():
             s.add(ModelEntry(name=f"MODEL ({default})", kind="llm", model_id=default,
                              notes="From MODEL in .env."))
+        _migrate_gm(s)
         have_routes = set(s.scalars(select(Route.role)))
         from agent_company.org import ROLES
 
@@ -121,6 +123,43 @@ def seed() -> None:
             if role not in have_routes:
                 s.add(Route(role=role, model_name=DEFAULT_ROUTES.get(role, DEFAULT_ROUTE_OTHER),
                             escalation=DEFAULT_ESCALATIONS.get(role, "")))
+
+
+def _migrate_gm(s) -> None:  # noqa: ANN001
+    """Once: databases made before the GM became Claude Code by default get the new route."""
+    from agent_company.db import Setting
+
+    if s.get(Setting, "_migration_gm_claude_code") is not None:
+        return
+    r = s.get(Route, "general_manager")
+    if r is not None and r.model_name == "Claude Opus 5.5":
+        r.model_name = "Claude Code"
+        r.escalation = r.escalation or "Claude Opus 5.5"
+    s.add(Setting(key="_migration_gm_claude_code", value={"v": True}))
+
+
+def agent_model(model_pref: str | None) -> tuple[str | None, str | None]:
+    """A preference may name another agent ("agent:<id>"): it then uses that agent's model (or its role's route).
+
+    Returns (model name or None, label). This is how the General Manager can be switched to an agent you created.
+    """
+    if not model_pref or not model_pref.startswith("agent:"):
+        return model_pref, None
+    from agent_company.db import Agent
+
+    try:
+        aid = int(model_pref.split(":", 1)[1])
+    except ValueError:
+        return None, None
+    with session() as s:
+        a = s.get(Agent, aid)
+        if a is None:
+            return None, None
+        pref = a.model_pref if a.model_pref and not a.model_pref.startswith("agent:") else None
+        if pref:
+            return pref, f"model of agent {a.name}"
+        r = s.get(Route, a.role)
+        return (r.model_name if r else None), f"route of agent {a.name} ({a.role})"
 
 
 def provider_of(model_id: str) -> str:
@@ -191,7 +230,8 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
         candidates: list[tuple[str, str | None]] = []
         if escalate and route and route.escalation:
             candidates.append((f"escalation for {role}", route.escalation))
-        candidates += [("agent preference", model_pref), (f"route for {role}", route.model_name if route else None)]
+        pref, via = agent_model(model_pref)
+        candidates += [(via or "agent preference", pref), (f"route for {role}", route.model_name if route else None)]
         default = settings().default_model
         if default:
             m = s.scalars(select(ModelEntry).where(ModelEntry.model_id == default)).first()

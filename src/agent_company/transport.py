@@ -321,11 +321,11 @@ server {{
     gzip_min_length 1024;
     gzip_types text/css application/javascript text/javascript application/json image/svg+xml text/plain application/xml;
 
-    # Static files: the browser revalidates (cheap 304s via ETag) so updates show at once.
-    # Proxied, not read from disk: nginx's worker user usually cannot enter the owner's home.
+    # Static files: the app sets Cache-Control (a versioned URL, ?v=<content hash>, is cached for a
+    # year; anything else revalidates with a cheap 304). Proxied, not read from disk: nginx's worker
+    # user usually cannot enter the owner's home.
     location /static/ {{
 {_proxy(mode)}
-        add_header Cache-Control "no-cache" always;
     }}
     # Third-party libraries (xterm.js, pdf.js, mammoth) change rarely: cache them for a week.
     location /static/vendor/ {{

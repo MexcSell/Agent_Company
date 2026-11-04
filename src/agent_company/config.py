@@ -50,6 +50,7 @@ class Settings:
     public_port: int = 4900  # the port nginx listens on when MANAGE_NGINX=1
     manage_nginx: bool = False  # write the nginx site and reload nginx (only the real server)
     nginx_dir: str = "/etc/nginx"
+    study_interval: int = 0  # seconds between study visits of the learning rotation (0 = manual)
 
     @property
     def worktrees_dir(self) -> Path:
@@ -89,6 +90,7 @@ def load_settings() -> Settings:
         public_port=_int("PUBLIC_PORT", 4900),
         manage_nginx=_bool("MANAGE_NGINX", False),
         nginx_dir=os.environ.get("NGINX_DIR") or "/etc/nginx",
+        study_interval=_int("STUDY_INTERVAL", 0),
     )
 
 

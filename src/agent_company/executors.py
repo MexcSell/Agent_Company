@@ -115,6 +115,20 @@ CLAUDE_BASH = ["Bash(pytest:*)", "Bash(python -m pytest:*)", "Bash(uv run:*)", "
                "Bash(npm run:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(ls:*)"]
 
 
+def claude_env(choice: Choice) -> dict[str, str] | None:
+    """Claude Code at another address: a claude_code model with a base URL (and optionally its key's variable)."""
+    import os
+
+    if not choice.base_url and not choice.api_key_env:
+        return None
+    env = dict(os.environ)
+    if choice.base_url:
+        env["ANTHROPIC_BASE_URL"] = choice.base_url
+    if choice.api_key_env and os.environ.get(choice.api_key_env):
+        env["ANTHROPIC_API_KEY"] = os.environ[choice.api_key_env]
+    return env
+
+
 class ClaudeCodeExecutor(Executor):
     kind = "claude_code"
 
@@ -132,7 +146,21 @@ class ClaudeCodeExecutor(Executor):
         resume = req.data.get("resume")
         if resume and re.fullmatch(r"[0-9a-fA-F-]{8,64}", resume):
             cmd += ["--resume", resume]  # continue this agent's earlier session on the same goal
-        proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=self.timeout)
+        mcp_file = None
+        servers, mcp_tools = req.data.get("mcp") or ({}, [])
+        if servers.get("mcpServers"):  # the agent's granted servers from Tools & MCP, allowed tools only
+            import tempfile
+
+            fd, mcp_file = tempfile.mkstemp(prefix="ac-mcp-", suffix=".json")
+            with open(fd, "w") as f:
+                json.dump(servers, f)
+            cmd += ["--mcp-config", mcp_file, "--strict-mcp-config"]
+            cmd[cmd.index("--allowedTools") + 1] += "," + ",".join(mcp_tools)
+        try:
+            proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=self.timeout, env=claude_env(self.choice))
+        finally:
+            if mcp_file:
+                Path(mcp_file).unlink(missing_ok=True)
         try:
             data = json.loads(proc.stdout)
         except json.JSONDecodeError:
@@ -233,6 +261,13 @@ class OfflineExecutor(Executor):
         if outcome == "success":
             return f"For tasks like '{title}', the approach used passed the quality gate; reuse it."
         return f"'{title}' failed the gate: {req.data.get('feedback', 'see report')[:200]}. Check this first next time."
+
+    def _study(self, req: Request) -> str:
+        kept = [ln for ln in str(req.data.get("current", "")).splitlines() if ln.startswith("- ")][:6]
+        learned = [f"- {x.strip()[:160]}" for x in req.data.get("lessons", [])[:3]]
+        read = [f"- Apply what '{d['title'] or d['url']}' teaches where it fits." for d in req.data.get("documents", [])[:1]]
+        lines = list(dict.fromkeys(kept + learned + read)) or ["- Read the acceptance conditions before starting."]
+        return "\n".join(lines[:10])
 
     def _report(self, req: Request) -> str:
         docs = req.data.get("documents") or []

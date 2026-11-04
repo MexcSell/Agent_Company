@@ -75,6 +75,8 @@ class Agent(Base):
     lifecycle: Mapped[str] = mapped_column(String(16), default="active")  # active|paused|retired (SPEC02 §6)
     playbook_version: Mapped[int] = mapped_column(Integer, default=0)
     experiment: Mapped[dict[str, Any]] = mapped_column(default=dict)  # running candidate playbook trial
+    plugins: Mapped[list[Any]] = mapped_column(default=list)  # names of catalog plugins/skills it may use
+    definition_version: Mapped[int] = mapped_column(Integer, default=0)  # its agent file (agentdefs.py)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -422,6 +424,77 @@ class Machine(Base):
     settings: Mapped[dict[str, Any]] = mapped_column(default=dict)  # os, url, cores, ram, disk, username, language
     running: Mapped[bool] = mapped_column(Boolean, default=True)  # wanted: started or stopped by an administrator
     change: Mapped[str] = mapped_column(String(200), default="")  # who made or last changed it, and what
+    created_by: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class McpServer(Base):
+    """An MCP server agents may use (mcp.py): stdio command or Streamable HTTP URL.
+
+    Header and environment *values* are secrets, stored encrypted in `secrets`; the API shows names only.
+    """
+
+    __tablename__ = "mcp_servers"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    slug: Mapped[str] = mapped_column(String(32), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    transport: Mapped[str] = mapped_column(String(8), default="stdio")  # stdio|http
+    command: Mapped[str] = mapped_column(String(256), default="")
+    args: Mapped[list[Any]] = mapped_column(default=list)
+    url: Mapped[str] = mapped_column(String(500), default="")
+    secrets: Mapped[str] = mapped_column(Text, default="")  # encrypted {"env": {...}, "headers": {...}}
+    secret_names: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"env": [names], "headers": [names]}
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    everyone: Mapped[bool] = mapped_column(Boolean, default=True)  # every agent may use it (else only granted ones)
+    tools: Mapped[list[Any]] = mapped_column(default=list)  # [{name, description, read_only, allowed}]
+    status: Mapped[str] = mapped_column(String(16), default="untested")  # untested|ok|error
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class McpGrant(Base):
+    """Which agent may use which MCP server (servers not open to every agent)."""
+
+    __tablename__ = "mcp_grants"
+    __table_args__ = (UniqueConstraint("server_id", "agent_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("mcp_servers.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+
+
+class McpCall(Base):
+    """Every tool call made through the catalog (test calls from the dashboard included)."""
+
+    __tablename__ = "mcp_calls"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    server_id: Mapped[int] = mapped_column(Integer, index=True)
+    agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actor: Mapped[str] = mapped_column(String(128), default="")
+    tool: Mapped[str] = mapped_column(String(128))
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    duration: Mapped[float] = mapped_column(Float, default=0.0)
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CatalogItem(Base):
+    """Skills, plugins, rules, commands and hooks the company shares (catalog.py): the management page
+    the General Manager and agents take from, and add to when something is missing."""
+
+    __tablename__ = "catalog"
+    __table_args__ = (UniqueConstraint("kind", "name"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), index=True)  # skill|plugin|rule|command|hook
+    name: Mapped[str] = mapped_column(String(64))
+    description: Mapped[str] = mapped_column(Text, default="")
+    content: Mapped[str] = mapped_column(Text, default="")  # SKILL.md / rule text / command prompt / hook spec
+    source: Mapped[str] = mapped_column(String(256), default="")  # where it came from (marketplace, URL, agent)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    builtin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[str] = mapped_column(String(128), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)

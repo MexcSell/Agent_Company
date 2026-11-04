@@ -55,9 +55,14 @@ def visible(user: dict[str, Any]):  # noqa: ANN201
     q = select(Project)
     if user["is_admin"]:
         return q
+    from sqlalchemy import or_
+
     q = q.where(Project.protected.is_(False))
-    allowed = user.get("permissions", {}).get("projects", "all")
-    return q if allowed == "all" else q.where(Project.id.in_(list(allowed) or [-1]))
+    allowed = user.get("permissions", {}).get("projects", "own")
+    if allowed == "all":
+        return q
+    granted = list(allowed) if isinstance(allowed, list) else []
+    return q.where(or_(Project.created_by == user["id"], Project.id.in_(granted or [-1])))
 
 
 def list_projects(user: dict[str, Any]) -> list[dict[str, Any]]:
@@ -81,6 +86,11 @@ def get(project_id: int, user: dict[str, Any]) -> Project:
         return p
 
 
+def default_base() -> Path:
+    """Where new projects go by default: the folder that holds this repository (one level above it)."""
+    return REPO_ROOT.resolve().parent
+
+
 def _check(name: str, path: str, github_url: str, quality_commands: list[str]) -> str:
     from agent_company.governance import check_command
 
@@ -93,6 +103,8 @@ def _check(name: str, path: str, github_url: str, quality_commands: list[str]) -
             raise ValueError(f"quality command refused: {cmd}")
     if path:
         p = Path(path).expanduser().resolve()
+        if not p.exists() and p.parent.is_dir() and p.parent == default_base():
+            p.mkdir()  # a new project folder next to this repository (the default location)
         if not p.is_dir():
             raise ValueError(f"{p} is not a directory")
         if not (p / ".git").exists():

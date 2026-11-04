@@ -62,6 +62,12 @@ def learn(agent_id: int, goal_id: int, lesson: str, success: bool, skills: list[
     from agent_company.evolution import after_task
 
     after_task(agent_id, success)
+    from agent_company import agentdefs
+
+    try:  # the definition file carries the (possibly new) playbook: learning changes the agent's body
+        agentdefs.sync(agent_id, f"learned from goal #{goal_id} ({'success' if success else 'failure'})")
+    except OSError:
+        pass
 
 
 def link_team(agent_ids: list[int]) -> None:

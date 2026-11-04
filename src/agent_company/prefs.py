@@ -25,11 +25,14 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "quality_commands": (list, "Default quality commands for goals that set none"),
     "executor": (str, "'auto' (Model Router) or 'offline' (simulator)"),
     "transport": (str, "How browsers connect: 'https' (encrypted, default) or 'http' (sealed cookie only)"),
+    "enable_claude_code": (bool, "Let agents (and the General Manager) run the Claude Code CLI on the server's Claude login"),
+    "enable_codex": (bool, "Let agents run the Codex CLI on the server's ChatGPT login"),
+    "study_interval": (int, "Seconds between visits of the learning rotation, which rewrites one agent's definition (0 = manual)"),
 }
 LIMITS: dict[str, tuple[float, float]] = {
     "max_iterations": (1, 10), "max_parallel": (1, 16), "command_timeout": (10, 7200),
     "rotation_interval": (0, 86400), "max_proposal_goals": (0, 20), "goal_budget_usd": (0, 10_000),
-    "goal_time_budget": (0, 7 * 86400),
+    "goal_time_budget": (0, 7 * 86400), "study_interval": (0, 7 * 86400),
 }
 CHOICES: dict[str, set[str]] = {"proposal_policy": {"user", "superiors"}, "executor": {"auto", "offline"},
                                 "transport": {"https", "http"}}
@@ -110,3 +113,32 @@ def clear(key: str) -> None:
         if row is not None:
             s.delete(row)
     load()
+
+
+# --- dashboard layout: JSON values kept apart from the .env settings ----------------------------
+
+UI_KEYS = {"nav_layout"}
+
+
+def get_ui(key: str) -> Any:
+    if key not in UI_KEYS:
+        raise ValueError(f"unknown layout key {key!r}")
+    with session() as s:
+        row = s.get(Setting, f"ui:{key}")
+        return (row.value or {}).get("v") if row else None
+
+
+def set_ui(key: str, value: Any) -> Any:
+    if key not in UI_KEYS:
+        raise ValueError(f"unknown layout key {key!r}")
+    if key == "nav_layout":
+        if not isinstance(value, dict) or not all(isinstance(value.get(k, []), list) for k in ("top", "bottom")):
+            raise ValueError("nav_layout is {top: [view ids], bottom: [view ids]}")
+        value = {k: [str(x)[:32] for x in value.get(k, [])][:40] for k in ("top", "bottom")}
+    with session() as s:
+        row = s.get(Setting, f"ui:{key}")
+        if row is None:
+            s.add(Setting(key=f"ui:{key}", value={"v": value}))
+        else:
+            row.value = {"v": value}
+    return value

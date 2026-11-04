@@ -56,10 +56,23 @@ TITLE_MODEL = "haiku"
 _helper_pids: set[int] = set()  # title helpers register as sessions too: never listed
 
 
+CODEX_MODELS = ["default"]
+# Agents the panel can talk to. Copilot is listed so the panel says how to get it; it needs its CLI.
+PROVIDERS = {"claude": "Claude Code", "codex": "Codex", "copilot": "GitHub Copilot"}
+
+
 def available() -> dict[str, Any]:
     exe = shutil.which("claude")
+    codex, copilot = shutil.which("codex"), shutil.which("copilot")
     return {"available": exe is not None, "path": exe or "", "models": MODELS, "version": _version(exe),
-            "account": _account()}
+            "account": _account(),
+            "providers": [
+                {"id": "claude", "label": "Claude Code", "available": exe is not None, "models": MODELS,
+                 "version": _version(exe), "install": "npm i -g @anthropic-ai/claude-code"},
+                {"id": "codex", "label": "Codex", "available": codex is not None, "models": CODEX_MODELS,
+                 "version": _version(codex), "install": "npm i -g @openai/codex, then `codex login`"},
+                {"id": "copilot", "label": "GitHub Copilot", "available": copilot is not None, "models": ["default"],
+                 "version": _version(copilot), "install": "npm i -g @github/copilot, then `copilot` to sign in"}]}
 
 
 _VERSION: dict[str, str] = {}
@@ -134,6 +147,10 @@ def normalise(raw: dict[str, Any]) -> list[dict[str, Any]]:
                                     for m in raw.get("mcp_servers") or [] if isinstance(m, dict)],
                     "agents": [str(a) for a in raw.get("agents") or []][:100],
                     "slash_commands": [str(c) for c in raw.get("slash_commands") or []][:200]})
+    elif t == "system" and raw.get("subtype") == "compact_boundary":
+        meta = raw.get("compact_metadata") or {}
+        out.append({"kind": "compact", "pre_tokens": int(meta.get("pre_tokens") or 0),
+                    "post_tokens": int(meta.get("post_tokens") or 0), "trigger": str(meta.get("trigger") or "")})
     elif t == "assistant":
         for block in (raw.get("message") or {}).get("content") or []:
             bt = block.get("type")
@@ -144,7 +161,7 @@ def normalise(raw: dict[str, Any]) -> list[dict[str, Any]]:
             elif bt == "tool_use":
                 out.append({"kind": "tool_use", "id": block.get("id", ""), "name": block.get("name", ""),
                             "input": _clip(block.get("input") or {})})
-    elif t == "user":
+    elif t == "user" and not raw.get("isReplay"):
         content = (raw.get("message") or {}).get("content")
         for block in content if isinstance(content, list) else []:
             if isinstance(block, dict) and block.get("type") == "tool_result":
@@ -165,10 +182,62 @@ def normalise(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def normalise_codex(raw: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
+    """`codex exec --json` events in the panel's kinds (tool calls become Bash / Edit / tool cards)."""
+    t = raw.get("type")
+    out: list[dict[str, Any]] = []
+    if t == "thread.started":
+        state["session_id"] = str(raw.get("thread_id") or "")
+        out.append({"kind": "init", "session_id": state["session_id"], "model": "Codex", "cwd": state.get("cwd", ""),
+                    "tools": 0})
+    elif t in ("item.started", "item.completed"):
+        it = raw.get("item") or {}
+        kind, iid = it.get("type"), str(it.get("id") or "")
+        done = t == "item.completed"
+        if kind == "agent_message" and done and it.get("text"):
+            out.append({"kind": "text", "text": _clip(str(it["text"]))})
+            state["last_text"] = str(it["text"])
+        elif kind == "reasoning" and done and it.get("text"):
+            out.append({"kind": "thinking", "text": _clip(str(it["text"]))})
+        elif kind == "command_execution":
+            started = state.setdefault("started", set())
+            if iid not in started:
+                started.add(iid)
+                out.append({"kind": "tool_use", "id": iid, "name": "Bash", "input": {"command": str(it.get("command", ""))}})
+            if done:
+                out.append({"kind": "tool_result", "tool_use_id": iid, "is_error": (it.get("exit_code") or 0) != 0,
+                            "text": _clip(str(it.get("aggregated_output") or ""), 8000)})
+        elif kind == "file_change" and done:
+            for ch in it.get("changes") or []:
+                out.append({"kind": "tool_use", "id": f"{iid}:{ch.get('path')}", "name": "Edit" if ch.get("kind") == "update" else "Write",
+                            "input": {"file_path": str(ch.get("path", "")), "change": str(ch.get("kind", ""))}})
+                out.append({"kind": "tool_result", "tool_use_id": f"{iid}:{ch.get('path')}", "is_error": False,
+                            "text": str(ch.get("kind", "changed"))})
+        elif kind in ("mcp_tool_call", "web_search") and done:
+            name = "WebSearch" if kind == "web_search" else f"{it.get('server', 'mcp')}.{it.get('tool', '')}"
+            out.append({"kind": "tool_use", "id": iid, "name": name, "input": {"query": it.get("query")} if kind == "web_search" else it.get("arguments") or {}})
+            out.append({"kind": "tool_result", "tool_use_id": iid, "is_error": bool(it.get("error")), "text": _clip(str(it.get("result") or it.get("error") or ""), 8000)})
+        elif kind == "todo_list" and done:
+            out.append({"kind": "tool_use", "id": iid, "name": "TodoWrite", "input": {"todos": [
+                {"content": str(x.get("text", "")), "status": "completed" if x.get("completed") else "pending"} for x in it.get("items") or []]}})
+        elif kind == "error":
+            out.append({"kind": "error", "text": str(it.get("message") or "error")})
+    elif t == "turn.completed":
+        u = raw.get("usage") or {}
+        out.append({"kind": "result", "text": state.get("last_text", ""), "is_error": False, "cost": 0.0,
+                    "duration_ms": int((time.time() - state.get("t0", time.time())) * 1000), "turns": 1,
+                    "session_id": state.get("session_id", ""), "tokens_in": int(u.get("input_tokens") or 0),
+                    "tokens_out": int(u.get("output_tokens") or 0)})
+    elif t in ("turn.failed", "error"):
+        out.append({"kind": "error", "text": str((raw.get("error") or {}).get("message") or raw.get("message") or "Codex failed")})
+    return out
+
+
 class Run:
     def __init__(self, prompt: str, cwd: str, owner: str, session_id: str, model: str, images: list[dict[str, Any]],
-                 title: str = ""):
+                 title: str = "", provider: str = "claude", system: str = ""):
         self.id = uuid.uuid4().hex[:12]
+        self.provider, self.system = provider, system
         self.prompt, self.cwd, self.owner, self.model, self.title = prompt, cwd, owner, model, title
         self.resume = bool(session_id)
         self.session_id = session_id or str(uuid.uuid4())  # known before Claude Code starts
@@ -186,7 +255,7 @@ class Run:
 
     def to_dict(self, after: int = 0) -> dict[str, Any]:
         with self.lock:
-            return {"id": self.id, "prompt": self.prompt, "cwd": self.cwd, "status": self.status,
+            return {"id": self.id, "prompt": self.prompt, "cwd": self.cwd, "status": self.status, "provider": self.provider,
                     "session_id": self.session_id, "title": self.title, "model": self.model, "started": self.started,
                     "ended": self.ended, "images": [{"id": i["id"], "name": i["name"]} for i in self.images],
                     "events": self.events[after:], "next": len(self.events)}
@@ -197,6 +266,13 @@ _runs_lock = threading.Lock()
 
 
 def _command(run: Run) -> list[str]:
+    if run.provider == "codex":  # the administrator's own Codex: writes in the folder, like Codex in an editor
+        cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "-s", "workspace-write"]
+        for folder in sorted({str(Path(i["path"]).parent) for i in run.images}):
+            cmd += ["--add-dir", folder]
+        if run.model and run.model != "default":
+            cmd += ["-m", run.model]
+        return cmd + (["resume", run.session_id, "-"] if run.resume else ["-"])
     cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits",
            "--allowedTools", ",".join(ALL_TOOLS)]
     for folder in sorted({str(Path(i["path"]).parent) for i in run.images}):
@@ -206,6 +282,8 @@ def _command(run: Run) -> list[str]:
         cmd += ["--name", run.title]
     if run.model and run.model != "default":
         cmd += ["--model", run.model]
+    if run.system:
+        cmd += ["--append-system-prompt", run.system]
     return cmd
 
 
@@ -268,11 +346,16 @@ def _run_title(session_id: str) -> str:
 
 
 def start(prompt: str, cwd: str, owner: str, session_id: str = "", model: str = "",
-          images: list[dict[str, Any]] | None = None, title: str = "") -> Run:
+          images: list[dict[str, Any]] | None = None, title: str = "", provider: str = "claude", system: str = "") -> Run:
     if not prompt.strip():
         raise ValueError("write a prompt first")
-    if not available()["available"]:
-        raise RuntimeError("the `claude` command is not installed on the server (npm i -g @anthropic-ai/claude-code)")
+    if provider not in PROVIDERS:
+        raise ValueError(f"unknown agent {provider!r}")
+    prov = next(p for p in available()["providers"] if p["id"] == provider)
+    if not prov["available"]:
+        raise RuntimeError(f"{prov['label']} is not installed on the server ({prov['install']})")
+    if provider == "copilot":
+        raise RuntimeError("GitHub Copilot's CLI has no streaming JSON mode this panel can read yet")
     folder = Path(cwd or Path.home()).expanduser().resolve()
     if not folder.is_dir():
         raise ValueError(f"{folder} is not a folder")
@@ -280,16 +363,18 @@ def start(prompt: str, cwd: str, owner: str, session_id: str = "", model: str = 
         raise ValueError("bad session id")
     # A run outlives a service restart (its own process group) while RUNS does not: resuming a
     # conversation that is still working would put two processes on one transcript.
-    busy = next((s for s in sessions(refresh=True) if s["session_id"] == session_id), None) if session_id else None
+    busy = next((s for s in sessions(refresh=True) if s["session_id"] == session_id), None) if session_id and provider == "claude" else None
     if busy is not None:
         raise ValueError(f"this conversation is still running in another process (pid {busy['pid']}): "
                          "wait for it to finish, or stop it from the sessions window")
     if model and model not in MODELS and not re.fullmatch(r"[\w.\-\[\]]{2,80}", model):
         raise ValueError("bad model name")
     title = re.sub(r"\s+", " ", title or "").strip()[:80]
-    run = Run(prompt, str(folder), owner, session_id, model, images or [], title)
+    run = Run(prompt, str(folder), owner, session_id, model, images or [], title, provider, system[:20000])
     # A conversation whose first prompt failed before Claude Code wrote anything starts afresh under its id.
-    run.resume = bool(session_id) and _transcript_path(session_id) is not None
+    run.resume = bool(session_id) and (provider == "codex" or _transcript_path(session_id) is not None)
+    if provider == "codex" and not session_id:
+        run.session_id = ""  # Codex names its thread; known from its first event
     with _runs_lock:
         RUNS[run.id] = run
         while len(RUNS) > MAX_RUNS:
@@ -321,6 +406,7 @@ def _pump(run: Run, text: str) -> None:
     except OSError:
         pass
     got_result = False
+    state: dict[str, Any] = {"cwd": run.cwd, "t0": time.time()}
     for line in proc.stdout:
         line = line.strip()
         if not line:
@@ -330,7 +416,7 @@ def _pump(run: Run, text: str) -> None:
         except json.JSONDecodeError:
             run.add({"kind": "log", "text": _clip(line, 4000)})
             continue
-        events = normalise(raw)
+        events = normalise_codex(raw, state) if run.provider == "codex" else normalise(raw)
         for e in events:
             if e["kind"] in {"init", "result"} and e.get("session_id"):
                 run.session_id = e["session_id"]
@@ -341,7 +427,8 @@ def _pump(run: Run, text: str) -> None:
     if run.status == "stopped":
         run.add({"kind": "error", "text": "stopped"})
     elif code != 0 and not got_result:
-        run.add({"kind": "error", "text": ("".join(stderr).strip() or f"Claude Code exited with code {code}")[-4000:]})
+        name = PROVIDERS.get(run.provider, "Claude Code")
+        run.add({"kind": "error", "text": ("".join(stderr).strip() or f"{name} exited with code {code}")[-4000:]})
     if run.status == "running":
         run.status = "done" if code == 0 else "failed"
     run.ended = time.time()

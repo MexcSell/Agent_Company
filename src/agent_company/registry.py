@@ -23,6 +23,7 @@ def agent_dict(a: Agent) -> dict[str, Any]:
         "status": a.status, "enabled": a.enabled, "xp": a.xp, "level": a.level,
         "tasks_done": a.tasks_done, "tasks_failed": a.tasks_failed, "playbook": a.playbook,
         "lifecycle": a.lifecycle, "playbook_version": a.playbook_version, "in_trial": bool(a.experiment),
+        "plugins": list(a.plugins or []), "definition_version": a.definition_version or 0,
         "last_active_at": a.last_active_at.isoformat() if a.last_active_at else None,
     }
 
@@ -216,10 +217,16 @@ def _recruit(s: Session, role: str, skills: list[str], writes: bool | None) -> A
 
 
 def release(agent_id: int) -> None:
+    name = None
     with session() as s:
         a = s.get(Agent, agent_id)
         if a is not None and a.status == "busy":
             a.status = "idle"
+            name = a.name
+    if name:
+        from agent_company import hooks
+
+        hooks.emit("TeammateIdle", agent_id=agent_id, agent=name)
 
 
 def list_agents() -> list[dict[str, Any]]:
@@ -235,7 +242,7 @@ def list_rooms() -> list[dict[str, Any]]:
                  "rotational": r.rotational, "agents": counts.get(r.key, 0)} for r in rooms]
 
 
-EDITABLE = {"enabled", "model_pref", "skills", "playbook", "superior_id", "goal", "permissions"}
+EDITABLE = {"enabled", "model_pref", "skills", "playbook", "superior_id", "goal", "permissions", "plugins"}
 PERMISSIONS = {"read", "write", "shell", "network"}
 
 
@@ -254,6 +261,12 @@ def update_agent(agent_id: int, changes: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"permissions are a subset of {sorted(PERMISSIONS)}")
         if a.lifecycle == "retired" and changes.get("enabled"):
             raise ValueError("a retired agent cannot be enabled")
+        if "plugins" in changes and not (isinstance(changes["plugins"], list)
+                                         and all(isinstance(x, str) and len(x) <= 64 for x in changes["plugins"])):
+            raise ValueError("plugins is a list of catalog names")
+        pref = changes.get("model_pref")
+        if pref and str(pref).startswith("agent:") and str(pref)[6:] == str(agent_id):
+            raise ValueError("an agent cannot use itself as its model")
         for k, v in changes.items():
             setattr(a, k, v)
         s.flush()

@@ -14,7 +14,7 @@ from agent_company.db import Proposal, session
 from agent_company.auth import DEFAULT_PERMISSIONS  # noqa: E402
 
 ADMIN = {"id": 1, "name": "admin", "is_admin": True, "permissions": dict(DEFAULT_PERMISSIONS)}
-MEMBER = {"id": 2, "name": "member", "is_admin": False, "permissions": dict(DEFAULT_PERMISSIONS)}
+MEMBER = {"id": 2, "name": "member", "is_admin": False, "permissions": {**DEFAULT_PERMISSIONS, "projects": "all"}}
 
 
 @pytest.fixture(autouse=True)
@@ -219,6 +219,8 @@ def test_permissions_limit_what_a_member_can_see_and_do():
         member = TestClient(app.app)
         assert member.post("/api/auth/device", json={"device_secret": member_secret}).status_code == 200
         assert app.post("/api/auth/device", json={"device_secret": admin_secret}).status_code == 200
+        assert member.get("/api/projects").json() == [], "by default a member sees only their own projects"
+        assert app.put("/api/users/2/permissions", json={"projects": "all"}).status_code == 200
         assert {p["name"] for p in member.get("/api/projects").json()} == {"Open one", "Restricted one"}
         assert app.put("/api/users/2/permissions", json={"projects": [a["id"]], "run": False}).status_code == 200
         assert [p["name"] for p in member.get("/api/projects").json()] == ["Open one"]

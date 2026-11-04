@@ -163,6 +163,9 @@ def test_fallback_goes_to_the_next_real_model_never_to_the_simulator(monkeypatch
     monkeypatch.setitem(executors.EXECUTORS, "llm", Failing)
     from agent_company import registry
 
+    from agent_company import router
+
+    router.set_route("general_manager", "Claude Opus 5.5")  # the default GM (Claude Code) needs a worktree
     gm = registry.staff("general_manager")
     gm.model_pref = "Claude Sonnet 5.5"
     gid = loop.create_goal("Plan only")
