@@ -807,6 +807,15 @@ def create_app(start_background: bool = True) -> FastAPI:
                                                          "resume": body.session_id or None}, severity="high")
         return run.to_dict()
 
+    # Every Claude Code session on the host (VS Code, terminal, SDK, this panel), read-only.
+    @app.get("/api/workspace/claude-sessions")
+    def claude_sessions(_: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
+        return workspace.sessions()
+
+    @app.get("/api/workspace/claude-sessions/{session_id}")
+    def claude_session(session_id: str, after: int = 0, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return workspace.session_status(session_id, max(0, after))
+
     @app.get("/api/workspace/claude/{run_id}")
     def claude_events(run_id: str, after: int = 0, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         return workspace.get(run_id).to_dict(max(0, after))

@@ -362,6 +362,8 @@ def apply(mode: str, force_reload: bool = False) -> bool:
     if settings().port == settings().public_port:
         raise ValueError(f"PORT and PUBLIC_PORT are both {settings().port}: nginx would proxy to itself; "
                          "let the app listen on another port (e.g. PORT=4910)")
+    if "PYTEST_CURRENT_TEST" in os.environ:  # a test run must never rewrite the live site
+        return False
     if shutil.which("nginx") is None:
         raise ValueError("nginx is not installed")
     force_reload = ensure_certs() or force_reload

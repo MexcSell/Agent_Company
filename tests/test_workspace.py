@@ -1,8 +1,10 @@
 import io
+import os
 import json
 import secrets
 import time
 import zipfile
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -200,7 +202,9 @@ def test_claude_panel_runs_resumes_and_attaches_images(admin, root, monkeypatch)
 
     monkeypatch.setattr(workspace.shutil, "which", lambda _: "/usr/bin/claude")
     monkeypatch.setattr(workspace.subprocess, "Popen", fake)
-    assert admin.get("/api/workspace/claude").json()["available"] is True
+    monkeypatch.setattr(workspace, "_version", lambda exe: "2.1.310")
+    info = admin.get("/api/workspace/claude").json()
+    assert info["available"] is True and info["version"] == "2.1.310" and info["account"]["method"]
     up = admin.post("/api/uploads", files={"file": ("shot.png", b"\x89PNG\r\n\x1a\n", "image/png")}).json()
     run = admin.post("/api/workspace/claude", json={"prompt": "-rf what is here?", "cwd": str(root), "attachments": [up["id"]],
                                                     "model": "sonnet"}).json()
@@ -230,3 +234,131 @@ def test_claude_panel_reports_missing_cli(admin, monkeypatch):
     monkeypatch.setattr(workspace.shutil, "which", lambda _: None)
     r = admin.post("/api/workspace/claude", json={"prompt": "hi"})
     assert r.status_code == 503 and "not installed" in r.json()["detail"]
+
+
+# --- Claude Code sessions on the host (/status, /tasks, /agents) -------------------------
+
+SID = "aaaaaaaa-1111-2222-3333-444444444444"
+
+
+def _line(**kw):
+    return json.dumps({"isSidechain": False, "timestamp": "2026-11-04T10:00:00.000Z", **kw})
+
+
+def _assistant(*content, usage=None):
+    return _line(type="assistant", cwd="/srv/app", gitBranch="main", version="2.1.310", permissionMode="acceptEdits",
+                 message={"model": "claude-opus-5-5", "content": list(content),
+                          "usage": usage or {"input_tokens": 3, "cache_read_input_tokens": 1000,
+                                             "cache_creation_input_tokens": 200, "output_tokens": 50}})
+
+
+def _result(tid, text, res=None, is_error=False):
+    return _line(type="user", toolUseResult=res or {},
+                 message={"content": [{"type": "tool_result", "tool_use_id": tid, "content": text, "is_error": is_error}]})
+
+
+def _claude_host(tmp_path, *lines, pid=None):
+    home = tmp_path / "claude"
+    (home / "sessions").mkdir(parents=True, exist_ok=True)
+    pid = pid or os.getpid()
+    stat = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    (home / "sessions" / f"{pid}.json").write_text(json.dumps({
+        "pid": pid, "sessionId": SID, "cwd": "/srv/app", "procStart": stat[19], "name": "app-1", "status": "busy",
+        "entrypoint": "claude-vscode", "kind": "interactive", "version": "2.1.310", "startedAt": 1, "updatedAt": 2}))
+    # A crashed session leaves its file behind: another process now has that pid, or none does.
+    (home / "sessions" / "999999.json").write_text(json.dumps({"pid": 999999, "sessionId": "b" * 8 + "-0000", "procStart": "1"}))
+    (home / "sessions" / "1.json").write_text(json.dumps({"pid": 1, "sessionId": "c" * 8 + "-0000", "procStart": "12345678"}))
+    folder = home / "projects" / "-srv-app"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{SID}.jsonl").write_text("".join(x + "\n" for x in lines))
+    return home, folder
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="needs /proc")
+def test_claude_sessions_list_only_live_processes(admin, tmp_path):
+    _claude_host(tmp_path)
+    got = admin.get("/api/workspace/claude-sessions").json()
+    assert [s["session_id"] for s in got] == [SID]
+    assert got[0]["status"] == "busy" and got[0]["entrypoint"] == "claude-vscode" and got[0]["name"] == "app-1"
+    assert member_of(admin).get("/api/workspace/claude-sessions").status_code == 403
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="needs /proc")
+def test_claude_session_status_tasks_and_agents(admin, tmp_path):
+    lines = [
+        _line(type="attachment", attachment={"type": "agent_listing_delta", "addedTypes": ["general-purpose", "Explore"]}),
+        _line(type="user", permissionMode="acceptEdits", message={"content": "Fix the login bug"}),
+        _line(type="user", isMeta=True, message={"content": "[Image: original 10x10]"}),
+        _assistant({"type": "thinking", "thinking": "look first"},
+                   {"type": "tool_use", "id": "t1", "name": "Agent",
+                    "input": {"subagent_type": "Explore", "description": "Find login code", "prompt": "..."}}),
+        _result("t1", "found it", {"status": "completed", "agentId": "a1", "resolvedModel": "claude-haiku-5-5",
+                                   "totalTokens": 900, "totalToolUseCount": 4}),
+        _assistant({"type": "tool_use", "id": "t2", "name": "Bash",
+                    "input": {"command": "npm run dev", "description": "Dev server", "run_in_background": True}}),
+        _result("t2", "Command running in background with ID: bg1.", {"backgroundTaskId": "bg1"}),
+        _assistant({"type": "tool_use", "id": "t3", "name": "Bash",
+                    "input": {"command": "pytest", "run_in_background": True}}),
+        _result("t3", "Command running in background with ID: bg2.", {"backgroundTaskId": "bg2"}),
+        _assistant({"type": "tool_use", "id": "t4", "name": "Agent",
+                    "input": {"subagent_type": "general-purpose", "description": "Write tests", "run_in_background": True}}),
+        _result("t4", "Launched", {"status": "async_launched", "agentId": "a2"}),
+        _line(type="user", message={"content": "<task-notification>\n<task-id>bg2</task-id>\n<status>completed</status>\n"
+                                               "<summary>pytest finished</summary>\n</task-notification>"}),
+        _assistant({"type": "tool_use", "id": "t5", "name": "TodoWrite",
+                    "input": {"todos": [{"content": "Reproduce", "status": "completed"},
+                                        {"content": "Fix", "status": "in_progress"}]}}),
+        _result("t5", "Todos updated"),
+        # One line per content block, each repeating the same usage: counted once.
+        _line(type="assistant", message={"id": "m7", "model": "claude-opus-5-5", "content": [{"type": "text", "text": "Now"}],
+                                         "usage": {"input_tokens": 1, "output_tokens": 30}}),
+        _line(type="assistant", message={"id": "m7", "model": "claude-opus-5-5", "content": [{"type": "text", "text": "the diff"}],
+                                         "usage": {"input_tokens": 1, "output_tokens": 30}}),
+        _assistant({"type": "tool_use", "id": "t6", "name": "Bash", "input": {"command": "git diff", "note": "x" * 5000}},
+                   usage={"input_tokens": 5, "cache_read_input_tokens": 40000, "cache_creation_input_tokens": 0,
+                          "output_tokens": 70}),
+    ]
+    home, folder = _claude_host(tmp_path, *lines)
+    d = admin.get(f"/api/workspace/claude-sessions/{SID}").json()
+    assert d["live"] and d["status"] == "busy" and d["model"] == "claude-opus-5-5"
+    assert d["permission_mode"] == "acceptEdits" and d["git_branch"] == "main" and d["cwd"] == "/srv/app"
+    assert d["context_tokens"] == 40005 and d["output_tokens"] == 50 * 5 + 30 + 70
+    assert d["current"]["name"] == "Bash" and d["current"]["input"]["command"] == "git diff"
+    assert d["last_prompt"] == "Fix the login bug"
+    assert d["agent_types"] == ["general-purpose", "Explore"]
+    agents = {a["description"]: a for a in d["agents"]}
+    assert agents["Find login code"]["status"] == "completed" and agents["Find login code"]["model"] == "claude-haiku-5-5"
+    assert agents["Write tests"]["status"] == "running" and agents["Write tests"]["background"]
+    tasks = {t["id"]: t for t in d["tasks"]}
+    assert tasks["bg1"]["status"] == "running" and tasks["bg1"]["command"] == "npm run dev"
+    assert tasks["bg2"]["status"] == "completed" and tasks["bg2"]["summary"] == "pytest finished"
+    assert d["todos"] == [{"content": "Reproduce", "status": "completed"}, {"content": "Fix", "status": "in_progress"}]
+    kinds = [e["kind"] for e in d["events"]]
+    assert kinds.count("prompt") == 1 and "notice" in kinds and "thinking" in kinds and "tool_result" in kinds
+    # The transcript is read incrementally: a poll returns only what was appended since `next`.
+    with (folder / f"{SID}.jsonl").open("a") as f:
+        f.write(_result("t6", "diff --git a b") + "\n")
+        f.write(_line(type="user", message={"content": "<task-notification><task-id>a2</task-id><status>completed</status>"
+                                                       "</task-notification>"}) + "\n")
+        f.write('{"type": "assistant", "message": {"content": [{"type": "te')  # still being written
+    d2 = admin.get(f"/api/workspace/claude-sessions/{SID}?after={d['next']}").json()
+    assert [e["kind"] for e in d2["events"]] == ["tool_result", "notice"]
+    assert d2["current"]["name"] == "" and {a["description"]: a["status"] for a in d2["agents"]}["Write tests"] == "completed"
+    # Agents defined as files are listed too.
+    (home / "agents").mkdir()
+    (home / "agents" / "reviewer.md").write_text("---\nname: reviewer\ndescription: Reviews diffs\nmodel: sonnet\n---\nBe strict.")
+    assert admin.get(f"/api/workspace/claude-sessions/{SID}").json()["configured_agents"] == [
+        {"name": "reviewer", "description": "Reviews diffs", "model": "sonnet"}]
+    assert admin.get("/api/workspace/claude-sessions/not%20a%20session").status_code == 400
+    assert admin.get("/api/workspace/claude-sessions/dddddddd-0000").status_code == 404
+
+
+def test_claude_session_that_ended_reports_unfinished_work(admin, tmp_path):
+    folder = tmp_path / "claude" / "projects" / "-srv-app"
+    folder.mkdir(parents=True)
+    (folder / f"{SID}.jsonl").write_text(
+        _assistant({"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "sleep 99", "run_in_background": True}})
+        + "\n" + _result("t2", "running", {"backgroundTaskId": "bg1"}) + "\n")
+    d = admin.get(f"/api/workspace/claude-sessions/{SID}").json()
+    assert not d["live"] and d["status"] == "ended" and d["current"] is None
+    assert d["tasks"][0]["status"] == "ended"

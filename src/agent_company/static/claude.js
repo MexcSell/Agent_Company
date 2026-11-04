@@ -3,23 +3,37 @@
 // answers, run summary) on top and the prompt box below. Each prompt runs Claude Code in
 // the explorer's folder with every tool allowed; follow-ups resume the same session.
 // Images can be pasted, dropped or attached; every answer has a copy button.
+// Tabs: this panel's conversation first, then every other live Claude Code session on the host
+// (VS Code, terminal, SDK) as a read-only view of its conversation. The drawer answers
+// /status, /tasks and /agents (typed in the prompt box or opened with the header button) for
+// the selected tab: model, context, background commands, todos, subagents and agent types.
 window.WSP = window.WSP || {};
 (() => {
   const W = window.WSP;
   const C = { el: null, runs: [], uploads: [], busy: false, open: new Set(), history: [], hpos: -1,
-    session: store.get("ac.wsp.claude.session") || "", sessionCwd: store.get("ac.wsp.claude.cwd") || "", model: store.get("ac.wsp.claude.model") || "default" };
+    session: store.get("ac.wsp.claude.session") || "", sessionCwd: store.get("ac.wsp.claude.cwd") || "", model: store.get("ac.wsp.claude.model") || "default",
+    tab: "chat", sessions: [], names: {}, view: { sid: "", events: [], next: 0, d: null }, info: "", cli: null, dtimer: 0 };
+  const ENTRY = { "claude-vscode": "VS Code", cli: "Terminal", "sdk-cli": "SDK", "sdk-ts": "SDK", "sdk-py": "SDK", "claude-desktop": "Desktop", "claude-jetbrains": "JetBrains" };
   const saveRuns = () => store.set("ac.wsp.claude.runs", JSON.stringify(C.runs.map((r) => r.id).slice(-30)));
   const saveSession = () => { store.set("ac.wsp.claude.session", C.session); store.set("ac.wsp.claude.cwd", C.sessionCwd); };
 
   W.initClaude = async (el) => {
     C.el = el;
     el.innerHTML = `<div class="wc-head"><span class="wc-logo" aria-hidden="true">✳</span><strong>Claude Code</strong><span class="wc-dot" title="idle"></span><span class="grow"></span>
-        <select id="wc-model" aria-label="Model" title="Model"></select>
-        <button class="icon-btn sm" id="wc-new" title="New conversation">${W.svg("M12 5v14M5 12h14")}</button></div>
+        <select id="wc-model" class="wc-chat-only" aria-label="Model" title="Model"></select>
+        <button class="icon-btn sm" id="wc-info-btn" title="Status, tasks and agents (/status, /tasks, /agents)" aria-expanded="false">${W.svg("M3 12h4l3-8 4 16 3-8h4")}</button>
+        <button class="icon-btn sm wc-chat-only" id="wc-new" title="New conversation">${W.svg("M12 5v14M5 12h14")}</button></div>
+      <div class="wc-tabs" id="wc-tabs" role="tablist" aria-label="Claude Code sessions"></div>
+      <div class="wc-info" id="wc-info" hidden>
+        <div class="wc-info-tabs" role="tablist">${["status", "tasks", "agents"].map((s) => `<button type="button" data-info="${s}" role="tab">/${s}</button>`).join("")}<span class="grow"></span>
+          <button type="button" class="icon-btn sm" id="wc-info-close" title="Close">×</button></div>
+        <div class="wc-info-body" id="wc-info-body"></div>
+      </div>
       <div class="wc-log" id="wc-log" aria-live="polite"></div>
+      <div class="wc-ro muted" id="wc-ro" hidden></div>
       <form class="wc-composer" id="wc-form">
         <div class="wc-att" id="wc-att"></div>
-        <textarea id="wc-input" rows="3" placeholder="Ask Claude Code to read, change, run or explain anything in this folder…  Enter sends · Shift+Enter new line · paste or drop images"></textarea>
+        <textarea id="wc-input" rows="3" placeholder="Ask Claude Code to read, change, run or explain anything in this folder…  Enter sends · Shift+Enter new line · paste or drop images · /status /tasks /agents"></textarea>
         <div class="wc-row"><label class="icon-btn sm" for="wc-file" title="Attach images or files">${W.svg("M21 12.5l-8.5 8.5a6 6 0 0 1-8.5-8.5L13 3.5a4 4 0 0 1 5.7 5.7L9.6 18.3a2 2 0 0 1-2.8-2.8L15 7.3")}</label>
           <input type="file" id="wc-file" multiple hidden accept="image/*,text/*,.json,.yaml,.yml,.md,.pdf">
           <span class="wc-cwd muted mono grow" id="wc-cwd"></span>
@@ -57,7 +71,7 @@ window.WSP = window.WSP || {};
       const b = e.target.closest("[data-copy]");
       if (!b) return;
       const [rid, n] = b.dataset.copy.split(":");
-      const run = C.runs.find((r) => r.id === rid);
+      const run = rid === "session" ? sessionRun() : C.runs.find((r) => r.id === rid);
       if (!run) return;
       if (n === "prompt") return W.copyText(run.prompt);
       if (n === "all") return W.copyText(run.events.filter((x) => x.kind === "text").map((x) => x.text).join("\n\n") || resultOf(run)?.text || "");
@@ -67,9 +81,16 @@ window.WSP = window.WSP || {};
     el.addEventListener("toggle", (e) => { const k = e.target.dataset?.k; if (k) e.target.open ? C.open.add(k) : C.open.delete(k); }, true);
     W.onRoot = () => renderCwd();
     renderCwd();
+    el.querySelector("#wc-info-btn").onclick = () => openInfo(C.info ? "" : "status");
+    el.querySelector("#wc-info-close").onclick = () => openInfo("");
+    el.querySelectorAll("[data-info]").forEach((b) => (b.onclick = () => openInfo(b.dataset.info)));
+    el.querySelector("#wc-tabs").addEventListener("click", (e) => { const t = e.target.closest("[data-tab]"); if (t) selectTab(t.dataset.tab); });
+    renderTabs();
+    pollSessions();
 
     try {
       const info = await api("/api/workspace/claude");
+      C.cli = info;
       sel.innerHTML = info.models.map((m) => `<option value="${m}">${m === "default" ? "Default model" : m[0].toUpperCase() + m.slice(1)}</option>`).join("");
       sel.value = info.models.includes(C.model) ? C.model : "default";
       if (!info.available) el.querySelector("#wc-log").innerHTML = `<div class="cc-error">The <code>claude</code> command is not installed on the server. Install Claude Code (<code>npm i -g @anthropic-ai/claude-code</code>) and sign in with <code>claude</code> in the terminal below.</div>`;
@@ -122,10 +143,14 @@ window.WSP = window.WSP || {};
     const btn = C.el.querySelector("#wc-send");
     btn.textContent = b ? "Stop" : "Send"; btn.classList.toggle("danger", b); btn.classList.toggle("primary", !b);
     const dot = C.el.querySelector(".wc-dot"); dot.classList.toggle("busy", b); dot.title = b ? "working" : "idle";
+    renderTabs();
   }
   async function send() {
     const ta = C.el.querySelector("#wc-input");
     const prompt = ta.value.trim();
+    // `claude -p` cannot run interactive slash commands: the panel answers these itself.
+    const slash = prompt.match(/^\/(status|tasks|agents)$/i);
+    if (slash) { ta.value = ""; ta.oninput(); return openInfo(slash[1].toLowerCase()); }
     if (C.uploads.some((u) => u.pending)) return toast("Wait for the attachments to finish uploading");
     if (!prompt && !C.uploads.length) return;
     if (!W.root()) return toast("Open a folder in the explorer first");
@@ -218,6 +243,8 @@ window.WSP = window.WSP || {};
         const shown = run.events.some((x) => x.kind === "text" && !x.parent);
         return `${!shown && e.text ? `<div class="cc-text"><div class="md">${W.md(e.text, W.root())}</div></div>` : ""}<div class="cc-result${e.is_error ? " err" : ""}"><span>${e.is_error ? "✗ Failed" : "✓ Done"}</span><span class="muted">${e.turns} turn${e.turns === 1 ? "" : "s"} · ${secs}s${e.cost ? ` · $${e.cost.toFixed(4)}` : ""}</span><span class="grow"></span><button class="cc-copy" data-copy="${run.id}:all">${W.svg("M8 8h12v12H8zM4 16V4h12")} Copy answer</button></div>`;
       }
+      case "prompt": return `<div class="cc-user"><div class="cc-user-text">${esc(e.text)}</div><button class="cc-copy ghost" data-copy="${k}" title="Copy prompt">${W.svg("M8 8h12v12H8zM4 16V4h12")}</button></div>`;
+      case "notice": return `<div class="cc-notice ${e.status === "completed" ? "ok" : e.status === "failed" || e.status === "killed" ? "err" : ""}"><span>${e.status === "completed" ? "✓" : e.status === "failed" ? "✗" : "■"}</span> Background task <code>${esc(e.task_id)}</code> ${esc(e.status)}${e.text && e.text !== e.status ? ` <span class="muted">${esc(firstLine(e.text, 160))}</span>` : ""}</div>`;
       case "error": return `<div class="cc-error">${esc(e.text)}</div>`;
       case "log": return `<div class="cc-logline mono">${esc(e.text)}</div>`;
       default: return "";
@@ -232,6 +259,7 @@ window.WSP = window.WSP || {};
     return `<div class="cc-user"><div class="cc-user-text">${esc(run.prompt)}</div>${imgs ? `<div class="cc-imgs">${imgs}</div>` : ""}<button class="cc-copy ghost" data-copy="${run.id}:prompt" title="Copy prompt">${W.svg("M8 8h12v12H8zM4 16V4h12")}</button></div>${events}${working}`;
   }
   function renderLog(scroll) {
+    if (C.tab !== "chat") return;
     const log = C.el.querySelector("#wc-log");
     if (!C.runs.length) {
       log.innerHTML = `<div class="cc-empty"><div class="wc-logo big">✳</div><h3>Claude Code</h3><p class="muted">Works in the folder open in the explorer, with full access: it can read and edit files, run commands and search the web.</p>
@@ -243,11 +271,172 @@ window.WSP = window.WSP || {};
     if (scroll !== false) log.scrollTop = log.scrollHeight;
   }
   function renderRun(run) {
+    if (C.tab !== "chat") return;
     const log = C.el.querySelector("#wc-log");
     const el = log.querySelector(`[data-run="${CSS.escape(run.id)}"]`);
     if (!el) return renderLog();
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
     el.innerHTML = runHtml(run);
     if (atBottom) log.scrollTop = log.scrollHeight;
+  }
+  // --- sessions on the host: tabs, read-only view, /status /tasks /agents ---------------------
+  const fmtK = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n || 0));
+  const dur = (s) => (s < 60 ? `${Math.floor(s)}s` : s < 3600 ? `${Math.floor(s / 60)} min` : s < 86400 ? `${Math.floor(s / 3600)} h` : `${Math.floor(s / 86400)} d`);
+  const since = (t) => (t ? dur(Math.max(0, Date.now() / 1000 - t)) : "");
+  const panelSids = () => new Set([C.session, ...C.runs.map((r) => r.session_id)].filter(Boolean));
+  // The chat tab's own session: the running prompt's, else the conversation's.
+  const chatSid = () => C.runs.find((r) => r.status === "running" && r.session_id)?.session_id || C.session;
+  const viewSid = () => (C.tab === "chat" ? chatSid() : C.tab);
+  const sessionRun = () => ({ id: "session", events: C.view.events, status: C.view.d?.status === "busy" ? "running" : "done" });
+  const others = () => C.sessions.filter((s) => !panelSids().has(s.session_id));
+
+  async function pollSessions() {
+    if (!C.el?.isConnected) return;
+    if (!document.hidden) {
+      try {
+        C.sessions = await api("/api/workspace/claude-sessions");
+        C.sessions.forEach((s) => (C.names[s.session_id] = s));
+        renderTabs();
+      } catch { /* signed out or offline: try again later */ }
+    }
+    setTimeout(pollSessions, 3000);
+  }
+  function renderTabs() {
+    const box = C.el?.querySelector("#wc-tabs");
+    if (!box) return;
+    const list = others();
+    if (C.tab !== "chat" && !list.some((s) => s.session_id === C.tab)) list.push({ ...(C.names[C.tab] || { name: C.tab.slice(0, 8) }), session_id: C.tab, status: "ended" });
+    const tab = (id, label, status, extra, title) => `<button type="button" role="tab" data-tab="${esc(id)}" aria-selected="${C.tab === id}" class="wc-tab${C.tab === id ? " on" : ""}${status === "ended" ? " ended" : ""}" title="${esc(title)}"><span class="wc-dot${status === "busy" ? " busy" : status === "ended" ? " off" : ""}"></span><span class="wc-tab-name">${esc(label)}</span>${extra ? `<span class="wc-tab-kind">${esc(extra)}</span>` : ""}</button>`;
+    box.innerHTML = tab("chat", "This panel", C.busy ? "busy" : "idle", "", "Your conversation with Claude Code in the explorer's folder")
+      + list.map((s) => tab(s.session_id, s.name, s.status, ENTRY[s.entrypoint] || s.entrypoint || "", `${s.cwd || ""}\n${s.status === "busy" ? "Working" : s.status === "ended" ? "Ended" : "Idle"}${s.pid ? ` · pid ${s.pid}` : ""}${s.version ? ` · v${s.version}` : ""}`)).join("");
+    box.hidden = !list.length && C.tab === "chat";
+  }
+  function selectTab(id) {
+    if (id === C.tab) return;
+    C.tab = id;
+    const chat = id === "chat";
+    C.el.querySelector("#wc-form").hidden = !chat;
+    C.el.querySelectorAll(".wc-chat-only").forEach((x) => (x.hidden = !chat));
+    C.view = { sid: "", events: [], next: 0, d: null };
+    if (chat) { C.el.querySelector("#wc-ro").hidden = true; renderLog(); } else renderSession();
+    renderTabs(); renderInfo(); pollDetail();
+  }
+  function openInfo(section) {
+    C.info = section;
+    const box = C.el.querySelector("#wc-info");
+    box.hidden = !section;
+    C.el.querySelector("#wc-info-btn").setAttribute("aria-expanded", String(!!section));
+    box.querySelectorAll("[data-info]").forEach((b) => { b.classList.toggle("on", b.dataset.info === section); b.setAttribute("aria-selected", String(b.dataset.info === section)); });
+    renderInfo();
+    if (section) pollDetail();
+  }
+
+  async function pollDetail() {
+    clearTimeout(C.dtimer);
+    if (!C.el?.isConnected) return;
+    const sid = viewSid();
+    if (!sid || (C.tab === "chat" && !C.info)) {
+      renderInfo();
+      if (C.info) C.dtimer = setTimeout(pollDetail, 2000);  // the first prompt will create the session
+      return;
+    }
+    if (C.view.sid !== sid) C.view = { sid, events: [], next: 0, d: null };
+    const v = C.view;
+    if (!document.hidden) {
+      try {
+        let d = await api(`/api/workspace/claude-sessions/${encodeURIComponent(sid)}?after=${v.next}`);
+        if (v !== C.view) return;
+        if (d.next < v.next) { v.events = []; d = await api(`/api/workspace/claude-sessions/${encodeURIComponent(sid)}?after=0`); }  // transcript reopened
+        const changed = d.events.length > 0 || !v.d || v.d.status !== d.status || (d.status === "busy" && d.current?.name !== v.d.current?.name);
+        v.events.push(...d.events);
+        if (v.events.length > 600) v.events.splice(0, v.events.length - 600);
+        v.next = d.next; v.d = d; v.missing = false;
+        if (changed && C.tab !== "chat") renderSession();
+      } catch (e) {
+        if (v !== C.view) return;
+        if (e.status === 404) { v.missing = true; if (C.tab !== "chat") renderSession(); }
+      }
+      renderInfo();
+    }
+    C.dtimer = setTimeout(pollDetail, v.d?.status === "busy" ? 1500 : 4000);
+  }
+
+  function activity(d) {
+    const c = d.current;
+    if (!c) return d.status === "busy" ? "Working…" : "";
+    if (!c.name) return `Working…${c.since ? ` <span class="muted">${since(c.since)}</span>` : ""}`;
+    return `Running <b>${esc(c.name)}</b> <span class="cc-tsum">${toolSummary(c)}</span>${c.since ? ` <span class="muted">${since(c.since)}</span>` : ""}`;
+  }
+  function renderSession() {
+    if (C.tab === "chat") return;
+    const log = C.el.querySelector("#wc-log"), v = C.view, d = v.d;
+    const s = C.names[C.tab] || {};
+    const ro = C.el.querySelector("#wc-ro");
+    ro.hidden = false;
+    ro.innerHTML = `Read-only view of a ${esc(ENTRY[s.entrypoint] || s.entrypoint || "Claude Code")} session in <span class="mono" title="${esc(d?.cwd || s.cwd || "")}">${esc(d?.cwd || s.cwd || "")}</span>`;
+    if (!d) {
+      log.innerHTML = v.missing ? `<div class="cc-empty"><div class="wc-logo big">✳</div><h3>${esc(s.name || "Session")}</h3><p class="muted">No transcript was found for this session yet.</p></div>` : `<div class="cc-working"><span class="spin"></span> Loading…</div>`;
+      return;
+    }
+    const first = !log.querySelector(".cc-run");
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+    const run = sessionRun();
+    const results = new Map(run.events.filter((e) => e.kind === "tool_result").map((e) => [e.tool_use_id, e]));
+    const events = run.events.map((e, i) => eventHtml(run, e, results, i === run.events.length - 1)).join("");
+    const tail = d.status === "busy" ? `<div class="cc-working"><span class="spin"></span> ${activity(d)}</div>` : d.status === "ended" ? '<div class="cc-divider"><span>Session ended</span></div>' : "";
+    log.innerHTML = `<div class="cc-run">${d.partial_history ? '<div class="cc-divider"><span>Earlier history not loaded</span></div>' : ""}${events || '<p class="muted">No conversation yet.</p>'}${tail}</div>`;
+    if (first || atBottom) log.scrollTop = log.scrollHeight;
+  }
+
+  const ST = { running: ["spin", ""], completed: ["ok", "✓"], failed: ["err", "✗"], killed: ["err", "■"], stopped: ["muted", "■"], ended: ["muted", "·"] };
+  const state = (s) => { const [cls, ch] = ST[s] || ["muted", "·"]; return cls === "spin" ? '<span class="spin" title="running"></span>' : `<span class="cc-st ${cls}" title="${esc(s)}">${ch}</span>`; };
+  const kv = (rows) => `<dl class="wc-kv">${rows.filter((r) => r[1]).map(([k, val]) => `<dt>${esc(k)}</dt><dd>${val}</dd>`).join("")}</dl>`;
+
+  function infoStatus(d) {
+    const s = d?.process || C.names[viewSid()] || {};
+    const acct = C.cli?.account || {};
+    const status = C.tab === "chat" ? (C.busy ? "busy" : "idle") : d?.status || "";
+    return kv([
+      ["Status", status ? `<span class="wc-badge ${esc(status)}">${esc(status === "busy" ? "working" : status)}</span>${status === "busy" && d ? ` ${activity(d)}` : ""}` : ""],
+      ["Session", d || s.name ? `${esc(s.name || "")} <span class="mono muted">${esc(viewSid() || "")}</span>` : ""],
+      ["Started from", s.entrypoint || d?.entrypoint ? `${esc(ENTRY[s.entrypoint || d.entrypoint] || s.entrypoint || d.entrypoint)}${s.pid ? ` <span class="muted">· pid ${s.pid}${s.started ? ` · up ${since(s.started)}` : ""}</span>` : ""}` : ""],
+      ["Folder", d?.cwd ? `<span class="mono">${esc(d.cwd)}</span>${d.git_branch ? ` <span class="wc-badge">⎇ ${esc(d.git_branch)}</span>` : ""}` : ""],
+      ["Model", d?.model ? `<span class="mono">${esc(d.model)}</span>` : C.tab === "chat" ? esc(C.model === "default" ? "Default model" : C.model) : ""],
+      ["Permissions", d?.permission_mode ? esc(d.permission_mode) : ""],
+      ["Context", d?.context_tokens ? `${fmtK(d.context_tokens)} tokens <span class="muted">in the last request</span>` : ""],
+      ["Output", d?.output_tokens ? `${fmtK(d.output_tokens)} tokens${d.partial_history ? ' <span class="muted">(recent history)</span>' : ""}` : ""],
+      ["Last prompt", d?.last_prompt ? `<span class="wc-clamp">${esc(firstLine(d.last_prompt, 300))}</span>` : ""],
+      ["Last activity", d?.last_activity ? `${since(d.last_activity)} ago` : ""],
+      ["Claude Code", esc(d?.version || C.cli?.version || "") || (C.cli && !C.cli.available ? "not installed" : "")],
+      ["Account", acct.method ? `${esc(acct.method)}${acct.email ? ` · ${esc(acct.email)}` : ""}${acct.organization ? ` <span class="muted">(${esc(acct.organization)})</span>` : ""}` : ""],
+    ]) + (!d && C.tab === "chat" ? '<p class="muted">Send a prompt to start a conversation; its status shows here.</p>' : "");
+  }
+  function infoTasks(d) {
+    if (!d) return '<p class="muted">No session yet.</p>';
+    const tasks = [...d.tasks].reverse(), bgAgents = d.agents.filter((a) => a.background).reverse();
+    const out = [];
+    if (tasks.length || bgAgents.length) {
+      out.push(`<h4>Background tasks <span class="muted">${tasks.concat(bgAgents).filter((t) => t.status === "running").length} running</span></h4><ul class="wc-list">${tasks.map((t) => `<li>${state(t.status)}<div><div><b>${esc(t.description || firstLine(t.command, 80))}</b> <span class="muted mono">${esc(t.id)}</span></div>${t.description ? `<code class="wc-cmd">${esc(firstLine(t.command, 200))}</code>` : ""}<div class="muted">${esc(t.status)} · started ${since(t.started)} ago${t.ended ? ` · took ${dur(t.ended - t.started)}` : ""}${t.summary ? ` · ${esc(firstLine(t.summary, 160))}` : ""}</div></div></li>`).join("")}${bgAgents.map((a) => `<li>${state(a.status)}<div><div><b>${esc(a.description || a.type)}</b> <span class="wc-badge">agent · ${esc(a.type)}</span></div><div class="muted">${esc(a.status)} · started ${since(a.started)} ago</div></div></li>`).join("")}</ul>`);
+    }
+    if (d.todos.length) out.push(`<h4>Todo list <span class="muted">${d.todos.filter((t) => t.status === "completed").length}/${d.todos.length} done</span></h4><ul class="cc-todos">${d.todos.map((t) => `<li class="${esc(t.status)}"><span>${t.status === "completed" ? "✓" : t.status === "in_progress" ? "◐" : "○"}</span>${esc(t.content)}</li>`).join("")}</ul>`);
+    if (d.task_list.length) out.push(`<h4>Tasks</h4><ul class="cc-todos">${d.task_list.map((t) => `<li class="${esc(t.status)}"><span>${t.status === "completed" ? "✓" : t.status === "in_progress" ? "◐" : "○"}</span>#${esc(t.id)} ${esc(t.subject)}</li>`).join("")}</ul>`);
+    return out.join("") || '<p class="muted">No background tasks or todos in this session.</p>';
+  }
+  function infoAgents(d) {
+    if (!d) return '<p class="muted">No session yet.</p>';
+    const order = { running: 0 };
+    const agents = [...d.agents].reverse().sort((a, b) => (order[a.status] ?? 1) - (order[b.status] ?? 1));
+    const out = [`<h4>Subagents <span class="muted">${agents.filter((a) => a.status === "running").length} running · ${agents.length} in view</span></h4>`
+      + (agents.length ? `<ul class="wc-list">${agents.map((a) => `<li>${state(a.status)}<div><div><b>${esc(a.description || a.type)}</b> <span class="wc-badge">${esc(a.type)}</span>${a.background ? ' <span class="wc-badge">background</span>' : ""}</div><div class="muted">${esc(a.status)}${a.model ? ` · <span class="mono">${esc(a.model)}</span>` : ""}${a.tokens ? ` · ${fmtK(a.tokens)} tokens` : ""}${a.tools ? ` · ${a.tools} tool calls` : ""} · ${a.ended ? `took ${dur(a.ended - a.started)}` : `started ${since(a.started)} ago`}</div></div></li>`).join("")}</ul>` : '<p class="muted">No subagents started in this session.</p>')];
+    if (d.configured_agents.length) out.push(`<h4>Custom agents</h4><ul class="wc-list">${d.configured_agents.map((a) => `<li><span class="cc-st muted">◆</span><div><div><b>${esc(a.name)}</b>${a.model ? ` <span class="wc-badge">${esc(a.model)}</span>` : ""}</div><div class="muted">${esc(a.description)}</div></div></li>`).join("")}</ul>`);
+    if (d.agent_types.length) out.push(`<h4>Available agent types</h4><div class="wc-chips">${d.agent_types.map((t) => `<span class="wc-badge">${esc(t)}</span>`).join("")}</div>`);
+    return out.join("");
+  }
+  function renderInfo() {
+    if (!C.info || !C.el) return;
+    const body = C.el.querySelector("#wc-info-body");
+    const d = C.view.sid === viewSid() ? C.view.d : null;
+    const html = C.info === "tasks" ? infoTasks(d) : C.info === "agents" ? infoAgents(d) : infoStatus(d);
+    if (body.innerHTML !== html) body.innerHTML = html;
   }
 })();
