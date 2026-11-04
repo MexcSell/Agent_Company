@@ -219,7 +219,7 @@ async function updateBadges() {
 function show(id) {
   if (id !== current) VIEWS.find((x) => x.id === current)?.leave?.();  // e.g. Machines closes its console
   current = id; store.set("ac.view", id);
-  $("#view").classList.remove("flush");
+  $("#view").classList.remove("flush", "fit");
   const v = VIEWS.find((x) => x.id === id); $("#view-title").textContent = v.title; renderRail();
   $("#view").classList.remove("enter"); void $("#view").offsetWidth; $("#view").classList.add("enter");
   clearInterval(refreshTimer); render(); updateBadges();
@@ -303,111 +303,6 @@ async function goalDetail(id, openIds = new Set()) {
   }));
 }
 
-// --- agents ---------------------------------------------------------------------
-async function viewAgents() {
-  const [all, rooms] = await Promise.all([api("/api/agents"), api("/api/rooms")]);
-  const showRetired = store.get("ac.retired") === "1";
-  const agents = all.filter((a) => showRetired || a.lifecycle !== "retired");
-  const divisions = [...new Set(rooms.map((r) => r.division))];
-  const retired = all.length - all.filter((a) => a.lifecycle !== "retired").length;
-  $("#view").innerHTML = `<div class="row" style="margin-bottom:8px"><span class="muted grow">${agents.length} agents · ${all.filter((a) => a.status === "busy").length} working · ${all.filter((a) => a.in_trial).length} on a trial playbook</span>
-    ${retired ? `<label class="row" style="margin:0"><input type="checkbox" id="a-retired" style="width:auto" ${showRetired ? "checked" : ""}> show ${retired} retired</label>` : ""}
-    ${me.is_admin ? `<button class="btn primary" id="a-new">New agent</button>` : ""}</div>` + divisions.map((d) => `<h3>${esc(d)}</h3>${rooms.filter((r) => r.division === d).map((r) => {
-    const members = agents.filter((a) => a.room === r.key);
-    return `<div class="room" style="margin-bottom:14px"><h2>${esc(r.name)} ${r.rotational ? '<span class="pill">rotational</span>' : ""} <span class="muted" style="font-weight:400">${esc(r.description)}</span></h2>
-      <div class="grid agents">${members.map((a) => `<div class="card agent ${a.enabled ? "" : "off"}" data-id="${a.id}"><div class="avatar">${roleIcon(a.role)}</div><div style="min-width:0"><strong>${esc(a.name)}</strong><div class="muted">${esc(a.role)} · L${a.level} · ${a.xp} XP</div><div class="row" style="margin-top:4px">${pill(a.lifecycle === "retired" ? "retired" : a.lifecycle === "paused" ? "paused" : a.enabled ? a.status : "disabled")}${a.in_trial ? '<span class="pill pending" title="testing a candidate playbook">trial</span>' : ""}${a.parent_id ? '<span class="pill">clone</span>' : ""}<span class="muted">${a.tasks_done} done · ${a.tasks_failed} failed</span></div></div></div>`).join("") || '<span class="muted">No agents.</span>'}</div></div>`;
-  }).join("")}`).join("");
-  document.querySelectorAll(".agent").forEach((el) => (el.onclick = () => agentModal(Number(el.dataset.id))));
-  $("#a-retired") && ($("#a-retired").onchange = (e) => { store.set("ac.retired", e.target.checked ? "1" : "0"); viewAgents(); });
-  $("#a-new") && ($("#a-new").onclick = () => newAgentForm(rooms, all));
-}
-function newAgentForm(rooms, agents) {
-  modal(`<h2>New agent</h2><form id="na"><label>Role (an existing one, or a new specialist role)</label><input id="na-role" required placeholder="data_engineer">
-    <label>Title (optional)</label><input id="na-title" placeholder="Data Engineer">
-    <label>Room</label><select id="na-room"><option value="">default for the role</option>${rooms.map((r) => `<option value="${esc(r.key)}">${esc(r.name)}</option>`).join("")}</select>
-    <label>Reports to</label><select id="na-sup"><option value="">General Manager</option>${agents.filter((a) => a.lifecycle === "active").map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select>
-    <label>Skills (name=level, comma separated)</label><input id="na-skills" placeholder="sql=6, python=5">
-    <label>Mission</label><input id="na-goal">
-    <label class="row" style="margin-top:8px"><input type="checkbox" id="na-writes" style="width:auto"> May change files (write and shell access)</label>
-    <div class="row" style="margin-top:12px"><button class="btn primary">Create</button></div></form>`);
-  $("#na").onsubmit = async (e) => {
-    e.preventDefault();
-    const skills = Object.fromEntries($("#na-skills").value.split(",").map((x) => x.split("=").map((y) => y.trim())).filter((x) => x[0]).map(([k, v]) => [k, Number(v) || 5]));
-    try { await api("/api/agents", { method: "POST", body: { role: $("#na-role").value, title: $("#na-title").value, room: $("#na-room").value, superior_id: Number($("#na-sup").value) || null, skills, goal: $("#na-goal").value, writes: $("#na-writes").checked } }); $("#modal").hidden = true; viewAgents(); }
-    catch (err) { toast(err.message); }
-  };
-}
-async function agentModal(id) {
-  const [a, m, versions] = await Promise.all([api(`/api/agents/${id}`), api("/api/models"), api(`/api/agents/${id}/versions`)]);
-  const skills = Object.entries(a.skills || {}).sort((x, y) => y[1] - x[1]).map(([k, v]) => `<span class="pill">${esc(k)} ${v}</span>`).join(" ");
-  modal(`<div class="row"><div class="avatar">${roleIcon(a.role)}</div><div class="grow"><h2 style="margin:0">${esc(a.name)}</h2><div class="muted">${esc(a.title)} · ${esc(a.room)}</div></div>${pill(a.enabled ? a.status : "disabled")}</div>
-    <div class="grid two" style="margin-top:12px"><div>
-      <h3>Mission</h3><p>${esc(a.goal)}</p><p class="muted">${esc(a.backstory)}</p>
-      <h3>Skills</h3><div class="row">${skills || '<span class="muted">none</span>'}</div>
-      <h3>Permissions</h3><div class="row">${(a.permissions || []).map((p) => `<span class="pill">${esc(p)}</span>`).join(" ")}</div>
-      <h3>Certification</h3><p><span class="pill ${a.certification.level >= 3 ? "done" : "info"}">L${a.certification.level}</span> ${esc(a.certification.meaning)} <span class="muted">(${a.certification.evidence.passed}/${a.certification.evidence.outcomes} passed over ${a.certification.evidence.goals} goals${a.certification.expired ? "; expired" : ""})</span></p>
-      <h3>Stats</h3><table><tr><td>Level / XP</td><td class="num">${a.level} / ${a.xp}</td></tr><tr><td>Tasks done / failed</td><td class="num">${a.tasks_done} / ${a.tasks_failed}</td></tr><tr><td>Runs</td><td class="num">${a.usage.runs}</td></tr><tr><td>Input / output tokens</td><td class="num">${fmt.format(a.usage.input_tokens)} / ${fmt.format(a.usage.output_tokens)}</td></tr><tr><td>Cost</td><td class="num">${money(a.usage.cost)}</td></tr><tr><td>Last active</td><td class="num">${ago(a.last_active_at)}</td></tr></table>
-      ${me.is_admin ? `<h3>Settings</h3><label>Model preference (overrides the role route)</label><select id="a-model"><option value="">Role route</option>${m.models.map((x) => `<option ${x.name === a.model_pref ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>
-        <div class="row" style="margin-top:10px"><button class="btn primary" id="a-save">Save</button>
-        ${a.lifecycle !== "retired" ? `<button class="btn" id="a-clone">Clone</button><button class="btn" id="a-pause">${a.lifecycle === "paused" ? "Resume" : "Pause"}</button>${a.parent_id ? `<button class="btn" id="a-merge">Merge into original</button>` : ""}<button class="btn danger" id="a-retire">Retire</button>` : '<span class="muted">Retired agents keep their history.</span>'}</div>` : ""}
-    </div><div>
-      <h3>Playbook v${a.playbook_version}</h3><pre>${esc(a.playbook || "Empty: the agent learns from finished work.")}</pre>
-      ${a.trial_playbook ? `<h3>Trial playbook (${a.trial_outcomes.length} task(s) so far)</h3><pre>${esc(a.trial_playbook)}</pre>` : ""}
-      ${versions.length ? `<details><summary class="muted">Version history (${versions.length})</summary>${versions.map((v) => `<div class="row" style="margin-top:6px"><strong>v${v.version}</strong><span class="muted grow">${esc(v.reason)} · ${ago(v.at)}</span>${me.is_admin && v.version !== a.playbook_version ? `<button class="btn sm" data-restore="${v.version}">Restore</button>` : ""}</div>`).join("")}</details>` : ""}
-      ${a.handovers.length ? `<h3>Handovers</h3><div class="events">${a.handovers.map((h) => `<div>goal #${h.goal_id} · ${esc(h.task)}: ${esc(h.package.from_agent || "")} → ${esc(h.package.to_agent || "")} <span class="muted">${ago(h.at)}</span></div>`).join("")}</div>` : ""}
-      <h3>Recent lessons</h3><div class="events">${a.lessons.map((l) => `<div>${pill(l.outcome)} ${esc(l.text)}</div>`).join("") || '<span class="muted">None yet.</span>'}</div>
-      <h3>Related agents (shared experience)</h3><div class="events">${a.related.map((r) => `<div>${esc(r.name)} <span class="muted">${esc(r.role)} · ${r.weight.toFixed(2)}</span></div>`).join("") || '<span class="muted">None.</span>'}</div>
-      <h3>Reports to it</h3><div class="events">${a.subordinates.map((r) => `<div>${esc(r.name)} <span class="muted">${esc(r.role)}</span></div>`).join("") || '<span class="muted">Nobody.</span>'}</div>
-    </div></div>`);
-  if (me.is_admin) {
-    const save = async (changes) => { try { await api(`/api/agents/${id}`, { method: "PATCH", body: changes }); toast("Saved"); agentModal(id); viewAgents(); } catch (e) { toast(e.message); } };
-    const act = async (path, body, sure) => { if (sure && !confirm(sure)) return; try { await api(`/api/agents/${id}/${path}`, { method: "POST", body }); toast("Done"); viewAgents(); agentModal(id); } catch (e) { toast(e.message); } };
-    $("#a-save").onclick = () => save({ model_pref: $("#a-model").value || null });
-    $("#a-clone") && ($("#a-clone").onclick = () => act("clone"));
-    $("#a-pause") && ($("#a-pause").onclick = () => act("lifecycle", { state: a.lifecycle === "paused" ? "active" : "paused" }));
-    $("#a-retire") && ($("#a-retire").onclick = () => act("lifecycle", { state: "retired" }, "Retire this agent permanently? Its history is kept."));
-    $("#a-merge") && ($("#a-merge").onclick = () => act("merge", undefined, "Fold this clone's experience into its original and retire it?"));
-    document.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = () => act(`versions/${b.dataset.restore}/restore`)));
-  }
-}
-
-// --- models ---------------------------------------------------------------------
-let providersList = [];
-async function viewModels() {
-  const [m, provs] = await Promise.all([api("/api/models"), api("/api/providers")]);
-  providersList = provs;
-  const admin = me.is_admin;
-  $("#view").innerHTML = `<div class="card"><h2>Model catalog</h2><p class="muted">Executor mode: <code>${esc(m.executor)}</code>${m.default_model ? ` · MODEL: <code>${esc(m.default_model)}</code>` : ""}. Unavailable models fall back to MODEL, then to the offline simulator.</p>
-    <div class="table-wrap"><table><tr><th>Name</th><th>Kind</th><th>Model id</th><th class="num">$/1M in</th><th class="num">$/1M out</th><th>Status</th><th></th></tr>
-    ${m.models.map((x) => `<tr><td>${esc(x.name)}</td><td>${esc(x.kind)}</td><td class="mono">${esc(x.model_id)}${x.base_url ? `<div class="muted">${esc(x.base_url)}</div>` : ""}</td><td class="num">${x.input_cost}</td><td class="num">${x.output_cost}</td><td>${x.available ? pill("ok") : `<span class="muted">${esc(x.unavailable_reason)}</span>`}</td><td class="row nowrap">${admin && x.available ? `<button class="btn sm" data-test="${x.id}">Test</button>` : ""}${admin && x.kind !== "offline" ? `<button class="btn sm danger" data-del="${x.id}">Delete</button>` : ""}</td></tr>`).join("")}</table></div></div>
-    <div class="grid halves" style="margin-top:12px"><div class="card"><h2>Routes: which role uses which model</h2><p class="muted">Retry model: used after a failed quality gate (escalation).</p><table><tr><th>Role</th><th>Model</th><th>Retry model</th></tr>${Object.entries(m.routes).map(([role, name]) => `<tr><td>${esc(role)}</td><td>${admin ? `<select data-role="${esc(role)}">${m.models.map((x) => `<option ${x.name === name ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : esc(name)}</td><td>${admin ? `<select data-esc="${esc(role)}"><option value="">same model</option>${m.models.map((x) => `<option ${x.name === m.escalations[role] ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : esc(m.escalations[role] || "same model")}</td></tr>`).join("")}</table></div>
-    <div class="grid">${admin ? `<div class="card"><h2>Add model</h2><form id="m-form"><label>Name</label><input id="m-name" required><label>Kind</label><select id="m-kind"><option value="llm">API model (CrewAI / LiteLLM id)</option><option value="claude_code">Claude Code CLI</option><option value="codex">Codex CLI</option></select>
-      <label>Model id (e.g. openai/gpt-5, ollama/qwen3-coder, openrouter/deepseek/deepseek-chat)</label><input id="m-id">
-      <label>Base URL of an OpenAI-compatible server (optional: llama-server, LM Studio, vLLM; model id then openai/&lt;name&gt;)</label><input id="m-url" placeholder="http://127.0.0.1:8080/v1">
-      <label>Environment variable with this model's key (optional)</label><input id="m-env" placeholder="LOCAL_LLM_KEY">
-      <div class="row"><div class="grow"><label>$/1M input</label><input id="m-in" type="number" step="0.01" value="0"></div><div class="grow"><label>$/1M output</label><input id="m-out" type="number" step="0.01" value="0"></div></div>
-      <div class="row"><div class="grow"><label>Daily token limit (0 = none)</label><input id="m-dl" type="number" value="0"></div><div class="grow"><label>Weekly token limit</label><input id="m-wl" type="number" value="0"></div></div>
-      <div class="row" style="margin-top:10px"><button class="btn primary">Add</button></div></form></div>
-      <div class="card"><h2>Model catalogs</h2><div class="row"><select id="or-prov" style="width:auto"><option value="openrouter">OpenRouter</option>${providersList.map((p) => `<option value="${p.id}">${esc(p.label)}${p.key_set ? "" : " (no key)"}</option>`).join("")}</select><input id="or-q" class="grow" placeholder="Search (e.g. qwen, deepseek, llama)"><label class="row" style="margin:0"><input type="checkbox" id="or-free" style="width:auto"> free only</label><button class="btn" id="or-go">Search</button></div><div id="or-res" class="table-wrap" style="margin-top:8px"></div></div>` : ""}</div></div>`;
-  document.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => { if (!confirm("Delete this model? Routes using it move to another model.")) return; try { await api(`/api/models/${b.dataset.del}`, { method: "DELETE" }); viewModels(); } catch (e) { toast(e.message); } }));
-  const saveRoute = async (role) => { try { await api(`/api/routes/${role}`, { method: "PUT", body: { model_name: document.querySelector(`[data-role="${role}"]`).value, escalation: document.querySelector(`[data-esc="${role}"]`).value } }); toast("Route saved"); } catch (e) { toast(e.message); } };
-  document.querySelectorAll("[data-role]").forEach((s) => (s.onchange = () => saveRoute(s.dataset.role)));
-  document.querySelectorAll("[data-esc]").forEach((s) => (s.onchange = () => saveRoute(s.dataset.esc)));
-  document.querySelectorAll("[data-test]").forEach((b) => (b.onclick = async () => { b.disabled = true; b.textContent = "Testing…"; try { const r = await api(`/api/models/${b.dataset.test}/test`, { method: "POST" }); toast(r.ok ? `OK in ${r.seconds}s: ${r.reply.slice(0, 60)} (${r.input_tokens}/${r.output_tokens} tokens)` : `Failed: ${r.error}`); } catch (e) { toast(e.message); } b.disabled = false; b.textContent = "Test"; }));
-  if (!admin) return;
-  $("#m-form").onsubmit = async (e) => { e.preventDefault(); try { await api("/api/models", { method: "POST", body: { name: $("#m-name").value, kind: $("#m-kind").value, model_id: $("#m-id").value, input_cost: +$("#m-in").value, output_cost: +$("#m-out").value, daily_token_limit: +$("#m-dl").value, weekly_token_limit: +$("#m-wl").value, base_url: $("#m-url").value.trim(), api_key_env: $("#m-env").value.trim() } }); toast("Model added"); viewModels(); } catch (err) { toast(err.message); } };
-  $("#or-go").onclick = async () => {
-    $("#or-res").innerHTML = '<span class="muted">Loading…</span>';
-    try {
-      const prov = $("#or-prov").value;
-      const rows = prov === "openrouter" ? await api(`/api/openrouter/models?q=${encodeURIComponent($("#or-q").value)}&free=${$("#or-free").checked}`)
-        : await api(`/api/providers/${prov}/models?q=${encodeURIComponent($("#or-q").value)}`);
-      $("#or-res").innerHTML = `<table><tr><th>Model</th><th class="num">$/1M in</th><th class="num">$/1M out</th><th class="num">Context</th><th></th></tr>${rows.slice(0, 60).map((r) => `<tr><td>${esc(r.name)}<div class="muted mono">${esc(r.id)}</div></td><td class="num">${r.input_cost}</td><td class="num">${r.output_cost}</td><td class="num">${r.context_length ? fmt.format(r.context_length) : "-"}</td><td><button class="btn sm" data-or="${esc(r.id)}">Add</button></td></tr>`).join("")}</table>`;
-      document.querySelectorAll("[data-or]").forEach((b) => (b.onclick = async () => { try { await api(prov === "openrouter" ? "/api/openrouter/models" : `/api/providers/${prov}/models`, { method: "POST", body: { id: b.dataset.or } }); toast("Added"); viewModels(); } catch (e) { toast(e.message); } }));
-    } catch (e) { $("#or-res").innerHTML = `<span class="muted">${esc(e.message)}</span>`; }
-  };
-}
-
 // --- research -------------------------------------------------------------------
 async function viewResearch(quiet) {
   if (quiet && $("#r-crawl")) return; // keep forms and results stable
@@ -477,8 +372,6 @@ function setFavicon(o) {
 }
 
 registerView({ id: "dashboard", title: "Dashboard", icon: "dashboard" }, viewDashboard);
-registerView({ id: "agents", title: "Agents", icon: "agents" }, viewAgents);
-registerView({ id: "models", title: "Models", icon: "models" }, viewModels);
 registerView({ id: "research", title: "Research", icon: "research" }, viewResearch);
 registerView({ id: "users", title: "Users", icon: "users", admin: true }, viewUsers);
 

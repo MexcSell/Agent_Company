@@ -1,0 +1,226 @@
+"use strict";
+// Agents: the organisation (every layer of the hierarchy on one screen, scaled to fit) beside the agent list
+// (the only part that scrolls); Tools & MCP (mcp.py) and Skills & plugins (catalog.py) as tabs.
+// The agent card edits model (also another agent's, for the General Manager), plugins and the agent's
+// definition file: the body learning rewrites (agentdefs.py).
+
+let agentsTab = store.get("ac.agents.tab") || "org";
+
+async function viewAgents(quiet) {
+  if (quiet && $("#ag-page") && agentsTab !== "org") return;  // the catalog tabs keep their forms
+  const tabs = [["org", "Organisation", "sitemap"], ["mcp", "Tools & MCP", "plug"], ["catalog", "Skills & plugins", "book"]];
+  if (!$("#ag-page") || !quiet) {
+    $("#view").innerHTML = `<div class="ag-page" id="ag-page"><div class="ag-tabs" role="tablist">${tabs.map(([k, l, i]) => `<button role="tab" data-agtab="${k}" aria-selected="${agentsTab === k}">${icon(i, 16)} ${l}</button>`).join("")}
+      <span class="grow"></span><span id="ag-tools"></span></div><div class="ag-body" id="ag-body"></div></div>`;
+    $("#view").classList.add("fit");
+    document.querySelectorAll("[data-agtab]").forEach((b) => (b.onclick = () => { agentsTab = b.dataset.agtab; store.set("ac.agents.tab", agentsTab); viewAgents(); }));
+  }
+  if (agentsTab === "mcp") return viewMcp();
+  if (agentsTab === "catalog") return viewCatalog();
+  return viewOrg(quiet);
+}
+
+// --- organisation ---------------------------------------------------------------------------
+async function viewOrg(quiet) {
+  const [all, rooms] = await Promise.all([api("/api/agents"), api("/api/rooms")]);
+  const showRetired = store.get("ac.retired") === "1";
+  const agents = all.filter((a) => showRetired || a.lifecycle !== "retired");
+  const retired = all.length - all.filter((a) => a.lifecycle !== "retired").length;
+  $("#ag-tools").innerHTML = `<span class="muted">${agents.length} agents · ${all.filter((a) => a.status === "busy").length} working</span>
+    ${retired ? `<label class="row" style="margin:0"><input type="checkbox" id="a-retired" style="width:auto" ${showRetired ? "checked" : ""}> retired (${retired})</label>` : ""}
+    ${me.is_admin ? ib("user_add", "Add an agent", 'id="a-new"', "primary") : ""}`;
+  const byId = new Map(agents.map((a) => [a.id, a])), kids = new Map();
+  agents.forEach((a) => { const p = byId.has(a.superior_id) ? a.superior_id : 0; if (!kids.has(p)) kids.set(p, []); kids.get(p).push(a); });
+  const node = (a) => `<div class="org-node ${a.enabled ? "" : "off"} st-${esc(a.status)}" data-aid="${a.id}" title="${esc(a.title)} · ${esc(a.room)}"><span class="avatar">${roleIcon(a.role)}</span><span class="org-txt"><b>${esc(a.name)}</b><small>${esc(a.role.replace(/_/g, " "))} · L${a.level}</small></span><i class="org-dot"></i></div>`;
+  // A wide layer (more than three reports) wraps into a square block, so the chart stays roughly square.
+  const tree = (a) => {
+    const ch = kids.get(a.id) || [];
+    const wrap = ch.length > 3 ? ` class="wrap" style="--cols:${Math.ceil(Math.sqrt(ch.length))}"` : "";
+    return `<li>${node(a)}${ch.length ? `<ul${wrap}>${ch.map(tree).join("")}</ul>` : ""}</li>`;
+  };
+  const roots = kids.get(0) || [];
+  const body = $("#ag-body");
+  const listHtml = rooms.map((r) => { const m = agents.filter((a) => a.room === r.key); return m.length ? `<div class="ag-room"><h3>${esc(r.name)}${r.rotational ? ' <span class="pill">rotational</span>' : ""}</h3>${m.map((a) => `<div class="list-item agent-row" data-aid="${a.id}"><div class="row nowrap"><span class="avatar" style="width:26px;height:26px">${roleIcon(a.role)}</span><strong class="grow">${esc(a.name)}</strong>${pill(a.lifecycle === "retired" ? "retired" : a.lifecycle === "paused" ? "paused" : a.enabled ? a.status : "disabled")}</div><div class="muted ellipsis">${esc(a.role)} · L${a.level} · ${a.tasks_done} done${a.in_trial ? " · trial" : ""}${a.parent_id ? " · clone" : ""}</div></div>`).join("")}</div>` : ""; }).join("");
+  const orgHtml = `<ul class="org-tree">${roots.map(tree).join("")}</ul>`;
+  if (!quiet || !$("#org-canvas")) {
+    body.innerHTML = `<div class="ag-split"><section class="card ag-org"><div class="row"><h2 class="grow" style="margin:0">Organisation</h2><span class="muted">every layer, top to bottom · click an agent for its card</span></div><div class="org-canvas" id="org-canvas"><div class="org-scale" id="org-scale"></div></div></section>
+      <aside class="card ag-list"><h2>Agents</h2><div class="ag-list-body" id="ag-list"></div></aside></div>`;
+    new ResizeObserver(fitOrg).observe($("#org-canvas"));
+  }
+  if ($("#org-scale").dataset.html !== orgHtml) { $("#org-scale").innerHTML = orgHtml; $("#org-scale").dataset.html = orgHtml; fitOrg(); }
+  const lst = $("#ag-list"), top = lst.scrollTop;
+  if (lst.dataset.html !== listHtml) { lst.innerHTML = listHtml; lst.dataset.html = listHtml; lst.scrollTop = top; }
+  body.querySelectorAll("[data-aid]").forEach((el) => (el.onclick = () => agentModal(Number(el.dataset.aid))));
+  $("#a-retired") && ($("#a-retired").onchange = (e) => { store.set("ac.retired", e.target.checked ? "1" : "0"); viewOrg(); });
+  $("#a-new") && ($("#a-new").onclick = () => newAgentForm(rooms, all));
+}
+// The whole hierarchy on one screen: scale the tree down (never up past 1) to fit the panel.
+function fitOrg() {
+  const c = $("#org-canvas"), s = $("#org-scale");
+  if (!c || !s) return;
+  s.style.transform = "none";
+  const k = Math.min(1, (c.clientWidth - 8) / Math.max(1, s.scrollWidth), (c.clientHeight - 8) / Math.max(1, s.scrollHeight));
+  s.style.transform = `scale(${k})`;
+}
+
+function newAgentForm(rooms, agents) {
+  modal(`<h2>${icon("user_add", 18)} New agent</h2><form id="na"><label>Role (an existing one, or a new specialist role)</label><input id="na-role" required placeholder="data_engineer">
+    <label>Title (optional)</label><input id="na-title" placeholder="Data Engineer">
+    <label>Room</label><select id="na-room"><option value="">default for the role</option>${rooms.map((r) => `<option value="${esc(r.key)}">${esc(r.name)}</option>`).join("")}</select>
+    <label>Reports to</label><select id="na-sup"><option value="">General Manager</option>${agents.filter((a) => a.lifecycle === "active").map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select>
+    <label>Skills (name=level, comma separated)</label><input id="na-skills" placeholder="sql=6, python=5">
+    <label>Mission</label><input id="na-goal">
+    <label class="row" style="margin-top:8px"><input type="checkbox" id="na-writes" style="width:auto"> May change files (write and shell access)</label>
+    <div class="row" style="margin-top:12px"><button class="btn icon primary" title="Create" aria-label="Create">${icon("check", 16)}</button></div></form>`);
+  $("#na").onsubmit = async (e) => {
+    e.preventDefault();
+    const skills = Object.fromEntries($("#na-skills").value.split(",").map((x) => x.split("=").map((y) => y.trim())).filter((x) => x[0]).map(([k, v]) => [k, Number(v) || 5]));
+    try { await api("/api/agents", { method: "POST", body: { role: $("#na-role").value, title: $("#na-title").value, room: $("#na-room").value, superior_id: Number($("#na-sup").value) || null, skills, goal: $("#na-goal").value, writes: $("#na-writes").checked } }); $("#modal").hidden = true; viewAgents(); }
+    catch (err) { toast(err.message); }
+  };
+}
+
+// --- the agent card -------------------------------------------------------------------------
+async function agentModal(id, tab = "profile") {
+  const [a, m, versions, all, cat] = await Promise.all([api(`/api/agents/${id}`), api("/api/models"), api(`/api/agents/${id}/versions`), api("/api/agents"), api("/api/catalog")]);
+  const skills = Object.entries(a.skills || {}).sort((x, y) => y[1] - x[1]).map(([k, v]) => `<span class="pill">${esc(k)} ${v}</span>`).join(" ");
+  const admin = me.is_admin || me.permissions?.manage_agents;
+  const isGm = a.role === "general_manager" && !a.parent_id;
+  const others = all.filter((x) => x.id !== a.id && x.lifecycle === "active");
+  const modelSelect = `<select id="a-model"><option value="">Role route (${esc(m.routes[a.role] || "default")})</option>
+    <optgroup label="Models">${m.models.map((x) => `<option value="${esc(x.name)}" ${x.name === a.model_pref ? "selected" : ""}>${esc(x.name)}${x.available ? "" : " (unavailable)"}</option>`).join("")}</optgroup>
+    <optgroup label="Another agent (uses its model)">${others.map((x) => `<option value="agent:${x.id}" ${a.model_pref === `agent:${x.id}` ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</optgroup></select>`;
+  const plugins = cat.filter((i) => ["plugin", "skill"].includes(i.kind));
+  const tabs = [["profile", "Profile"], ["definition", "Definition"], ["history", "Playbook & history"]];
+  modal(`<div class="row"><div class="avatar">${roleIcon(a.role)}</div><div class="grow"><h2 style="margin:0">${esc(a.name)}</h2><div class="muted">${esc(a.title)} · ${esc(a.room)} · definition v${a.definition_version}</div></div>${pill(a.enabled ? a.status : "disabled")}</div>
+    <div class="ag-tabs small" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-mtab="${k}" aria-selected="${tab === k}">${l}</button>`).join("")}</div><div id="a-tab"></div>`);
+  document.querySelectorAll("[data-mtab]").forEach((b) => (b.onclick = () => agentModal(id, b.dataset.mtab)));
+  const box = $("#a-tab");
+  if (tab === "definition") {
+    const d = await api(`/api/agents/${id}/definition`);
+    box.innerHTML = `<p class="muted">The agent runs with this file (<code>${esc(d.path)}</code>): learning rewrites its <b>Working method</b> and <b>Knowledge notes</b>, the card's settings rewrite the rest. Every change is a commit.</p>
+      <textarea id="a-def" class="mono" rows="18" ${admin ? "" : "readonly"}>${esc(d.text)}</textarea>
+      <div class="row" style="margin-top:8px">${admin ? ib("save", "Save the definition", 'id="a-def-save"', "primary") + ib("book", "Study now: rewrite the working method from new knowledge and lessons", 'id="a-study"') : ""}<span class="grow"></span></div>
+      <h3>History</h3><div class="events">${d.history.map((h) => `<div><span class="k">${esc(h.commit)}</span>${esc(h.message)} <span class="muted">${ago(h.at)}</span></div>`).join("") || '<span class="muted">No commits yet.</span>'}</div>`;
+    $("#a-def-save") && ($("#a-def-save").onclick = async () => { try { await api(`/api/agents/${id}/definition`, { method: "PUT", body: { text: $("#a-def").value } }); toast("Definition saved"); agentModal(id, "definition"); } catch (e) { toast(e.message); } });
+    $("#a-study") && ($("#a-study").onclick = async () => { toast("Studying…"); try { const r = await api(`/api/learning/study?agent_id=${id}`, { method: "POST" }); toast(r.changed ? `Rewrote ${r.lines} line(s) with ${r.model}` : `No change: ${r.detail || ""}`); agentModal(id, "definition"); } catch (e) { toast(e.message); } });
+    return;
+  }
+  if (tab === "history") {
+    box.innerHTML = `<h3>Playbook v${a.playbook_version}</h3><pre>${esc(a.playbook || "Empty: the agent learns from finished work.")}</pre>
+      ${a.trial_playbook ? `<h3>Trial playbook (${a.trial_outcomes.length} task(s) so far)</h3><pre>${esc(a.trial_playbook)}</pre>` : ""}
+      ${versions.length ? `<h3>Versions</h3>${versions.map((v) => `<div class="row" style="margin-top:6px"><strong>v${v.version}</strong><span class="muted grow">${esc(v.reason)} · ${ago(v.at)}</span>${admin && v.version !== a.playbook_version ? ib("refresh", `Restore v${v.version}`, `data-restore="${v.version}"`, "sm") : ""}</div>`).join("")}` : ""}
+      ${a.handovers.length ? `<h3>Handovers</h3><div class="events">${a.handovers.map((h) => `<div>goal #${h.goal_id} · ${esc(h.task)}: ${esc(h.package.from_agent || "")} → ${esc(h.package.to_agent || "")} <span class="muted">${ago(h.at)}</span></div>`).join("")}</div>` : ""}
+      <h3>Recent lessons</h3><div class="events">${a.lessons.map((l) => `<div>${pill(l.outcome)} ${esc(l.text)}</div>`).join("") || '<span class="muted">None yet.</span>'}</div>`;
+    document.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = async () => { await api(`/api/agents/${id}/versions/${b.dataset.restore}/restore`, { method: "POST" }); agentModal(id, "history"); }));
+    return;
+  }
+  box.innerHTML = `<div class="grid two" style="margin-top:8px"><div>
+      <h3>Mission</h3><p>${esc(a.goal)}</p><p class="muted">${esc(a.backstory)}</p>
+      <h3>Skills</h3><div class="row">${skills || '<span class="muted">none</span>'}</div>
+      <h3>Permissions</h3><div class="row">${(a.permissions || []).map((p) => `<span class="pill">${esc(p)}</span>`).join(" ")}</div>
+      <h3>Certification</h3><p><span class="pill ${a.certification.level >= 3 ? "done" : "info"}">L${a.certification.level}</span> ${esc(a.certification.meaning)} <span class="muted">(${a.certification.evidence.passed}/${a.certification.evidence.outcomes} passed over ${a.certification.evidence.goals} goals${a.certification.expired ? "; expired" : ""})</span></p>
+      <h3>Stats</h3><table><tr><td>Level / XP</td><td class="num">${a.level} / ${a.xp}</td></tr><tr><td>Tasks done / failed</td><td class="num">${a.tasks_done} / ${a.tasks_failed}</td></tr><tr><td>Runs</td><td class="num">${a.usage.runs}</td></tr><tr><td>Input / output tokens</td><td class="num">${fmt.format(a.usage.input_tokens)} / ${fmt.format(a.usage.output_tokens)}</td></tr><tr><td>Cost</td><td class="num">${money(a.usage.cost)}</td></tr><tr><td>Last active</td><td class="num">${ago(a.last_active_at)}</td></tr></table>
+    </div><div>
+      ${admin ? `<h3>Settings</h3><label>Model${isGm ? " — the General Manager: Claude Code by default; pick an API model, a Claude Code at another address (Models → Add), or another agent" : " (overrides the role route)"}</label>${modelSelect}
+        <label>Plugins and skills it uses (from Agents → Skills & plugins)</label><div class="plug-picks">${plugins.map((p) => `<label class="plug"><input type="checkbox" data-plug="${esc(p.name)}" ${(a.plugins || []).includes(p.name) ? "checked" : ""}><span>${esc(p.name)}</span><small>${esc(p.kind)}</small></label>`).join("") || '<span class="muted">The catalog is empty.</span>'}</div>
+        <div class="row" style="margin-top:10px">${ib("save", "Save", 'id="a-save"', "primary")}
+        ${a.lifecycle !== "retired" ? `${ib("clone", "Clone", 'id="a-clone"')}${ib(a.lifecycle === "paused" ? "play" : "pause", a.lifecycle === "paused" ? "Resume" : "Pause", 'id="a-pause"')}${a.parent_id ? ib("merge", "Merge into original", 'id="a-merge"') : ""}${ib("trash", "Retire", 'id="a-retire"', "danger")}` : '<span class="muted">Retired agents keep their history.</span>'}</div>` : ""}
+      <h3>Related agents (shared experience)</h3><div class="events">${a.related.map((r) => `<div>${esc(r.name)} <span class="muted">${esc(r.role)} · ${r.weight.toFixed(2)}</span></div>`).join("") || '<span class="muted">None.</span>'}</div>
+      <h3>Reports to it</h3><div class="events">${a.subordinates.map((r) => `<div>${esc(r.name)} <span class="muted">${esc(r.role)}</span></div>`).join("") || '<span class="muted">Nobody.</span>'}</div>
+    </div></div>`;
+  if (!admin) return;
+  const act = async (path, body, sure) => { if (sure && !confirm(sure)) return; try { await api(`/api/agents/${id}/${path}`, { method: "POST", body }); toast("Done"); if (current === "agents") viewAgents(); agentModal(id); } catch (e) { toast(e.message); } };
+  $("#a-save").onclick = async () => {
+    const plugins2 = [...document.querySelectorAll("[data-plug]:checked")].map((c) => c.dataset.plug);
+    try { await api(`/api/agents/${id}`, { method: "PATCH", body: { model_pref: $("#a-model").value || null, plugins: plugins2 } }); toast("Saved"); agentModal(id); if (current === "agents") viewAgents(); } catch (e) { toast(e.message); }
+  };
+  $("#a-clone") && ($("#a-clone").onclick = () => act("clone"));
+  $("#a-pause") && ($("#a-pause").onclick = () => act("lifecycle", { state: a.lifecycle === "paused" ? "active" : "paused" }));
+  $("#a-retire") && ($("#a-retire").onclick = () => act("lifecycle", { state: "retired" }, "Retire this agent permanently? Its history is kept."));
+  $("#a-merge") && ($("#a-merge").onclick = () => act("merge", undefined, "Fold this clone's experience into its original and retire it?"));
+}
+
+// --- Tools & MCP ----------------------------------------------------------------------------
+async function viewMcp() {
+  const [d, agents, calls] = await Promise.all([api("/api/mcp"), api("/api/agents"), me.is_admin ? api("/api/mcp/calls") : Promise.resolve([])]);
+  $("#ag-tools").innerHTML = me.is_admin ? ib("plus", "Add a server", 'id="mcp-new"', "primary") : "";
+  const st = (s) => `<span class="pill ${s.status === "ok" ? "ok" : s.status === "error" ? "failed" : "pending"}">${esc(s.status)}</span>`;
+  $("#ag-body").innerHTML = `<div class="ag-split"><section class="card ag-scroll"><h2>MCP servers</h2><p class="muted">Servers the agents may use. Claude Code agents get the servers they are granted, with only the allowed tools. Secrets (header and environment values) never leave the server. Every call is logged.</p>
+      ${d.servers.map((s) => `<div class="mcp-srv card"><div class="row nowrap"><strong class="grow">${esc(s.name)}</strong>${st(s)}<span class="pill">${esc(s.transport)}</span><span class="pill">${s.everyone ? "every agent" : `${s.grants.length} agent(s)`}</span>
+          ${me.is_admin ? ib("refresh", "Test: connect and list the tools", `data-mtest="${s.id}"`, "sm") + ib("edit", "Edit", `data-medit="${s.id}"`, "sm") + ib("trash", "Delete", `data-mdel="${s.id}"`, "sm danger") : ""}</div>
+        <div class="muted mono ellipsis">${esc(s.transport === "http" ? s.url : [s.command, ...s.args].join(" "))}${s.env.length || s.headers.length ? ` · secrets: ${esc([...s.env, ...s.headers].join(", "))}` : ""}</div>
+        ${s.error ? `<div class="cc-error">${esc(s.error)}</div>` : ""}
+        ${s.tools.length ? `<details><summary>${s.tools.filter((t) => t.allowed).length} of ${s.tools.length} tools allowed</summary><div class="mcp-tools">${s.tools.map((t) => `<label class="row nowrap"><input type="checkbox" data-mtool="${s.id}" value="${esc(t.name)}" ${t.allowed ? "checked" : ""} ${me.is_admin ? "" : "disabled"} style="width:auto"><code>${esc(t.name)}</code>${t.read_only ? ' <span class="pill ok">read-only</span>' : ""}<span class="muted ellipsis grow">${esc(t.description)}</span></label>`).join("")}</div>
+          ${me.is_admin ? `<div class="row">${ib("save", "Save allowed tools", `data-msave="${s.id}"`, "sm primary")}<span class="muted">Who may use it:</span><select data-mgrant="${s.id}" multiple size="3" style="width:auto;min-width:200px">${agents.filter((a) => a.lifecycle === "active").map((a) => `<option value="${a.id}" ${s.grants.includes(a.id) ? "selected" : ""}>${esc(a.name)}</option>`).join("")}</select><label class="row" style="margin:0"><input type="checkbox" data-mevery="${s.id}" ${s.everyone ? "checked" : ""} style="width:auto"> every agent</label>${ib("check", "Save who may use it", `data-mgsave="${s.id}"`, "sm")}</div>` : ""}</details>` : ""}</div>`).join("") || '<p class="muted">No servers yet: add one from the catalog.</p>'}</section>
+    <aside class="card ag-scroll"><h2>Catalog</h2><p class="muted">One click: added, tested and ready to grant.</p>
+      ${d.catalog.map((c) => `<div class="mcp-cat"><div class="row nowrap"><strong class="grow">${esc(c.name)}</strong><span class="pill">${esc(c.transport)}</span>${c.added ? pill("ok").replace("ok", "added") : me.is_admin ? ib("plus", `Add ${c.name}`, `data-mcat="${esc(c.key)}"`, "sm primary") : ""}</div><div class="muted">${esc(c.about)}</div></div>`).join("")}
+      ${calls.length ? `<h3>Recent calls</h3><div class="events">${calls.slice(0, 30).map((c) => `<div>${c.ok ? "✓" : "✗"} <span class="k">${esc(c.server)}</span>${esc(c.tool)} <span class="muted">${esc(c.actor)} · ${c.duration}s · ${ago(c.at)}</span></div>`).join("")}</div>` : ""}</aside></div>`;
+  const run = async (fn, ok) => { try { await fn(); if (ok) toast(ok); viewMcp(); } catch (e) { toast(e.message); viewMcp(); } };
+  $("#mcp-new") && ($("#mcp-new").onclick = () => mcpForm());
+  document.querySelectorAll("[data-mtest]").forEach((b) => (b.onclick = () => { b.disabled = true; run(() => api(`/api/mcp/servers/${b.dataset.mtest}/test`, { method: "POST" }), "Connected"); }));
+  document.querySelectorAll("[data-medit]").forEach((b) => (b.onclick = () => mcpForm(d.servers.find((s) => s.id === Number(b.dataset.medit)))));
+  document.querySelectorAll("[data-mdel]").forEach((b) => (b.onclick = () => confirm("Delete this server and its grants?") && run(() => api(`/api/mcp/servers/${b.dataset.mdel}`, { method: "DELETE" }), "Deleted")));
+  document.querySelectorAll("[data-msave]").forEach((b) => (b.onclick = () => run(() => api(`/api/mcp/servers/${b.dataset.msave}/tools`, { method: "PUT", body: { allowed: [...document.querySelectorAll(`[data-mtool="${b.dataset.msave}"]:checked`)].map((c) => c.value) } }), "Saved")));
+  document.querySelectorAll("[data-mgsave]").forEach((b) => (b.onclick = () => { const id = b.dataset.mgsave; run(() => api(`/api/mcp/servers/${id}/grants`, { method: "PUT", body: { agent_ids: [...document.querySelector(`[data-mgrant="${id}"]`).selectedOptions].map((o) => Number(o.value)), everyone: document.querySelector(`[data-mevery="${id}"]`).checked } }), "Saved"); }));
+  document.querySelectorAll("[data-mcat]").forEach((b) => (b.onclick = () => {
+    const c = d.catalog.find((x) => x.key === b.dataset.mcat);
+    if (!c.fields.length) return run(() => api(`/api/mcp/catalog/${c.key}`, { method: "POST", body: { values: {} } }), `Added ${c.name}`);
+    modal(`<h2>${icon("plug", 18)} Add ${esc(c.name)}</h2><p class="muted">${esc(c.about)}</p><form id="mc-f">${c.fields.map((f) => `<label>${esc(f.label)}${f.optional ? " (optional)" : ""}</label><input type="password" autocomplete="off" data-mf="${esc(f.key)}" ${f.optional ? "" : "required"}>`).join("")}
+      <div class="row" style="margin-top:12px"><button class="btn icon primary" title="Add" aria-label="Add">${icon("check", 16)}</button></div></form>`);
+    $("#mc-f").onsubmit = (e) => { e.preventDefault(); const values = Object.fromEntries([...document.querySelectorAll("[data-mf]")].map((i) => [i.dataset.mf, i.value])); $("#modal").hidden = true; run(() => api(`/api/mcp/catalog/${c.key}`, { method: "POST", body: { values } }), `Added ${c.name}`); };
+  }));
+}
+function mcpForm(s = null) {
+  const pairs = (names) => (names || []).map((n) => `${n}=`).join("\n");
+  modal(`<h2>${icon("plug", 18)} ${s ? `Edit ${esc(s.name)}` : "New MCP server"}</h2><form id="ms-f">
+    <label>Name</label><input id="ms-name" required value="${esc(s?.name || "")}">
+    <label>Transport</label><select id="ms-tr"><option value="stdio" ${s?.transport === "stdio" ? "selected" : ""}>Local command (stdio)</option><option value="http" ${s?.transport === "http" ? "selected" : ""}>Remote (Streamable HTTP)</option></select>
+    <div id="ms-stdio"><label>Command</label><input id="ms-cmd" value="${esc(s?.command || "")}" placeholder="npx"><label>Arguments (one per line)</label><textarea id="ms-args" rows="3">${esc((s?.args || []).join("\n"))}</textarea>
+      <label>Environment (NAME=value per line; an empty value keeps the stored one)</label><textarea id="ms-env" rows="2" class="mono">${esc(pairs(s?.env))}</textarea></div>
+    <div id="ms-http"><label>URL</label><input id="ms-url" value="${esc(s?.url || "")}" placeholder="https://example.com/mcp"><label>Headers (Name=value per line; empty keeps the stored value)</label><textarea id="ms-hdr" rows="2" class="mono">${esc(pairs(s?.headers))}</textarea></div>
+    <label class="row" style="margin-top:8px"><input type="checkbox" id="ms-every" style="width:auto" ${s?.everyone === false ? "" : "checked"}> Every agent may use it</label>
+    <div class="row" style="margin-top:12px"><button class="btn icon primary" title="Save" aria-label="Save">${icon("save", 16)}</button></div></form>`);
+  const sync = () => { const h = $("#ms-tr").value === "http"; $("#ms-http").hidden = !h; $("#ms-stdio").hidden = h; };
+  $("#ms-tr").onchange = sync; sync();
+  const kv = (t) => Object.fromEntries(t.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => [l.split("=")[0].trim(), l.slice(l.indexOf("=") + 1)]));
+  $("#ms-f").onsubmit = async (e) => {
+    e.preventDefault();
+    const body = { name: $("#ms-name").value, transport: $("#ms-tr").value, command: $("#ms-cmd").value, args: $("#ms-args").value.split("\n").map((x) => x.trim()).filter(Boolean),
+      url: $("#ms-url").value, env: kv($("#ms-env").value), headers: kv($("#ms-hdr").value), everyone: $("#ms-every").checked, enabled: true };
+    try { const r = await api(s ? `/api/mcp/servers/${s.id}` : "/api/mcp/servers", { method: s ? "PUT" : "POST", body }); $("#modal").hidden = true; await api(`/api/mcp/servers/${r.id}/test`, { method: "POST" }).catch((x) => toast(x.message)); viewMcp(); }
+    catch (err) { toast(err.message); }
+  };
+}
+
+// --- Skills & plugins (the management page the GM adds to) ----------------------------------
+async function viewCatalog() {
+  const items = await api("/api/catalog");
+  const can = me.is_admin || me.permissions?.manage_agents;
+  $("#ag-tools").innerHTML = can ? ib("plus", "Add a skill, plugin, rule, command or hook", 'id="cat-new"', "primary") : "";
+  const KIND = { plugin: "Plugins", skill: "Skills", rule: "Rules", command: "Commands", hook: "Hooks (fail-open)" };
+  $("#ag-body").innerHTML = `<div class="cat-grid">${Object.entries(KIND).map(([k, label]) => `<section class="card ag-scroll"><h2>${label} <span class="muted">${items.filter((i) => i.kind === k).length}</span></h2>
+    ${items.filter((i) => i.kind === k).map((i) => `<div class="cat-item ${i.enabled ? "" : "off"}"><div class="row nowrap"><strong class="grow">${k === "command" ? "/" : ""}${esc(i.name)}</strong>${i.builtin ? "" : `<span class="pill">${esc(i.created_by || "added")}</span>`}${can ? ib("edit", "Edit", `data-cedit="${i.id}"`, "sm") + ib("trash", "Delete", `data-cdel="${i.id}"`, "sm danger") : ""}</div><div class="muted">${esc(i.description)}</div></div>`).join("") || '<p class="muted">None.</p>'}</section>`).join("")}</div>
+    <p class="muted" style="margin-top:8px">Agents take what they need from here; the General Manager adds what is missing (<code>gm add</code>). Projects → ${icon("download", 12)} writes it into a project's <code>.claude/</code>.</p>`;
+  $("#cat-new") && ($("#cat-new").onclick = () => catalogForm());
+  document.querySelectorAll("[data-cedit]").forEach((b) => (b.onclick = () => catalogForm(items.find((i) => i.id === Number(b.dataset.cedit)))));
+  document.querySelectorAll("[data-cdel]").forEach((b) => (b.onclick = async () => { if (!confirm("Delete this item?")) return; await api(`/api/catalog/${b.dataset.cdel}`, { method: "DELETE" }); viewCatalog(); }));
+}
+function catalogForm(i = null) {
+  modal(`<h2>${icon("book", 18)} ${i ? `Edit ${esc(i.name)}` : "Add to the catalog"}</h2><form id="cf">
+    <label>Kind</label><select id="cf-kind" ${i ? "disabled" : ""}>${["skill", "plugin", "rule", "command", "hook"].map((k) => `<option ${i?.kind === k ? "selected" : ""}>${k}</option>`).join("")}</select>
+    <label>Name</label><input id="cf-name" required value="${esc(i?.name || "")}" ${i ? "readonly" : ""} placeholder="kubernetes">
+    <label>Description</label><input id="cf-desc" value="${esc(i?.description || "")}">
+    <label>Content (SKILL.md body, rule text, command prompt)</label><textarea id="cf-content" rows="10" class="mono">${esc(i?.content || "")}</textarea>
+    <div class="row" style="margin-top:12px"><button class="btn icon primary" title="Save" aria-label="Save">${icon("save", 16)}</button></div></form>`);
+  $("#cf").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      if (i) await api(`/api/catalog/${i.id}`, { method: "PATCH", body: { description: $("#cf-desc").value, content: $("#cf-content").value } });
+      else await api("/api/catalog", { method: "POST", body: { kind: $("#cf-kind").value, name: $("#cf-name").value, description: $("#cf-desc").value, content: $("#cf-content").value } });
+      $("#modal").hidden = true; viewCatalog();
+    } catch (err) { toast(err.message); }
+  };
+}
+
+registerView({ id: "agents", title: "Agents", icon: "agents" }, viewAgents);

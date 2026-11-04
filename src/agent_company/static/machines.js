@@ -35,6 +35,10 @@ const Machines = (() => {
   const busy = (x) => x && ["starting", "stopping", "deleting"].includes(x.status);
   const lead = "Linux and Windows virtual machines on this server's KVM: pick a system and use its screen right here.";
   let d = null, sel = null, cur = null, tab = "console", timer = null, logTail = 300;
+  // Screen settings per machine, kept in this browser (Edit → Screen): applied at the next Connect, no restart.
+  const DISPLAY = { quality: 6, compression: 2, interval: 0, viewOnly: false, dot: false, scale: "fit", clipboard: true, bell: true, background: "#000000" };
+  const display = (name) => { try { return { ...DISPLAY, ...JSON.parse(store.get(`ac.machines.display.${name}`) || "{}") }; } catch { return { ...DISPLAY }; } };
+  const PRESETS = { sharp: { quality: 9, compression: 0, interval: 0 }, balanced: { quality: 6, compression: 2, interval: 0 }, fast: { quality: 3, compression: 6, interval: 100 }, saver: { quality: 1, compression: 9, interval: 500 } };
   // the console: noVNC's RFB on a WebSocket to the API's relay
   let RFB = null, rfb = null, conn = { name: null, state: "idle", note: "" }, fit = true;
 
@@ -124,8 +128,9 @@ const Machines = (() => {
     }
     el.dataset.showing = x.name; el.dataset.showtab = tab; el.dataset.live = String(live);
     if (tab === "logs" && !$(".mc-log", el).dataset.loaded) loadLogs();
-    if (live && conn.name !== x.name && conn.state !== "manual") connect();
-    else if (live) showConn();
+    // The console connects only when Connect is pressed (never on its own when the tab opens).
+    if (live && conn.name !== x.name && conn.state !== "on" && conn.state !== "connecting") conn = { name: x.name, state: "manual", note: "Not connected: press Connect." };
+    if (live) showConn();
   }
 
   // ---------- console ----------
@@ -133,10 +138,12 @@ const Machines = (() => {
     const x = cur;
     if (x.status !== "running") return `<div class="mc-wait">${waitHtml()}</div>`;
     return `<div class="mc-bar"><span class="mc-state" data-part="conn" role="status"></span><span class="grow"></span>
-        <button type="button" class="btn sm" data-mc="cad" title="Send Ctrl+Alt+Del">${ic("keyboard")} Ctrl+Alt+Del</button>
-        <button type="button" class="btn sm" data-mc="fit" aria-pressed="${fit}" title="Fit the screen to the page, or show it at its own size">${ic(fit ? "shrink" : "expand")} ${fit ? "Fit" : "100%"}</button>
-        <button type="button" class="btn sm" data-mc="full">${ic("expand")} Full screen</button>
-        <button type="button" class="btn sm" data-mc="conn"></button></div>
+        <span class="muted mc-dispinfo" data-part="dispinfo"></span>
+        <button type="button" class="btn icon sm" data-mc="cad" title="Send Ctrl+Alt+Del" aria-label="Send Ctrl+Alt+Del">${ic("keyboard")}</button>
+        <button type="button" class="btn icon sm" data-mc="fit" aria-pressed="${fit}" title="${fit ? "Fitted to the page: show at its own size" : "At its own size: fit to the page"}" aria-label="Fit or 100%">${ic(fit ? "shrink" : "expand")}</button>
+        <button type="button" class="btn icon sm" data-mc="full" title="Full screen" aria-label="Full screen">${ic("expand")}</button>
+        <button type="button" class="btn icon sm" data-mc="screen" title="Screen settings: quality, compression, refresh interval…" aria-label="Screen settings">${ic("chip")}</button>
+        <button type="button" class="btn sm mc-connbtn" data-mc="conn"></button></div>
       <div class="mc-screen ${fit ? "" : "mc-native"}" data-part="screen"></div>
       <p class="muted mc-note">Click the screen to type into the machine. ${x.family === "windows"
         ? `Windows signs in as <b>${esc(x.settings.username || "")}</b> with the password set when it was made; the first start installs it, which takes 10 to 20 minutes after the download.`
@@ -157,7 +164,7 @@ const Machines = (() => {
     conn = { name, state: "connecting", note: "" }; showConn();
     try {
       await api(`${API}/${encodeURIComponent(name)}/console`);
-      if (!RFB) RFB = (await import("/static/vendor/novnc/core/rfb.js")).default;
+      if (!RFB) { RFB = (await import("/static/vendor/novnc/core/rfb.js")).default; throttle(RFB); }
     } catch (e) {
       if (conn.name === name) { conn = { name, state: "manual", note: e.message }; showConn(); }
       return;
@@ -166,9 +173,18 @@ const Machines = (() => {
     if (!scr || conn.name !== name || cur?.name !== name || tab !== "console") return;
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${API}/${encodeURIComponent(name)}/console`, ["binary"]);
     ws.addEventListener("close", (e) => { if (e.code >= 4000 && conn.name === name) conn.note = e.reason; });
+    const o = display(name);
     const r = new RFB(scr, ws, { shared: true });
     rfb = r;
-    r.scaleViewport = fit; r.clipViewport = false; r.resizeSession = false; r.focusOnClick = true; r.background = "#000";
+    fit = o.scale !== "native";
+    r.scaleViewport = o.scale === "fit"; r.clipViewport = false; r.resizeSession = o.scale === "remote"; r.focusOnClick = true; r.background = o.background || "#000";
+    r.qualityLevel = o.quality; r.compressionLevel = o.compression; r.viewOnly = !!o.viewOnly; r.showDotCursor = !!o.dot;
+    r._sock._acDelay = Math.max(0, Number(o.interval) || 0);  // read by the throttled fbUpdateRequest below
+    if (o.clipboard) {
+      r.addEventListener("clipboard", (e) => { navigator.clipboard?.writeText(e.detail.text).catch(() => {}); });
+      scr.addEventListener("paste", (e) => { const t = e.clipboardData?.getData("text"); if (t && rfb === r) r.clipboardPasteFrom(t); });
+    }
+    if (o.bell) r.addEventListener("bell", () => { try { new AudioContext().resume(); } catch { /* no audio */ } toast(`${name}: bell`); });
     r.addEventListener("connect", () => { if (rfb === r) { conn.state = "on"; conn.note = ""; showConn(); r.focus({ preventScroll: true }); } });
     r.addEventListener("disconnect", (e) => {
       if (rfb !== r) return;
@@ -177,6 +193,16 @@ const Machines = (() => {
       showConn();
     });
     r.addEventListener("desktopname", (e) => { if (rfb === r) { conn.desktop = e.detail.name; showConn(); } });
+  }
+  // "Seconds between screen transmissions": noVNC asks for the next update as soon as one arrives; with an interval
+  // set, the next request waits that long, so fewer frames cross the network (wrapped here, the vendored file is untouched).
+  function throttle(R) {
+    const orig = R.messages.fbUpdateRequest;
+    R.messages.fbUpdateRequest = function (sock, incremental, ...rest) {
+      const wait = sock?._acDelay || 0;
+      if (!incremental || !wait) return orig.call(this, sock, incremental, ...rest);
+      setTimeout(() => { try { if (sock._websocket?.readyState === 1) { orig.call(this, sock, incremental, ...rest); sock.flush?.(); } } catch { /* closed */ } }, wait);
+    };
   }
   function disconnect() {
     const r = rfb; rfb = null;
@@ -189,7 +215,10 @@ const Machines = (() => {
     const on = conn.state === "on";
     s.innerHTML = on ? `${dot("running")} Connected${conn.desktop ? ` <small class="muted">${esc(conn.desktop)}</small>` : ""}`
       : conn.state === "connecting" ? `${dot("starting")} Connecting…` : `${dot("stopped")} ${esc(conn.note || "Not connected.")}`;
-    b.innerHTML = on || conn.state === "connecting" ? `${ic("close")} Disconnect` : `${ic("reset")} Connect`;
+    b.innerHTML = on || conn.state === "connecting" ? `${ic("close")} Disconnect` : `${ic("play")} Connect`;
+    b.classList.toggle("primary", !(on || conn.state === "connecting"));
+    const o = display(conn.name || cur?.name || ""), info = $("[data-part=dispinfo]", root() || document);
+    if (info) info.textContent = `quality ${o.quality} · compression ${o.compression}${o.interval ? ` · every ${(o.interval / 1000).toFixed(2)}s` : ""}${o.viewOnly ? " · view only" : ""}`;
     $$("[data-mc=cad], [data-mc=full]", root()).forEach((x) => (x.disabled = !on));
   }
 
@@ -297,9 +326,12 @@ const Machines = (() => {
       <div class="mc-three"><div><label>CPU cores</label><input name="cores" type="number" min="1" max="${L.cores}" value="${v.cores}"></div>
         <div><label>Memory (GB)</label><input name="ram" type="number" min="1" max="${L.ram}" value="${v.ram}"></div>
         <div><label>Disk (GB)</label><input name="disk" type="number" min="8" max="${L.disk}" value="${v.disk}" ${x ? "readonly" : ""}></div></div>
-      <p class="muted">${x ? "Saving restarts the machine (its system is asked to shut down first). The disk's size is set when it's made." : "The disk's size can't change later. The machine reaches the internet through its container's network."}</p>`,
+      <p class="muted">${x ? "Saving restarts the machine (its system is asked to shut down first). The disk's size is set when it's made." : "The disk's size can't change later. The machine reaches the internet through its container's network."}</p>
+      ${x ? screenFields(x.name) : ""}`,
       async (f) => {
         const el = f.elements, os = x ? v.os : el.os.value, win = OS[os].family === "windows";
+        if (x && f.dataset.screenOnly === "1") { saveScreen(x.name, f); $("#modal").hidden = true; toast("Screen settings saved: they apply at the next Connect"); return; }
+        if (x) saveScreen(x.name, f);
         const body = { name: el.name.value.trim(), os, url: el.url.value.trim(), cores: +el.cores.value, ram: +el.ram.value, disk: +el.disk.value,
           username: el.username.value.trim(), password: x || !win ? null : el.password.value, language: x ? v.language : el.language.value };
         if (!body.name) throw new Error("Name the machine.");
@@ -310,6 +342,7 @@ const Machines = (() => {
         sel = r.name; store.set("ac.machines.sel", sel); tab = x ? tab : "console"; await load(); schedule();
       }, { submit: x ? "Save" : "Make machine" });
     const el = f.elements;
+    if (x) wireScreen(f);
     const sync = (fresh) => {
       const os = x ? v.os : el.os.value, o = OS[os], win = o.family === "windows";
       $("[data-part=url]", f).hidden = os !== "custom";
@@ -325,6 +358,40 @@ const Machines = (() => {
     setTimeout(() => (x ? el.cores : el.name).focus(), 30);
   }
 
+  // ---------- screen settings (transfer speed and more) ----------
+  function screenFields(name) {
+    const o = display(name), sel = (k, opts) => opts.map(([v, l]) => `<option value="${v}" ${String(o[k]) === String(v) ? "selected" : ""}>${l}</option>`).join("");
+    return `<fieldset class="mc-screenset"><legend>${ic("monitor")} Screen (this browser; applies at the next Connect, no restart)</legend>
+      <div class="row">${Object.keys(PRESETS).map((k) => `<button type="button" class="btn sm" data-preset="${k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}<span class="muted">presets</span></div>
+      <div class="mc-three"><div><label>Image quality <b data-out="quality">${o.quality}</b>/9</label><input type="range" name="s_quality" min="0" max="9" value="${o.quality}"><small class="muted">Lower = smaller JPEG frames, faster.</small></div>
+        <div><label>Compression <b data-out="compression">${o.compression}</b>/9</label><input type="range" name="s_compression" min="0" max="9" value="${o.compression}"><small class="muted">Higher = less data, more CPU.</small></div>
+        <div><label>Send the screen every</label><select name="s_interval">${sel("interval", [[0, "as fast as possible"], [50, "0.05 s (20/s)"], [100, "0.1 s (10/s)"], [250, "0.25 s (4/s)"], [500, "0.5 s"], [1000, "1 s"], [2000, "2 s"], [5000, "5 s"]])}</select><small class="muted">Longer = fewer frames on the network.</small></div></div>
+      <div class="mc-three"><div><label>Scaling</label><select name="s_scale">${sel("scale", [["fit", "Fit to the page"], ["native", "Own size (scroll)"], ["remote", "Resize the machine's screen"]])}</select></div>
+        <div><label>Background</label><input type="color" name="s_background" value="${esc(o.background)}"></div>
+        <div class="mc-checks"><label class="row"><input type="checkbox" name="s_viewOnly" ${o.viewOnly ? "checked" : ""}> View only (no keyboard or mouse)</label>
+          <label class="row"><input type="checkbox" name="s_dot" ${o.dot ? "checked" : ""}> Show a dot when the cursor is hidden</label>
+          <label class="row"><input type="checkbox" name="s_clipboard" ${o.clipboard ? "checked" : ""}> Share the clipboard</label>
+          <label class="row"><input type="checkbox" name="s_bell" ${o.bell ? "checked" : ""}> Notify on the machine's bell</label></div></div></fieldset>`;
+  }
+  function wireScreen(f) {
+    f.querySelectorAll("input[type=range]").forEach((r) => (r.oninput = () => { const out = f.querySelector(`[data-out="${r.name.slice(2)}"]`); if (out) out.textContent = r.value; }));
+    f.querySelectorAll("[data-preset]").forEach((b) => (b.onclick = () => { const p = PRESETS[b.dataset.preset]; f.elements.s_quality.value = p.quality; f.elements.s_compression.value = p.compression; f.elements.s_interval.value = p.interval; f.querySelectorAll("input[type=range]").forEach((r) => r.oninput()); }));
+  }
+  function saveScreen(name, f) {
+    const e = f.elements;
+    if (!e.s_quality) return;
+    store.set(`ac.machines.display.${name}`, JSON.stringify({ quality: +e.s_quality.value, compression: +e.s_compression.value, interval: +e.s_interval.value, scale: e.s_scale.value,
+      background: e.s_background.value, viewOnly: e.s_viewOnly.checked, dot: e.s_dot.checked, clipboard: e.s_clipboard.checked, bell: e.s_bell.checked }));
+    if (rfb && conn.name === name) {  // what can change live does
+      rfb.qualityLevel = +e.s_quality.value; rfb.compressionLevel = +e.s_compression.value; rfb.viewOnly = e.s_viewOnly.checked; rfb.showDotCursor = e.s_dot.checked;
+      rfb._sock._acDelay = +e.s_interval.value; showConn();
+    }
+  }
+  function screenDialog(x) {
+    const f = dialog(`<h2>${ic("monitor")} Screen of ${esc(x.name)}</h2>${screenFields(x.name)}`, async (form) => { saveScreen(x.name, form); $("#modal").hidden = true; toast("Saved"); }, { submit: "Save" });
+    wireScreen(f);
+  }
+
   function wire() {
     const v = root();
     if (!v || v.dataset.wired) return;
@@ -336,6 +403,7 @@ const Machines = (() => {
       const a = b.dataset.mc;
       if (a === "new") form(null);
       else if (a === "edit") form(cur);
+      else if (a === "screen") screenDialog(cur);
       else if (a === "delete") remove();
       else if (["restart", "stop", "start"].includes(a)) act(a);
       else if (a === "logs") loadLogs();
