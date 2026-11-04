@@ -414,6 +414,19 @@ class Setting(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
 
+class Machine(Base):
+    """A virtual machine on the host's KVM (machines.py): its settings and whether it should run."""
+
+    __tablename__ = "machines"
+    name: Mapped[str] = mapped_column(String(30), primary_key=True)
+    settings: Mapped[dict[str, Any]] = mapped_column(default=dict)  # os, url, cores, ram, disk, username, language
+    running: Mapped[bool] = mapped_column(Boolean, default=True)  # wanted: started or stopped by an administrator
+    change: Mapped[str] = mapped_column(String(200), default="")  # who made or last changed it, and what
+    created_by: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 class Notification(Base):
     __tablename__ = "notifications"
     id: Mapped[int] = mapped_column(primary_key=True)

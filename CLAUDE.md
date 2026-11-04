@@ -15,10 +15,12 @@ feature came from.
   metrics); `evaluation.py` (eval harness); `research.py`; `governance.py` (audit, notifications,
   command policy); `prefs.py` (DB settings); `gitsync.py` (push with each user's own GitHub token or SSH key, `data/git-keys/`); `files.py`; `supervisor.py` + `system.py`;
   `containers.py` (Docker and LXD VMs on the host: install, start, clean up; admin-only);
+  `machines.py` (Machines view, from AXoR in /home/thomas/axor-3.0.zip: Linux/Windows KVM VMs as Docker
+  containers with a noVNC console relayed over a WebSocket; admin-only; cleanup never prunes them);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
   (Workspace Claude Code panel: live host sessions, session history with resume/stop/delete); `api.py`; `static/` (dashboard, plain JS, one file per area;
   `workspace.js` + `viewer.js` + `console.js` + `claude.js` are the Workspace home page, sharing
-  `window.WSP`; `vendor/` holds xterm.js, pdf.js and mammoth); `crew.py` (classic crew); `__main__.py` (CLI)
+  `window.WSP`; `vendor/` holds xterm.js, pdf.js, mammoth and noVNC); `crew.py` (classic crew); `__main__.py` (CLI)
 - `evals/` – benchmark suites (JSON)
 - `tests/` – pytest; every test gets its own temp DATA_DIR and runs offline
 - `data/` – SQLite DB, workspaces, worktrees, uploads (git-ignored)
@@ -42,8 +44,8 @@ feature came from.
   command filter, Claude Code with every tool allowed in the opened folder), are admin-only, and
   every session/prompt is audited. Do not route them through the sandbox, and do not loosen
   `ClaudeCodeExecutor`/`CLAUDE_BASH` because of them. Workspace WebSockets must check the Origin.
-  The same holds for `containers.py` (Docker, LXD VMs): admin API and CLI only, audited; agents
-  and executors never call it.
+  The same holds for `containers.py` (Docker, LXD VMs) and `machines.py` (Machines): admin API
+  and CLI only, audited; agents and executors never call them.
 - DB writes inside an open `session()` must use that session (`log_event(..., s=s)`,
   `notify(..., s=s)`), never a second connection: SQLite allows one writer.
 - New tables/columns: add them to `db.py`; `_add_missing_columns` migrates existing databases.

@@ -41,7 +41,10 @@ class FakeHost:
         elif cmd[:3] == ["docker", "system", "df"]:
             out = DF
         elif cmd[:2] == ["docker", "ps"] and "-q" not in " ".join(cmd):
-            out = json.dumps({"Names": "old", "Image": "busybox", "Status": "Exited (0) 3 days ago"})
+            out = "\n".join(json.dumps(x) for x in [
+                {"Names": "old", "Image": "busybox", "Status": "Exited (0) 3 days ago", "Labels": ""},
+                {"Names": "ac-machine-dev", "Image": "qemux/qemu:7.50", "Status": "Exited (0) 2 days ago",
+                 "Labels": "agent-company.machine=dev"}])
         elif cmd[:2] == ["docker", "ps"]:
             out = "c1\nc2"
         elif cmd[:2] == ["docker", "inspect"]:
@@ -71,7 +74,7 @@ def test_status_polls_reuse_the_disk_scan(monkeypatch):
 def test_cleanup_dry_run_lists_and_never_prunes(monkeypatch):
     host = FakeHost(monkeypatch)
     r = containers.cleanup()
-    assert r["applied"] is False and r["stopped_containers"][0]["name"] == "old"
+    assert r["applied"] is False and [c["name"] for c in r["stopped_containers"]] == ["old"]  # a stopped machine stays
     assert r["build_cache_reclaimable"] == "4GB"
     assert not any("prune" in c for c in host.calls)
     r = containers.cleanup(all_images=True)
@@ -88,6 +91,8 @@ def test_cleanup_apply_prunes_with_age_filter(monkeypatch):
     prunes = [c for c in host.calls if "prune" in c]
     assert ["docker", "image", "prune", "-a", "-f", "--filter", "until=48h"] in prunes
     assert ["docker", "volume", "prune", "-f"] in prunes  # anonymous volumes only: no --all
+    assert ["docker", "container", "prune", "-f", "--filter", "until=48h",
+            "--filter", "label!=agent-company.machine"] in prunes  # the Machines page's containers are kept
     assert all("--all" not in c for c in prunes)
     assert "containers.log" in str(containers.log_path()) and "until=48h" in containers.log_path().read_text()
 

@@ -35,6 +35,7 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 AGE_RE = re.compile(r"^\d{1,5}[smh]$")
 MEMORY_RE = re.compile(r"^\d{1,6}(MiB|GiB)$")
+MACHINE_LABEL = "agent-company.machine"  # machines.py's containers: kept by cleanup like running ones
 
 _lock = threading.Lock()  # one job at a time, like bit's flock around builds
 _jobs: dict[str, dict[str, Any]] = {}
@@ -242,7 +243,8 @@ def cleanup(apply: bool = False, all_images: bool = False, volumes: bool = False
             older_than: str = "24h") -> dict[str, Any]:
     """bit's docker-cleanup.sh. Dry run (a report) by default; `apply` starts the prune job.
 
-    Running containers and the images they use are never removed; named volumes are kept.
+    Running containers, the Machines page's containers (stopped or not) and the images
+    they use are never removed; named volumes are kept.
     `all_images` also removes tagged images no container uses (they must be pulled or built again).
     """
     if not AGE_RE.match(older_than):
@@ -252,7 +254,8 @@ def cleanup(apply: bool = False, all_images: bool = False, volumes: bool = False
         raise HostError("Docker is not running")
     stopped = [{"name": c.get("Names"), "image": c.get("Image"), "status": c.get("Status")}
                for c in _json_lines(_run(["docker", "ps", "-a", "--filter", "status=exited", "--filter",
-                                          "status=created", "--format", "json"], 60).stdout)]
+                                          "status=created", "--format", "json"], 60).stdout)
+               if f"{MACHINE_LABEL}=" not in str(c.get("Labels") or "")]  # a stopped machine is not clutter
     if all_images:
         ids = _run(["docker", "ps", "-aq"], 60).stdout.split()
         used = set(_run(["docker", "inspect", "--format", "{{.Image}}", *ids], 60).stdout.split()) if ids else set()
@@ -273,7 +276,7 @@ def cleanup(apply: bool = False, all_images: bool = False, volumes: bool = False
     if not apply:
         return report
     until = f"until={older_than}"
-    steps = [["docker", "container", "prune", "-f", "--filter", until],
+    steps = [["docker", "container", "prune", "-f", "--filter", until, "--filter", f"label!={MACHINE_LABEL}"],
              ["docker", "image", "prune", *(["-a"] if all_images else []), "-f", "--filter", until],
              ["docker", "network", "prune", "-f", "--filter", until],
              ["docker", "builder", "prune", "-f", "--filter", until]]

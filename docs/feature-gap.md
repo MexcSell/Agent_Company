@@ -55,6 +55,14 @@ Status: `done` = implemented in this repository, `skip` = deliberately not taken
 | Background image builds (`phase-6/tools/build_bg.sh`: nice/ionice, pinned cores, one at a time) | skip: Agent Company builds no images; host jobs already run one at a time |
 | Harbor task Dockerfiles (`eval/make_tb_tasks.py`) | skip: eval-specific; our eval harness runs goals in worktrees |
 
+From AXoR 3.0 (`/home/thomas/axor-3.0.zip`, the workbench installed on `/home/thomas/bit`; `bit` itself has no
+Machines code):
+
+| Feature | Status |
+| --- | --- |
+| Machines: Linux (qemux/qemu: Ubuntu, Debian, Fedora, Rocky, Arch, … or any ISO/disk URL) and Windows (dockurr/windows: 10, 11, Server, unattended setup) VMs on KVM; list with status and usage, New/Edit form, start/stop/restart/delete, Overview, Logs, in-browser console (noVNC over a WebSocket relay to QEMU's VNC) | done (`machines.py`, `static/machines.js`, Machines view). AXoR runs each machine as a Kubernetes Deployment with a KVM device plugin; here each is one Docker container with `/dev/kvm` and a named-volume disk, settings in the `machines` table. Its network policy (no access to the host or private ranges) is not reproduced |
+| Admin sudo step-up before changes and the console | skip: Agent Company has no sudo session; every Machines endpoint is admin-only and audited |
+
 ## From /home/luca/update (ASEAO specs, SPEC11-14, guides)
 
 | Feature | Spec | Status |
@@ -113,7 +121,7 @@ Status: `done` = implemented in this repository, `skip` = deliberately not taken
 | Claude Code sessions window: running sessions on the host (open, stop) and the history of every session with a transcript (search, open read-only, resume in the panel, delete) | done (`workspace.py`, `static/claude.js`) |
 
 Browser libraries are vendored in `static/vendor/` (xterm.js 5.5.0 + fit addon 0.10.0, pdf.js 3.11.174,
-mammoth 1.8.0) so the dashboard needs no CDN; pdf.js runs with `isEvalSupported: false`.
+mammoth 1.8.0, noVNC 1.7.0 with its licences, unchanged from AXoR) so the dashboard needs no CDN; pdf.js runs with `isEvalSupported: false`.
 
 Not yet examined (no features taken, no decision recorded):
 

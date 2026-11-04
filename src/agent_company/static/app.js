@@ -40,6 +40,7 @@ const P = {
   learning: "M2 7l10-4 10 4-10 4zM6 9v6c3 2 9 2 12 0V9",
   business: "M3 7h18v13H3zM8 7V4h8v3",
   admin: "M4 4h16v16H4zM8 9h8M8 13h8M8 17h5",
+  machines: "M3 4h18v12H3zM8 20h8M12 16v4M7 8l3 2-3 2M12 12h4",
   specialist: "M12 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM4 22a8 8 0 0 1 16 0",
 };
 const ROLE_ICON = { general_manager: "general_manager", architect: "architect", developer: "developer", frontend: "frontend", qa: "qa", research: "research_role", external_data: "external_data", analyst: "analyst", comprehensive_analyst: "analyst", security: "security", network_security: "security", security_guard: "security", devops: "devops", tech_scout: "learning", tech_introducer: "learning", instructor: "learning", student: "learning", product: "business", sales: "business", administrator: "admin", agent_manager: "admin" };
@@ -148,6 +149,7 @@ async function updateBadges() {
   } catch { /* signed out */ }
 }
 function show(id) {
+  if (id !== current) VIEWS.find((x) => x.id === current)?.leave?.();  // e.g. Machines closes its console
   current = id; store.set("ac.view", id);
   $("#view").classList.remove("flush");
   const v = VIEWS.find((x) => x.id === id); $("#view-title").textContent = v.title; renderRail();

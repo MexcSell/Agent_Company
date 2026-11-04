@@ -469,7 +469,8 @@ Next.js front end only when one machine is no longer enough.
   `workspace-write` sandbox. This is not a container: for untrusted goals, run the
   service in a disposable VM or container with no production credentials.
   Administrators can install Docker and launch LXD VMs from System view (or
-  `python -m agent_company host ...`); agents cannot reach these controls.
+  `python -m agent_company host ...`), and run Linux and Windows VMs with an in-browser
+  console from the Machines view; agents cannot reach these controls.
 - Nothing is deployed. Merging is local and needs approval (`REQUIRE_APPROVAL=1`,
   the default); pushing to GitHub happens only on `/sync` or with `AUTO_PUSH=1`.
 - Commands that would deploy, push, escalate privileges, delete root or home paths,

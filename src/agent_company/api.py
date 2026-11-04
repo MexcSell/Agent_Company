@@ -26,6 +26,7 @@ from agent_company import (
     gitsync,
     governance,
     loop,
+    machines,
     performance,
     prefs,
     projects,
@@ -197,6 +198,22 @@ class VmBody(BaseModel):
     cpus: int = 2
     memory: str = "4GiB"
     disk: str = ""
+
+
+class MachineBody(BaseModel):
+    name: str = Field(..., max_length=30)
+    os: str = Field(..., max_length=20)
+    url: str = Field("", max_length=500)  # the image of "custom"
+    cores: int = Field(2, ge=1, le=16)
+    ram: int = Field(4, ge=1, le=64)  # GB
+    disk: int = Field(32, ge=8, le=500)  # GB, set when it's made
+    username: str = Field("", max_length=20)  # Windows, when it's made: the account its setup makes
+    password: str | None = Field(None, max_length=127)  # Windows, when it's made; never stored in the DB or audit
+    language: str = Field("en", max_length=5)  # Windows, when it's made
+
+
+class MachineActBody(BaseModel):
+    action: str
 
 
 class AgentBody(BaseModel):
@@ -608,6 +625,113 @@ def create_app(start_background: bool = True) -> FastAPI:
         _audit(admin, f"vm_{action}", name, after={"job": out["id"]},
                severity="high" if action == "delete" else "info")
         return out
+
+    # --- Machines: Linux and Windows VMs on the host's KVM (administrators' tools, never agents') ---
+    def _machine(call: Any) -> Any:
+        try:
+            return call()
+        except machines.MachineError as e:
+            raise HTTPException(e.status, str(e)) from e
+
+    @app.get("/api/machines")
+    def machines_list(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return _machine(machines.list_machines)
+
+    @app.post("/api/machines")
+    def machine_create(body: MachineBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _machine(lambda: machines.save(admin["name"], body.model_dump(), True))
+        _audit(admin, "machine_create", body.name, after=body.model_dump(exclude={"password"}), severity="high")
+        return out
+
+    @app.get("/api/machines/{name}")
+    def machine_view(name: str, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return _machine(lambda: machines.view(name))
+
+    @app.put("/api/machines/{name}")
+    def machine_update(name: str, body: MachineBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        if body.name != name:
+            raise HTTPException(400, "Machines can't be renamed.")
+        out = _machine(lambda: machines.save(admin["name"], body.model_dump(), False))
+        _audit(admin, "machine_update", name, after=body.model_dump(include={"cores", "ram"}))
+        return out
+
+    @app.delete("/api/machines/{name}")
+    def machine_delete(name: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _machine(lambda: machines.delete(name))
+        _audit(admin, "machine_delete", name, after={"disk": "deleted"}, severity="high")
+        return out
+
+    @app.post("/api/machines/{name}/action")
+    def machine_action(name: str, body: MachineActBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _machine(lambda: machines.act(name, body.action))
+        _audit(admin, f"machine_{body.action}", name)
+        return out
+
+    @app.get("/api/machines/{name}/logs")
+    def machine_logs(name: str, tail: int = 300, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return _machine(lambda: machines.logs(name, max(1, min(tail, 5000))))
+
+    @app.get("/api/machines/{name}/console")
+    def machine_console_check(name: str, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        """Asked before the WebSocket opens, so "still starting" shows as a message, not a dropped socket."""
+        _machine(lambda: machines.target(name))
+        return {"ok": True}
+
+    @app.websocket("/api/machines/{name}/console")
+    async def machine_console(ws: WebSocket, name: str) -> None:
+        """The console: noVNC's RFB stream relayed to QEMU's VNC port. Close codes 4400-4599 carry an HTTP status."""
+        import asyncio
+
+        from starlette.concurrency import run_in_threadpool
+
+        offered = [p.strip() for p in ws.headers.get("sec-websocket-protocol", "").split(",")]
+        await ws.accept(subprotocol="binary" if "binary" in offered else None)
+
+        async def refuse(status: int, reason: str) -> None:
+            await ws.close(code=4000 + status if 400 <= status < 600 else 4500, reason=str(reason)[:120])
+
+        user = ws_admin(ws)  # same-origin page and an administrator's session
+        if user is None:
+            return await refuse(403, "Administrators only, from this site.")
+        try:
+            addr = await run_in_threadpool(machines.target, name)
+        except machines.MachineError as e:
+            return await refuse(e.status, str(e))
+        try:
+            reader, writer = await asyncio.wait_for(asyncio.open_connection(addr, machines.VNC), 10)
+        except (OSError, asyncio.TimeoutError) as e:
+            return await refuse(502, f"Can't reach the machine's screen ({e or 'timed out'}).")
+        await run_in_threadpool(_audit, user, "machine_console", name, None, None, "high")
+
+        async def up() -> None:  # browser -> QEMU
+            while True:
+                msg = await ws.receive()
+                if msg["type"] == "websocket.disconnect":
+                    return
+                writer.write(msg.get("bytes") or (msg.get("text") or "").encode())
+                await writer.drain()
+
+        async def down() -> None:  # QEMU -> browser
+            while data := await reader.read(65536):
+                await ws.send_bytes(data)
+
+        async def still_admin() -> None:  # signing out (or losing admin) ends the console too
+            while True:
+                await asyncio.sleep(30)
+                if await run_in_threadpool(ws_admin, ws) is None:
+                    return
+
+        tasks = [asyncio.create_task(f()) for f in (up, down, still_admin)]
+        try:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for t in tasks:
+                t.cancel()
+            writer.close()
+            try:
+                await ws.close()
+            except RuntimeError:
+                pass  # the browser went first
 
     # --- file manager (administrators) ---
     @app.get("/api/files/roots")
