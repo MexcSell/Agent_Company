@@ -128,7 +128,9 @@ def read(agent_id: int) -> dict[str, Any]:
 
 
 def write_text(agent_id: int, text: str, actor: str) -> dict[str, Any]:
-    """An administrator edits the agent's definition directly (sections are kept by later syncs)."""
+    """An administrator edits the agent's definition directly. Later syncs rebuild the file from the agent's
+    settings and keep the learned sections ("Working method", "Knowledge notes"): edit those two here; change
+    the mission, skills and model on the agent's card."""
     if not text.startswith("---\n") or "\n---\n" not in text:
         raise ValueError("keep the front matter (--- … ---) at the top")
     with _lock, session() as s:

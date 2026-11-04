@@ -90,7 +90,7 @@ function renderMessages(append) {
   box.innerHTML = groups.map((g) => messageHtml(g.m, g.n)).join("") || '<p class="muted">No messages yet. Give an order below.</p>';
   if (atBottom || !append) box.scrollTop = box.scrollHeight;
   box.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = () => { const m = messageCache.find((x) => x.id === Number(b.dataset.copy)); navigator.clipboard?.writeText(m.content).then(() => toast("Copied"), () => toast("Copy failed")); }));
-  box.querySelectorAll("[data-goal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); selectedGoal = Number(a.dataset.goal); show("goals"); }));
+  box.querySelectorAll("[data-goal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); goalModal(Number(a.dataset.goal)); }));
 }
 
 async function projectMain(id, incremental) {

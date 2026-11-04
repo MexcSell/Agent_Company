@@ -151,4 +151,4 @@ function pickFolder(start) {
   });
 }
 
-registerView({ id: "files", title: "Files", icon: "files", admin: true }, viewFiles);
+registerView({ id: "files", title: "File Manager", icon: "folder", admin: true }, viewFiles);

@@ -3,11 +3,11 @@
 
 async function viewNotifications() {
   const n = await api("/api/notifications");
-  $("#view").innerHTML = `${me.is_admin ? `<div class="card" style="margin-bottom:12px"><h2>Post a notice to every user</h2><form id="n-form" class="row"><input id="n-title" class="grow" required placeholder="Notice"><select id="n-level" style="width:auto"><option>info</option><option>warning</option><option>success</option><option>error</option></select><button class="btn primary">Post</button></form></div>` : ""}
-    <div class="card"><div class="row"><h2 class="grow" style="margin:0">Notifications</h2><button class="btn" id="n-read" ${n.unread ? "" : "disabled"}>Mark all read</button></div>
-    <div class="events" style="margin-top:8px">${n.items.map((x) => `<div class="row" style="${x.read ? "opacity:.65" : ""}">${pill(x.level === "error" ? "failed" : x.level === "warning" ? "pending" : x.level === "success" ? "done" : "info")}<strong>${esc(x.title)}</strong><span class="muted grow">${esc(x.body)}</span>${x.goal_id ? `<a href="#" data-goal="${x.goal_id}">goal #${x.goal_id}</a>` : ""}<span class="muted">${ago(x.at)}</span>${me.is_admin ? `<button class="btn sm ghost" data-del="${x.id}" title="Delete">✕</button>` : ""}</div>`).join("") || '<span class="muted">No notifications.</span>'}</div></div>`;
+  $("#view").innerHTML = `${me.is_admin ? `<div class="card" style="margin-bottom:12px"><h2>Post a notice to every user</h2><form id="n-form" class="row"><input id="n-title" class="grow" required placeholder="Notice"><select id="n-level" style="width:auto"><option>info</option><option>warning</option><option>success</option><option>error</option></select><button class="btn icon primary" title="Post" aria-label="Post">${icon("send", 16)}</button></form></div>` : ""}
+    <div class="card"><div class="row"><h2 class="grow" style="margin:0">Notifications</h2>${ib("check", "Mark all read", `id="n-read" ${n.unread ? "" : "disabled"}`)}</div>
+    <div class="events" style="margin-top:8px">${n.items.map((x) => `<div class="row" style="${x.read ? "opacity:.65" : ""}">${pill(x.level === "error" ? "failed" : x.level === "warning" ? "pending" : x.level === "success" ? "done" : "info")}<strong>${esc(x.title)}</strong><span class="muted grow">${esc(x.body)}</span>${x.goal_id ? `<a href="#" data-goal="${x.goal_id}">goal #${x.goal_id}</a>` : ""}<span class="muted">${ago(x.at)}</span>${me.is_admin ? `${ib("trash", "Delete", `data-del="${x.id}"`, "sm ghost")}` : ""}</div>`).join("") || '<span class="muted">No notifications.</span>'}</div></div>`;
   $("#n-read").onclick = async () => { await api("/api/notifications/read", { method: "POST" }); viewNotifications(); updateBadges(); };
-  document.querySelectorAll("[data-goal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); selectedGoal = Number(a.dataset.goal); show("goals"); }));
+  document.querySelectorAll("[data-goal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); goalModal(Number(a.dataset.goal)); }));
   document.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => { await api(`/api/notifications/${b.dataset.del}`, { method: "DELETE" }); viewNotifications(); updateBadges(); }));
   if (me.is_admin) $("#n-form").onsubmit = async (e) => { e.preventDefault(); try { await api("/api/notifications", { method: "POST", body: { title: $("#n-title").value, level: $("#n-level").value } }); viewNotifications(); updateBadges(); } catch (err) { toast(err.message); } };
 }
@@ -18,6 +18,7 @@ function connectionCard(tls, row) {
   const where = tls.behind_proxy ? `You are connected over <strong>${esc(tls.current_scheme.toUpperCase())}</strong>.` : "You are connected to the app directly (not through nginx); switching does not move this tab.";
   return `<div class="card" style="margin-bottom:12px"><h2>Connection</h2>
     <p class="muted">${where} HTTPS encrypts everything. HTTP sends pages in the clear and only seals the session cookie (encrypted, tied to the browser and its IP).</p>
+    <details><summary>How the session cookie is protected</summary><p class="muted">The cookie holds the session token sealed with AES-256-GCM (key in <code>data/secret.key</code>), bound to this browser's User-Agent and, over HTTP, to its IP address, so a copied cookie works nowhere else. It is HttpOnly (scripts cannot read it), SameSite=Lax (not sent with cross-site posts), Secure on HTTPS, and expires after 30 days. Every answer also carries X-Content-Type-Options, X-Frame-Options, Referrer-Policy and Permissions-Policy headers; API answers are never cached.</p></details>
     <div class="row"><select id="tls-mode" style="width:auto"><option value="https" ${on("https")}>HTTPS (recommended)</option><option value="http" ${on("http")}>HTTP</option></select>
       <button class="btn primary" id="tls-save">Switch</button>${row && row.overridden ? '<button class="btn" id="tls-reset">Reset to .env</button>' : ""}
       <a class="btn" href="/api/tls/ca.crt" download="agent-company-ca.crt">Download certificate (CA)</a></div>
@@ -49,6 +50,24 @@ async function switchTransport(mode, reset) {
   else viewSettings();
 }
 
+// Navigation: the rail's two groups (and hidden icons), the same for every user. Edit, then drag.
+function navCard() {
+  const g = navGroups(), item = (v) => `<button type="button" class="nav-item" data-v="${v.id}" title="${esc(v.title)}">${icon(v.icon, 18)}<span>${esc(v.title)}</span></button>`;
+  const col = (key, label, hint, list) => `<div class="nav-col"><h3>${label}</h3><p class="muted">${hint}</p><div class="nav-list" data-group="${key}">${list.map(item).join("")}</div></div>`;
+  return `<div class="card nav-card" style="margin-bottom:12px"><div class="row"><h2 class="grow" style="margin:0">Navigation</h2>
+      ${ib("edit", "Edit: drag icons between the lists", 'id="nav-edit"')}${ib("save", "Save for every user", 'id="nav-save" disabled', "primary")}${ib("refresh", "Back to the default order", 'id="nav-reset"')}</div>
+    <p class="muted">The icon rail on the left: the top group, then the bottom group. Press Edit, then drag icons to reorder them, move them between groups, or to Hidden (drag back to add them again). The rail's own edit button (bottom of the rail) does the same in place.</p>
+    <div class="nav-cols" id="nav-cols">${col("top", "Top", "Work", g.top)}${col("bottom", "Bottom", "Tools and administration", g.bottom)}${col("hidden", "Hidden", "Not on the rail", g.hidden)}</div></div>`;
+}
+function wireNavCard() {
+  const box = $("#nav-cols");
+  if (!box) return;
+  let lay = null;
+  $("#nav-edit").onclick = () => { box.classList.add("editing"); wireNavDrag(box, (l) => { lay = l; $("#nav-save").disabled = false; }); toast("Drag the icons, then save"); };
+  $("#nav-save").onclick = async () => { if (lay) { await saveNav(lay); box.classList.remove("editing"); $("#nav-save").disabled = true; } };
+  $("#nav-reset").onclick = async () => { if (confirm("Restore the default order for every user?")) { await saveNav(NAV_DEFAULT); viewSettings(); } };
+}
+
 async function viewSettings(quiet) {
   if (quiet && $("#s-table")) return;
   const [all, tls] = await Promise.all([api("/api/settings"), api("/api/tls")]);
@@ -57,8 +76,9 @@ async function viewSettings(quiet) {
     : r.choices.length ? `<select data-k="${r.key}">${r.choices.map((c) => `<option ${c === r.value ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`
     : r.type === "list" ? `<textarea data-k="${r.key}" rows="2">${esc((r.value || []).join("\n"))}</textarea>`
     : `<input data-k="${r.key}" value="${esc(r.value)}" ${r.type === "str" ? "" : 'type="number" step="any"'}>`;
-  $("#view").innerHTML = connectionCard(tls, all.find((r) => r.key === "transport")) + `<div class="card"><h2>Settings</h2><p class="muted">Saved settings override <code>.env</code> and apply immediately. Reset returns a setting to its <code>.env</code> value.</p>
-    <div class="table-wrap"><table id="s-table">${rows.map((r) => `<tr><td><strong>${esc(r.key)}</strong><div class="muted">${esc(r.description)}</div></td><td style="min-width:200px">${input(r)}</td><td class="row"><button class="btn sm primary" data-save="${r.key}">Save</button>${r.overridden ? `<button class="btn sm" data-reset="${r.key}">Reset</button>` : ""}</td></tr>`).join("")}</table></div></div>`;
+  $("#view").innerHTML = navCard() + connectionCard(tls, all.find((r) => r.key === "transport")) + `<div class="card"><h2>Settings</h2><p class="muted">Saved settings override <code>.env</code> and apply immediately. Reset returns a setting to its <code>.env</code> value.</p>
+    <div class="table-wrap"><table id="s-table">${rows.map((r) => `<tr><td><strong>${esc(r.key)}</strong><div class="muted">${esc(r.description)}</div></td><td style="min-width:200px">${input(r)}</td><td class="row nowrap">${ib("save", "Save", `data-save="${r.key}"`, "sm primary")}${r.overridden ? ib("refresh", "Reset to the .env value", `data-reset="${r.key}"`, "sm") : ""}</td></tr>`).join("")}</table></div></div>`;
+  wireNavCard();
   document.querySelectorAll("[data-save]").forEach((b) => (b.onclick = async () => {
     const el = document.querySelector(`[data-k="${b.dataset.save}"]`);
     try { await api(`/api/settings/${b.dataset.save}`, { method: "PUT", body: { value: el.value } }); toast("Saved"); viewSettings(); } catch (e) { toast(e.message); }
@@ -89,7 +109,7 @@ async function viewEvolution() {
 }
 
 async function viewSystem() {
-  const st = await api("/api/system");
+  const [st, em] = await Promise.all([api("/api/system"), api("/api/emergency")]);
   const gb = (n) => (n ? `${(n / 1073741824).toFixed(1)} GB` : "–");
   const sup = st.supervisor;
   const row = (k, v) => `<tr><td class="muted">${k}</td><td>${v}</td></tr>`;
@@ -98,9 +118,14 @@ async function viewSystem() {
     <div class="card"><h2>Service</h2><table>${row("Process", `pid ${st.service.pid} · Python ${esc(st.service.python)} · up ${dur(st.service.uptime_seconds)}`)}${row("Data", `<code>${esc(st.service.data_dir)}</code> · ${esc(st.service.database)}`)}${row("Executor", esc(st.service.executor))}${row("Work", `${st.work.running_tasks} task(s) running · ${st.work.busy_agents} agent(s) busy · ${Object.entries(st.work.goals).map(([k, v]) => `${v} ${k.replace("_", " ")}`).join(", ") || "no goals"}`)}</table></div>
     <div class="card"><h2>Repository</h2><table>${row("Path", `<code>${esc(st.repository.path)}</code>`)}${row("Branch", esc(st.repository.branch))}${row("Last commit", esc(st.repository.head))}${row("Uncommitted changes", st.repository.uncommitted_changes ? `<span class="pill pending">${st.repository.uncommitted_changes}</span> approved platform goals cannot merge until these are committed` : "none")}</table></div>
     <div class="card"><h2>Safe restart</h2>${sup && sup.running ? `<table>${row("Supervisor", `pid ${sup.pid} · server pid ${sup.child_pid} · ${sup.restarts} restart(s)`)}${row("Last restart", sup.last_restart ? ago(new Date(sup.last_restart * 1000).toISOString()) : "never")}${sup.pending ? row("Pending", esc(sup.pending)) : ""}${sup.last_error ? row("Last problem", `<span class="pill failed">refused</span> ${esc(sup.last_error)}`) : ""}</table>
-      <p class="muted">Code changes are checked, tried on a side port and swapped in once no goal is running.</p><button class="btn primary" id="sys-restart">Restart safely</button>`
+      <p class="muted">Code changes are checked, tried on a side port and swapped in once no goal is running.</p>${ib("refresh", "Restart safely", 'id="sys-restart"', "primary")}`
       : `<p class="muted">Not supervised. Start the service with <code>uv run python -m agent_company supervise</code> to get automatic, safe restarts when the code changes (for example after approving a platform goal).</p>`}</div></div>
+    <div class="card emergency ${em.on ? "on" : ""}" style="margin-top:12px"><div class="row"><span class="em-icon">${icon("emergency", 22)}</span><div class="grow"><h2 style="margin:0">Emergency stop</h2>
+      <p class="muted" style="margin:2px 0 0">${em.on ? `On since ${ago(em.at)} by ${esc(em.actor)}: ${esc(em.reason)}. No agent run starts; new goals are cancelled. The Workspace still works.` : "Stops all autonomous work at once: running and queued goals are cancelled and no agent run starts until you lift it. The Workspace (your own tools) is not affected."}</p></div>
+      ${em.on ? ib("play", "Lift the emergency stop", 'id="em-lift"', "primary") : ib("emergency", "Emergency stop", 'id="em-stop"', "danger")}</div></div>
     <div class="grid halves" id="sys-host" style="margin-top:12px"><div class="card"><h2>Docker and virtual machines</h2><span class="muted">Checking…</span></div></div>`;
+  $("#em-stop") && ($("#em-stop").onclick = async () => { const reason = prompt("Why stop all autonomous work?"); if (!reason) return; try { const r = await api("/api/emergency", { method: "POST", body: { on: true, reason } }); toast(`Emergency stop: ${r.cancelled_goals.length} goal(s) cancelled`); viewSystem(); } catch (e) { toast(e.message); } });
+  $("#em-lift") && ($("#em-lift").onclick = async () => { if (!confirm("Lift the emergency stop?")) return; await api("/api/emergency", { method: "POST", body: { on: false } }); viewSystem(); });
   $("#sys-restart") && ($("#sys-restart").onclick = async () => { try { await api("/api/system/restart", { method: "POST" }); toast("Restart requested"); } catch (e) { toast(e.message); } });
   hostCards();
 }

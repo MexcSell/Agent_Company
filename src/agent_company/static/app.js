@@ -17,7 +17,20 @@ const P = {
   models: "M12 2l9 5v10l-9 5-9-5V7zM12 22V12M21 7l-9 5-9-5",
   research: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-5-5",
   users: "M9 7a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM2 21v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1M16 3a4 4 0 0 1 0 8M22 21v-1a5 5 0 0 0-3-4.6",
-  projects: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  projects: "M12 2l10 5-10 5L2 7zM2 12l10 5 10-5M2 17l10 5 10-5",
+  folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  plus: "M12 5v14M5 12h14", edit: "M4 20h4L19 9l-4-4L4 16zM14 6l4 4", trash: "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13",
+  check: "M5 12l5 5L20 7", x: "M6 6l12 12M18 6L6 18", copy: "M8 8h12v12H8zM4 16V4h12", play: "M7 4l13 8-13 8z", stop: "M6 6h12v12H6z",
+  refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7", save: "M5 3h11l3 3v15H5zM8 3v6h8M8 21v-7h8v7", search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-5-5",
+  send: "M4 12l16-8-6 16-2-7z", attach: "M21 12.5l-8.5 8.5a6 6 0 0 1-8.5-8.5L13 3.5a4 4 0 0 1 5.7 5.7L9.6 18.3a2 2 0 0 1-2.8-2.8L15 7.3",
+  upload: "M12 16V4M7 9l5-5 5 5M4 20h16", download: "M12 4v12M7 11l5 5 5-5M4 20h16", link: "M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1",
+  pause: "M7 5h3v14H7zM14 5h3v14h-3z", clone: "M8 8h12v12H8zM4 16V4h12", merge: "M6 3v6a6 6 0 0 0 6 6h6M15 12l3 3-3 3M6 21V9",
+  git: "M6 3v12M18 9a3 3 0 1 0 0-.01M6 21a3 3 0 1 0 0-.01M18 12c0 4-6 3-12 6", key: "M15 7a4 4 0 1 1-3.5 6L4 20.5V17h3v-3h3l1.5-1.5A4 4 0 0 1 15 7z",
+  user_add: "M9 7a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM2 21v-1a5 5 0 0 1 5-5h4M19 14v6M16 17h6", sitemap: "M9 3h6v5H9zM3 16h6v5H3zM15 16h6v5h-6zM12 8v4M6 16v-4h12v4",
+  bolt: "M13 2L4 14h7l-1 8 9-12h-7z", plug: "M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4", book: "M4 4h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H4zM20 4h-6a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h7z",
+  grip: "M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01", shield: "M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6z",
+  min: "M5 19h14", max: "M4 4h16v16H4z", restore: "M8 8h12v12H8zM4 16V4h12", eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+  emergency: "M12 3l10 18H2zM12 10v4M12 17h.01", cpu: "M7 7h10v10H7zM9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4",
   system: "M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01",
   files: "M6 2h9l5 5v15H6zM14 2v6h6M9 13h6M9 17h6",
   performance: "M4 19V9M10 19V5M16 19v-7M22 19H2M3 5l5 3 5-4 6 3",
@@ -44,6 +57,8 @@ const P = {
   specialist: "M12 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM4 22a8 8 0 0 1 16 0",
 };
 const ROLE_ICON = { general_manager: "general_manager", architect: "architect", developer: "developer", frontend: "frontend", qa: "qa", research: "research_role", external_data: "external_data", analyst: "analyst", comprehensive_analyst: "analyst", security: "security", network_security: "security", security_guard: "security", devops: "devops", tech_scout: "learning", tech_introducer: "learning", instructor: "learning", student: "learning", product: "business", sales: "business", administrator: "admin", agent_manager: "admin" };
+// An icon-only button: the label becomes the tooltip and the accessible name.
+const ib = (name, label, attrs = "", cls = "") => `<button type="button" class="btn icon ${cls}" title="${esc(label)}" aria-label="${esc(label)}" ${attrs}>${icon(name, 16)}</button>`;
 const icon = (name, size = 20) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${P[name] || P.specialist}"/></svg>`;
 const roleIcon = (role) => icon(ROLE_ICON[role] || "specialist");
 const pill = (s) => `<span class="pill ${esc(s)}">${esc(String(s).replace(/_/g, " "))}</span>`;
@@ -134,17 +149,70 @@ async function boot() {
   $("#auth").hidden = true; $("#app").hidden = false;
   $("#whoami").textContent = me.name + (me.is_admin ? " · admin" : "");
   $("#my-git").onclick = () => gitForm(me);
+  try { navLayout = (await api("/api/ui/nav_layout")).value || null; } catch { navLayout = null; }
   renderRail(); show(VIEWS.some((v) => v.id === current && (!v.admin || me.is_admin)) ? current : "dashboard");
   connectLive();
 }
-function renderRail() {
-  $("#rail").innerHTML = VIEWS.filter((v) => !v.admin || me.is_admin).map((v) => `<button data-v="${v.id}" title="${v.title}" aria-label="${v.title}" class="${v.id === current ? "active" : ""}">${icon(v.icon)}<span class="rail-label">${v.title}</span>${badges[v.id] ? `<span class="badge">${badges[v.id]}</span>` : ""}</button>`).join("");
-  $("#rail").querySelectorAll("button").forEach((b) => (b.onclick = () => show(b.dataset.v)));
+// --- rail: two groups (top, bottom) in the order an administrator set (Settings → Navigation) -----------
+const NAV_DEFAULT = { top: ["dashboard", "projects", "agents", "models", "evolution", "research", "performance"],
+  bottom: ["workspace", "files", "machines", "notifications", "audit", "system", "settings", "users"] };
+let navLayout = null, railEditing = false;
+function navGroups() {
+  const lay = navLayout && (navLayout.top || navLayout.bottom) ? navLayout : NAV_DEFAULT;
+  const seen = new Set(), vis = VIEWS.filter((v) => !v.admin || me.is_admin), by = Object.fromEntries(vis.map((v) => [v.id, v]));
+  const pick = (ids) => ids.filter((id) => by[id] && !seen.has(id) && seen.add(id)).map((id) => by[id]);
+  const top = pick(lay.top || []), bottom = pick(lay.bottom || []), hidden = pick((lay.hidden || []).filter((id) => id !== "settings"));
+  return { top, bottom: [...bottom, ...vis.filter((v) => !seen.has(v.id))], hidden };  // views added later go to the bottom
 }
+function railButton(v) {
+  return `<button data-v="${v.id}" title="${v.title}" aria-label="${v.title}" class="${v.id === current ? "active" : ""}" draggable="${railEditing}">${icon(v.icon)}<span class="rail-label">${v.title}</span>${badges[v.id] ? `<span class="badge">${badges[v.id]}</span>` : ""}</button>`;
+}
+function renderRail() {
+  const g = navGroups();
+  $("#rail").innerHTML = `<a class="brand" href="#" data-home title="Agent Company" aria-label="Agent Company: dashboard">${BRAND}</a>
+    <div class="rail-group" data-group="top">${g.top.map(railButton).join("")}</div><div class="rail-gap"></div>
+    <div class="rail-group" data-group="bottom">${g.bottom.map(railButton).join("")}</div>
+    ${me.is_admin ? `<button class="rail-edit${railEditing ? " on" : ""}" id="rail-edit" title="${railEditing ? "Done: save the order" : "Edit: drag icons to reorder (also in Settings → Navigation)"}" aria-label="Edit navigation">${icon(railEditing ? "check" : "grip", 18)}</button>` : ""}`;
+  $("#rail").classList.toggle("editing", railEditing);
+  $("#rail").querySelectorAll("button[data-v]").forEach((b) => (b.onclick = () => { if (!railEditing) show(b.dataset.v); }));
+  $("#rail [data-home]").onclick = (e) => { e.preventDefault(); show("dashboard"); };
+  $("#rail-edit") && ($("#rail-edit").onclick = () => { railEditing = !railEditing; if (!railEditing) saveNav(readNav($("#rail"))); renderRail(); });
+  if (railEditing) wireNavDrag($("#rail"), () => {});
+}
+// Drag and drop between the two groups of a navigation list (the rail or the Settings card).
+function wireNavDrag(root, changed) {
+  let dragging = null;
+  root.querySelectorAll("[data-v]").forEach((b) => {
+    b.draggable = true;
+    b.ondragstart = (e) => { dragging = b; b.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", b.dataset.v); };
+    b.ondragend = () => { b.classList.remove("dragging"); dragging = null; changed(readNav(root)); };
+  });
+  root.querySelectorAll("[data-group]").forEach((grp) => (grp.ondragover = (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    const after = [...grp.querySelectorAll("[data-v]:not(.dragging)")].find((x) => { const r = x.getBoundingClientRect(); return grp.dataset.dir === "row" ? e.clientX < r.left + r.width / 2 : e.clientY < r.top + r.height / 2; });
+    grp.insertBefore(dragging, after || null);
+  }));
+}
+const readNav = (root) => {
+  const ids = (g) => [...root.querySelectorAll(`[data-group="${g}"] [data-v]`)].map((b) => b.dataset.v);
+  const hiddenNow = root.querySelector('[data-group="hidden"]') ? ids("hidden") : (navLayout?.hidden || []);
+  return { top: ids("top"), bottom: ids("bottom"), hidden: hiddenNow };
+};
+async function saveNav(lay) {
+  try { navLayout = (await api("/api/ui/nav_layout", { method: "PUT", body: { value: lay } })).value; toast("Navigation saved for every user"); } catch (e) { toast(e.message); }
+  renderRail();
+}
+// The home icon: a small enchanted emblem (gradient, a twinkling star and fairy dust).
+const BRAND = `<svg viewBox="0 0 40 40" width="34" height="34" aria-hidden="true"><defs><linearGradient id="bg-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c3aed"/><stop offset=".55" stop-color="#db2777"/><stop offset="1" stop-color="#f59e0b"/></linearGradient>
+  <radialGradient id="bg-s" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
+  <rect x="2" y="2" width="36" height="36" rx="11" fill="url(#bg-g)"/><path class="brand-castle" d="M10 30V19l3-2v-3h2v2l2-1.5L19 16v-4l1-2 1 2v4l2-1.5 2 1.5v-2h2v3l3 2v11z" fill="#fff" opacity=".95"/>
+  <path d="M18 30v-5a2 2 0 0 1 4 0v5z" fill="url(#bg-g)"/><path class="brand-star" d="M30 6l1.2 2.8L34 10l-2.8 1.2L30 14l-1.2-2.8L26 10l2.8-1.2z" fill="#fff"/>
+  <circle class="brand-dust d1" cx="8" cy="9" r="1.2" fill="url(#bg-s)"/><circle class="brand-dust d2" cx="34" cy="20" r="1" fill="#fff"/><circle class="brand-dust d3" cx="7" cy="22" r=".9" fill="#fff"/></svg>`;
 async function updateBadges() {
   try {
     const o = await api("/api/overview");
-    badges = { goals: (o.goals.running || 0) + (o.goals.awaiting_approval || 0), users: o.pending_users || 0, notifications: o.unread || 0, projects: o.pending_proposals || 0 };
+    badges = { users: o.pending_users || 0, notifications: o.unread || 0, projects: (o.pending_proposals || 0) + (o.goals.awaiting_approval || 0) + (o.goals.running || 0) };
     renderRail(); setFavicon(o);
   } catch { /* signed out */ }
 }
@@ -153,19 +221,24 @@ function show(id) {
   current = id; store.set("ac.view", id);
   $("#view").classList.remove("flush");
   const v = VIEWS.find((x) => x.id === id); $("#view-title").textContent = v.title; renderRail();
+  $("#view").classList.remove("enter"); void $("#view").offsetWidth; $("#view").classList.add("enter");
   clearInterval(refreshTimer); render(); updateBadges();
   // Live events push changes; polling stays as a slower fallback when the stream is down.
   refreshTimer = setInterval(() => { if (!liveOk) refreshNow(); }, 5000);
 }
+// Views that manage their own updates (terminals, consoles, editors) are never re-rendered by live events.
+const SELF_UPDATING = new Set(["workspace", "files", "machines"]);
 function refreshNow() {
-  if (!document.hidden && $("#modal").hidden && !document.activeElement?.closest("form:not(#composer)")) { render(true); updateBadges(); }
+  if (document.hidden || !$("#modal").hidden || document.activeElement?.closest("form:not(#composer)")) return;
+  if (!SELF_UPDATING.has(current)) render(true);
+  updateBadges();
 }
 let liveOk = false, liveSource = null, liveTimer = null;
 function connectLive() {
   if (liveSource || typeof EventSource === "undefined") return;
   liveSource = new EventSource("/api/stream");
   liveSource.onopen = () => { liveOk = true; };
-  liveSource.onmessage = () => { clearTimeout(liveTimer); liveTimer = setTimeout(refreshNow, 250); };
+  liveSource.onmessage = () => { clearTimeout(liveTimer); liveTimer = setTimeout(refreshNow, 700); };
   liveSource.onerror = () => {
     liveOk = false; liveSource.close(); liveSource = null;
     api("/api/auth/me").catch(() => {});  // a 421 here (scheme switched) moves the tab via the hand-off page
@@ -200,45 +273,19 @@ function usageTable(u) {
   ${u.models.map((m) => `<tr><td>${esc(m.name)}</td><td class="num">${fmt.format(m.daily.tokens)}${lim(m.daily)}</td><td class="num">${m.daily.runs}</td><td class="num">${fmt.format(m.weekly.tokens)}${lim(m.weekly)}</td><td class="num">${m.weekly.runs}</td><td class="num">${money(m.weekly.cost)}</td></tr>`).join("")}</table></div>`;
 }
 
-// --- goals ----------------------------------------------------------------------
+// --- goals: no page of their own any more (orders go through the General Manager); a goal opens in a modal
 let selectedGoal = null;
-async function viewGoals(quiet) {
-  const goals = await api("/api/goals");
-  if (selectedGoal === null && goals.length) selectedGoal = goals[0].id;
-  const openIds = new Set([...document.querySelectorAll("#goal-detail details[open]")].map((d) => d.dataset.id));
-  const list = goals.map((g) => `<div class="list-item ${g.id === selectedGoal ? "selected" : ""}" data-id="${g.id}"><div class="row"><strong class="grow">${esc(g.title)}</strong>${pill(g.status)}</div><div class="muted">#${g.id} · iteration ${g.iteration}/${g.max_iterations} · ${ago(g.updated_at)}</div></div>`).join("") || '<p class="muted">No goals yet.</p>';
-  if (!quiet || !$("#goal-list")) {
-    $("#view").innerHTML = `<div class="grid two"><div class="grid"><div class="card"><h2>New goal</h2><form id="goal-form">
-      <label for="g-title">Goal</label><input id="g-title" required minlength="3" placeholder="Build a REST API for a todo list">
-      <label for="g-desc">Details</label><textarea id="g-desc" placeholder="Constraints, acceptance criteria, tech choices"></textarea>
-      <label for="g-urls">Research URLs (one per line; linked pages are collected too)</label><textarea id="g-urls" placeholder="https://docs.example.com/guide"></textarea>
-      ${me.is_admin ? `<label for="g-repo">Existing git repository (optional; default: new workspace)</label><input id="g-repo" placeholder="/home/you/project">
-      <label for="g-checks">Quality commands (one per line, run in the worktree)</label><textarea id="g-checks" placeholder="uv run pytest -q"></textarea>` : ""}
-      <label for="g-allow">Allowed paths (globs, one per line; empty = anywhere)</label><textarea id="g-allow" rows="2" placeholder="src/*"></textarea>
-      <label class="row" style="margin-top:8px"><input type="checkbox" id="g-protect" style="width:auto"> Protect existing tests (agents may add tests, not change them)</label>
-      <label for="g-iter">Max iterations</label><input id="g-iter" type="number" min="1" max="10" value="3">
-      <div class="row" style="margin-top:12px"><button class="btn primary">Start</button></div></form></div>
-      <div class="card"><h2>Goals</h2><div class="list" id="goal-list"></div></div></div>
-      <div id="goal-detail" class="card"><p class="muted">Select a goal.</p></div></div>`;
-    $("#goal-form").onsubmit = async (e) => {
-      e.preventDefault();
-      const lines = (id) => ($(id)?.value || "").split("\n").map((x) => x.trim()).filter(Boolean);
-      try {
-        const r = await api("/api/goals", { method: "POST", body: { title: $("#g-title").value, description: $("#g-desc").value, urls: lines("#g-urls"), repo_path: $("#g-repo")?.value.trim() || "", quality_commands: lines("#g-checks"), allowed_paths: lines("#g-allow"), protect_tests: $("#g-protect").checked, max_iterations: Number($("#g-iter").value) || null } });
-        selectedGoal = r.id; e.target.reset(); toast(`Goal #${r.id} started`); viewGoals(true);
-      } catch (err) { toast(err.message); }
-    };
-  }
-  $("#goal-list").innerHTML = list;
-  $("#goal-list").querySelectorAll(".list-item").forEach((el) => (el.onclick = () => { selectedGoal = Number(el.dataset.id); viewGoals(true); }));
-  if (selectedGoal !== null) await goalDetail(selectedGoal, openIds);
+function goalModal(id) {
+  selectedGoal = id;
+  modal(`<div id="goal-detail"><div class="cc-working"><span class="spin"></span> Loading goal #${Number(id)}…</div></div>`);
+  goalDetail(id).catch((e) => ($("#goal-detail").innerHTML = `<p class="muted">${esc(e.message)}</p>`));
 }
 async function goalDetail(id, openIds = new Set()) {
   const g = await api(`/api/goals/${id}`);
   const iters = [...new Set(g.tasks.map((t) => t.iteration))].sort((a, b) => b - a);
   const actions = [
-    g.status === "awaiting_approval" && me.is_admin ? `<button class="btn primary" data-act="approve">Approve &amp; merge</button><button class="btn danger" data-act="reject">Reject</button>` : "",
-    ["queued", "running"].includes(g.status) ? `<button class="btn danger" data-act="cancel">Cancel</button>` : "",
+    g.status === "awaiting_approval" && me.is_admin ? ib("check", "Approve and merge", 'data-act="approve"', "primary") + ib("x", "Reject", 'data-act="reject"', "danger") : "",
+    ["queued", "running"].includes(g.status) ? ib("stop", "Cancel the goal", 'data-act="cancel"', "danger") : "",
   ].join("");
   $("#goal-detail").innerHTML = `<div class="row"><h2 class="grow" style="margin:0">#${g.id} ${esc(g.title)}</h2>${pill(g.status)}${actions}</div>
     <p class="muted">Iteration ${g.iteration}/${g.max_iterations} · branch <code>${esc(g.branch || "-")}</code> · worktree <code>${esc(g.worktree || "-")}</code></p>
@@ -252,7 +299,7 @@ async function goalDetail(id, openIds = new Set()) {
     ${(g.defects || []).length ? `<h3>Defects</h3>${g.defects.map((d) => `<div class="row">${pill(d.status === "closed" ? "done" : d.status === "accepted_risk" || d.status === "deferred" ? "pending" : "failed").replace(/>[^<]+</, `>${esc(d.status.replace("_", " "))}<`)}<span class="pill">${esc(d.severity)}</span><span class="grow">${esc(d.check)}</span><span class="muted">iterations ${d.first_iteration}–${d.closed_iteration || d.last_iteration}</span></div>`).join("")}` : ""}
     <h3>Activity</h3><div class="events">${g.events.map((e) => `<div><span class="k">${esc(e.kind)}</span>${esc(e.message)} <span class="muted">${ago(e.at)}</span></div>`).join("")}</div>`;
   $("#goal-detail").querySelectorAll("[data-act]").forEach((b) => (b.onclick = async () => {
-    try { await api(`/api/goals/${id}/${b.dataset.act}`, { method: "POST" }); toast(`Goal ${b.dataset.act}d`); viewGoals(true); } catch (err) { toast(err.message); }
+    try { await api(`/api/goals/${id}/${b.dataset.act}`, { method: "POST" }); toast(`Goal ${b.dataset.act}d`); goalDetail(id); } catch (err) { toast(err.message); }
   }));
 }
 
@@ -421,16 +468,15 @@ async function viewUsers() {
 // --- dynamic favicon: running goals (blue) or waiting approvals (amber) -----------
 function setFavicon(o) {
   const running = o.goals.running || 0, waiting = o.goals.awaiting_approval || 0;
-  const color = running ? "%232563eb" : waiting ? "%23d97706" : "%2364748b";
-  const n = running || waiting;
-  const label = n ? `%3Ctext x='16' y='22' font-size='16' font-family='sans-serif' font-weight='700' text-anchor='middle' fill='white'%3E${n > 9 ? "9+" : n}%3C/text%3E` : "%3Cpath d='M9 22l7-12 7 12z' fill='white'/%3E";
-  let link = document.querySelector("link[rel=icon]");
-  link.href = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='${color}'/%3E${label}%3C/svg%3E`;
+  const n = running || waiting, dot = running ? "%232563eb" : "%23d97706";
+  const base = "%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237c3aed'/%3E%3Cstop offset='.55' stop-color='%23db2777'/%3E%3Cstop offset='1' stop-color='%23f59e0b'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='2' y='2' width='36' height='36' rx='11' fill='url(%23g)'/%3E%3Cpath d='M10 30V19l3-2v-3h2v2l2-1.5L19 16v-4l1-2 1 2v4l2-1.5 2 1.5v-2h2v3l3 2v11z' fill='white'/%3E";
+  const badge = n ? `%3Ccircle cx='30' cy='10' r='9' fill='${dot}' stroke='white' stroke-width='2'/%3E%3Ctext x='30' y='14' font-size='11' font-family='sans-serif' font-weight='700' text-anchor='middle' fill='white'%3E${n > 9 ? "9+" : n}%3C/text%3E`
+    : "%3Cpath d='M30 6l1.2 2.8L34 10l-2.8 1.2L30 14l-1.2-2.8L26 10l2.8-1.2z' fill='white'/%3E";
+  document.querySelector("link[rel=icon]").href = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E${base}${badge}%3C/svg%3E`;
   document.title = n ? `(${n}) Agent Company` : "Agent Company";
 }
 
 registerView({ id: "dashboard", title: "Dashboard", icon: "dashboard" }, viewDashboard);
-registerView({ id: "goals", title: "Goals", icon: "goals" }, viewGoals);
 registerView({ id: "agents", title: "Agents", icon: "agents" }, viewAgents);
 registerView({ id: "models", title: "Models", icon: "models" }, viewModels);
 registerView({ id: "research", title: "Research", icon: "research" }, viewResearch);

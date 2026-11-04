@@ -185,16 +185,20 @@ window.WSP = window.WSP || {};
     if (!dir) { renderRoots(); return; }
     try { const r = await api("/api/files/roots", { method: "POST", body: { path: dir } }); S.roots = await api("/api/files/roots"); await setRoot(r.path); } catch (e) { toast(e.message); renderRoots(); }
   }
+  // Only folders whose whole chain is open are listed (an open folder inside a closed one is not visible).
+  const shown = (p) => { for (let d = parentOf(p); d.length > S.root.length; d = parentOf(d)) if (!S.open.has(d)) return false; return true; };
   async function refresh() {
     if (!S.root) return renderTree();
-    const dirs = [S.root, ...[...S.open].filter((p) => p.startsWith(S.root + "/"))];
-    const fresh = new Map();
-    await Promise.all(dirs.map(async (d) => { try { fresh.set(d, (await api(`/api/files/list?path=${encodeURIComponent(d)}`)).items.filter((it) => it.name !== ".git")); } catch { if (d !== S.root) S.open.delete(d); } }));
-    if (!fresh.has(S.root)) { status("This folder is not available."); S.dirs.clear(); return renderTree(); }
+    const dirs = [S.root, ...[...S.open].filter((p) => p.startsWith(S.root + "/") && shown(p))];
+    const fresh = new Map(S.dirs);
+    let rootOk = false;
+    await Promise.all(dirs.map(async (d) => { try { fresh.set(d, (await api(`/api/files/list?path=${encodeURIComponent(d)}`)).items.filter((it) => it.name !== ".git")); if (d === S.root) rootOk = true; } catch { fresh.delete(d); if (d !== S.root) S.open.delete(d); } }));
+    if (!rootOk) { status("This folder is not available."); S.dirs.clear(); return renderTree(); }
     const before = JSON.stringify([...S.dirs.entries()].filter(([k]) => fresh.has(k)).map(([k, v]) => [k, v.map((i) => i.name + i.size + i.modified)]));
     S.dirs = fresh;
     fresh.forEach((items) => items.forEach((it) => S.items.set(it.path, it)));
     const after = JSON.stringify([...S.dirs.entries()].map(([k, v]) => [k, v.map((i) => i.name + i.size + i.modified)]));
+    S.idle = before === after ? (S.idle || 0) + 1 : 0;
     if (before !== after || !S.el.querySelector("#wx-tree .tr")) renderTree();
   }
   W.refreshExplorer = refresh;
@@ -572,7 +576,14 @@ window.WSP = window.WSP || {};
     const saved = read("ac.wsp.tabs", { open: [] });
     for (const p of saved.open || []) await W.openPath(p);
     if (saved.active && S.tabs.some((t) => t.path === saved.active)) activate(S.tabs.find((t) => t.path === saved.active));
-    setInterval(() => { if (S.el.isConnected && !document.hidden && !menuEl) refresh(); }, 8000);
+    // Poll gently: every 10 s while things change, up to 60 s when nothing did; never while hidden. Coming back
+    // to the page refreshes at once.
+    const tick = () => {
+      if (S.el.isConnected && !document.hidden && !menuEl) refresh().catch(() => {});
+      setTimeout(tick, Math.min(60000, 10000 * (1 + Math.floor((S.idle || 0) / 3))));
+    };
+    setTimeout(tick, 10000);
+    addEventListener("focus", () => { if (S.el.isConnected) { S.idle = 0; refresh().catch(() => {}); } });
     document.addEventListener("keydown", (e) => {
       if (!S.el.isConnected) return;
       if (e.ctrlKey && e.key === "`") { e.preventDefault(); W.toggleTerminal(true); }

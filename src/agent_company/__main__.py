@@ -62,6 +62,9 @@ def _host(args: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
+    from agent_company.config import REPO_ROOT
+
+    load_dotenv(REPO_ROOT / ".env")  # also when run from another folder (the General Manager's toolbox)
     load_dotenv()
     if not argv:
         raise SystemExit(__doc__)

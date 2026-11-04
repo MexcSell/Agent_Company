@@ -25,6 +25,7 @@ window.WSP = window.WSP || {};
     T.el = el;
     el.innerHTML = `<div class="wt-bar"><div class="wt-tabs" role="tablist"></div>
       <button class="icon-btn sm" data-t="new" title="New terminal">${W.svg("M12 5v14M5 12h14")}</button>
+      <button class="icon-btn sm" data-t="reconnect" title="Reconnect the terminal">${W.svg("M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7")}</button>
       <button class="icon-btn sm" data-t="clear" title="Clear">${W.svg("M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13")}</button>
       <button class="icon-btn sm" data-t="max" title="Maximise / restore">${W.svg("M4 14v6h6M20 10V4h-6M4 20l7-7M20 4l-7 7")}</button>
       <button class="icon-btn sm" data-t="hide" title="Hide panel (Ctrl+\`)">${W.svg("M6 9l6 6 6-6")}</button></div>
@@ -33,6 +34,7 @@ window.WSP = window.WSP || {};
       const b = e.target.closest("[data-t]");
       if (!b) return;
       if (b.dataset.t === "new") W.newTerminal(W.root());
+      if (b.dataset.t === "reconnect") reconnect(T.active);
       if (b.dataset.t === "clear") T.active?.term.clear();
       if (b.dataset.t === "max") W.maximizeTerminal();
       if (b.dataset.t === "hide") W.toggleTerminal(false);
@@ -47,6 +49,9 @@ window.WSP = window.WSP || {};
       T.active.term.focus();
     });
     new MutationObserver(() => T.list.forEach((t) => (t.term.options.theme = theme()))).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    // Coming back to the tab (or the network): lost connections reconnect by themselves.
+    const wake = () => { if (!document.hidden) T.list.filter((t) => t.lost && t.lost !== 4404).forEach((t) => reconnect(t, true)); };
+    document.addEventListener("visibilitychange", wake); addEventListener("online", wake);
     new ResizeObserver(() => W.fitTerminals()).observe(el);
     try {
       await load();
@@ -111,7 +116,7 @@ window.WSP = window.WSP || {};
     ws.binaryType = "arraybuffer";
     t.ws = ws;
     let first = true;
-    ws.onopen = () => { t.retry = 0; try { t.fit.fit(); } catch { /* hidden */ } ws.send(JSON.stringify({ t: "resize", cols: t.term.cols, rows: t.term.rows })); };
+    ws.onopen = () => { t.retry = 0; t.lost = 0; t.alive = true; renderTabs(); try { t.fit.fit(); } catch { /* hidden */ } ws.send(JSON.stringify({ t: "resize", cols: t.term.cols, rows: t.term.rows })); };
     ws.onmessage = (ev) => {
       if (typeof ev.data === "string") {
         const m = JSON.parse(ev.data);
@@ -126,11 +131,32 @@ window.WSP = window.WSP || {};
       if (ev.code === 4404 || ev.code === 4403 || t.retry > 8) {
         const why = ev.code === 4403 ? "refused: sign in as an administrator, and if a proxy is in front, forward the Host or X-Forwarded-Host header"
           : ev.code === 4404 ? "this shell no longer exists on the server" : "the server is not reachable";
-        t.alive = false; t.term.write(`\r\n\x1b[31m[terminal disconnected: ${why}]\x1b[0m\r\n`); renderTabs(); return;
+        t.alive = false; t.lost = ev.code === 4404 ? 4404 : ev.code || 1;
+        t.term.write(`\r\n\x1b[31m[terminal disconnected: ${why}]\x1b[0m \x1b[2m· press Enter or the reconnect button${ev.code === 4404 ? " to open a new shell here" : " to reconnect"}\x1b[0m\r\n`);
+        renderTabs(); armReconnect(t); return;
       }
       t.retry++;
       setTimeout(() => { if (!t.closed) connect(t); }, Math.min(8000, 500 * 2 ** t.retry));
     };
+  }
+  // Reconnect a lost terminal: the same shell when the server still has it, else a new one in the same folder.
+  async function reconnect(t, quiet) {
+    if (!t) return;
+    if (t.lost === 4404) {
+      const i = T.list.indexOf(t);
+      await W.newTerminal(t.cwd);
+      close(t);
+      if (i >= 0 && T.list.length) activate(T.list[T.list.length - 1]);
+      return;
+    }
+    if (!t.lost && t.ws?.readyState === 1) { if (!quiet) toast("Terminal is connected"); return; }
+    t.retry = 0; t.lost = 0; t.alive = true; t.closed = false;
+    t.term.write("\r\n\x1b[2m[reconnecting…]\x1b[0m\r\n");
+    try { t.ws?.close(); } catch { /* already closed */ }
+    connect(t); renderTabs();
+  }
+  function armReconnect(t) {
+    const d = t.term.onData((data) => { if (data === "\r" && t.lost) { d.dispose(); reconnect(t); } });
   }
   function armClose(t) {
     const d = t.term.onData((data) => { if (data === "\r") { d.dispose(); close(t); } });
@@ -155,11 +181,11 @@ window.WSP = window.WSP || {};
   }
   function renderTabs() {
     const bar = T.el.querySelector(".wt-tabs");
-    bar.innerHTML = T.list.map((t, i) => `<div class="wt-tab${t === T.active ? " on" : ""}${t.alive ? "" : " dead"}" role="tab" data-i="${i}" title="${esc(t.cwd)}">${W.svg("M4 17l6-5-6-5M12 19h8")}<span>${esc(t.title)}</span><button class="wtab-x" data-close="${i}" aria-label="Kill terminal">×</button></div>`).join("")
+    bar.innerHTML = T.list.map((t, i) => `<div class="wt-tab${t === T.active ? " on" : ""}${t.alive ? "" : " dead"}${t.lost ? " lost" : ""}" role="tab" data-i="${i}" title="${esc(t.cwd)}${t.lost ? " · disconnected: click to reconnect" : ""}">${W.svg("M4 17l6-5-6-5M12 19h8")}<span>${esc(t.title)}</span><button class="wtab-x" data-close="${i}" aria-label="Kill terminal">×</button></div>`).join("")
       || '<span class="muted wt-none">Terminal</span>';
     bar.querySelectorAll(".wt-tab").forEach((el) => {
       const t = T.list[Number(el.dataset.i)];
-      el.onclick = (e) => { if (e.target.closest("[data-close]")) { if (!t.alive || confirm("Kill this terminal and everything running in it?")) close(t); } else activate(t); };
+      el.onclick = (e) => { if (e.target.closest("[data-close]")) { if (!t.alive || confirm("Kill this terminal and everything running in it?")) close(t); } else { activate(t); if (t.lost) reconnect(t); } };
     });
   }
 })();

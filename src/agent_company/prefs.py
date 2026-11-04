@@ -134,7 +134,8 @@ def set_ui(key: str, value: Any) -> Any:
     if key == "nav_layout":
         if not isinstance(value, dict) or not all(isinstance(value.get(k, []), list) for k in ("top", "bottom")):
             raise ValueError("nav_layout is {top: [view ids], bottom: [view ids]}")
-        value = {k: [str(x)[:32] for x in value.get(k, [])][:40] for k in ("top", "bottom")}
+        value = {k: [str(x)[:32] for x in value.get(k, []) if not (k == "hidden" and x == "settings")][:40]
+                 for k in ("top", "bottom", "hidden")}
     with session() as s:
         row = s.get(Setting, f"ui:{key}")
         if row is None:

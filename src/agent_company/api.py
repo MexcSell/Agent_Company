@@ -426,6 +426,8 @@ def create_app(start_background: bool = True) -> FastAPI:
         yield
         if app.state.rotation:
             app.state.rotation.stop.set()
+        if getattr(app.state, "study", None):
+            app.state.study.stop.set()
         terminal.close_all()
         workspace.stop_all()
 
