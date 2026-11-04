@@ -12,9 +12,12 @@ window.WSP = window.WSP || {};
   const W = window.WSP;
   const C = { el: null, runs: [], uploads: [], busy: false, open: new Set(), history: [], hpos: -1,
     session: store.get("ac.wsp.claude.session") || "", sessionCwd: store.get("ac.wsp.claude.cwd") || "", model: store.get("ac.wsp.claude.model") || "default",
-    tab: "chat", sessions: [], names: {}, view: { sid: "", events: [], next: 0, d: null }, info: "", cli: null, dtimer: 0 };
+    tab: "chat", sessions: [], names: {}, view: { sid: "", events: [], next: 0, d: null }, info: "", cli: null, dtimer: 0,
+    closed: new Set() };
+  try { C.closed = new Set(JSON.parse(store.get("ac.wsp.claude.closed") || "[]")); } catch { /* ignore */ }
   const ENTRY = { "claude-vscode": "VS Code", cli: "Terminal", "sdk-cli": "SDK", "sdk-ts": "SDK", "sdk-py": "SDK", "claude-desktop": "Desktop", "claude-jetbrains": "JetBrains" };
   const saveRuns = () => store.set("ac.wsp.claude.runs", JSON.stringify(C.runs.map((r) => r.id).slice(-30)));
+  const saveClosed = () => store.set("ac.wsp.claude.closed", JSON.stringify([...C.closed]));
   const saveSession = () => { store.set("ac.wsp.claude.session", C.session); store.set("ac.wsp.claude.cwd", C.sessionCwd); };
 
   W.initClaude = async (el) => {
@@ -84,7 +87,19 @@ window.WSP = window.WSP || {};
     el.querySelector("#wc-info-btn").onclick = () => openInfo(C.info ? "" : "status");
     el.querySelector("#wc-info-close").onclick = () => openInfo("");
     el.querySelectorAll("[data-info]").forEach((b) => (b.onclick = () => openInfo(b.dataset.info)));
-    el.querySelector("#wc-tabs").addEventListener("click", (e) => { const t = e.target.closest("[data-tab]"); if (t) selectTab(t.dataset.tab); });
+    const tabs = el.querySelector("#wc-tabs");
+    tabs.addEventListener("click", (e) => {
+      const x = e.target.closest("[data-close]");
+      if (x) return closeTab(x.dataset.close);
+      const t = e.target.closest("[data-tab]"); if (t) selectTab(t.dataset.tab);
+    });
+    tabs.addEventListener("auxclick", (e) => { const t = e.button === 1 && e.target.closest("[data-tab]"); if (t && t.dataset.tab !== "chat") { e.preventDefault(); closeTab(t.dataset.tab); } });
+    tabs.addEventListener("keydown", (e) => {
+      const t = e.target.closest("[data-tab]");
+      if (!t || e.target.closest("[data-close]")) return;
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectTab(t.dataset.tab); }
+      else if (e.key === "Delete" && t.dataset.tab !== "chat") { e.preventDefault(); closeTab(t.dataset.tab); }
+    });
     renderTabs();
     pollSessions();
 
@@ -296,6 +311,9 @@ window.WSP = window.WSP || {};
       try {
         C.sessions = await api("/api/workspace/claude-sessions");
         C.sessions.forEach((s) => (C.names[s.session_id] = s));
+        // A closed tab stays closed while its session runs; forget it once the session ended.
+        const live = new Set(C.sessions.map((s) => s.session_id));
+        if ([...C.closed].some((id) => !live.has(id))) { C.closed = new Set([...C.closed].filter((id) => live.has(id))); saveClosed(); }
         renderTabs();
       } catch { /* signed out or offline: try again later */ }
     }
@@ -304,12 +322,18 @@ window.WSP = window.WSP || {};
   function renderTabs() {
     const box = C.el?.querySelector("#wc-tabs");
     if (!box) return;
-    const list = others();
+    const list = others().filter((s) => !C.closed.has(s.session_id));
     if (C.tab !== "chat" && !list.some((s) => s.session_id === C.tab)) list.push({ ...(C.names[C.tab] || { name: C.tab.slice(0, 8) }), session_id: C.tab, status: "ended" });
-    const tab = (id, label, status, extra, title) => `<button type="button" role="tab" data-tab="${esc(id)}" aria-selected="${C.tab === id}" class="wc-tab${C.tab === id ? " on" : ""}${status === "ended" ? " ended" : ""}" title="${esc(title)}"><span class="wc-dot${status === "busy" ? " busy" : status === "ended" ? " off" : ""}"></span><span class="wc-tab-name">${esc(label)}</span>${extra ? `<span class="wc-tab-kind">${esc(extra)}</span>` : ""}</button>`;
+    const tab = (id, label, status, extra, title) => `<div role="tab" tabindex="0" data-tab="${esc(id)}" aria-selected="${C.tab === id}" class="wc-tab${C.tab === id ? " on" : ""}${status === "ended" ? " ended" : ""}" title="${esc(title)}"><span class="wc-dot${status === "busy" ? " busy" : status === "ended" ? " off" : ""}"></span><span class="wc-tab-name">${esc(label)}</span>${extra ? `<span class="wc-tab-kind">${esc(extra)}</span>` : ""}${id === "chat" ? "" : `<button type="button" class="wtab-x" data-close="${esc(id)}" title="Close tab (the session keeps running)" aria-label="Close ${esc(label)}">×</button>`}</div>`;
     box.innerHTML = tab("chat", "This panel", C.busy ? "busy" : "idle", "", "Your conversation with Claude Code in the explorer's folder")
       + list.map((s) => tab(s.session_id, s.name, s.status, ENTRY[s.entrypoint] || s.entrypoint || "", `${s.cwd || ""}\n${s.status === "busy" ? "Working" : s.status === "ended" ? "Ended" : "Idle"}${s.pid ? ` · pid ${s.pid}` : ""}${s.version ? ` · v${s.version}` : ""}`)).join("");
     box.hidden = !list.length && C.tab === "chat";
+  }
+  // Closing only hides the tab here: the session itself (VS Code, terminal, SDK) keeps running.
+  function closeTab(id) {
+    if (!id || id === "chat") return;
+    C.closed.add(id); saveClosed();
+    if (C.tab === id) selectTab("chat"); else renderTabs();
   }
   function selectTab(id) {
     if (id === C.tab) return;
