@@ -17,8 +17,10 @@ def env(tmp_path, monkeypatch):
     db.reset_engine()
     scheduler._global_slots = None
     router._catalog = None
+    from agent_company import api
     from agent_company.api import bootstrap
 
+    api._signups.clear()  # the registration rate limit is per process; start each test fresh
     bootstrap()
     yield tmp_path
     db.reset_engine()

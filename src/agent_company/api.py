@@ -10,13 +10,28 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from agent_company import auth, loop, registry, research, router, usage
+from agent_company import (
+    auth,
+    evaluation,
+    evolution,
+    files,
+    gitsync,
+    governance,
+    loop,
+    performance,
+    prefs,
+    projects,
+    registry,
+    research,
+    router,
+    usage,
+)
 from agent_company.config import settings
 from agent_company.db import Agent, Event, Goal, Task, session
 
@@ -25,9 +40,16 @@ COOKIE = "ac_session"
 
 
 def bootstrap() -> None:
+    """Seed the catalog and load settings. Safe to call while a server is running."""
     registry.seed()
     router.seed()
-    with session() as s:  # nothing is running after a restart
+    projects.seed()
+    prefs.load()
+
+
+def reset_after_restart() -> None:
+    """Only for the server that owns the work: nothing is running right after it starts."""
+    with session() as s:
         for a in s.scalars(select(Agent).where(Agent.status == "busy")):
             a.status = "idle"
 
@@ -45,6 +67,16 @@ def admin_user(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     if not user["is_admin"]:
         raise HTTPException(403, "administrators only")
     return user
+
+
+def allowed(perm: str):  # noqa: ANN201
+    """Dependency: administrators, or users granted `perm` (Users page → Permissions)."""
+    def check(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        if not auth.can(user, perm):
+            raise HTTPException(403, f"needs the '{perm}' permission")
+        return user
+
+    return check
 
 
 def _set_cookie(request: Request, response: Response, token: str) -> None:
@@ -87,6 +119,8 @@ class GoalBody(BaseModel):
     urls: list[str] = Field(default_factory=list)
     quality_commands: list[str] = Field(default_factory=list)
     max_iterations: int | None = Field(default=None, ge=1, le=10)
+    allowed_paths: list[str] = Field(default_factory=list)
+    protect_tests: bool = False
 
 
 class CrawlBody(BaseModel):
@@ -99,8 +133,102 @@ class SourceBody(CrawlBody):
     pass
 
 
+class ResearchBody(BaseModel):
+    question: str = Field(min_length=5, max_length=2000)
+    urls: list[str] = Field(default_factory=list, max_length=10)
+
+
+class SettingBody(BaseModel):
+    value: Any
+
+
+class NoticeBody(BaseModel):
+    title: str = Field(min_length=1, max_length=256)
+    body: str = ""
+    level: str = "info"
+
+
+def _audit(user: dict[str, Any], action: str, target: Any = "", before: dict[str, Any] | None = None,
+           after: dict[str, Any] | None = None, severity: str = "info") -> None:
+    governance.audit(f"user:{user['name']}", action, str(target), before, after, severity)
+
+
+class AgentBody(BaseModel):
+    role: str = Field(min_length=2, max_length=64)
+    title: str = ""
+    skills: dict[str, int] = Field(default_factory=dict)
+    room: str = ""
+    superior_id: int | None = None
+    goal: str = ""
+    writes: bool = False
+
+
+class WriteBody(BaseModel):
+    path: str
+    text: str
+
+
+class CreateBody(BaseModel):
+    path: str
+    folder: bool = False
+
+
+class MoveBody(BaseModel):
+    model_config = {"populate_by_name": True}
+    src: str
+    dest: str
+    keep_source: bool = Field(default=False, alias="copy")
+
+
+class PathsBody(BaseModel):
+    paths: list[str]
+
+
+class EvalBody(BaseModel):
+    suite: str
+    label: str = Field(pattern=r"^[\w.-]{1,64}$")
+    repeats: int = Field(default=1, ge=1, le=10)
+    tasks: list[str] = Field(default_factory=list)
+
+
+class StatusBody(BaseModel):
+    status: str
+
+
+class LifecycleBody(BaseModel):
+    state: str
+
+
+class RoleBody(BaseModel):
+    role: str
+
+
+class ProjectBody(BaseModel):
+    name: str
+    path: str = ""
+    github_url: str = ""
+    description: str = ""
+    quality_commands: list[str] = Field(default_factory=list)
+
+
+class CommandBody(BaseModel):
+    content: str = ""
+    attachments: list[str] = Field(default_factory=list)
+
+
+class IdsBody(BaseModel):
+    ids: list[int]
+
+
+class GitIdentityBody(BaseModel):
+    name: str = ""
+    email: str = ""
+    branch: str = ""
+
+
 class RouteBody(BaseModel):
     model_name: str
+    escalation: str | None = None
 
 
 class OpenRouterBody(BaseModel):
@@ -115,6 +243,7 @@ def create_app(start_background: bool = True) -> FastAPI:
         app.state.queue = None
         app.state.rotation = None
         if start_background:
+            reset_after_restart()
             app.state.queue = loop.GoalQueue(workers=2)
             app.state.queue.start()
             if settings().rotation_interval > 0:
@@ -130,9 +259,17 @@ def create_app(start_background: bool = True) -> FastAPI:
     async def _auth_error(_: Request, e: auth.AuthError) -> JSONResponse:
         return JSONResponse({"code": e.code, "detail": e.message}, status_code=e.status)
 
+    @app.exception_handler(PermissionError)
+    async def _forbidden(_: Request, e: PermissionError) -> JSONResponse:
+        return JSONResponse({"detail": str(e)}, status_code=403)
+
     @app.exception_handler(KeyError)
     async def _not_found(_: Request, e: KeyError) -> JSONResponse:
         return JSONResponse({"detail": f"not found: {e}"}, status_code=404)
+
+    @app.exception_handler(files.FileError)
+    async def _file_error(_: Request, e: files.FileError) -> JSONResponse:
+        return JSONResponse({"detail": str(e)}, status_code=400)
 
     @app.exception_handler(ValueError)
     async def _bad(_: Request, e: ValueError) -> JSONResponse:
@@ -174,11 +311,15 @@ def create_app(start_background: bool = True) -> FastAPI:
 
     @app.post("/api/users/{user_id}/{action}")
     def user_action(user_id: int, action: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
-        return auth.admin_action(admin["id"], user_id, action)
+        out = auth.admin_action(admin["id"], user_id, action)
+        _audit(admin, f"user_{action}", out["name"], after={"status": out["status"], "is_admin": out["is_admin"]},
+               severity="high" if action == "make_admin" else "info")
+        return out
 
     @app.delete("/api/users/{user_id}")
     def user_delete(user_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         auth.delete_user(admin["id"], user_id)
+        _audit(admin, "user_delete", user_id)
         return {"ok": True}
 
     # --- overview ---
@@ -191,8 +332,11 @@ def create_app(start_background: bool = True) -> FastAPI:
             pending = s.scalar(select(func.count()).select_from(auth.User)
                                .where(auth.User.status == "pending")) if user["is_admin"] else 0
             docs = s.scalar(select(func.count()).select_from(research.Document))
+            proposals = s.scalar(select(func.count()).select_from(projects.Proposal)
+                                 .where(projects.Proposal.status == "pending")) if user["is_admin"] else 0
         return {"goals": by_status, "agents": agents, "pending_users": pending, "documents": docs,
-                "usage": usage.summary()["totals"]}
+                "usage": usage.summary()["totals"], "unread": governance.unread_count(user),
+                "pending_proposals": proposals}
 
     # --- agents ---
     @app.get("/api/rooms")
@@ -205,26 +349,240 @@ def create_app(start_background: bool = True) -> FastAPI:
 
     @app.get("/api/agents/{agent_id}")
     def agent(agent_id: int, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-        return registry.agent_detail(agent_id)
+        return registry.agent_detail(agent_id) | {"certification": performance.certification(agent_id)}
 
     @app.patch("/api/agents/{agent_id}")
-    def agent_update(agent_id: int, changes: dict[str, Any], _: dict[str, Any] = Depends(admin_user)
+    def agent_update(agent_id: int, changes: dict[str, Any], admin: dict[str, Any] = Depends(allowed("manage_agents"))
                      ) -> dict[str, Any]:
-        return registry.update_agent(agent_id, changes)
+        out = registry.update_agent(agent_id, changes)
+        _audit(admin, "agent_update", out["name"], after=changes)
+        return out
+
+    @app.post("/api/agents")
+    def agent_create(body: AgentBody, admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        out = registry.create_agent(body.role, body.title, body.skills, body.room, body.superior_id, body.goal,
+                                    body.writes)
+        _audit(admin, "agent_create", out["name"], after={"role": out["role"], "room": out["room"]})
+        return out
+
+    @app.post("/api/agents/consolidate")
+    def agents_consolidate(body: RoleBody, admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> list[dict[str, Any]]:
+        out = evolution.consolidate(body.role)
+        _audit(admin, "agents_consolidate", body.role, after={"merged": len(out)})
+        return out
+
+    @app.post("/api/agents/{agent_id}/clone")
+    def agent_clone(agent_id: int, admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        out = registry.clone_agent(agent_id)
+        _audit(admin, "agent_clone", out["name"], after={"from": agent_id})
+        return out
+
+    @app.post("/api/agents/{agent_id}/merge")
+    def agent_merge(agent_id: int, admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        out = evolution.merge_clone(agent_id)
+        if out is None:
+            raise HTTPException(400, "only an idle, unretired clone can be merged")
+        _audit(admin, "agent_merge", out["clone"], after=out)
+        return out
+
+    @app.post("/api/agents/{agent_id}/lifecycle")
+    def agent_lifecycle(agent_id: int, body: LifecycleBody, admin: dict[str, Any] = Depends(allowed("manage_agents"))
+                        ) -> dict[str, Any]:
+        out = registry.set_lifecycle(agent_id, body.state)
+        _audit(admin, "agent_lifecycle", out["name"], after={"state": body.state})
+        return out
+
+    @app.get("/api/agents/{agent_id}/versions")
+    def agent_versions(agent_id: int, _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        return evolution.versions(agent_id)
+
+    @app.post("/api/agents/{agent_id}/versions/{version}/restore")
+    def agent_restore(agent_id: int, version: int, admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        out = evolution.restore(agent_id, version)
+        _audit(admin, "playbook_restore", agent_id, after=out)
+        return out
+
+    # --- live events (Server-Sent Events) ---
+    @app.get("/api/stream")
+    async def stream(request: Request, _: dict[str, Any] = Depends(current_user)) -> Any:
+        import asyncio
+
+        from fastapi.responses import StreamingResponse
+
+        from agent_company.db import Message, Notification
+
+        def marks() -> tuple[int, int, int, int]:
+            with session() as s:
+                return (s.scalar(select(func.max(Event.id))) or 0, s.scalar(select(func.max(Message.id))) or 0,
+                        s.scalar(select(func.max(Notification.id))) or 0,
+                        s.scalar(select(func.count()).select_from(Goal).where(Goal.status == "running")) or 0)
+
+        async def gen():  # noqa: ANN202
+            last, idle = None, 0
+            while not await request.is_disconnected():
+                now_marks = await asyncio.to_thread(marks)
+                if now_marks != last:
+                    last, idle = now_marks, 0
+                    yield f"data: {{\"event\": {now_marks[0]}, \"message\": {now_marks[1]}, \"notification\": {now_marks[2]}}}\n\n"
+                else:
+                    idle += 1
+                    if idle % 15 == 0:
+                        yield ": keep-alive\n\n"
+                await asyncio.sleep(1)
+
+        return StreamingResponse(gen(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    # --- system ---
+    @app.get("/api/system")
+    def system_status(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        from agent_company import system
+
+        return system.status()
+
+    @app.post("/api/system/restart")
+    def system_restart(admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        from agent_company import supervisor
+
+        if not supervisor.request_restart(f"restart requested by {admin['name']}"):
+            raise HTTPException(409, "the service is not running under the supervisor "
+                                     "(start it with `python -m agent_company supervise`)")
+        _audit(admin, "system_restart", "service", severity="high")
+        return {"requested": True}
+
+    # --- file manager (administrators) ---
+    @app.get("/api/files/roots")
+    def file_roots(_: dict[str, Any] = Depends(admin_user)) -> list[dict[str, str]]:
+        return files.roots()
+
+    @app.get("/api/files/list")
+    def file_list(path: str, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return files.listing(path)
+
+    @app.get("/api/files/read")
+    def file_read(path: str, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return files.read(path)
+
+    @app.get("/api/files/raw")
+    def file_raw(path: str, _: dict[str, Any] = Depends(admin_user)) -> FileResponse:
+        p = files.resolve(path)
+        return FileResponse(p, headers={"X-Content-Type-Options": "nosniff",
+                                        "Content-Security-Policy": "default-src 'none'; img-src 'self'"})
+
+    @app.put("/api/files/write")
+    def file_write(body: WriteBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = files.write(body.path, body.text)
+        _audit(admin, "file_write", out["path"], after={"size": out["size"]})
+        return out
+
+    @app.post("/api/files/create")
+    def file_create(body: CreateBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = files.create(body.path, body.folder)
+        _audit(admin, "file_create", out["path"])
+        return out
+
+    @app.post("/api/files/move")
+    def file_move(body: MoveBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = files.move(body.src, body.dest, body.keep_source)
+        _audit(admin, "file_copy" if body.keep_source else "file_move", body.src, after={"to": out["path"]})
+        return out
+
+    @app.post("/api/files/delete")
+    def file_delete(body: PathsBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        done = files.delete(body.paths)
+        _audit(admin, "file_delete", ", ".join(done)[:256], severity="high")
+        return {"deleted": done}
+
+    @app.post("/api/files/upload")
+    async def file_upload(folder: str, file: UploadFile = File(...), admin: dict[str, Any] = Depends(admin_user)
+                          ) -> dict[str, Any]:
+        data = await file.read(50 * 1024 * 1024 + 1)
+        if len(data) > 50 * 1024 * 1024:
+            raise HTTPException(413, "files may be at most 50 MB")
+        out = files.upload(folder, file.filename or "file", data)
+        _audit(admin, "file_upload", out["path"], after={"size": out["size"]})
+        return out
+
+    @app.get("/api/files/folders")
+    def file_folders(path: str = "", _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return files.folders(path)
+
+    @app.get("/api/defects")
+    def defects(status: str = "", goal_id: int | None = None, _: dict[str, Any] = Depends(current_user)
+                ) -> list[dict[str, Any]]:
+        return performance.list_defects(status, goal_id)
+
+    @app.post("/api/defects/{defect_id}/status")
+    def defect_status(defect_id: int, body: StatusBody, admin: dict[str, Any] = Depends(admin_user)
+                      ) -> dict[str, Any]:
+        out = performance.set_defect_status(defect_id, body.status)
+        _audit(admin, "defect_status", defect_id, after={"status": body.status})
+        return out
+
+    @app.get("/api/certifications")
+    def certifications(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        return performance.certifications()
+
+    @app.get("/api/performance")
+    def performance_report(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return performance.report()
+
+    @app.get("/api/evals")
+    def evals(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return {"suites": evaluation.list_suites(), "labels": evaluation.labels()}
+
+    @app.get("/api/evals/compare")
+    def evals_compare(a: str, b: str, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return evaluation.compare(a, b)
+
+    @app.get("/api/evals/{label}")
+    def eval_summary(label: str, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return evaluation.summary(label)
+
+    @app.post("/api/evals/run")
+    def eval_run(body: EvalBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        evaluation.load_suite(body.suite)  # validate before starting
+        _audit(admin, "eval_run", body.label, after={"suite": body.suite, "repeats": body.repeats})
+
+        def run() -> None:
+            try:
+                evaluation.run_suite(body.suite, body.label, body.repeats, body.tasks or None)
+            except Exception as e:  # noqa: BLE001 - reported as an event
+                from agent_company.db import log_event
+
+                log_event("error", f"eval {body.label} failed: {e}")
+
+        threading.Thread(target=run, daemon=True, name=f"eval-{body.label}").start()
+        return {"started": body.label}
+
+    @app.get("/api/evolution")
+    def evolution_overview(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return evolution.overview()
+
+    @app.post("/api/evolution/cycle")
+    def evolution_cycle(admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        return {"experiments_started": evolution.cycle()}
 
     # --- goals ---
     @app.get("/api/goals")
-    def goals(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+    def goals(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         with session() as s:
-            return [_goal_dict(g) for g in s.scalars(select(Goal).order_by(Goal.id.desc()).limit(200))]
+            seen = _visible_project_ids(s, user)
+            return [_goal_dict(g) for g in s.scalars(select(Goal).order_by(Goal.id.desc()).limit(200))
+                    if seen is None or g.project_id is None or g.project_id in seen]
 
     @app.post("/api/goals")
-    def goal_create(body: GoalBody, request: Request, user: dict[str, Any] = Depends(current_user)
+    def goal_create(body: GoalBody, request: Request, user: dict[str, Any] = Depends(allowed("run"))
                     ) -> dict[str, Any]:
         if (body.repo_path or body.quality_commands) and not user["is_admin"]:
             raise HTTPException(403, "only administrators can set a repository or quality commands")
         gid = loop.create_goal(body.title, body.description, body.repo_path, body.urls,
-                               body.quality_commands, body.max_iterations, created_by=user["id"])
+                               body.quality_commands, body.max_iterations, created_by=user["id"],
+                               allowed_paths=body.allowed_paths, protect_tests=body.protect_tests,
+                               extract_checks=user["is_admin"])
+        if body.repo_path or body.quality_commands:
+            _audit(user, "goal_create_privileged", gid,
+                   after={"repo_path": body.repo_path, "quality_commands": body.quality_commands})
         q = request.app.state.queue
         if q is not None:
             q.submit(gid)
@@ -233,10 +591,11 @@ def create_app(start_background: bool = True) -> FastAPI:
         return {"id": gid}
 
     @app.get("/api/goals/{goal_id}")
-    def goal(goal_id: int, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    def goal(goal_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         with session() as s:
             g = s.get(Goal, goal_id)
-            if g is None:
+            seen = _visible_project_ids(s, user)
+            if g is None or (seen is not None and g.project_id is not None and g.project_id not in seen):
                 raise KeyError(goal_id)
             d = _goal_dict(g)
             d["tasks"] = [{"id": t.id, "iteration": t.iteration, "key": t.key, "title": t.title, "role": t.role,
@@ -246,55 +605,82 @@ def create_app(start_background: bool = True) -> FastAPI:
                           for t in s.scalars(select(Task).where(Task.goal_id == goal_id).order_by(Task.id))]
             d["events"] = [_event_dict(e) for e in s.scalars(
                 select(Event).where(Event.goal_id == goal_id).order_by(Event.id))]
-            return d
+        d["defects"] = performance.list_defects(goal_id=goal_id)
+        return d
 
     @app.post("/api/goals/{goal_id}/approve")
-    def goal_approve(goal_id: int, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
-        return loop.approve(goal_id)
+    def goal_approve(goal_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = loop.approve(goal_id)
+        _audit(admin, "goal_approve", goal_id, after=out)
+        return out
 
     @app.post("/api/goals/{goal_id}/reject")
-    def goal_reject(goal_id: int, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+    def goal_reject(goal_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         loop.reject(goal_id)
+        _audit(admin, "goal_reject", goal_id)
         return {"ok": True}
 
     @app.post("/api/goals/{goal_id}/cancel")
-    def goal_cancel(goal_id: int, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    def goal_cancel(goal_id: int, user: dict[str, Any] = Depends(allowed("run"))) -> dict[str, Any]:
+        with session() as s:
+            g = s.get(Goal, goal_id)
+            seen = _visible_project_ids(s, user)
+            if g is None or (seen is not None and g.project_id is not None and g.project_id not in seen):
+                raise KeyError(goal_id)
         loop.cancel(goal_id)
         return {"ok": True}
 
     @app.get("/api/events")
-    def events(after: int = 0, goal_id: int | None = None, _: dict[str, Any] = Depends(current_user)
+    def events(after: int = 0, goal_id: int | None = None, user: dict[str, Any] = Depends(current_user)
                ) -> list[dict[str, Any]]:
         with session() as s:
             q = select(Event).where(Event.id > after)
             if goal_id is not None:
                 q = q.where(Event.goal_id == goal_id)
             rows = s.scalars(q.order_by(Event.id.desc()).limit(200)).all()
+            seen = _visible_project_ids(s, user)
+            if seen is not None:
+                hidden = set(s.scalars(select(Goal.id).where(Goal.project_id.is_not(None),
+                                                             Goal.project_id.not_in(seen or {-1}))))
+                rows = [e for e in rows if e.goal_id not in hidden]
             return [_event_dict(e) for e in reversed(rows)]
 
     # --- models ---
     @app.get("/api/models")
     def models(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         return {"models": router.list_models(), "routes": router.list_routes(),
+                "escalations": router.list_escalations(),
                 "default_model": settings().default_model, "executor": settings().executor}
 
     @app.post("/api/models")
-    def model_add(data: dict[str, Any], _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
-        return router.add_model(data)
+    def model_add(data: dict[str, Any], admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
+        out = router.add_model(data)
+        _audit(admin, "model_add", out["name"], after={"model_id": out["model_id"], "kind": out["kind"]})
+        return out
 
     @app.patch("/api/models/{model_id}")
-    def model_update(model_id: int, data: dict[str, Any], _: dict[str, Any] = Depends(admin_user)
+    def model_update(model_id: int, data: dict[str, Any], admin: dict[str, Any] = Depends(allowed("manage_models"))
                      ) -> dict[str, Any]:
-        return router.update_model(model_id, data)
+        out = router.update_model(model_id, data)
+        _audit(admin, "model_update", out["name"], after=data)
+        return out
 
     @app.delete("/api/models/{model_id}")
-    def model_delete(model_id: int, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+    def model_delete(model_id: int, admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
         router.delete_model(model_id)
+        _audit(admin, "model_delete", model_id)
         return {"ok": True}
 
+    @app.post("/api/models/{model_id}/test")
+    def model_test(model_id: int, admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
+        return router.test_model(model_id)
+
     @app.put("/api/routes/{role}")
-    def route_set(role: str, body: RouteBody, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
-        router.set_route(role, body.model_name)
+    def route_set(role: str, body: RouteBody, admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
+        before = router.list_routes().get(role)
+        router.set_route(role, body.model_name, body.escalation)
+        _audit(admin, "route_set", role, before={"model": before},
+               after={"model": body.model_name, "escalation": body.escalation})
         return {"role": role, "model_name": body.model_name}
 
     @app.get("/api/openrouter/models")
@@ -306,8 +692,26 @@ def create_app(start_background: bool = True) -> FastAPI:
             raise HTTPException(502, f"OpenRouter catalog unavailable: {e}") from e
 
     @app.post("/api/openrouter/models")
-    def openrouter_add(body: OpenRouterBody, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+    def openrouter_add(body: OpenRouterBody, _: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
         return router.add_openrouter_model(body.id, body.name)
+
+    @app.get("/api/providers")
+    def provider_list(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        return router.providers()
+
+    @app.get("/api/providers/{provider}/models")
+    def provider_models(provider: str, q: str = "", _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        try:
+            return router.provider_catalog(provider, q)
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"model list unavailable: {e}") from e
+
+    @app.post("/api/providers/{provider}/models")
+    def provider_add(provider: str, body: OpenRouterBody, admin: dict[str, Any] = Depends(allowed("manage_models"))
+                     ) -> dict[str, Any]:
+        out = router.add_provider_model(provider, body.id, body.name)
+        _audit(admin, "model_add", out["name"], after={"model_id": out["model_id"], "base_url": out["base_url"]})
+        return out
 
     @app.get("/api/usage")
     def usage_summary(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
@@ -321,6 +725,23 @@ def create_app(start_background: bool = True) -> FastAPI:
             lead_id = lead.id if lead else None
         return research.collect(body.url, body.depth, body.max_pages, agent_id=lead_id)
 
+    @app.post("/api/research/requests")
+    def research_request(body: ResearchBody, user: dict[str, Any] = Depends(allowed("run"))) -> dict[str, Any]:
+        rid = research.request_report(body.question, body.urls, user["id"])
+
+        def run() -> None:
+            try:
+                research.run_report(rid)
+            except Exception:  # noqa: BLE001 - recorded on the report
+                pass
+
+        threading.Thread(target=run, daemon=True, name=f"report-{rid}").start()
+        return {"id": rid}
+
+    @app.get("/api/research/requests")
+    def research_reports(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        return research.list_reports()
+
     @app.get("/api/research/search")
     def search(q: str, limit: int = 10, _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         return research.search(q, min(limit, 50))
@@ -329,7 +750,8 @@ def create_app(start_background: bool = True) -> FastAPI:
     def documents(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         with session() as s:
             return [{"id": d.id, "url": d.url, "title": d.title, "chars": len(d.text),
-                     "source": d.source_url, "at": d.created_at.isoformat()}
+                     "source": d.source_url, "at": d.created_at.isoformat(),
+                     "category": d.category or research.classify_source(d.url), "flags": d.flags or []}
                     for d in s.scalars(select(research.Document).order_by(research.Document.id.desc()).limit(300))]
 
     @app.get("/api/research/sources")
@@ -345,6 +767,147 @@ def create_app(start_background: bool = True) -> FastAPI:
     def rotate(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         return research.rotation_tick() or {"ran": False, "detail": "no enabled source or no research agent"}
 
+    # --- projects and the command window ---
+    @app.get("/api/projects")
+    def projects_list(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        return projects.list_projects(user)
+
+    @app.post("/api/projects")
+    def project_create(body: ProjectBody, admin: dict[str, Any] = Depends(allowed("create_projects"))
+                       ) -> dict[str, Any]:
+        if not admin["is_admin"] and (body.path or body.quality_commands):
+            raise HTTPException(403, "only administrators can choose a work folder or quality commands")
+        out = projects.create(body.name, body.path, body.github_url, body.description, body.quality_commands,
+                              created_by=admin["id"])
+        granted = admin["permissions"].get("projects", "all")
+        if not admin["is_admin"] and granted != "all":
+            auth.set_permissions(admin["id"], {"projects": [*granted, out["id"]]})
+        _audit(admin, "project_create", out["name"], after={"path": out["path"], "github_url": out["github_url"]})
+        return out
+
+    @app.patch("/api/projects/{project_id}")
+    def project_update(project_id: int, changes: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                       ) -> dict[str, Any]:
+        out = projects.update(project_id, changes)
+        _audit(admin, "project_update", out["name"], after=changes)
+        return out
+
+    @app.post("/api/projects/delete")
+    def project_delete(body: IdsBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        done = projects.delete(body.ids)
+        _audit(admin, "project_delete", ",".join(map(str, done)))
+        return {"deleted": done}
+
+    @app.get("/api/projects/{project_id}")
+    def project_detail(project_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        p = projects.get(project_id, user)
+        with session() as s:
+            goals = [_goal_dict(g) for g in s.scalars(select(Goal).where(Goal.project_id == p.id)
+                                                       .order_by(Goal.id.desc()).limit(50))]
+        return projects.project_dict(p) | {"members": projects.members(p.id), "goals": goals,
+                                           "proposals": [x for x in projects.list_proposals(user)
+                                                         if x["project_id"] == p.id][:30]}
+
+    @app.get("/api/projects/{project_id}/messages")
+    def project_messages(project_id: int, after: int = 0, user: dict[str, Any] = Depends(current_user)
+                         ) -> list[dict[str, Any]]:
+        projects.get(project_id, user)
+        return projects.messages(project_id, after)
+
+    @app.post("/api/projects/{project_id}/command")
+    def project_command(project_id: int, body: CommandBody, user: dict[str, Any] = Depends(current_user)
+                        ) -> dict[str, Any]:
+        return projects.command(project_id, user, body.content, body.attachments)
+
+    @app.post("/api/projects/{project_id}/sync")
+    def project_sync(project_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        projects.get(project_id, admin)
+        return {"message": gitsync.sync_project(project_id, admin)}
+
+    @app.post("/api/uploads")
+    async def upload(file: UploadFile = File(...), user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        data = await file.read(projects.MAX_UPLOAD + 1)
+        return projects.save_upload(file.filename or "file", data, file.content_type or "", user["id"])
+
+    @app.get("/api/uploads/{uid}")
+    def upload_get(uid: str, _: dict[str, Any] = Depends(current_user)) -> FileResponse:
+        path, ctype = projects.upload_path(uid)
+        return FileResponse(path, media_type=ctype, headers={"X-Content-Type-Options": "nosniff",
+                                                             "Content-Security-Policy": "default-src 'none'"})
+
+    @app.get("/api/proposals")
+    def proposals_list(status: str = "", user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        return projects.list_proposals(user, status)
+
+    @app.post("/api/proposals/{proposal_id}/{decision}")
+    def proposal_decide(proposal_id: int, decision: str, admin: dict[str, Any] = Depends(admin_user)
+                        ) -> dict[str, Any]:
+        if decision not in {"approve", "reject"}:
+            raise HTTPException(404, "unknown decision")
+        out = projects.decide(proposal_id, decision == "approve", admin["name"])
+        _audit(admin, f"proposal_{decision}", proposal_id, after={"status": out["status"],
+                                                                 "goal": out.get("spawned_goal_id")})
+        return out
+
+    @app.put("/api/users/{user_id}/permissions")
+    def user_permissions(user_id: int, perms: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                         ) -> dict[str, Any]:
+        out = auth.set_permissions(user_id, perms)
+        _audit(admin, "user_permissions", out["name"], after=out["permissions"], severity="high")
+        return out
+
+    @app.put("/api/users/{user_id}/git")
+    def user_git(user_id: int, body: GitIdentityBody, admin: dict[str, Any] = Depends(admin_user)
+                 ) -> dict[str, Any]:
+        out = gitsync.set_identity(user_id, body.name, body.email, body.branch)
+        _audit(admin, "user_git_identity", user_id, after=out)
+        return out
+
+    # --- settings, notifications, audit ---
+    @app.get("/api/settings")
+    def settings_get(_: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
+        return prefs.describe()
+
+    @app.put("/api/settings/{key}")
+    def settings_put(key: str, body: SettingBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        before = getattr(settings(), key, None)
+        value = prefs.set_value(key, body.value)
+        _audit(admin, "setting_set", key, before={"value": before}, after={"value": value})
+        return {"key": key, "value": value}
+
+    @app.delete("/api/settings/{key}")
+    def settings_clear(key: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        prefs.clear(key)
+        _audit(admin, "setting_clear", key)
+        return {"ok": True}
+
+    @app.get("/api/notifications")
+    def notifications(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return governance.list_notifications(user)
+
+    @app.post("/api/notifications/read")
+    def notifications_read(ids: list[int] | None = None, user: dict[str, Any] = Depends(current_user)
+                           ) -> dict[str, Any]:
+        governance.mark_read(user, ids)
+        return {"ok": True}
+
+    @app.post("/api/notifications")
+    def notice(body: NoticeBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        """An administrator's notice to every user."""
+        level = body.level if body.level in {"info", "success", "warning", "error"} else "info"
+        governance.notify(body.title, body.body, level=level, source=f"notice:{admin['name']}")
+        _audit(admin, "notice_post", body.title)
+        return {"ok": True}
+
+    @app.delete("/api/notifications/{nid}")
+    def notification_delete(nid: int, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        governance.delete_notification(nid)
+        return {"ok": True}
+
+    @app.get("/api/audit")
+    def audit_list(action: str = "", _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return {"records": governance.list_audit(action=action), "chain": governance.verify_audit()}
+
     # --- dashboard ---
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
@@ -353,6 +916,13 @@ def create_app(start_background: bool = True) -> FastAPI:
         return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
 
     return app
+
+
+def _visible_project_ids(s: Any, user: dict[str, Any]) -> set[int] | None:
+    """None for administrators (everything), else the ids of the projects this user may see."""
+    if user["is_admin"]:
+        return None
+    return set(s.scalars(projects.visible(user).with_only_columns(projects.Project.id)))
 
 
 def _run_quietly(goal_id: int) -> None:
@@ -366,7 +936,9 @@ def _goal_dict(g: Goal) -> dict[str, Any]:
     return {"id": g.id, "title": g.title, "description": g.description, "status": g.status,
             "iteration": g.iteration, "max_iterations": g.max_iterations, "repo_path": g.repo_path,
             "branch": g.branch, "base_branch": g.base_branch, "worktree": g.worktree, "urls": g.urls,
-            "quality_commands": g.quality_commands, "result": g.result,
+            "quality_commands": g.quality_commands, "result": g.result, "project_id": g.project_id,
+            "origin": g.origin, "parent_goal_id": g.parent_goal_id, "allowed_paths": g.allowed_paths,
+            "protect_tests": g.protect_tests, "baseline": g.baseline, "history": g.history,
             "created_at": g.created_at.isoformat(), "updated_at": g.updated_at.isoformat()}
 
 

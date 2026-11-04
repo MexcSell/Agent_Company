@@ -73,3 +73,30 @@ def test_delete_model_moves_routes():
     router.set_route("analyst", "Local")
     router.delete_model(m["id"])
     assert router.list_routes()["analyst"] == router.DEFAULT_ROUTE_OTHER
+
+
+def test_openai_compatible_provider_catalogs(monkeypatch):
+    def handler(req):
+        assert req.headers["authorization"] == "Bearer gsk-test"
+        return httpx.Response(200, json={"data": [
+            {"id": "llama-3.3-70b-versatile", "context_window": 131072},
+            {"id": "whisper-large-v3", "context_window": 448},
+            {"id": "llama-guard-4-12b"}]})
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    router._provider_cache.clear()
+    rows = router.provider_catalog("groq", client=client)
+    assert [r["id"] for r in rows] == ["llama-3.3-70b-versatile"] and rows[0]["context_length"] == 131072
+    m = router.add_provider_model("groq", "llama-3.3-70b-versatile")
+    assert m["model_id"] == "openai/llama-3.3-70b-versatile" and m["base_url"].startswith("https://api.groq.com")
+    assert m["available"] is True and m["api_key_env"] == "GROQ_API_KEY"
+    monkeypatch.delenv("GROQ_API_KEY")
+    assert next(x for x in router.list_models() if x["id"] == m["id"])["available"] is False
+    router._provider_cache.clear()
+    try:
+        router.provider_catalog("mistral")
+        raise AssertionError("a key is required")
+    except ValueError as e:
+        assert "MISTRAL_API_KEY" in str(e)
+    assert {p["id"] for p in router.providers()} == {"groq", "mistral", "cohere", "sambanova"}

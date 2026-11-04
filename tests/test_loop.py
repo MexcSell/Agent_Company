@@ -84,3 +84,25 @@ def test_invalid_plan_falls_back_to_standard_plan(monkeypatch):
     gid = loop.create_goal("Anything")
     out = loop.run_goal(gid)
     assert out["status"] == "awaiting_approval"
+
+
+def test_generated_files_are_never_committed(env):
+    from agent_company.config import settings
+
+    repo = env / "r"
+    repo.mkdir()
+    worktrees.git(repo, "init", "-q", "-b", "main")
+    (repo / "m.py").write_text("x = 1\n")
+    worktrees.git(repo, "add", ".")
+    worktrees.git(repo, "commit", "-q", "-m", "i")
+    wt, _, base = worktrees.create(repo, "gen")
+    (wt / "__pycache__").mkdir()
+    (wt / "__pycache__" / "m.cpython-313.pyc").write_bytes(b"\x00")
+    (wt / "pkg" / "node_modules").mkdir(parents=True)
+    (wt / "pkg" / "node_modules" / "x.js").write_text("1")
+    assert worktrees.commit_all(wt, "junk only") is None
+    (wt / "m.py").write_text("x = 2\n")
+    worktrees.commit_all(wt, "real change")
+    assert worktrees.changed_files(wt, base) == ["m.py"]
+    assert settings().worktrees_dir in wt.parents
+

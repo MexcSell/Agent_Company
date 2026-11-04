@@ -58,6 +58,11 @@ DEFAULT_ROUTES: dict[str, str] = {
     "student": "OpenRouter Free router",
 }
 DEFAULT_ROUTE_OTHER = "Claude Haiku 5.5"
+# Model used for a role's retries after a failed gate (escalation, as in /home/thomas/bit).
+DEFAULT_ESCALATIONS: dict[str, str] = {
+    "qa": "Claude Opus 5.5", "security": "Claude Opus 5.5", "analyst": "Claude Opus 5.5",
+    "research": "Claude Sonnet 5.5", "external_data": "Claude Haiku 5.5",
+}
 
 PROVIDER_KEYS: dict[str, tuple[str, ...]] = {
     "anthropic": ("ANTHROPIC_API_KEY",),
@@ -80,6 +85,13 @@ class Choice:
     kind: str
     model_id: str
     reason: str
+    base_url: str = ""
+    api_key_env: str = ""
+
+    @property
+    def provider(self) -> str:
+        return {"claude_code": "anthropic", "codex": "openai", "offline": "offline"}.get(
+            self.kind, "local" if self.base_url else provider_of(self.model_id))
 
 
 def model_dict(m: ModelEntry) -> dict[str, Any]:
@@ -87,8 +99,8 @@ def model_dict(m: ModelEntry) -> dict[str, Any]:
     return {"id": m.id, "name": m.name, "kind": m.kind, "model_id": m.model_id,
             "input_cost": m.input_cost, "output_cost": m.output_cost,
             "daily_token_limit": m.daily_token_limit, "weekly_token_limit": m.weekly_token_limit,
-            "enabled": m.enabled, "builtin": m.builtin, "notes": m.notes,
-            "available": ok, "unavailable_reason": why}
+            "enabled": m.enabled, "builtin": m.builtin, "notes": m.notes, "base_url": m.base_url,
+            "api_key_env": m.api_key_env, "available": ok, "unavailable_reason": why}
 
 
 def seed() -> None:
@@ -107,7 +119,8 @@ def seed() -> None:
 
         for role in ROLES:
             if role not in have_routes:
-                s.add(Route(role=role, model_name=DEFAULT_ROUTES.get(role, DEFAULT_ROUTE_OTHER)))
+                s.add(Route(role=role, model_name=DEFAULT_ROUTES.get(role, DEFAULT_ROUTE_OTHER),
+                            escalation=DEFAULT_ESCALATIONS.get(role, "")))
 
 
 def provider_of(model_id: str) -> str:
@@ -131,6 +144,9 @@ def available(m: ModelEntry) -> tuple[bool, str]:
             return False, "set ENABLE_CODEX=1 to let agents run Codex"
         if not shutil.which("codex"):
             return False, "`codex` CLI not found on PATH"
+    elif m.base_url:
+        if m.api_key_env and not os.environ.get(m.api_key_env):
+            return False, f"{m.api_key_env} is not set"
     else:
         provider = provider_of(m.model_id)
         if provider in LOCAL_PROVIDERS:
@@ -147,27 +163,43 @@ def available(m: ModelEntry) -> tuple[bool, str]:
 
 
 def _choice(m: ModelEntry, reason: str) -> Choice:
-    return Choice(name=m.name, kind=m.kind, model_id=m.model_id, reason=reason)
+    return Choice(name=m.name, kind=m.kind, model_id=m.model_id, reason=reason, base_url=m.base_url or "",
+                  api_key_env=m.api_key_env or "")
 
 
-def resolve(role: str, model_pref: str | None = None) -> Choice:
-    """Pick the model an agent of `role` should use right now."""
+def _choice_from_dict(m: dict[str, Any]) -> Choice:
+    return Choice(name=m["name"], kind=m["kind"], model_id=m["model_id"], reason="", base_url=m.get("base_url") or "",
+                  api_key_env=m.get("api_key_env") or "")
+
+
+def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = False,
+                  avoid_provider: str | None = None) -> list[Choice]:
+    """Every usable model for the role, best first, ending with the offline simulator.
+
+    Order: the escalation model (on retries), the agent's preference, the role's route,
+    MODEL from .env. With `avoid_provider` (a reviewer checking a developer's work), an
+    available API model from another provider is tried first, so the reviewer is not
+    blind to the same model family's mistakes.
+    """
     with session() as s:
         offline = s.scalars(select(ModelEntry).where(ModelEntry.kind == "offline")).first()
         if offline is None:
             raise RuntimeError("model catalog not seeded")
         if settings().executor == "offline":
-            return _choice(offline, "EXECUTOR=offline")
-        skipped: list[str] = []
-        candidates: list[tuple[str, str | None]] = [("agent preference", model_pref)]
+            return [_choice(offline, "EXECUTOR=offline")]
         route = s.get(Route, role)
-        candidates.append((f"route for {role}", route.model_name if route else None))
+        candidates: list[tuple[str, str | None]] = []
+        if escalate and route and route.escalation:
+            candidates.append((f"escalation for {role}", route.escalation))
+        candidates += [("agent preference", model_pref), (f"route for {role}", route.model_name if route else None)]
         default = settings().default_model
         if default:
             m = s.scalars(select(ModelEntry).where(ModelEntry.model_id == default)).first()
             candidates.append(("MODEL in .env", m.name if m else None))
+        chain: list[Choice] = []
+        skipped: list[str] = []
         for label, name in candidates:
-            if not name:
+            if not name or any(c.name == name for c in chain):
                 continue
             m = s.scalars(select(ModelEntry).where(ModelEntry.name == name)).first()
             if m is None:
@@ -175,9 +207,23 @@ def resolve(role: str, model_pref: str | None = None) -> Choice:
                 continue
             ok, why = available(m)
             if ok:
-                return _choice(m, label)
-            skipped.append(f"{name}: {why}")
-        return _choice(offline, "fallback (" + "; ".join(skipped) + ")" if skipped else "fallback")
+                chain.append(_choice(m, label))
+            else:
+                skipped.append(f"{name}: {why}")
+        if avoid_provider and (not chain or chain[0].provider == avoid_provider):
+            for m in s.scalars(select(ModelEntry).where(ModelEntry.kind == "llm").order_by(ModelEntry.id)):
+                c = _choice(m, f"different family from {avoid_provider}")
+                if c.provider != avoid_provider and available(m)[0] and all(x.name != m.name for x in chain):
+                    chain.insert(0, c)
+                    break
+        chain.append(_choice(offline, "fallback (" + "; ".join(skipped) + ")" if skipped else "fallback"))
+        return chain
+
+
+def resolve(role: str, model_pref: str | None = None, escalate: bool = False,
+            avoid_provider: str | None = None) -> Choice:
+    """Pick the model an agent of `role` should use right now."""
+    return resolve_chain(role, model_pref, escalate, avoid_provider)[0]
 
 
 def list_models() -> list[dict[str, Any]]:
@@ -190,19 +236,27 @@ def list_routes() -> dict[str, str]:
         return {r.role: r.model_name for r in s.scalars(select(Route).order_by(Route.role))}
 
 
-def set_route(role: str, model_name: str) -> None:
+def list_escalations() -> dict[str, str]:
     with session() as s:
-        if not s.scalars(select(ModelEntry).where(ModelEntry.name == model_name)).first():
-            raise ValueError(f"unknown model {model_name!r}")
+        return {r.role: r.escalation for r in s.scalars(select(Route).order_by(Route.role))}
+
+
+def set_route(role: str, model_name: str, escalation: str | None = None) -> None:
+    with session() as s:
+        for name in [model_name] + ([escalation] if escalation else []):
+            if not s.scalars(select(ModelEntry).where(ModelEntry.name == name)).first():
+                raise ValueError(f"unknown model {name!r}")
         r = s.get(Route, role)
         if r is None:
-            s.add(Route(role=role, model_name=model_name))
-        else:
-            r.model_name = model_name
+            r = Route(role=role, model_name=model_name)
+            s.add(r)
+        r.model_name = model_name
+        if escalation is not None:
+            r.escalation = escalation
 
 
 MODEL_FIELDS = {"name", "kind", "model_id", "input_cost", "output_cost", "daily_token_limit",
-                "weekly_token_limit", "enabled", "notes"}
+                "weekly_token_limit", "enabled", "notes", "base_url", "api_key_env"}
 
 
 def add_model(data: dict[str, Any]) -> dict[str, Any]:
@@ -213,6 +267,7 @@ def add_model(data: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("kind must be llm, claude_code or codex")
     if data["kind"] == "llm" and not data.get("model_id"):
         raise ValueError("model_id is required (LiteLLM-style provider/model)")
+    _check_endpoint(data)
     with session() as s:
         if s.scalars(select(ModelEntry).where(ModelEntry.name == data["name"])).first():
             raise ValueError("a model with that name exists")
@@ -228,11 +283,47 @@ def update_model(model_id: int, data: dict[str, Any]) -> dict[str, Any]:
         if m is None:
             raise KeyError(model_id)
         fields = MODEL_FIELDS - ({"name", "kind", "model_id"} if m.builtin else set())
+        _check_endpoint(data)
         for k, v in data.items():
             if k in fields:
                 setattr(m, k, v)
         s.flush()
         return model_dict(m)
+
+
+def _check_endpoint(data: dict[str, Any]) -> None:
+    import re
+
+    url = data.get("base_url") or ""
+    if url and not re.match(r"^https?://[\w.-]+(:\d+)?(/[\w./-]*)?$", url):
+        raise ValueError("base_url must be an http(s) URL such as http://127.0.0.1:8080/v1")
+    env = data.get("api_key_env") or ""
+    if env and not re.match(r"^[A-Z][A-Z0-9_]{1,63}$", env):
+        raise ValueError("api_key_env must be an environment variable name such as LOCAL_LLM_KEY")
+
+
+def test_model(model_id: int) -> dict[str, Any]:
+    """Send a tiny prompt through the model and report the answer, tokens and time."""
+    from agent_company import executors
+
+    with session() as s:
+        m = s.get(ModelEntry, model_id)
+        if m is None:
+            raise KeyError(model_id)
+        ok, why = available(m)
+        choice = _choice(m, "test")
+    if not ok:
+        return {"ok": False, "error": why}
+    workdir = settings().worktrees_dir / "_model-test"
+    workdir.mkdir(parents=True, exist_ok=True)
+    req = executors.Request(purpose="test", role="test", system="You are a connectivity test.",
+                            prompt="Reply with the single word OK.", workdir=workdir)
+    res = executors.for_choice(choice, 120).run(req)
+    usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
+                 output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
+                 error=res.error, purpose="test")
+    return {"ok": res.ok, "reply": res.text[:500], "error": res.error[:500], "seconds": round(res.duration, 2),
+            "input_tokens": res.input_tokens, "output_tokens": res.output_tokens}
 
 
 def delete_model(model_id: int) -> None:
@@ -290,3 +381,61 @@ def add_openrouter_model(or_id: str, name: str | None = None, **costs: float) ->
         "output_cost": costs.get("output_cost", row["output_cost"] if row else 0.0),
         "notes": "OpenRouter. Needs OPENROUTER_API_KEY.",
     })
+
+
+# --- OpenAI-compatible provider catalogs (Groq, Mistral, Cohere, SambaNova) ---------------
+
+PROVIDERS: dict[str, dict[str, str]] = {
+    "groq": {"label": "Groq", "base_url": "https://api.groq.com/openai/v1", "key": "GROQ_API_KEY"},
+    "mistral": {"label": "Mistral", "base_url": "https://api.mistral.ai/v1", "key": "MISTRAL_API_KEY"},
+    "cohere": {"label": "Cohere", "base_url": "https://api.cohere.ai/compatibility/v1", "key": "COHERE_API_KEY"},
+    "sambanova": {"label": "SambaNova", "base_url": "https://api.sambanova.ai/v1", "key": "SAMBANOVA_API_KEY"},
+}
+NOT_CHAT = ("whisper", "tts", "speech", "transcri", "embed", "guard", "moderation", "ocr", "rerank", "distil-whisper")
+_provider_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
+def providers() -> list[dict[str, Any]]:
+    return [{"id": k, "label": v["label"], "base_url": v["base_url"], "key": v["key"],
+             "key_set": bool(os.environ.get(v["key"]))} for k, v in PROVIDERS.items()]
+
+
+def provider_catalog(provider: str, query: str = "", client: httpx.Client | None = None) -> list[dict[str, Any]]:
+    """The provider's chat models (its /models list, cached 10 minutes)."""
+    if provider not in PROVIDERS:
+        raise KeyError(provider)
+    cfg = PROVIDERS[provider]
+    cached = _provider_cache.get(provider)
+    if cached is None or time.time() - cached[0] > 600:
+        key = os.environ.get(cfg["key"], "")
+        if not key and client is None:
+            raise ValueError(f"{cfg['key']} is not set; the {cfg['label']} model list needs a key")
+        c = client or httpx.Client(timeout=20)
+        resp = c.get(cfg["base_url"].rstrip("/") + "/models", headers={"Authorization": f"Bearer {key}"})
+        resp.raise_for_status()
+        body = resp.json()
+        rows = []
+        for m in body.get("data", body.get("models", [])):
+            mid = m.get("id") or m.get("name")
+            if not mid or any(w in mid.lower() for w in NOT_CHAT) or m.get("deprecated") or m.get("active") is False:
+                continue
+            p = m.get("pricing") or {}
+            rows.append({"id": mid, "name": m.get("name") or mid,
+                         "context_length": m.get("context_window") or m.get("context_length") or m.get("max_context_length"),
+                         "input_cost": round(float(p.get("prompt") or 0) * 1_000_000, 4),
+                         "output_cost": round(float(p.get("completion") or 0) * 1_000_000, 4)})
+        _provider_cache[provider] = (time.time(), rows)
+    rows = _provider_cache[provider][1]
+    q = query.lower().strip()
+    return sorted([r for r in rows if not q or q in r["id"].lower() or q in r["name"].lower()], key=lambda r: r["id"])
+
+
+def add_provider_model(provider: str, model: str, name: str | None = None) -> dict[str, Any]:
+    if provider not in PROVIDERS:
+        raise KeyError(provider)
+    cfg = PROVIDERS[provider]
+    row = next((r for r in _provider_cache.get(provider, (0, []))[1] if r["id"] == model), None)
+    return add_model({"name": name or f"{cfg['label']} · {model}", "kind": "llm", "model_id": f"openai/{model}",
+                      "base_url": cfg["base_url"], "api_key_env": cfg["key"],
+                      "input_cost": row["input_cost"] if row else 0.0, "output_cost": row["output_cost"] if row else 0.0,
+                      "notes": f"{cfg['label']} (OpenAI-compatible API). Needs {cfg['key']}."})

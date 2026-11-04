@@ -22,6 +22,7 @@ def agent_dict(a: Agent) -> dict[str, Any]:
         "skills": a.skills, "permissions": a.permissions, "model_pref": a.model_pref,
         "status": a.status, "enabled": a.enabled, "xp": a.xp, "level": a.level,
         "tasks_done": a.tasks_done, "tasks_failed": a.tasks_failed, "playbook": a.playbook,
+        "lifecycle": a.lifecycle, "playbook_version": a.playbook_version, "in_trial": bool(a.experiment),
         "last_active_at": a.last_active_at.isoformat() if a.last_active_at else None,
     }
 
@@ -104,9 +105,32 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")[:48] or "specialist"
 
 
-def _skill_score(agent: Agent, wanted: list[str]) -> float:
+def _skill_score(agent: Agent, wanted: list[str], team: dict[int, float] | None = None) -> float:
+    """Team utility of one candidate (SPEC12 §7.3): skill coverage + experience + collaboration
+    evidence with the agents already on the goal + quality (success rate)."""
     skills = agent.skills or {}
-    return sum(skills.get(w, 0) for w in wanted) + 0.01 * agent.level
+    done, failed = agent.tasks_done or 0, agent.tasks_failed or 0
+    quality = done / (done + failed) if done + failed else 0.5
+    return (sum(skills.get(w, 0) for w in wanted) + 0.05 * agent.level + 2.0 * (team or {}).get(agent.id, 0.0)
+            + 1.0 * quality)
+
+
+def _team_weights(s: Session, goal_id: int | None) -> dict[int, float]:
+    """For each agent: summed 'collaborated' weight with the agents already working on this goal."""
+    if goal_id is None:
+        return {}
+    from agent_company.db import Task
+
+    team = set(s.scalars(select(Task.agent_id).where(Task.goal_id == goal_id, Task.agent_id.is_not(None))))
+    if not team:
+        return {}
+    out: dict[int, float] = {}
+    for r in s.scalars(select(Relationship).where(Relationship.kind == "collaborated",
+                                                  or_(Relationship.a_id.in_(team), Relationship.b_id.in_(team)))):
+        for me, other in ((r.a_id, r.b_id), (r.b_id, r.a_id)):
+            if other in team and me not in team:
+                out[me] = out.get(me, 0.0) + r.weight
+    return out
 
 
 def resolve_role(role: str) -> tuple[str, str | None]:
@@ -116,7 +140,7 @@ def resolve_role(role: str) -> tuple[str, str | None]:
     if spec is None or spec.enabled:
         return role, None
     with session() as s:
-        if s.scalars(select(Agent).where(Agent.role == role, Agent.enabled)).first():
+        if s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active")).first():
             return role, None
     fallback = org.FALLBACK_WRITE_ROLE if spec.writes else org.FALLBACK_READ_ROLE
     return fallback, f"role '{role}' is disabled; using '{fallback}'"
@@ -132,13 +156,14 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
     """
     skills = [_slug(x) for x in (skills or [])]
     with _staff_lock, session() as s:
-        pool = s.scalars(select(Agent).where(Agent.role == role, Agent.enabled)).all()
+        pool = s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active")).all()
         idle = [a for a in pool if a.status == "idle"]
+        team = _team_weights(s, goal_id)
         if idle:
-            agent = max(idle, key=lambda a: _skill_score(a, skills))
+            agent = max(idle, key=lambda a: _skill_score(a, skills, team))
             action = "assigned"
         elif pool:
-            agent = _clone(s, max(pool, key=lambda a: _skill_score(a, skills)))
+            agent = _clone(s, max(pool, key=lambda a: _skill_score(a, skills, team)))
             action = "cloned"
         else:
             agent = _recruit(s, role, skills, writes)
@@ -211,6 +236,7 @@ def list_rooms() -> list[dict[str, Any]]:
 
 
 EDITABLE = {"enabled", "model_pref", "skills", "playbook", "superior_id", "goal", "permissions"}
+PERMISSIONS = {"read", "write", "shell", "network"}
 
 
 def update_agent(agent_id: int, changes: dict[str, Any]) -> dict[str, Any]:
@@ -224,6 +250,10 @@ def update_agent(agent_id: int, changes: dict[str, Any]) -> dict[str, Any]:
             raise KeyError(agent_id)
         if "superior_id" in changes and changes["superior_id"] == agent_id:
             raise ValueError("an agent cannot report to itself")
+        if "permissions" in changes and not set(changes["permissions"]) <= PERMISSIONS:
+            raise ValueError(f"permissions are a subset of {sorted(PERMISSIONS)}")
+        if a.lifecycle == "retired" and changes.get("enabled"):
+            raise ValueError("a retired agent cannot be enabled")
         for k, v in changes.items():
             setattr(a, k, v)
         s.flush()
@@ -247,8 +277,76 @@ def agent_detail(agent_id: int) -> dict[str, Any]:
                          "at": lesson.created_at.isoformat()}
                         for lesson in s.scalars(select(Lesson).where(Lesson.agent_id == a.id)
                                                 .order_by(Lesson.id.desc()).limit(20))]
+        from agent_company.db import Handover
+
+        d["handovers"] = [{"goal_id": h.goal_id, "task": h.task_key, "from": h.from_agent_id, "to": h.to_agent_id,
+                           "package": h.package, "at": h.created_at.isoformat()}
+                          for h in s.scalars(select(Handover).where(
+                              or_(Handover.from_agent_id == a.id, Handover.to_agent_id == a.id))
+                              .order_by(Handover.id.desc()).limit(10))]
+        d["trial_playbook"] = (a.experiment or {}).get("playbook")
+        d["trial_outcomes"] = (a.experiment or {}).get("outcomes", [])
         runs = s.scalars(select(Run).where(Run.agent_id == a.id)).all()
         d["usage"] = {"runs": len(runs), "input_tokens": sum(r.input_tokens for r in runs),
                       "output_tokens": sum(r.output_tokens for r in runs),
                       "cost": round(sum(r.cost for r in runs), 6)}
         return d
+
+
+# --- manual management and lifecycle (SPEC02 §6: active, paused, retired) -------------
+
+def create_agent(role: str, title: str = "", skills: dict[str, int] | None = None, room: str = "",
+                 superior_id: int | None = None, goal: str = "", writes: bool = False) -> dict[str, Any]:
+    role = _slug(role)
+    with session() as s:
+        spec = org.ROLES.get(role)
+        room = room or (spec.room if spec else ("development" if writes else "information_collection"))
+        if s.scalars(select(Room).where(Room.key == room)).first() is None:
+            raise ValueError(f"unknown room {room!r}")
+        if superior_id is not None and s.get(Agent, superior_id) is None:
+            raise ValueError("unknown superior")
+        base = title.strip() or (spec.title if spec else role.replace("_", " ").title() + " Specialist")
+        name, n = base, 1
+        while s.scalars(select(Agent).where(Agent.name == name)).first():
+            n += 1
+            name = f"{base} #{n}"
+        gm = s.scalars(select(Agent).where(Agent.role == "general_manager", Agent.parent_id.is_(None))).first()
+        a = Agent(name=name, role=role, title=base, room_key=room,
+                  superior_id=superior_id or (gm.id if gm else None),
+                  goal=goal or (spec.goal if spec else f"Handle {role.replace('_', ' ')} work"),
+                  backstory=spec.backstory if spec else "",
+                  skills=dict(skills or (spec.skills if spec else {role: 5})),
+                  permissions=list(spec.permissions) if spec else (["read", "write", "shell"] if writes else ["read"]),
+                  enabled=True)
+        s.add(a)
+        s.flush()
+        _link_similar(s, a, threshold=0.05)
+        return agent_dict(a)
+
+
+def clone_agent(agent_id: int) -> dict[str, Any]:
+    with _staff_lock, session() as s:
+        src = s.get(Agent, agent_id)
+        if src is None:
+            raise KeyError(agent_id)
+        if src.lifecycle == "retired":
+            raise ValueError("a retired agent cannot be cloned")
+        c = _clone(s, src)
+        return agent_dict(c)
+
+
+def set_lifecycle(agent_id: int, state: str) -> dict[str, Any]:
+    if state not in {"active", "paused", "retired"}:
+        raise ValueError("state is active, paused or retired")
+    with session() as s:
+        a = s.get(Agent, agent_id)
+        if a is None:
+            raise KeyError(agent_id)
+        if a.lifecycle == "retired":
+            raise ValueError("retirement is permanent")
+        if state != "active" and a.role == "general_manager" and a.parent_id is None:
+            raise ValueError("the company General Manager cannot be paused or retired")
+        if state != "active" and a.status == "busy":
+            raise ValueError("the agent is working; try again when it is idle")
+        a.lifecycle, a.enabled = state, state == "active"
+        return agent_dict(a)

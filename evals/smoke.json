@@ -1,0 +1,30 @@
+{
+  "name": "smoke",
+  "description": "Small, fully checkable coding tasks. The offline simulator fails these on purpose: they measure real models.",
+  "tasks": [
+    {
+      "name": "fizzbuzz",
+      "title": "Write fizzbuzz.py with a function fizzbuzz(n) returning 'Fizz', 'Buzz', 'FizzBuzz' or str(n)",
+      "description": "Create fizzbuzz.py at the repository root. fizzbuzz(3) == 'Fizz', fizzbuzz(5) == 'Buzz', fizzbuzz(15) == 'FizzBuzz', fizzbuzz(7) == '7'. Add tests in tests/test_fizzbuzz.py.",
+      "checks": ["python3 -c \"from fizzbuzz import fizzbuzz as f; assert [f(i) for i in (3, 5, 15, 7)] == ['Fizz', 'Buzz', 'FizzBuzz', '7']\""],
+      "max_iterations": 2
+    },
+    {
+      "name": "fix-average",
+      "title": "Fix the average() bug in stats.py",
+      "description": "average([]) raises ZeroDivisionError; it must return 0.0. average([1, 2]) must stay 1.5. Change only stats.py.",
+      "files": {"stats.py": "def average(xs):\n    return sum(xs) / len(xs)\n"},
+      "checks": ["python3 -c \"from stats import average as a; assert a([]) == 0.0 and a([1, 2]) == 1.5\""],
+      "allowed_paths": ["stats.py"],
+      "max_iterations": 2
+    },
+    {
+      "name": "slugify",
+      "title": "Add slugify(text) to text_utils.py",
+      "description": "slugify('Hello, World!') == 'hello-world'; runs of non-alphanumerics become one dash; no leading or trailing dash.",
+      "files": {"text_utils.py": "\"\"\"Text helpers.\"\"\"\n"},
+      "checks": ["python3 -c \"from text_utils import slugify as s; assert s('Hello, World!') == 'hello-world' and s('  a--b  ') == 'a-b'\""],
+      "max_iterations": 2
+    }
+  ]
+}

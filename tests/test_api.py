@@ -96,3 +96,12 @@ def test_models_and_dashboard(app):
     assert app.put("/api/routes/qa", json={"model_name": "nope"}).status_code == 400
     assert app.delete(f"/api/models/{r.json()['id']}").status_code == 200
     assert app.patch("/api/agents/1", json={"name": "renamed"}).status_code == 400
+
+
+def test_cli_bootstrap_does_not_free_busy_agents():
+    from agent_company import registry
+    from agent_company.api import bootstrap
+
+    a = registry.staff("developer")
+    bootstrap()  # what `agents`/`models`/`goal` CLI commands and the supervisor's candidate run
+    assert next(x for x in registry.list_agents() if x["id"] == a.id)["status"] == "busy"

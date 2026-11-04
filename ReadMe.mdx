@@ -9,6 +9,8 @@ Guiding principle: what matters most is not how many agents you run. It's
 combining capable models, specialized roles, shared project context, reliable
 tools, and a controlled orchestration system.
 
+**Contents:** [What it does](#what-it-does) · [Setup](#setup) · [Run](#run) · [Projects and the command window](#projects-and-the-command-window) · [What the quality gate checks](#what-the-quality-gate-checks) · [Services (CDAF)](#services-cdaf) · [Organisation](#organisation) · [Which agent uses which model](#which-agent-uses-which-model) · [Model fallback, retries and local servers](#model-fallback-retries-and-local-servers) · [More models](#more-models) · [How agents evolve](#how-agents-evolve) · [Measuring the company](#measuring-the-company) · [Research](#research) · [Knowledge safety](#knowledge-safety) · [Users](#users) · [Users and permissions](#users-and-permissions) · [Administration](#administration) · [Platform](#platform) · [Technology choices](#technology-choices) · [Safety](#safety) · [References](#references)
+
 ## What it does
 
 1. **Goal**: you enter a goal (dashboard, API or CLI), optionally with URLs to
@@ -32,6 +34,126 @@ tools, and a controlled orchestration system.
 9. **Approve**: passing work waits for an administrator, then the branch is merged
    locally. Nothing is pushed or deployed.
 
+## Setup
+
+Requirements: Python 3.12+, [uv](https://docs.astral.sh/uv/) and git.
+
+```bash
+uv sync                 # installs dependencies into .venv
+cp .env.example .env    # set MODEL and the keys you have; everything is optional
+uv run pytest -q        # runs offline
+```
+
+## Run
+
+```bash
+uv run python -m agent_company supervise    # recommended: dashboard on http://127.0.0.1:4900, safe restarts
+uv run python -m agent_company serve        # the same server without the supervisor
+uv run python -m agent_company goal "Build a REST API for a todo list with FastAPI" \
+    --check "uv run pytest -q" --url https://fastapi.tiangolo.com/tutorial/
+uv run python -m agent_company approve 1    # merge goal 1 after review
+uv run python -m agent_company models       # what each role would use right now
+uv run python -m agent_company agents       # agents by room
+uv run python -m agent_company crawl https://docs.crewai.com/ --depth 1
+uv run python -m agent_company eval --suite smoke --label v1 --repeats 3   # benchmark the company
+uv run python -m agent_company goal "Fix the bug" --repo ~/proj --allow 'src/*' --protect-tests
+uv run python -m agent_company "Build a REST API for a todo list"   # classic crew -> output/
+```
+
+Without any key, goals run on the offline simulator: the whole loop runs
+(planning, staffing, worktree, gate, learning, approval) with placeholder content.
+Set `EXECUTOR=offline` to force that, for example in tests.
+
+Approving a goal merges its branch into the repository's current branch, which must
+have no uncommitted changes to tracked files. For the protected platform project
+that is this checkout: commit your own work first, or approval is refused.
+
+A goal without `--repo` gets a fresh git workspace in `data/workspaces/`. With
+`--repo`, the agents work in a worktree of that repository on branch
+`agents/goal-<id>`, and approval merges that branch into the branch it started
+from (the repository must be on that branch, with no uncommitted changes).
+
+Known limits: the worktree and branch stay in place after approval (remove them
+with `git worktree remove` when you no longer need them). A goal interrupted by a
+restart resumes at the iteration it was on, but without the previous gate's
+findings.
+
+## Projects and the command window
+
+**Projects** (admins create them) are git repositories the company works on: a
+work folder (an existing folder becomes a repository; empty means a fresh
+workspace), a GitHub URL and default quality commands. The page lists projects
+on the left (check boxes or Ctrl+click select several for deletion), the command
+window of the selected project in the middle, and the agents working on it on
+the right (click one for its card).
+
+The command window is a conversation with the project's General Manager. A plain
+order becomes a goal for that project; the GM posts the plan, each task's result,
+proposals and the gate result back into the thread. Attach files with **Attach**
+or by pasting an image; agents find them in `.attachments/` in their worktree
+(never committed). Claude Code and Codex can open them there; API models only see
+the file names (images are not sent as image content). Every message has a copy button, and identical consecutive
+messages collapse into one with a count. Slash commands:
+
+| Command | Does |
+| --- | --- |
+| `/standup` | Every agent on the project reports what it is doing and what it last finished |
+| `/status` | The project's recent goals and their state |
+| `/stop` | Cancels the project's running and queued goals |
+| `/sync` | Pushes approved work to the GitHub remote (administrators) |
+| `/help` | Lists the commands |
+
+This repository is registered as the protected **Agent Company** project: it
+cannot be deleted or renamed and only administrators see it, so agents can work
+on the platform itself. Approved changes are merged into this checkout; restart
+the service to load them.
+
+### Proposals
+
+Agents may end a task with `PROPOSAL: <title> :: <why>`. By default proposals
+wait for an administrator (Projects page, or `POST /api/proposals/<id>/approve`);
+with the setting `proposal_policy = superiors` the General Manager decides them.
+An approved proposal becomes a new goal in the same project. One goal and its
+descendants may spawn at most `max_proposal_goals` goals, so agents cannot keep
+creating work for themselves.
+
+### Pushing to GitHub
+
+Approval merges a goal's branch locally. `/sync` (or **Sync to GitHub**) then
+pushes that branch to the project's GitHub URL; with `AUTO_PUSH=1` this happens
+after every approval. Only commits that came from approved work are pushed: the
+checkout's own uncommitted changes are never staged. Missing entries of a
+source-only `.gitignore` (`node_modules/`, `.venv/`, `.env`, `data/`, ...) are
+added in a commit of their own, and commits with files over 50 MB are refused.
+Credentials come from `gh auth` when it is logged in, otherwise from git's own
+configuration. Administrators can give each user a Git name, email and branch
+(`PUT /api/users/<id>/git`); that user's work is committed and pushed under it.
+
+## What the quality gate checks
+
+Besides each task's contract and the reviewer's verdict, every iteration's change is checked for:
+
+| Check | Fails when |
+| --- | --- |
+| Secret scan | An added line holds something that looks like a credential: private keys, Anthropic/OpenAI/OpenRouter/GitHub/Slack/Google/Stripe/AWS keys, or a hard-coded password or token (obvious placeholders are ignored) |
+| Syntax | A changed Python, JSON, TOML or shell file does not parse; JavaScript, Ruby, PHP and Go too when `node`, `ruby`, `php` or `gofmt` is installed |
+| Scope | A changed file is outside the goal's allowed paths (`--allow 'src/*'`), or an existing test was changed or deleted while tests are protected (`--protect-tests`); new tests are always allowed |
+| Commands | A quality command exits non-zero |
+
+Quality commands are first run on the **untouched code**. A command that already
+failed there is reported as pre-existing ("the goal may be to fix it"), and with
+`allow_preexisting_failures` it does not block the gate. An administrator's goal
+that sets no quality commands uses the test and lint commands its description
+names in backticks or a shell block (for example "check with `uv run pytest -q`").
+
+Each iteration gets a score (the share of checks that passed). If the last
+iteration fails and scored worse than an earlier one, the goal's branch is reset
+to the best iteration, so a late regression doesn't throw away better work.
+
+Budgets (Settings): `goal_budget_usd` caps the model spend per goal and
+`goal_time_budget` its wall-clock time. At 60% the agents are told to converge;
+at 100% the goal stops (and keeps its best iteration).
+
 ## Services (CDAF)
 
 | Service | Module | What it does |
@@ -45,10 +167,17 @@ tools, and a controlled orchestration system.
 | Quality Gate | `quality.py` | Contracts, reviewer verdicts, test/lint/type commands, approval |
 | Cost and Usage Monitor | `usage.py` | Tokens and cost per run, daily and weekly windows, limits, reset times, active sessions |
 
-The rest: `loop.py` (the circular goal loop), `learning.py` (lessons, XP,
-playbooks), `research.py` (crawler, knowledge search, rotation), `auth.py`
-(users), `api.py` plus `static/` (API and dashboard), and `crew.py` (the classic
-four-agent CrewAI pipeline).
+The rest: `loop.py` (the circular goal loop), `projects.py` (projects, command
+window, proposals), `checks.py` (secret, syntax and scope checks), `learning.py` and
+`evolution.py` (lessons, versioned playbooks, experiments, clone merging),
+`performance.py` (defects, certification, metrics), `evaluation.py` (eval harness),
+`research.py` (crawler, knowledge, source kinds, injection flags, reports, rotation),
+`governance.py` (audit log, notifications, command policy), `prefs.py` (settings),
+`gitsync.py` (pushes, Git identities), `files.py` (file manager), `supervisor.py` and
+`system.py` (safe restarts, status), `auth.py` (users, permissions), `api.py` plus
+`static/` (API and dashboard), and `crew.py` (the classic four-agent CrewAI pipeline).
+`docs/feature-gap.md` lists every feature taken from AgentForge, `/home/thomas/bit`
+and `/home/luca/update/`, and the few that were deliberately left out.
 
 ## Organisation
 
@@ -84,10 +213,12 @@ route on the Models page.
 | External Data, Study Room | OpenRouter Free router | Bulk collection at no token cost |
 
 For each agent the router tries, in order: the agent's own model preference, then
-its role's route, then `MODEL` from `.env`, then the offline simulator. It skips
-any model whose key or CLI is missing, that is disabled, or that has reached its
-daily or weekly token limit, and it records why. A goal therefore always runs,
-offline at worst.
+its role's route, then `MODEL` from `.env`. It skips any model whose key or CLI is
+missing, that is disabled, or that has reached its daily or weekly token limit, and
+it records why. Only when none of them is usable does the offline simulator stand
+in, so the whole loop still runs on a machine with no model configured; once a real
+model is in use, its failures are real failures and are never papered over by
+simulated work.
 
 ### Claude Code
 
@@ -114,6 +245,87 @@ which is billed per token. Free options are OpenRouter's free models and local
 models through Ollama (`ollama/<model>` plus `OLLAMA_API_BASE`). The Codex CLI
 (`ENABLE_CODEX=1`) can use an eligible ChatGPT plan, subject to that plan's limits.
 
+## Model fallback, retries and local servers
+
+- **Fallback:** if a model call fails (rate limit, overload, network), the same
+  request goes to the next usable real model in the role's chain (agent
+  preference, route, `MODEL`). If all of them fail, the task fails; the simulator
+  never substitutes for a real model that failed.
+- **Retry model:** each route can name a stronger model for iterations after a
+  failed gate (by default QA, Security and Analyst retry on Claude Opus 5.5, and
+  Research on Claude Sonnet 5.5).
+- **Different reviewer family:** QA and security reviews prefer an available model
+  from a different provider than the one that wrote the code, so the reviewer
+  isn't blind to the same mistakes.
+- **Local servers:** add a model with a base URL of an OpenAI-compatible server
+  (llama-server, LM Studio, vLLM) and the model id `openai/<name>`; for example the
+  Qwen3-Coder llama-server in `/home/thomas/bit/local-llm/serve.sh` is
+  `http://172.17.0.1:18100/v1` with id `openai/local/qwen3-coder-30b`. An optional
+  `api_key_env` names the variable that holds its key.
+- **Test:** the Models page's **Test** button sends a one-word prompt and shows the
+  reply, tokens and time.
+
+## More models
+
+- **Model catalogs** (Models page): besides OpenRouter, search the chat models of
+  Groq, Mistral, Cohere and SambaNova (their OpenAI-compatible model lists) and add
+  one with a click. They need `GROQ_API_KEY`, `MISTRAL_API_KEY`, `COHERE_API_KEY` or
+  `SAMBANOVA_API_KEY`.
+- **Claude Code sessions:** an agent's next task on the same goal within 60 minutes
+  resumes its previous Claude Code session (`--resume`), so a retry does not re-read
+  the code from scratch.
+
+## How agents evolve
+
+- **Versioned playbooks:** every few new lessons, an agent's playbook is rebuilt
+  from its recent lessons (`DO:` rules from passed work, `AVOID:` warnings from
+  failures) as a new version. Every version is kept; administrators can restore
+  any of them from the agent's card.
+- **Experiments:** when an agent's last outcomes pass the gate less than half the
+  time, it gets a failure-aware candidate playbook (warnings first) instead of a
+  direct change. The candidate runs for 3 tasks and is promoted only if it does at
+  least as well as before; otherwise it is rolled back and the agent is not
+  re-diagnosed until it has 6 new outcomes.
+- **Clones:** when every agent of a role is busy, the best one is cloned. After the
+  goal, idle clones merge their XP, skills, task counts and lessons back into the
+  original and retire. **Merge idle clones** on the Evolution page does the same
+  for a whole role.
+- **Team compatibility:** staffing scores candidates by skill coverage, level,
+  success rate and how well they have worked with the agents already on the goal.
+- **Handovers:** when a task is retried in the next iteration, the agent gets a
+  handover package (previous agent, status, files changed, known problems, commit,
+  next actions); a handover between two different agents is recorded on both cards.
+- **Lifecycle:** agents are active, paused or retired. Retirement is permanent and
+  keeps the agent's history; names never change. Administrators can create agents
+  for new roles and clone, pause, resume or retire existing ones.
+
+## Measuring the company
+
+- **Eval harness:** `uv run python -m agent_company eval --suite smoke --label sonnet-v1 --repeats 3`
+  runs every task of `evals/smoke.json` three times, each in a fresh repository,
+  and reports per task how many runs passed, why runs ended, iterations, time and
+  cost. A task counts as solved only if every run passes. Change a route or a
+  model, run again under a new label, and compare with
+  `eval --compare sonnet-v1 opus-v1` (or on the Performance page). A suite is a JSON
+  file of tasks with seed files and check commands; eval goals never merge, push
+  or notify. The offline simulator solves none of the bundled tasks, on purpose:
+  they need real code.
+- **Defects:** every failed gate check becomes a defect of its goal (critical:
+  credentials or a refused command; high: failing command or syntax; medium:
+  scope or reviewer FAIL; low: a task contract). It closes when a later iteration
+  passes that check and reopens if it fails again. Administrators can accept the
+  risk or defer it.
+- **Certification:** each agent has a level L0-L5 for its role, computed from its
+  gate outcomes and eval runs. L3 needs at least 3 passes in 5 outcomes, L4 at
+  least 10 passes at 75% across 2 goals, and L5 at least 25 passes at 85% across 5
+  goals including 5 eval passes, so one hard task never makes an expert. A level
+  drops by one when the newest evidence is more than 90 days old.
+- **Performance:** per agent: completion, rework (tasks redone in a later
+  iteration), reliability (model calls that succeeded), average task time,
+  tokens, cost, collaborators and the pass rate of its goals; the same per room;
+  and for the company: pass rate, iterations to pass, cost per passed goal and
+  open defects.
+
 ## Research
 
 **Research** page → **Collect a website**: give a URL and a link depth. Depth 0
@@ -132,6 +344,25 @@ The learning pipeline: new information (crawl) → research (summaries) → know
 (documents) → experiments (goal iterations) → evaluation (quality gate) → improved
 agents (lessons and playbooks).
 
+## Knowledge safety
+
+Collected pages keep their provenance (URL, when, which agent) and are labelled by
+the kind of source: standard, academic, source repository, package registry,
+official documentation, community Q&A, blog or other web page. Different kinds
+deserve different weight, so there is no single trust score. Pages whose text tries
+to instruct the reader (override earlier instructions, take on a new role, reveal a
+system prompt, fake a chat turn, send credentials somewhere, run destructive
+commands) are flagged; they stay in the knowledge store for people to read but are
+never put into an agent's prompt. Everything else reaches agents wrapped in
+`<document>` tags with its kind and date, and agents are told it is data, not
+instructions.
+
+**Ask the research room** (Research page or `POST /api/research/requests`) takes a
+question and optional URLs. The research lead collects the URLs, searches the
+knowledge store and writes a report with objective, numbered findings citing their
+sources, gaps, a recommendation and the source list; the report is filed as
+knowledge too.
+
 ## Users
 
 The dashboard asks only for a name and has a **Register** button. The browser
@@ -143,6 +374,74 @@ registered browser signs in by itself with no password; other computers are
 refused. Administrators can reject, disable, enable, reset a computer, promote or
 delete accounts. Only administrators can point a goal at an existing repository
 or set its quality commands, because those run commands on the server.
+
+## Users and permissions
+
+Administrators can do everything. Every other account has permissions (Users page →
+**Permissions**):
+
+| Permission | Default | Grants |
+| --- | --- | --- |
+| Projects | every regular project | Which projects the user sees (with their chat, goals, proposals and agents) |
+| Run | on | Giving orders, starting goals and asking the research room; without it the user only reads |
+| Create projects | off | Creating projects in a new workspace (choosing a folder or quality commands stays admin-only); the creator is granted the project |
+| Manage agents | off | Creating, cloning, pausing, retiring and editing agents; evolution actions |
+| Manage models | off | Adding, editing, testing and deleting models; changing routes |
+
+Always admin-only: users, files, settings, audit log, system, pushing to GitHub and
+approving work. The protected platform project is never visible to a non-admin.
+Each user can also have a Git name, email and branch (Users page → **Git**): goals
+they order are committed and merged under that identity and pushed to that branch.
+
+## Administration
+
+- **Settings** (admins): the values in `.env` can be overridden here and apply at
+  once (iterations, parallelism, approval, proposal policy, budgets, auto-push,
+  default quality commands, executor). **Reset** returns to the `.env` value.
+- **Notifications**: goals waiting for approval, failed goals, proposals and new
+  registrations; the bell shows the unread count. Administrators can post a notice
+  to every user. The browser tab icon shows how many goals are running (blue) or
+  waiting for approval (amber).
+- **Audit log** (admins): every administrative action (users, settings, models,
+  routes, agents, approvals, projects, pushes) and every refused command, with
+  actor, before/after values and time. Records are hash-chained; the page shows
+  whether the chain is intact, so an edited or deleted record is detected.
+- **Command policy**: quality commands, project commands and check commands are
+  refused before they run when they would escalate privileges (`sudo`), delete
+  root/home/parent paths, wipe disks, deploy or push, drop databases, change
+  firewalls or accounts, pipe a download into a shell, stop services or tamper
+  with audit history. Refusals are audited as high severity.
+
+## Platform
+
+- **Files** (admins): browse the project folders and `data/` in one or more panes
+  (**+ Pane**, close with ✕). Ctrl/Shift+click selects several items; drag them
+  onto a folder to move them; copy, cut, paste, rename, delete and upload work on
+  the selection. Double-click opens a file: code is shown with syntax colours,
+  Markdown rendered (with a Source toggle), and **Edit** saves changes. Nothing
+  outside the project folders can be read or changed, `.git` is read-only, and
+  every write is in the audit log. **Browse…** in the new-project form picks the
+  work folder.
+- **Safe restart:** run the service as `uv run python -m agent_company supervise`.
+  When the code under `src/` changes (for example after approving a goal of the
+  protected platform project), the supervisor syntax-checks it, boots a candidate
+  on port + 1 without background work, health-checks it, waits until no goal is
+  running and then swaps the server. A candidate that fails never replaces the
+  running service; the reason is shown on the **System** page, which also has a
+  **Restart safely** button and shows host load, memory, disk, the service process,
+  running work and the repository's uncommitted changes. A crashed server is
+  restarted with backoff. The dashboard itself is served from disk and needs no
+  restart.
+- **Live updates:** the dashboard listens to `/api/stream` (Server-Sent Events) and
+  refreshes when something changes; it falls back to polling every 5 seconds.
+- **Screen formats:** the columns button in the top bar picks one of 21 formats
+  (Standard, Compact, Comfortable, Focus, Zen, Wide chat, Agent ops, Mirror, Command
+  centre, Stacked, Presentation, Large text, Dense data, Ultrawide, Laptop, Tablet,
+  Mobile, Cinema, Floating cards, Labelled rail, Square). Each sets scale, density,
+  corners, where the navigation rail sits (left, right or bottom, with or without
+  labels), the page width and how the Projects page arranges its three panels.
+  Drag the gutters between those panels to resize them; widths are remembered per
+  format in this browser. Light and dark theme are separate (moon/sun button).
 
 ## Technology choices
 
@@ -162,43 +461,6 @@ The design's suggested Node.js / Next.js / Redis stack is what
 Python agent engine, so it stays with the stack CrewAI needs and adds Redis or a
 Next.js front end only when one machine is no longer enough.
 
-## Setup
-
-Requirements: Python 3.12+, [uv](https://docs.astral.sh/uv/) and git.
-
-```bash
-uv sync                 # installs dependencies into .venv
-cp .env.example .env    # set MODEL and the keys you have; everything is optional
-uv run pytest -q        # runs offline
-```
-
-## Run
-
-```bash
-uv run python -m agent_company serve        # dashboard: http://127.0.0.1:4900
-uv run python -m agent_company goal "Build a REST API for a todo list with FastAPI" \
-    --check "uv run pytest -q" --url https://fastapi.tiangolo.com/tutorial/
-uv run python -m agent_company approve 1    # merge goal 1 after review
-uv run python -m agent_company models       # what each role would use right now
-uv run python -m agent_company agents       # agents by room
-uv run python -m agent_company crawl https://docs.crewai.com/ --depth 1
-uv run python -m agent_company "Build a REST API for a todo list"   # classic crew -> output/
-```
-
-Without any key, goals run on the offline simulator: the whole loop runs
-(planning, staffing, worktree, gate, learning, approval) with placeholder content.
-Set `EXECUTOR=offline` to force that, for example in tests.
-
-A goal without `--repo` gets a fresh git workspace in `data/workspaces/`. With
-`--repo`, the agents work in a worktree of that repository on branch
-`agents/goal-<id>`, and approval merges that branch into the branch it started
-from (the repository must be on that branch, with no uncommitted changes).
-
-Known limits: the worktree and branch stay in place after approval (remove them
-with `git worktree remove` when you no longer need them). A goal interrupted by a
-restart resumes at the iteration it was on, but without the previous gate's
-findings.
-
 ## Safety
 
 - Agents never edit the main checkout. File-changing executors run only inside
@@ -206,10 +468,15 @@ findings.
 - Claude Code's Bash access is limited to tests and read-only git; Codex runs in its
   `workspace-write` sandbox. This is not a container: for untrusted goals, run the
   service in a disposable VM or container with no production credentials.
-- Nothing is pushed or deployed. Merging is local and needs approval
-  (`REQUIRE_APPROVAL=1`, the default).
+- Nothing is deployed. Merging is local and needs approval (`REQUIRE_APPROVAL=1`,
+  the default); pushing to GitHub happens only on `/sync` or with `AUTO_PUSH=1`.
+- Commands that would deploy, push, escalate privileges, delete root or home paths,
+  drop databases or change firewalls are refused before they run (and audited);
+  changes that add credentials fail the gate.
 - Web pages, repository files and tool output are passed to agents as untrusted
-  data, and the crawler refuses private network addresses.
+  data; pages that try to instruct agents are kept out of prompts, and the crawler
+  refuses private network addresses (also after redirects).
+- Administrative actions are recorded in a hash-chained audit log.
 
 ## References
 

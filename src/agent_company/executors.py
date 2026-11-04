@@ -44,6 +44,7 @@ class Result:
     error: str = ""
     files: list[str] = field(default_factory=list)
     duration: float = 0.0
+    session_id: str = ""
 
 
 FILE_BLOCK_HELP = (
@@ -87,7 +88,15 @@ class LLMExecutor(Executor):
     def _run(self, req: Request) -> Result:
         from crewai import LLM
 
-        llm = LLM(model=self.choice.model_id, timeout=self.timeout)
+        import os
+
+        kwargs: dict[str, Any] = {"timeout": self.timeout}
+        if self.choice.base_url:  # OpenAI-compatible server: llama-server, LM Studio, vLLM, ...
+            kwargs["base_url"] = self.choice.base_url
+            kwargs["api_key"] = os.environ.get(self.choice.api_key_env, "") if self.choice.api_key_env else "local"
+        elif self.choice.api_key_env and os.environ.get(self.choice.api_key_env):
+            kwargs["api_key"] = os.environ[self.choice.api_key_env]
+        llm = LLM(model=self.choice.model_id, **kwargs)
         system = req.system + ("\n\n" + FILE_BLOCK_HELP if req.writes else "")
         text = llm.call([{"role": "system", "content": system}, {"role": "user", "content": req.prompt}])
         text = text if isinstance(text, str) else str(text)
@@ -120,6 +129,9 @@ class ClaudeCodeExecutor(Executor):
             cmd += ["--permission-mode", "acceptEdits"]
         if self.choice.model_id:
             cmd += ["--model", self.choice.model_id]
+        resume = req.data.get("resume")
+        if resume and re.fullmatch(r"[0-9a-fA-F-]{8,64}", resume):
+            cmd += ["--resume", resume]  # continue this agent's earlier session on the same goal
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=self.timeout)
         try:
             data = json.loads(proc.stdout)
@@ -132,7 +144,8 @@ class ClaudeCodeExecutor(Executor):
                       output_tokens=int(u.get("output_tokens") or 0),
                       cost=float(data.get("total_cost_usd") or 0.0),
                       ok=not data.get("is_error") and proc.returncode == 0,
-                      error="" if proc.returncode == 0 else (proc.stderr or str(data.get("result")))[-2000:])
+                      error="" if proc.returncode == 0 else (proc.stderr or str(data.get("result")))[-2000:],
+                      session_id=str(data.get("session_id") or ""))
 
 
 class CodexExecutor(Executor):
@@ -198,13 +211,21 @@ class OfflineExecutor(Executor):
             return (f"Review of '{title}' (offline simulator).\n- Checked the worklog against the "
                     "specification.\n- No blocking issues found.\nVERDICT: PASS")
         if req.writes:
+            proposal = ("\nPROPOSAL: Add regression tests for this change :: the change has no automated tests yet\n"
+                        if "propose" in req.prompt.lower() else "")
             body = (f"# Worklog\n\nTask: {title}\n\n{req.data.get('description', '')}\n\n"
                     + (f"Addressed feedback:\n{feedback}\n" if feedback else "")
                     + "\n(Written by the offline simulator; configure a model for real code.)\n")
-            return f"Implemented '{title}'.\n=== FILE: WORKLOG.md ===\n{body}=== END FILE ===\n"
+            return f"Implemented '{title}'.\n=== FILE: WORKLOG.md ===\n{body}=== END FILE ===\n{proposal}"
         return (f"## {title}\n\nOffline simulator output for the {req.role} role.\n\n"
                 f"{req.data.get('description', '')}\n\nKey points:\n1. Keep the scope small.\n"
                 "2. Define acceptance tests first.\n3. Report evidence, not claims.\n")
+
+    def _triage(self, req: Request) -> str:
+        return f"APPROVE\n'{req.data.get('title', 'the proposal')}' is small and serves the project."
+
+    def _test(self, req: Request) -> str:
+        return "OK"
 
     def _lesson(self, req: Request) -> str:
         outcome = req.data.get("outcome", "success")
@@ -212,6 +233,14 @@ class OfflineExecutor(Executor):
         if outcome == "success":
             return f"For tasks like '{title}', the approach used passed the quality gate; reuse it."
         return f"'{title}' failed the gate: {req.data.get('feedback', 'see report')[:200]}. Check this first next time."
+
+    def _report(self, req: Request) -> str:
+        docs = req.data.get("documents") or []
+        findings = "\n".join(f"{i}. {d['title'] or d['url']} is relevant [{i}]." for i, d in enumerate(docs, 1))
+        sources = "\n".join(f"[{i}] {d['title']} - {d['url']} - {d['category']}" for i, d in enumerate(docs, 1))
+        return (f"## Objective\n{req.data.get('question', '')}\n\n## Findings\n{findings or 'No material was found.'}\n\n"
+                "## Gaps\nThe offline simulator does not read the material; configure a model for a real report.\n\n"
+                f"## Recommendation\nRead the sources below.\n\n## Sources\n{sources or '(none)'}\n")
 
     def _research(self, req: Request) -> str:
         docs = req.data.get("documents") or []

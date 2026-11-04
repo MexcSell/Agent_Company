@@ -72,8 +72,87 @@ class Agent(Base):
     tasks_done: Mapped[int] = mapped_column(Integer, default=0)
     tasks_failed: Mapped[int] = mapped_column(Integer, default=0)
     playbook: Mapped[str] = mapped_column(Text, default="")
+    lifecycle: Mapped[str] = mapped_column(String(16), default="active")  # active|paused|retired (SPEC02 §6)
+    playbook_version: Mapped[int] = mapped_column(Integer, default=0)
+    experiment: Mapped[dict[str, Any]] = mapped_column(default=dict)  # running candidate playbook trial
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PlaybookVersion(Base):
+    __tablename__ = "playbook_versions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    playbook: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class EvolutionEvent(Base):
+    """Observe -> diagnose -> generate -> experiment -> evaluate -> promote/rollback."""
+
+    __tablename__ = "evolution_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stage: Mapped[str] = mapped_column(String(16))
+    agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
+    title: Mapped[str] = mapped_column(Text)
+    detail: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Handover(Base):
+    """Context passed when a task moves to another agent (SPEC12 §10)."""
+
+    __tablename__ = "handovers"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    goal_id: Mapped[int] = mapped_column(ForeignKey("goals.id", ondelete="CASCADE"), index=True)
+    task_key: Mapped[str] = mapped_column(String(64))
+    from_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
+    to_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
+    package: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="accepted")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Defect(Base):
+    """A failed quality-gate check, tracked until a later iteration passes it (ASEAO09 §11)."""
+
+    __tablename__ = "defects"
+    __table_args__ = (UniqueConstraint("goal_id", "check"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    goal_id: Mapped[int] = mapped_column(ForeignKey("goals.id", ondelete="CASCADE"), index=True)
+    check: Mapped[str] = mapped_column(String(256))
+    severity: Mapped[str] = mapped_column(String(16))  # critical|high|medium|low|info
+    status: Mapped[str] = mapped_column(String(16), default="detected")
+    # detected|reopened|closed|accepted_risk|deferred
+    detail: Mapped[str] = mapped_column(Text, default="")
+    first_iteration: Mapped[int] = mapped_column(Integer, default=1)
+    last_iteration: Mapped[int] = mapped_column(Integer, default=1)
+    closed_iteration: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class EvalRun(Base):
+    """One run of one benchmark task (eval harness)."""
+
+    __tablename__ = "eval_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    label: Mapped[str] = mapped_column(String(64), index=True)
+    suite: Mapped[str] = mapped_column(String(128))
+    task: Mapped[str] = mapped_column(String(128))
+    repeat: Mapped[int] = mapped_column(Integer)
+    goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    passed: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(24), default="")
+    end_reason: Mapped[str] = mapped_column(String(64), default="")
+    iterations: Mapped[int] = mapped_column(Integer, default=0)
+    cost: Mapped[float] = mapped_column(Float, default=0.0)
+    tokens: Mapped[int] = mapped_column(Integer, default=0)
+    seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class Relationship(Base):
@@ -109,12 +188,15 @@ class ModelEntry(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     builtin: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str] = mapped_column(Text, default="")
+    base_url: Mapped[str] = mapped_column(String(512), default="")  # OpenAI-compatible server (llama-server, LM Studio)
+    api_key_env: Mapped[str] = mapped_column(String(64), default="")  # env var holding this model's key
 
 
 class Route(Base):
     __tablename__ = "routes"
     role: Mapped[str] = mapped_column(String(64), primary_key=True)
     model_name: Mapped[str] = mapped_column(String(128))
+    escalation: Mapped[str] = mapped_column(String(128), default="")  # model for retries after a failed gate
 
 
 class Goal(Base):
@@ -134,8 +216,74 @@ class Goal(Base):
     quality_commands: Mapped[list[Any]] = mapped_column(default=list)
     result: Mapped[str] = mapped_column(Text, default="")
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    origin: Mapped[str] = mapped_column(String(16), default="user")  # user|proposal|eval
+    parent_goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    attachments: Mapped[list[Any]] = mapped_column(default=list)
+    allowed_paths: Mapped[list[Any]] = mapped_column(default=list)  # globs; empty = anywhere
+    protect_tests: Mapped[bool] = mapped_column(Boolean, default=False)
+    baseline: Mapped[dict[str, Any]] = mapped_column(default=dict)  # command -> {"passed", "detail"}
+    history: Mapped[list[Any]] = mapped_column(default=list)  # per iteration: commit, score, passed
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class Project(Base):
+    __tablename__ = "projects"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True)
+    path: Mapped[str] = mapped_column(Text, default="")  # git repository the agents work on
+    github_url: Mapped[str] = mapped_column(String(512), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    quality_commands: Mapped[list[Any]] = mapped_column(default=list)
+    protected: Mapped[bool] = mapped_column(Boolean, default=False)
+    manager_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Message(Base):
+    """The project command window: orders, GM replies, plans, results, proposals."""
+
+    __tablename__ = "messages"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    goal_id: Mapped[int | None] = mapped_column(ForeignKey("goals.id", ondelete="SET NULL"), nullable=True)
+    author_type: Mapped[str] = mapped_column(String(16))  # user|agent|system
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"), nullable=True)
+    kind: Mapped[str] = mapped_column(String(16), default="chat")  # chat|command|plan|result|proposal|standup|error
+    content: Mapped[str] = mapped_column(Text, default="")
+    attachments: Mapped[list[Any]] = mapped_column(default=list)
+    meta: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
+class Proposal(Base):
+    """Follow-up work an agent raised; approved proposals become goals."""
+
+    __tablename__ = "proposals"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    goal_id: Mapped[int] = mapped_column(ForeignKey("goals.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"), nullable=True)
+    title: Mapped[str] = mapped_column(String(256))
+    description: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|approved|rejected
+    decided_by: Mapped[str] = mapped_column(String(128), default="")
+    spawned_goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Upload(Base):
+    __tablename__ = "uploads"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(256))
+    path: Mapped[str] = mapped_column(Text)
+    content_type: Mapped[str] = mapped_column(String(128), default="")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class Task(Base):
@@ -155,6 +303,7 @@ class Task(Base):
     output: Mapped[str] = mapped_column(Text, default="")
     gate: Mapped[dict[str, Any]] = mapped_column(default=dict)
     model_name: Mapped[str] = mapped_column(String(128), default="")
+    session_id: Mapped[str] = mapped_column(String(64), default="")  # Claude Code session, for resuming
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -164,6 +313,7 @@ class Run(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True)
     agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
+    goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     model_name: Mapped[str] = mapped_column(String(128))
     kind: Mapped[str] = mapped_column(String(16))
     purpose: Mapped[str] = mapped_column(String(32), default="task")
@@ -197,6 +347,23 @@ class Document(Base):
     text: Mapped[str] = mapped_column(Text, default="")
     source_url: Mapped[str] = mapped_column(String(2048), default="")
     collected_by: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
+    category: Mapped[str] = mapped_column(String(32), default="")  # kind of source (ASEAO06 §9)
+    flags: Mapped[list[Any]] = mapped_column(default=list)  # prompt-injection signals (SPEC14 §9)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ResearchReport(Base):
+    """A research request and the cited report the research room wrote for it (ASEAO06 §5-6)."""
+
+    __tablename__ = "research_reports"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question: Mapped[str] = mapped_column(Text)
+    urls: Mapped[list[Any]] = mapped_column(default=list)
+    status: Mapped[str] = mapped_column(String(16), default="queued")  # queued|running|done|failed
+    report: Mapped[str] = mapped_column(Text, default="")
+    sources: Mapped[list[Any]] = mapped_column(default=list)
+    agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
+    requested_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -223,6 +390,10 @@ class User(Base):
     device_info: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    permissions: Mapped[dict[str, Any]] = mapped_column(default=dict)  # see auth.DEFAULT_PERMISSIONS
+    git_name: Mapped[str] = mapped_column(String(128), default="")
+    git_email: Mapped[str] = mapped_column(String(256), default="")
+    git_branch: Mapped[str] = mapped_column(String(128), default="")
 
 
 class UserSession(Base):
@@ -231,6 +402,47 @@ class UserSession(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Setting(Base):
+    """Administrator overrides of the `.env` settings (see prefs.py)."""
+
+    __tablename__ = "settings"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"v": <value>}
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    level: Mapped[str] = mapped_column(String(16), default="info")  # info|success|warning|error
+    title: Mapped[str] = mapped_column(String(256))
+    body: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(64), default="system")
+    goal_id: Mapped[int | None] = mapped_column(ForeignKey("goals.id", ondelete="SET NULL"), nullable=True)
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = everyone; else one user
+    admin_only: Mapped[bool] = mapped_column(Boolean, default=False)
+    read_by: Mapped[list[Any]] = mapped_column(default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
+class AuditEvent(Base):
+    """Append-only, hash-chained record of administrative and security actions."""
+
+    __tablename__ = "audit"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    actor: Mapped[str] = mapped_column(String(128))
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    target: Mapped[str] = mapped_column(String(256), default="")
+    before: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    after: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    severity: Mapped[str] = mapped_column(String(16), default="info")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    prev_hash: Mapped[str] = mapped_column(String(64), default="")
+    hash: Mapped[str] = mapped_column(String(64), default="")
 
 
 _engine: Engine | None = None
@@ -258,8 +470,30 @@ def engine() -> Engine:
                     cur.close()
 
             Base.metadata.create_all(_engine)
+            _add_missing_columns(_engine)
             _factory = sessionmaker(_engine, expire_on_commit=False)
         return _engine
+
+
+def _add_missing_columns(eng: Engine) -> None:
+    """create_all never alters existing tables: add columns introduced since the DB was made."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(eng)
+    with eng.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in have:
+                    continue
+                ddl = col.type.compile(dialect=eng.dialect)
+                default = ""
+                if col.default is not None and getattr(col.default, "is_scalar", False):
+                    v = col.default.arg
+                    default = f" DEFAULT {int(v) if isinstance(v, bool) else repr(v) if isinstance(v, str) else v}"
+                conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl}{default}'))
 
 
 @contextmanager
@@ -292,7 +526,13 @@ def log_event(
     message: str,
     goal_id: int | None = None,
     agent_id: int | None = None,
+    s: Session | None = None,
     **data: Any,
 ) -> None:
-    with session() as s:
-        s.add(Event(kind=kind, message=message, goal_id=goal_id, agent_id=agent_id, data=data))
+    """Record an event. Pass `s` when called inside an open session (SQLite allows one writer)."""
+    ev = Event(kind=kind, message=message, goal_id=goal_id, agent_id=agent_id, data=data)
+    if s is not None:
+        s.add(ev)
+        return
+    with session() as own:
+        own.add(ev)

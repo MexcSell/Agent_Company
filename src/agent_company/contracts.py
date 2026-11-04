@@ -180,9 +180,18 @@ def _check_one(cond: Condition, contract: TaskContract, output: str, workdir: Pa
 def run_command(cmd: str, workdir: Path, timeout: int) -> tuple[bool, str]:
     from agent_company.worktrees import ensure_sandboxed
 
+    from agent_company.governance import audit, check_command
+
     cwd = ensure_sandboxed(workdir)
+    refused = check_command(cmd)
+    if refused:
+        audit("quality-gate", "command_refused", cmd[:256], after={"reason": refused}, severity="high")
+        return False, f"`{cmd}` refused by the command policy: {refused}"
     try:
-        proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        import os
+
+        env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+        proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         return False, f"`{cmd}` timed out after {timeout}s"
     tail = (proc.stdout + proc.stderr)[-1500:]

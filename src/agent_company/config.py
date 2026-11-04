@@ -38,6 +38,13 @@ class Settings:
     host: str
     port: int
     quality_commands: list[str] = field(default_factory=list)
+    # Proposals agents raise: "user" waits for an administrator, "superiors" lets the GM decide.
+    proposal_policy: str = "user"
+    max_proposal_goals: int = 3  # goals one goal may spawn through approved proposals
+    goal_budget_usd: float = 0.0  # 0 = no limit
+    goal_time_budget: int = 0  # seconds, 0 = no limit
+    auto_push: bool = False
+    allow_preexisting_failures: bool = False
 
     @property
     def worktrees_dir(self) -> Path:
@@ -67,20 +74,39 @@ def load_settings() -> Settings:
         host=os.environ.get("HOST") or "127.0.0.1",
         port=_int("PORT", 4900),
         quality_commands=commands,
+        proposal_policy=(os.environ.get("PROPOSAL_POLICY") or "user").lower(),
+        max_proposal_goals=_int("MAX_PROPOSAL_GOALS", 3),
+        goal_budget_usd=float(os.environ.get("GOAL_BUDGET_USD") or 0),
+        goal_time_budget=_int("GOAL_TIME_BUDGET", 0),
+        auto_push=_bool("AUTO_PUSH", False),
+        allow_preexisting_failures=_bool("ALLOW_PREEXISTING_FAILURES", False),
     )
 
 
 _settings: Settings | None = None
+_overrides: dict[str, object] = {}
 
 
 def settings() -> Settings:
     global _settings
     if _settings is None:
         _settings = load_settings()
+        for k, v in _overrides.items():
+            if hasattr(_settings, k):
+                setattr(_settings, k, v)
     return _settings
 
 
+def set_overrides(values: dict[str, object]) -> None:
+    """Apply administrator overrides from the database on top of the environment."""
+    global _settings
+    _overrides.clear()
+    _overrides.update(values)
+    _settings = None
+
+
 def reset_settings() -> None:
-    """Re-read the environment (used by tests)."""
+    """Re-read the environment and drop overrides (used by tests)."""
     global _settings
     _settings = None
+    _overrides.clear()

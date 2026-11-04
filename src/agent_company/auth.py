@@ -24,10 +24,43 @@ from typing import Any
 from sqlalchemy import delete, func, select
 
 from agent_company.db import Event, User, UserSession, now, session
+from agent_company.governance import notify
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,31}$")
 SECRET_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 SESSION_DAYS = 30
+# What a non-administrator may do. Administrators may do everything.
+DEFAULT_PERMISSIONS: dict[str, Any] = {
+    "projects": "all",         # "all" regular projects, or a list of project ids
+    "run": True,               # give orders, start goals, ask the research room
+    "create_projects": False,  # create projects (in a new workspace; folders and commands stay admin-only)
+    "manage_agents": False,    # create, clone, pause, retire and edit agents; evolution actions
+    "manage_models": False,    # add, edit, test and delete models; change routes
+}
+
+
+def permissions_of(u: User) -> dict[str, Any]:
+    return {**DEFAULT_PERMISSIONS, **(u.permissions or {})}
+
+
+def can(user: dict[str, Any], perm: str) -> bool:
+    return bool(user.get("is_admin")) or bool(user.get("permissions", {}).get(perm))
+
+
+def set_permissions(user_id: int, perms: dict[str, Any]) -> dict[str, Any]:
+    bad = set(perms) - set(DEFAULT_PERMISSIONS)
+    if bad:
+        raise AuthError(400, "unknown_permission", f"unknown permission(s): {', '.join(sorted(bad))}")
+    projects = perms.get("projects", "all")
+    if projects != "all" and not (isinstance(projects, list) and all(isinstance(x, int) for x in projects)):
+        raise AuthError(400, "bad_projects", "projects is \"all\" or a list of project ids")
+    with session() as s:
+        u = s.get(User, user_id)
+        if u is None:
+            raise AuthError(404, "not_found")
+        u.permissions = {**permissions_of(u), **{k: (v if k == "projects" else bool(v)) for k, v in perms.items()}}
+        s.flush()
+        return user_dict(u)
 
 
 class AuthError(Exception):
@@ -44,7 +77,9 @@ def user_dict(u: User) -> dict[str, Any]:
     return {"id": u.id, "name": u.name, "status": u.status, "is_admin": u.is_admin,
             "device_bound": u.device_hash is not None, "device_info": u.device_info,
             "created_at": u.created_at.isoformat(),
-            "approved_at": u.approved_at.isoformat() if u.approved_at else None}
+            "approved_at": u.approved_at.isoformat() if u.approved_at else None,
+            "git": {"name": u.git_name or "", "email": u.git_email or "", "branch": u.git_branch or ""},
+            "permissions": permissions_of(u)}
 
 
 def _new_session(s, user_id: int) -> str:  # noqa: ANN001
@@ -80,6 +115,8 @@ def register(name: str, device_secret: str, device_info: dict[str, Any] | None =
             existing.device_hash, existing.device_info, existing.status = dh, info, "pending"
             s.flush()
             s.add(Event(kind="user", message=f"{existing.name} registered a new computer; waiting for approval"))
+            notify(f"{existing.name} registered a new computer", str(info.get("label", "")), level="warning",
+                   source="users", admin_only=True, s=s)
             return user_dict(existing), None
         first = s.scalar(select(func.count()).select_from(User).where(User.is_admin,
                                                                       User.status == "active")) == 0
@@ -88,6 +125,9 @@ def register(name: str, device_secret: str, device_info: dict[str, Any] | None =
         s.add(u)
         s.flush()
         token = _new_session(s, u.id) if first else None
+        if not first:
+            notify(f"{name} is waiting for approval", str(info.get("label", "")), level="warning",
+                   source="users", admin_only=True, s=s)
         s.add(Event(kind="user", message=f"{name} registered"
                     + (" as administrator" if first else "; waiting for approval")))
         return user_dict(u), token

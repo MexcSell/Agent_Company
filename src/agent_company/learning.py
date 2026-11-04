@@ -14,7 +14,6 @@ from agent_company import registry
 from agent_company.db import Agent, Lesson, session
 
 XP_SUCCESS, XP_FAILURE, XP_PER_LEVEL = 10, 3, 50
-PLAYBOOK_LINES = 10
 
 
 def experience_context(agent_id: int, limit: int = 8) -> str:
@@ -30,9 +29,12 @@ def experience_context(agent_id: int, limit: int = 8) -> str:
                                                          Lesson.outcome != "research")
                                     .order_by(Lesson.id.desc()).limit(2)):
                 lines.append(f"- ({other.name}, similarity {weight:.2f}) {lesson.text}")
+        from agent_company.evolution import active_playbook
+
         parts = []
-        if agent.playbook.strip():
-            parts.append("Your playbook:\n" + agent.playbook.strip())
+        playbook, trial = active_playbook(agent)
+        if playbook.strip():
+            parts.append(f"Your playbook{' (trial version)' if trial else ''}:\n" + playbook.strip())
         if lines:
             parts.append("Experience from you and related agents:\n" + "\n".join(lines[:limit]))
         return "\n\n".join(parts)
@@ -57,24 +59,9 @@ def learn(agent_id: int, goal_id: int, lesson: str, success: bool, skills: list[
             a.skills = grown
         else:
             a.tasks_failed += 1
-        s.flush()
-        a.playbook = _curate(s, agent_id)
+    from agent_company.evolution import after_task
 
-
-def _curate(s, agent_id: int) -> str:  # noqa: ANN001
-    """Playbook = the most recent distinct lessons, successes as rules, failures as warnings."""
-    seen: set[str] = set()
-    out: list[str] = []
-    for lesson in s.scalars(select(Lesson).where(Lesson.agent_id == agent_id, Lesson.outcome != "research")
-                            .order_by(Lesson.id.desc()).limit(40)):
-        key = lesson.text.lower()[:120]
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(("DO: " if lesson.outcome == "success" else "AVOID: ") + lesson.text)
-        if len(out) >= PLAYBOOK_LINES:
-            break
-    return "\n".join(out)
+    after_task(agent_id, success)
 
 
 def link_team(agent_ids: list[int]) -> None:

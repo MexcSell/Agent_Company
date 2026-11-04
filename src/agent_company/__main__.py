@@ -17,7 +17,7 @@ import sys
 
 from dotenv import load_dotenv
 
-COMMANDS = {"serve", "goal", "crawl", "models", "agents", "approve", "crew", "rotate"}
+COMMANDS = {"serve", "goal", "crawl", "models", "agents", "approve", "crew", "rotate", "eval", "supervise"}
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -33,6 +33,9 @@ def main(argv: list[str] | None = None) -> None:
     sp = sub.add_parser("serve")
     sp.add_argument("--host")
     sp.add_argument("--port", type=int)
+    sv = sub.add_parser("supervise", help="serve and restart safely when the code changes")
+    sv.add_argument("--host")
+    sv.add_argument("--port", type=int)
     g = sub.add_parser("goal")
     g.add_argument("title")
     g.add_argument("--description", default="")
@@ -40,6 +43,8 @@ def main(argv: list[str] | None = None) -> None:
     g.add_argument("--url", action="append", default=[], help="site to research first (links are followed)")
     g.add_argument("--check", action="append", default=[], help="quality command, e.g. 'uv run pytest -q'")
     g.add_argument("--max-iterations", type=int)
+    g.add_argument("--allow", action="append", default=[], help="path glob the change may touch (repeatable)")
+    g.add_argument("--protect-tests", action="store_true", help="refuse changes to existing test files")
     c = sub.add_parser("crawl")
     c.add_argument("url")
     c.add_argument("--depth", type=int, default=1)
@@ -47,6 +52,12 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("models")
     sub.add_parser("agents")
     sub.add_parser("rotate")
+    ev = sub.add_parser("eval", help="run a benchmark suite, or compare two labels")
+    ev.add_argument("--suite", default="smoke", help="suite name in evals/ or a JSON file")
+    ev.add_argument("--label", help="name for this run's results")
+    ev.add_argument("--repeats", type=int, default=3)
+    ev.add_argument("--tasks", nargs="*", help="only these task names")
+    ev.add_argument("--compare", nargs=2, metavar=("A", "B"))
     a = sub.add_parser("approve")
     a.add_argument("goal_id", type=int)
     args = p.parse_args(argv)
@@ -63,7 +74,16 @@ def main(argv: list[str] | None = None) -> None:
         from agent_company.api import create_app
         from agent_company.config import settings
 
-        uvicorn.run(create_app(), host=args.host or settings().host, port=args.port or settings().port)
+        import os
+
+        candidate = os.environ.get("AC_CANDIDATE") == "1"  # a supervisor's trial boot: no background work
+        uvicorn.run(create_app(start_background=not candidate), host=args.host or settings().host,
+                    port=args.port or settings().port)
+        return
+    if args.cmd == "supervise":
+        from agent_company.supervisor import Supervisor
+
+        Supervisor(args.port, args.host).run()
         return
 
     from agent_company.api import bootstrap
@@ -73,7 +93,8 @@ def main(argv: list[str] | None = None) -> None:
         from agent_company import loop
 
         gid = loop.create_goal(args.title, args.description, args.repo, args.url, args.check,
-                               args.max_iterations)
+                               args.max_iterations, allowed_paths=args.allow, protect_tests=args.protect_tests,
+                               extract_checks=True)
         out = loop.run_goal(gid)
         g = loop._goal(gid)
         print(f"Goal {gid}: {out['status']} after {g.iteration} iteration(s)\n{g.result}\n"
@@ -84,6 +105,23 @@ def main(argv: list[str] | None = None) -> None:
         from agent_company import research
 
         print(json.dumps(research.collect(args.url, args.depth, args.max_pages), indent=2))
+    elif args.cmd == "eval":
+        from agent_company import evaluation
+
+        if args.compare:
+            out = evaluation.compare(*args.compare)
+            print(f"pass rate {out['a']['pass_rate']:.0%} -> {out['b']['pass_rate']:.0%} "
+                  f"({out['pass_rate_change']:+.0%}), cost {out['cost_change']:+.4f} USD")
+            for t in out["tasks"]:
+                print(f"  {t['task']:<24} {t[args.compare[0]]} -> {t[args.compare[1]]}")
+            return
+        if not args.label:
+            raise SystemExit("--label is required to run a suite")
+        out = evaluation.run_suite(args.suite, args.label, args.repeats, args.tasks)
+        print(f"{out['label']}: {out['solved']}/{out['tasks']} solved, pass rate {out['pass_rate']:.0%}, "
+              f"cost {out['total_cost']:.4f} USD, {out['avg_seconds']}s per run")
+        for t in out["by_task"]:
+            print(f"  {t['task']:<24} {t['passed']}/{t['runs']} {', '.join(t['end_reasons'])}")
     elif args.cmd == "rotate":
         from agent_company import research
 

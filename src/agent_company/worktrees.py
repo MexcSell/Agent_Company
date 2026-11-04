@@ -22,11 +22,21 @@ GIT_ENV = {"GIT_AUTHOR_NAME": "Agent Company", "GIT_AUTHOR_EMAIL": "agents@local
            "GIT_COMMITTER_NAME": "Agent Company", "GIT_COMMITTER_EMAIL": "agents@localhost"}
 
 
-def git(cwd: Path | str, *args: str, check: bool = True) -> str:
+def identity_env(ident: dict[str, str] | None) -> dict[str, str]:
+    """Author/committer variables for a user's Git identity (name and/or email)."""
+    env: dict[str, str] = {}
+    if ident and ident.get("name"):
+        env.update(GIT_AUTHOR_NAME=ident["name"], GIT_COMMITTER_NAME=ident["name"])
+    if ident and ident.get("email"):
+        env.update(GIT_AUTHOR_EMAIL=ident["email"], GIT_COMMITTER_EMAIL=ident["email"])
+    return env
+
+
+def git(cwd: Path | str, *args: str, check: bool = True, env: dict[str, str] | None = None) -> str:
     import os
 
     proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
-                          env={**os.environ, **GIT_ENV}, timeout=120)
+                          env={**os.environ, **GIT_ENV, **(env or {})}, timeout=120)
     if check and proc.returncode != 0:
         raise WorktreeError(f"git {' '.join(args)}: {proc.stderr.strip() or proc.stdout.strip()}")
     return proc.stdout.strip()
@@ -72,13 +82,19 @@ def create(repo: Path | str, name: str, base: str | None = None) -> tuple[Path, 
     return path, branch, base
 
 
-def commit_all(path: Path | str, message: str) -> str | None:
-    """Commit every change in the worktree. Returns the commit sha or None if clean."""
+# Generated files never belong in a goal's commit (bytecode, caches, dependencies, attachments).
+GENERATED = ["__pycache__", "*.pyc", ".pytest_cache", ".ruff_cache", ".mypy_cache", "node_modules", ".venv",
+             ".attachments", ".DS_Store"]
+
+
+def commit_all(path: Path | str, message: str, author: dict[str, str] | None = None) -> str | None:
+    """Commit every source change in the worktree. Returns the commit sha or None if clean."""
     path = ensure_sandboxed(path)
-    git(path, "add", "-A")
-    if not git(path, "status", "--porcelain"):
+    excludes = [f":(exclude,glob)**/{g}" for g in GENERATED] + [f":(exclude,glob)**/{g}/**" for g in GENERATED]
+    git(path, "add", "-A", "--", ".", *excludes)
+    if not git(path, "diff", "--cached", "--name-only"):
         return None
-    git(path, "commit", "-q", "-m", message)
+    git(path, "commit", "-q", "-m", message, env=identity_env(author))
     return git(path, "rev-parse", "HEAD")
 
 
@@ -91,7 +107,7 @@ def changed_files(path: Path | str, base: str) -> list[str]:
     return [line for line in out.splitlines() if line]
 
 
-def merge(repo: Path | str, branch: str, base: str) -> str:
+def merge(repo: Path | str, branch: str, base: str, author: dict[str, str] | None = None) -> str:
     """Merge the goal branch into its base branch in the main repository (local only)."""
     repo = Path(repo).resolve()
     current = git(repo, "rev-parse", "--abbrev-ref", "HEAD")
@@ -99,7 +115,7 @@ def merge(repo: Path | str, branch: str, base: str) -> str:
         raise WorktreeError(f"{repo} is on {current}, not {base}; switch it to {base} to merge")
     if git(repo, "status", "--porcelain", "--untracked-files=no"):
         raise WorktreeError(f"{repo} has uncommitted changes; commit or stash them first")
-    git(repo, "merge", "--no-ff", "-q", "-m", f"Merge {branch}", branch)
+    git(repo, "merge", "--no-ff", "-q", "-m", f"Merge {branch}", branch, env=identity_env(author))
     return git(repo, "rev-parse", "HEAD")
 
 
