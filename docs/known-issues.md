@@ -42,3 +42,16 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 | # | Problem | Status |
 |---|---------|--------|
 | S1 | The firewall (ufw) is inactive and the server has a public IP. Besides Agent Company, these listen on every interface: Samba (139, 445), nginx (80, 8081), 3000, 4800, 8000, 8082, k3s (6443, 10250), Cockpit (9090). Check that each is meant to be public, or block it at the hosting provider's firewall. | open |
+
+## Added 2026-11-04 (evening)
+
+| # | Problem | Status |
+|---|---------|--------|
+| N1 | GitHub Copilot's CLI is not installed on this server, so the Workspace panel lists Copilot as "not installed". Once installed (`npm i -g @github/copilot`) it still needs a streaming-JSON adapter like Codex's (`workspace.normalise_codex`). | open |
+| N2 | `enable_claude_code` was switched on so the GM (Claude Code) works: goals and the GM's `.claude/` configure step (one Claude Code run per goal) use the server's Claude subscription. Turn it off in Settings to stop that; the GM then falls back to the simulator (no API key in `.env`). | by decision |
+| N3 | The Machines "interval between screen transmissions" is enforced in the browser (noVNC's update requests are delayed); the VNC server itself still sends whatever changed when asked. | by design |
+| N4 | Machine screen settings are kept per browser (localStorage), not per machine on the server. | by design |
+| N5 | Learning rewrites only the *Working method* and *Knowledge notes* sections of an agent's definition; mission, skills, model and permissions come from the agent's card and overwrite manual edits of those sections on the next sync. | by design |
+| N6 | Non-administrators now see only projects they created (plus ones an administrator grants, or "all"). Users whose permissions were saved before keep `projects: "all"`. | by decision |
+| N7 | The File Manager is the Workspace's windows without Claude Code: both pages share one set of open files, terminals and explorer panes. | by design |
+| N8 | Explorer panes added with "+" refresh only on their refresh button (the main explorer polls). | open (low) |

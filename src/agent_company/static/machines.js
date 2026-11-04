@@ -143,7 +143,7 @@ const Machines = (() => {
         <button type="button" class="btn icon sm" data-mc="fit" aria-pressed="${fit}" title="${fit ? "Fitted to the page: show at its own size" : "At its own size: fit to the page"}" aria-label="Fit or 100%">${ic(fit ? "shrink" : "expand")}</button>
         <button type="button" class="btn icon sm" data-mc="full" title="Full screen" aria-label="Full screen">${ic("expand")}</button>
         <button type="button" class="btn icon sm" data-mc="screen" title="Screen settings: quality, compression, refresh interval…" aria-label="Screen settings">${ic("chip")}</button>
-        <button type="button" class="btn sm mc-connbtn" data-mc="conn"></button></div>
+        <button type="button" class="btn sm mc-connbtn keep-text" data-mc="conn"></button></div>
       <div class="mc-screen ${fit ? "" : "mc-native"}" data-part="screen"></div>
       <p class="muted mc-note">Click the screen to type into the machine. ${x.family === "windows"
         ? `Windows signs in as <b>${esc(x.settings.username || "")}</b> with the password set when it was made; the first start installs it, which takes 10 to 20 minutes after the download.`

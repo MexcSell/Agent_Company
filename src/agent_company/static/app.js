@@ -424,6 +424,44 @@ async function gitForm(u) {
   $("#gf-test").onclick = async () => { $("#gf-test-out").textContent = "Testing…"; try { const r = await api(`/api/users/${u.id}/git/test`, { method: "POST" }); $("#gf-test-out").textContent = r.message; } catch (err) { $("#gf-test-out").textContent = err.message; } };
 }
 
+// --- icon buttons everywhere: a text button with a known label shows an icon; the label becomes its tooltip and
+// accessible name. Buttons that already carry an icon just drop the text. Long or unknown labels stay text.
+P.cut = "M6 6a3 3 0 1 0 0 .01M6 18a3 3 0 1 0 0 .01M8.5 7.5L20 18M8.5 16.5L20 6";
+P.paste = "M9 4h6v3H9zM7 5H5v16h14V5h-2";
+P.up = "M12 19V5M5 12l7-7 7 7";
+P.file_add = "M6 2h9l5 5v15H6zM14 2v6h6M12 11v6M9 14h6";
+P.folder_add = "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 10v6M9 13h6";
+P.columns = "M3 4h18v16H3zM12 4v16";
+P.clock = "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2";
+P.rocket = "M5 15c-1 1-2 4-2 6 2 0 5-1 6-2M9 15l-3-3c1-4 5-9 12-9 0 7-5 11-9 12zM15 9h.01";
+P.broom = "M19 3l-7 7M9 13l-6 8h9l1-6zM10 11l3 3";
+const BTN_ICONS = { save: "save", delete: "trash", remove: "trash", cancel: "x", copy: "copy", cut: "cut", paste: "paste", rename: "edit", edit: "edit",
+  up: "up", "new file": "file_add", "new folder": "folder_add", upload: "upload", download: "download", search: "search", add: "plus", ask: "send",
+  collect: "download", run: "play", "run next": "play", compare: "columns", defer: "clock", "accept risk": "check", test: "bolt", switch: "refresh",
+  "reset to .env": "refresh", reset: "refresh", start: "play", stop: "stop", restart: "refresh", launch: "rocket", "install docker": "download",
+  "install lxd": "download", "initialise lxd": "play", "start docker": "play", "clean up": "broom", "check again": "refresh", approve: "check", reject: "x",
+  disable: "pause", enable: "play", "make admin": "shield", permissions: "key", git: "git", open: "eye", continue: "play", "use this folder": "check",
+  "diagnose all agents now": "bolt", "merge idle clones": "merge", create: "check", post: "send", "open folder": "folder", "reset computer": "refresh",
+  "save token": "save", "create ssh key": "key", "delete key": "trash", "test github access": "bolt", "download certificate (ca)": "download",
+  source: "files", preview: "eye", wrap: "columns", close: "x", "ctrl+alt+del": "cpu", "full screen": "max", fit: "min", "100%": "max", refresh: "refresh",
+  "make machine": "check", "delete": "trash" };
+function iconize(root) {
+  root.querySelectorAll("button.btn:not(.icon):not(.keep-text), a.btn:not(.icon):not(.keep-text)").forEach((b) => {
+    const label = b.textContent.replace(/\s+/g, " ").trim().replace(/…$/, "");
+    const name = BTN_ICONS[label.toLowerCase()];
+    if (!label || (!name && !b.querySelector("svg"))) return;
+    if (!b.title || b.dataset.autot) { b.title = label; b.dataset.autot = "1"; }  // a label that changes (Connect/Disconnect) follows
+    if (!b.getAttribute("aria-label") || b.dataset.autot) b.setAttribute("aria-label", label);
+    const svgEl = b.querySelector("svg");
+    if (svgEl) { [...b.childNodes].forEach((n) => { if (n !== svgEl && !(n.nodeType === 1 && n.querySelector?.("svg"))) n.remove(); }); }
+    else b.innerHTML = icon(name, 16);
+    b.classList.add("icon");
+  });
+}
+let iconizeQueued = false;
+new MutationObserver(() => { if (!iconizeQueued) { iconizeQueued = true; requestAnimationFrame(() => { iconizeQueued = false; iconize(document.body); }); } })
+  .observe(document.documentElement, { childList: true, subtree: true });
+
 // --- start (called after every view file has loaded) ----------------------------
 function start() {
 $("#theme").onclick = toggleTheme;

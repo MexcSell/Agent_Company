@@ -17,8 +17,17 @@ feature came from.
   `containers.py` (Docker and LXD VMs on the host: install, start, clean up; admin-only);
   `machines.py` (Machines view, from AXoR in /home/thomas/axor-3.0.zip: Linux/Windows KVM VMs as Docker
   containers with a noVNC console relayed over a WebSocket; admin-only; cleanup never prunes them);
+  `mcp.py` (Tools & MCP catalog, from AXoR's mcp_hub: stdio/HTTP servers, encrypted secrets, tool allow-list,
+  per-agent grants, call log; bundled servers in `mcp_servers/`); `catalog.py` (skills, plugins, rules, commands,
+  hooks; exports a project's `.claude/`); `agentdefs.py` (each agent's versioned definition file in `data/agents/`,
+  its own git repo: the loop runs agents from it, learning and the study rotation rewrite it); `gm.py` (the General
+  Manager as Claude Code: its instructions and the `python -m agent_company gm …` toolbox); `specs.py`
+  (`.claude/specs/<slug>/` artifacts of every goal, the GM's `.claude/` configure step); `hooks.py` (TaskCreated,
+  TaskCompleted, TeammateIdle → `data/logs/team-hooks.jsonl`, fail-open);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
-  (Workspace Claude Code panel: a tab per conversation, titled by Haiku; live host sessions, session history with resume/stop/delete); `api.py`; `static/` (dashboard, plain JS, one file per area;
+  (Workspace Claude Code panel: a tab per conversation, titled by Haiku; live host sessions, session history with resume/stop/delete); `api.py`; `static/` (dashboard, plain JS, one file per area; `agents.js` (org chart, Tools & MCP, Skills & plugins, agent card),
+  `models.js`; rail order shared by all users via `/api/ui/nav_layout` (Settings → Navigation); buttons with a known
+  label become icons (`iconize` in app.js); `index.html` is served with content-hashed static URLs;
   `workspace.js` + `viewer.js` + `console.js` + `claude.js` are the Workspace home page, sharing
   `window.WSP`; `vendor/` holds xterm.js, pdf.js, mammoth and noVNC); `crew.py` (classic crew); `__main__.py` (CLI)
 - `evals/` – benchmark suites (JSON)
@@ -34,6 +43,9 @@ feature came from.
 - Python 3.12+, dependencies managed with `uv` (system pip is externally managed).
 - Models come from the Model Router (catalog + role routes in the DB); `MODEL` in `.env` is the
   fallback. Never hard-code keys. The offline simulator only stands in when no real model is usable.
+- The General Manager is Claude Code by default (route `general_manager`; `enable_claude_code` is on in the DB
+  settings). It can be switched on its agent card: another model, a `claude_code` model with a base URL, or
+  another agent (`model_pref = "agent:<id>"`). A CLI GM's `.claude/` edits happen in the goal's worktree.
 - Only the core pipeline (GM, Architect, Developer, QA) and the research rooms are enabled by
   default; other roles are registered but disabled until the pipeline is reliable.
 - Agents must not get access to production servers. Executors that change files run only inside
@@ -65,4 +77,5 @@ feature came from.
 - `uv run python -m agent_company goal "<goal>" --check "<cmd>" [--allow 'src/*'] [--protect-tests]`
 - `uv run python -m agent_company eval --suite smoke --label <name> [--repeats 3]` / `eval --compare a b`
 - `uv run python -m agent_company host status|install-docker|docker-start|cleanup [--yes]|install-lxd|launch <name> [--container]|stop|delete <name>`
+- `uv run python -m agent_company gm status|agents|create-agent|add|mcp|configure|goal|study` – the GM's toolbox
 - `uv run python -m agent_company "<request>"` – classic four-agent crew

@@ -375,6 +375,35 @@ refused. Administrators can reject, disable, enable, reset a computer, promote o
 delete accounts. Only administrators can point a goal at an existing repository
 or set its quality commands, because those run commands on the server.
 
+## The General Manager, Claude Code and the company's tools
+
+You talk to the company through its **General Manager**. By default the GM is **Claude Code**
+(see `docs/1.claude-code-multi-agent.jpg`): on the Projects page an administrator talks to it as a Claude Code
+conversation in the project's folder. Its instructions give it a toolbox:
+
+```bash
+uv run python -m agent_company gm status        # agents, running goals, catalog
+uv run python -m agent_company gm agents        # who exists, with skills, plugins, model
+uv run python -m agent_company gm create-agent data_engineer --skills "sql=7" --plugins "code-review"
+uv run python -m agent_company gm add skill kubernetes --description "…" --content "…"
+uv run python -m agent_company gm configure 3   # write the catalog into project 3's .claude/
+uv run python -m agent_company gm goal 3 "Add a CSV export" --check "uv run pytest -q"
+uv run python -m agent_company gm study         # one learning visit (rewrites an agent's definition)
+```
+
+- **Switching the GM**: Agents → Company General Manager → Model: any model, a Claude Code at another address
+  (a Claude Code model with a base URL), or another agent (it then uses that agent's model).
+- **Spec-driven loop**: every goal writes `.claude/specs/<slug>/` (requirements, tasks, spec, design, review,
+  sa-review, decisions) and loops Plan → Build → Review → Fix until the gate passes. A CLI GM first updates the
+  project's `.claude/` (agents, rules, skills, commands, settings.json, .mcp.json) in the goal's worktree.
+- **Catalog** (Agents → Skills & plugins): skills, plugins, rules, commands and hooks the agents share; the GM
+  adds what is missing. **Tools & MCP** (Agents tab): MCP servers with encrypted secrets, tool allow-lists and
+  per-agent grants; Claude Code agents get their granted servers.
+- **Learning changes the agent itself**: each agent is a versioned definition file in `data/agents/` (its own git
+  repository). The loop runs the agent from it; learning and the study rotation (`study_interval`) rewrite it.
+- **Hooks** (fail-open): TaskCreated, TaskCompleted, TeammateIdle are appended to `data/logs/team-hooks.jsonl`.
+- **Emergency stop** (System): cancels running and queued goals and refuses agent runs until lifted.
+
 ## Users and permissions
 
 Administrators can do everything. Every other account has permissions (Users page →
