@@ -535,14 +535,14 @@ def room_gate(room: str) -> dict[str, Any]:
                 m, r = _measure(s, runs, suite)
                 reasons += r
                 ids = [x.goal_id for x in runs if x.goal_id]
-                gated_roles = {r for r, spec in org.ROLES.items() if not spec.enabled and spec.room == room}
+                gated_roles = {r for r, spec in org.ROLES.items() if not spec.enabled}  # in the room: room_key
                 worked = set(s.scalars(select(Task.goal_id).join(Agent, Agent.id == Task.agent_id).where(
                     Task.goal_id.in_(ids), Agent.room_key == room, Agent.role.in_(gated_roles)))) if ids else set()
                 idle = sum(1 for x in runs if x.goal_id not in worked)
                 m["runs_without_room"] = idle
                 if idle:
-                    reasons.append(f"{suite} label '{m['label']}': the room's gated roles "
-                                   f"({', '.join(sorted(gated_roles))}) did no task in {idle} run(s)")
+                    reasons.append(f"{suite} label '{m['label']}': the room's agents of gated roles did no "
+                                   f"task in {idle} run(s)")
                 out["suite"] = m
         after = _latest_label(s, GATE_SUITE, room)
         if not after:
