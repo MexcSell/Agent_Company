@@ -140,3 +140,7 @@ registered sources (`rotation_tick`), robots.txt and public-host checks (`_robot
 
 ### S06-R-08 Recovery — AT-021
 - A report left `running` at restart is re-queued (same rule as goals, SPEC-04 S04-R-05).
+- **Status: done** (`api.reset_after_restart`, `research.resume_reviews`). A report left `running` is queued again; a
+  written report whose review a restart cut off (`draft` or `in_review` without a note) is reviewed again when
+  `ReportThread` starts; reports already waiting for a person stay waiting. A rejected report never answers a new
+  request on the same question (`find_overlap`).

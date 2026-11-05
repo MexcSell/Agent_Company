@@ -891,7 +891,7 @@ def find_overlap(question: str, keywords: list[str] | None = None) -> int | None
                                                           ResearchReport.created_at >= since))
                          .order_by(ResearchReport.id.desc()).limit(500))
         for r in rows:
-            if r.status in ("failed", "expired"):
+            if r.status in ("failed", "expired") or r.review == "rejected":  # a rejected report answers nothing
                 continue
             theirs = _terms(r.question, r.keywords)
             same = " ".join(r.question.lower().split()).rstrip("?. ") == norm
@@ -1187,6 +1187,11 @@ def review_report(report_id: int, author_id: int | None = None, author_provider:
         prompt = _review_prompt(r)
     try:
         reviewer = registry.staff("research", ["research", "review"], goal_id=None)
+        if reviewer.id == author_id:  # the author is idle (a resumed review): hold it so someone else is staffed
+            try:
+                reviewer = registry.staff("research", ["research", "review"], goal_id=None)
+            finally:
+                registry.release(author_id)
     except RuntimeError as e:
         return _wait_for_person(report_id, f"no reviewer could be staffed: {e}")
     try:
@@ -1382,6 +1387,21 @@ def conclude(report_id: int, approve: bool, actor: str, note: str = "", agreed: 
     return out
 
 
+def resume_reviews() -> list[int]:
+    """Reviews a restart cut off (S06-R-08): written reports still in draft or review that nobody has sent to a
+    person yet are reviewed again. Run once when the server that owns the work starts (ReportThread)."""
+    with session() as s:
+        ids = list(s.scalars(select(ResearchReport.id).where(
+            ResearchReport.status == "done", ResearchReport.review.in_(("draft", "in_review")),
+            or_(ResearchReport.review_note == "", ResearchReport.review_note.is_(None)))))
+    for rid in ids:
+        try:
+            review_report(rid)
+        except Exception as e:  # noqa: BLE001 - one report must not hold the others
+            log_event("error", f"research report #{rid}: review failed: {e}")
+    return ids
+
+
 def decide_report(report_id: int, approve: bool, actor: str, note: str = "") -> dict[str, Any]:
     """A person's review of a report waiting for one (or a draft): their agreement counts as independent."""
     if not approve and not str(note).strip():
@@ -1435,6 +1455,10 @@ class ReportThread(threading.Thread):
         self.stop = threading.Event()
 
     def run(self) -> None:
+        try:
+            resume_reviews()
+        except Exception as e:  # noqa: BLE001 - keep serving requests
+            log_event("error", f"research reviews: {e}")
         while not self.stop.wait(self.every):
             try:
                 run_due_reports()

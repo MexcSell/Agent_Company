@@ -137,6 +137,25 @@ def test_a_rejected_report_feeds_nothing(monkeypatch):
         not h["url"].startswith("report://") for h in research.search("Research report RabbitMQ confirm"))
     with pytest.raises(ValueError):  # settled: no second decision
         research.decide_report(out["id"], True, "user:admin")
+    again = research.submit("Does RabbitMQ confirm publishes?", goal_id=gid)  # a rejected report answers nothing
+    assert again["duplicate"] is False and again["id"] != out["id"]
+
+
+def test_a_review_cut_off_by_a_restart_runs_again(monkeypatch):
+    two_sources()
+    write_report(monkeypatch, "## Findings\n1. RabbitMQ supports publisher confirms [{rabbit}] \"supports publisher confirms\".")
+    monkeypatch.setattr(research, "review_report", lambda rid, **kw: {"id": rid})  # cut off before the review
+    rid = research.run_report(research.request_report("Does RabbitMQ confirm publishes?"))["id"]
+    monkeypatch.undo()
+    with session() as s:
+        s.get(ResearchReport, rid).review = "in_review"  # the restart came during the reviewer's model call
+        waiting = research.request_report("A report already waiting for a person?")
+        r = s.get(ResearchReport, waiting)
+        r.status, r.review, r.review_note = "done", "in_review", "Waits for a person: no verdict"
+    assert research.resume_reviews() == [rid]
+    with session() as s:
+        assert s.get(ResearchReport, rid).review == "approved"
+        assert s.get(ResearchReport, waiting).review == "in_review"
 
 
 def test_no_verdict_waits_for_a_person_whose_approval_verifies(monkeypatch):
