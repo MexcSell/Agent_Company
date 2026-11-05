@@ -73,8 +73,10 @@ reliable. The requirements below are the parts the core pipeline needs now.
   reason (correlation is not cause). The analysis is a knowledge item of kind `operational`, class `INFERENCE`,
   screened like every lesson; up to three actions become pending proposals (only when the item passed the
   screen). Follow-up: when a goal spawned from one of them ends, the action is marked `worked` (it passed and none
-  of the watched checks failed) or `did not work` with the checks still failing. Not taken: the analysis room
-  (gated); the General Manager analyses until it is enabled.
+  of the watched checks failed) or `did not work` with the checks still failing. The analysis is one model run billed
+  to the failed goal (and its project; a goal's own exhausted budget does not stop it, it is the last spend on the
+  goal); none is made once the project's budget is used up. Not taken: the analysis room (gated); the General
+  Manager analyses until it is enabled.
 
 ### S07-R-03 Hypotheses — §9 (AT-008)
 - `hypotheses` (or knowledge items of class `HYPOTHESIS`): statement, reason, supporting and

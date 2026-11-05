@@ -73,7 +73,8 @@ push only on `/sync`. The 13 engineering teams (§3) are **gated** (CLAUDE.md).
   decision record.
 - **Status: done, adapted** (`adr.py`, column `decisions.adr_path`; `tests/test_adr.py`). The loop writes the ADR
   from the decision record instead of an Architect task (deterministic, and the record is the single source): every
-  `technical` or `critical` decision of the plan becomes `docs/adr/NNNN-<topic>.md` in the goal's worktree before
+  `technical` or `critical` decision of the plan (unless its workflow template changes no files, like `research`)
+  becomes `docs/adr/NNNN-<topic>.md` in the goal's worktree before
   the plan checkpoint, so it is committed and merged with the branch. NNNN is the decision's id (unique when several
   goals work on one repository at once; the ADR and its record name each other). Sections: context (the question),
   options, criteria, decision, reasons with labelled evidence, consequences (assumptions, limitations, confidence);

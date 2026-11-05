@@ -22,7 +22,9 @@ scope checks (`quality.py`, `checks.py`); defects opened/closed/reopened automat
 - Acceptance: the goal page shows one row per stage; an open critical defect blocks `approve`.
 - **Status: done** (`quality.STAGES`, `stages`, `split_stage`; goal page "Gate by stage"). Commands are
   tagged with a prefix in the command string (`[integration] pytest tests/it`) rather than a JSON object,
-  so `quality_commands` stays a list of strings. `requirements` stays `skipped` until S08-R-01 exists;
+  so `quality_commands` stays a list of strings. `requirements` stays `skipped`: traceability (S08-R-01, S09-R-06)
+  is recorded by `requirements.on_gate` after the gate, and unknown keys are logged, not fatal, so it has no
+  pass/fail of its own;
   `security` holds the secret scan (no dependency audit yet, S08-R-05); `governance` is `waiting` while a
   decision needs a person (it holds the merge, it does not fail the gate).
 

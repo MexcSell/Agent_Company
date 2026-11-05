@@ -104,3 +104,15 @@ def test_the_same_choice_again_reuses_the_adr(monkeypatch):
     again = decisions.from_plan(gid, [storage("SQLite")], None)[0]
     assert adr.write(gid, [again["id"]]) == []
     assert decisions.get(again["id"])["adr_path"] == first["adr_path"]
+
+
+def test_a_goal_that_changes_no_files_gets_no_adr_file(monkeypatch):
+    from agent_company import strategies
+
+    real = strategies.fallback_plan
+    monkeypatch.setattr(strategies, "fallback_plan", lambda goal, kind="": real(goal, kind) | {
+        "decisions": [storage("SQLite")]})
+    gid = loop.create_goal("Compare storage engines", quality_commands=[], kind="research")
+    loop.run_goal(gid)
+    [d] = decisions.list_decisions(gid)
+    assert d["adr_path"] == "" and not (worktrees.ensure_sandboxed(loop._goal(gid).worktree) / "docs" / "adr").exists()

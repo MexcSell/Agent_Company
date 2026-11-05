@@ -244,6 +244,19 @@ def follow_up(goal_id: int) -> list[int]:
     return updated
 
 
+def _out_of_budget(goal_id: int) -> bool:
+    """The analysis is a model run billed to the failed goal (and so its project): none once the project's budget is
+    used up. A goal's own budget is not checked: it failed, and the analysis is the last spend on it."""
+    from agent_company.db import Project
+    from agent_company.projects import project_spend
+
+    with session() as s:
+        g = s.get(Goal, goal_id)
+        p = s.get(Project, g.project_id) if g is not None and g.project_id is not None else None
+        budget = float(p.budget_usd or 0) if p is not None else 0.0
+    return budget > 0 and project_spend(g.project_id) >= budget
+
+
 def after_goal(goal_id: int, status: str) -> dict[str, Any] | None:
     """Called when a goal ends: follow up earlier analyses, then analyse when a trigger holds. Never raises."""
     try:
@@ -260,6 +273,10 @@ def after_goal(goal_id: int, status: str) -> dict[str, Any] | None:
                     streak, common = [], []
             else:
                 streak, common = [], []
+        if (common or exhausted) and _out_of_budget(goal_id):
+            log_event("rca", f"no root-cause analysis of goal #{goal_id}: the project's budget is used up",
+                      goal_id=goal_id)
+            return None
         if common:
             return analyse(goal_id, f"'{common[0]}' failed in {STREAK} goals in a row", streak, common)
         if exhausted:

@@ -570,7 +570,9 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
         _board_plan(goal, iteration, plan, summary, gm.id)
         if isinstance(data, dict) and data.get("decisions"):
             made = decisions.from_plan(goal.id, data["decisions"], gm.id)
-            _spec_step(lambda g, _i, ids: adr.write(g.id, ids), goal, iteration, [d["id"] for d in made])  # S08-R-02
+            if not tmpl or tmpl.get("writes", True):  # S08-R-02; a template changing no files gets no ADR file
+                _spec_step(lambda g, _i, ids: adr.write(g.id, ids), goal, iteration, [d["id"] for d in made],
+                           what="ADR files")
         if isinstance(data, dict):
             _set_estimate(goal.id, data.get("estimated_cost_usd"))
         log_event("plan", f"{gm.name} planned {len(plan)} task(s) with {choice.name}: {summary}"[:500],
@@ -692,12 +694,13 @@ def _board_plan(goal: Goal, iteration: int, plan: list[contracts.TaskContract], 
     blackboard.put(goal.id, "planning", "plan", "\n".join(lines), author_agent_id=gm_id)
 
 
-def _spec_step(fn: Any, goal: Goal, iteration: int, data: Any) -> None:
-    """Spec artifacts (.claude/specs/<slug>/) are documentation: a failure to write them never stops a goal."""
+def _spec_step(fn: Any, goal: Goal, iteration: int, data: Any, what: str = "spec artifacts") -> None:
+    """Spec artifacts (.claude/specs/<slug>/) and ADRs are documentation: a failure to write them never stops a
+    goal."""
     try:
         fn(goal, iteration, data)
     except Exception as e:  # noqa: BLE001
-        log_event("error", f"spec artifacts not written: {e}", goal_id=goal.id)
+        log_event("error", f"{what} not written: {e}", goal_id=goal.id)
 
 
 def _configure(goal: Goal) -> None:

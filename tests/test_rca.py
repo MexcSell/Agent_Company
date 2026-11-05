@@ -99,3 +99,18 @@ def test_a_poisoned_analysis_proposes_nothing(monkeypatch):
     assert a["status"] != "approved" and a["actions"] == []
     with session() as s:
         assert not s.scalars(select(Proposal).where(Proposal.goal_id == gid)).all()
+
+
+def test_no_analysis_once_the_projects_budget_is_used_up(monkeypatch):
+    from agent_company.db import Project
+
+    p = projects.create("Spent")
+    gid = loop.create_goal("Impossible", project_id=p["id"], quality_commands=["false"], max_iterations=1)
+    loop.run_goal(gid)
+    assert len(rca.list_analyses(goal_id=gid)) == 1
+    with session() as s:
+        s.get(Project, p["id"]).budget_usd = 5.0
+    monkeypatch.setattr(projects, "project_spend", lambda pid: 5.0)
+    assert rca.after_goal(gid, "failed") is None and len(rca.list_analyses(goal_id=gid)) == 1
+    monkeypatch.setattr(projects, "project_spend", lambda pid: 1.0)
+    assert rca.after_goal(gid, "failed") is not None, "with budget left it would analyse"
