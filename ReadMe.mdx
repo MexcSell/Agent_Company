@@ -435,6 +435,16 @@ they order are committed and merged under that identity and pushed to that branc
   routes, agents, approvals, projects, pushes) and every refused command, with
   actor, before/after values and time. Records are hash-chained; the page shows
   whether the chain is intact, so an edited or deleted record is detected.
+- **Security** (admins): the active stop level and stops, security incidents (open
+  first, worst first; containment and status steps), refused commands per agent and
+  the latest ones, and security alerts. Every user sees an active stop level (for
+  example `E1 stop`) in the top bar, without its scope.
+- **Knowledge** (admins): what agents learned, with the goal, task and commit each
+  lesson came from. Search, approve or reject, write a new version, or delete an
+  item. Lessons that contradict each other appear side by side; you decide which
+  holds (or both) and give a reason, and until then both rank lower in prompts.
+- **Goal trace**: the clock button on a goal shows every run, gate result,
+  decision and operation on one time line, with totals per agent and model.
 - **Command policy**: quality commands, project commands and check commands are
   refused before they run when they would escalate privileges (`sudo`), delete
   root/home/parent paths, wipe disks, deploy or push, drop databases, change
