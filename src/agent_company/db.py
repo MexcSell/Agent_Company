@@ -270,9 +270,12 @@ class Relationship(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     a_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
     b_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
-    kind: Mapped[str] = mapped_column(String(32))  # similar|collaborated
+    # network.KINDS (SPEC-12 S12-R-01); symmetric kinds store the lower id in a_id, directed ones read
+    # "a <kind> b" (a reviewed_by b, a mentored_by b, a depends_on b, a handover_to b, a supervises b)
+    kind: Mapped[str] = mapped_column(String(32))
     weight: Mapped[float] = mapped_column(Float, default=1.0)
-    evidence: Mapped[list[Any]] = mapped_column(default=list)  # goal ids that already changed the weight
+    evidence: Mapped[list[Any]] = mapped_column(default=list)  # goal/task/plan ids that already changed the weight
+    status: Mapped[str] = mapped_column(String(16), default="active")  # active|expired (expired: not used)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

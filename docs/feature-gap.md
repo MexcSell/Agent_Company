@@ -109,7 +109,8 @@ Machines code):
 | Dashboard: Knowledge view (search, review queue, contradictions side by side), Security view (stops, incidents, refused commands per agent, alerts), goal trace, stop level for every user | SPEC-15 | done (`static/knowledge.js`, `static/security.js`, S15-R-01..R-04) |
 | Memory-poisoning protection for learned lessons | SPEC11 §10.4 | done (`learning.screen`, people review, S11-R-05) |
 | Agent mentoring and knowledge transfer | SPEC12 §9 | open → S12-R-04 |
-| Collaboration recommendation with bias and reputation-manipulation protection | SPEC12 §11, §18 | open → S12-R-03, S12-R-06 |
+| Collaboration recommendation with bias and reputation-manipulation protection | SPEC12 §11, §18 | partial: administrator corrections done (S12-R-06); fair recommendation open → S12-R-03 |
+| Relationship kinds with evidence; links of a new agent | SPEC12 §2.2, `.rtf` | done (`network.py`, S12-R-01, S12-R-02) |
 | Capability gaps, learning plans with practice and hidden final evaluations, certification by the harness only | SPEC13 §5, §6, §8, §9 | done (`training.py`, `evals/python-*.json`, S13-R-01..R-03; exercises are hand-written suites, generated ones open) |
 | A/B testing of playbook or model changes: experiments with baseline, candidate, sample sizes, review, canary and rollback; self-improvement levels E0-E6 | SPEC13 §10, §11, §12 | done (`experiments.py`, S13-R-04..R-06; workflow-template and retrieval-weight targets open) |
 | Learning metrics: first-pass success, rework, knowledge reuse, benchmark per playbook version | SPEC13 `.rtf` | done (`training.metrics`, S13-R-07) |

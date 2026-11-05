@@ -21,8 +21,8 @@ from typing import Any
 
 from sqlalchemy import select
 
-from agent_company import (blackboard, contracts, decisions, executors, learning, quality, registry, research, router,
-                           specs, usage, worktrees)
+from agent_company import (blackboard, contracts, decisions, executors, learning, network, quality, registry, research,
+                           router, specs, usage, worktrees)
 from agent_company.config import settings
 from agent_company.db import Agent, Event, Goal, Task, log_event, session
 from agent_company.org import ROLES
@@ -831,6 +831,7 @@ def _handover(goal: Goal, contract: contracts.TaskContract, agent: Agent) -> str
         if prev_agent is not None and prev_agent.id != agent.id:
             s.add(Handover(goal_id=goal.id, task_key=contract.key, from_agent_id=prev_agent.id,
                            to_agent_id=agent.id, package=package))
+            network.handover(s, prev_agent.id, agent.id, goal.id, contract.key, goal.iteration)
         who = "your previous attempt" if prev_agent is None or prev_agent.id == agent.id else prev_agent.name
         summary = _brief(prev.output, 1200)
     return (f"Handover from {who} (iteration {prev.iteration}, {prev.status}):\n"
@@ -895,6 +896,7 @@ def _learn_from(goal_id: int, iteration: int, passed: bool, feedback: str, commi
         learning.learn(agent_id, goal_id, _lesson_text(agent_id, title, ok, "" if ok else feedback, goal_id),
                        ok, skills, task_id=task_id, commit=commit or "")
     learning.link_team(goal_id, [(r[0], r[2]) for r in rows], passed)
+    network.observe(goal_id, iteration, passed)
 
 
 # --- the loop -------------------------------------------------------------------

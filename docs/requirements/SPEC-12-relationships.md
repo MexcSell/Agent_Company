@@ -28,6 +28,9 @@ specialists, mentors and past collaborators, and that departments keep a shift s
 
 ## Specific requirements
 
+Status (2026-11-05): S12-R-01 done · S12-R-02 done · S12-R-03 open · S12-R-04 open · S12-R-05 open ·
+S12-R-06 done · S12-R-07 open.
+
 ### S12-R-01 Relationship kinds with evidence — §2.2
 - Extend `relationships.kind` beyond `similar|collaborated` to: `reviewed_by`, `mentored_by`,
   `depends_on`, `handover_to`, `complementary_skill`, `research_partner`, `testing_partner`,
@@ -37,6 +40,15 @@ specialists, mentors and past collaborators, and that departments keep a shift s
 - Written as side effects: QA task on a Developer's output → `reviewed_by`; handover →
   `handover_to`; task dependency → `depends_on`.
 - Acceptance: AR-001, AR-002, AR-021, AR-022.
+- **Status: done** (`network.py`, `registry.KINDS`): `relationships.status` (`active|expired`); directed kinds
+  keep their order (`a reviewed_by b`), symmetric ones are stored once per pair; every link lists its evidence
+  (`task:<id>`, `goal:<id>`, `candidate:<skill>:L<n>`, `admin:<name>: <reason>`) and each piece counts once.
+  Origin is derived: `inferred` (similar, complementary_skill, a mentor candidate), `observed`, `corrected`.
+  Side effects: `network.observe` after every iteration's lesson step writes `reviewed_by` (a QA/security task
+  depending on a writer's task), `depends_on` (other dependencies), and, when the goal passed, `research_partner`
+  and `knowledge_contributor` (an agent's task retrieved another agent's knowledge); `loop._handover` writes
+  `handover_to`. `supervises` stays the hierarchy (`superior_id`); `testing_partner` is set by administrators.
+  Only experience-sharing kinds (`registry.SHARING`) that are not expired feed knowledge ranking.
 
 ### S12-R-02 Relationships on recruitment — `.rtf` SPEC-12
 - When `registry._recruit` / `create_agent` / `clone_agent` creates an agent: link `similar`
@@ -44,6 +56,10 @@ specialists, mentors and past collaborators, and that departments keep a shift s
   and a `mentored_by` candidate (most certified agent of the same role, SPEC-13 certification).
 - Acceptance: a recruited agent has at least one `similar` and, when a certified agent of its role
   exists, one `mentored_by` link.
+- **Status: done** (`network.link_on_creation` from `_recruit`, `create_agent`, `_clone`):
+  `complementary_skill` to the (up to 3) specialists of other roles that its peers (same role, else its similar
+  agents) have `collaborated` links with; `mentored_by` to the active agent of the same role with the highest
+  SPEC-13 certification, on the new agent's skills when one is certified (never its own original or a sibling).
 
 ### S12-R-03 Fair team recommendation — §11.2, §11.3, §18.2
 - Score = capability coverage + relevant experience + quality evidence + availability
@@ -75,8 +91,9 @@ specialists, mentors and past collaborators, and that departments keep a shift s
 - Collaboration scores come only from gate results and QA verdicts, never from message counts.
 - Duplicate/artificial records (same pair, same goal, repeated) are ignored (AR-015, AR-016).
 - Administrators can correct a relationship (audited).
-- **Status: partial.** Collaboration weight comes only from gate results and each goal counts once
-  (S12-D-01); the administrator correction is open.
+- **Status: done.** Collaboration weight comes only from gate results and each goal counts once
+  (S12-D-01); administrators correct a link's weight or expire it (or add one) with a reason on the agent card's
+  Relationships tab (`POST /api/agents/{id}/relationships`, audited `relationship_correct`).
 
 ### S12-R-07 Network view — §16 (P2)
 - Agent network view with paging (AR-009, AR-020): `open`.

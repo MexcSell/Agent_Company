@@ -35,6 +35,7 @@ from agent_company import (
     machines,
     management,
     mcp,
+    network,
     performance,
     prefs,
     projects,
@@ -455,6 +456,14 @@ class LifecycleBody(BaseModel):
     state: str
 
 
+class RelationshipBody(BaseModel):
+    other_id: int
+    kind: str
+    weight: float | None = Field(default=None, ge=0, le=1)
+    status: str | None = None
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class RoleBody(BaseModel):
     role: str
 
@@ -764,6 +773,21 @@ def create_app(start_background: bool = True) -> FastAPI:
         out = registry.set_lifecycle(agent_id, body.state, admin["name"])
         _audit(admin, "agent_lifecycle", out["name"], after={"state": body.state})
         return out
+
+    @app.get("/api/agents/{agent_id}/relationships")
+    def agent_relationships(agent_id: int, _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        return network.of_agent(agent_id)
+
+    @app.post("/api/agents/{agent_id}/relationships")
+    def agent_relationship_correct(agent_id: int, body: RelationshipBody,
+                                   admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        """An administrator corrects a link's weight or expires it (SPEC-12 S12-R-06)."""
+        before, after = network.correct(agent_id, body.other_id, body.kind, admin["name"], body.reason, body.weight,
+                                        body.status)
+        _audit(admin, "relationship_correct", f"{after['a']} {after['kind']} {after['b']}",
+               before={k: before[k] for k in ("weight", "status")} if before else None,
+               after={"weight": after["weight"], "status": after["status"], "reason": body.reason})
+        return after
 
     @app.get("/api/agents/{agent_id}/versions")
     def agent_versions(agent_id: int, _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:

@@ -102,7 +102,7 @@ async function agentModal(id, tab = "profile") {
     <optgroup label="Models">${m.models.map((x) => `<option value="${esc(x.name)}" ${x.name === a.model_pref ? "selected" : ""}>${esc(x.name)}${x.available ? "" : " (unavailable)"}</option>`).join("")}</optgroup>
     <optgroup label="Another agent (uses its model)">${others.map((x) => `<option value="agent:${x.id}" ${a.model_pref === `agent:${x.id}` ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</optgroup></select>`;
   const plugins = cat.filter((i) => ["plugin", "skill"].includes(i.kind));
-  const tabs = [["profile", "Profile"], ["definition", "Definition"], ["history", "Playbook & history"], ["config", "Versions"]];
+  const tabs = [["profile", "Profile"], ["definition", "Definition"], ["history", "Playbook & history"], ["links", "Relationships"], ["config", "Versions"]];
   modal(`<div class="row"><div class="avatar">${roleIcon(a.role)}</div><div class="grow"><h2 style="margin:0">${esc(a.name)}</h2><div class="muted">${esc(a.title)} · ${esc(a.room)} · configuration v${a.config_version} · definition v${a.definition_version}</div></div>${a.health === "degraded" ? '<span class="pill failed">degraded</span>' : ""}${pill(a.enabled ? a.status : "disabled")}</div>
     <div class="ag-tabs small" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-mtab="${k}" aria-selected="${tab === k}">${l}</button>`).join("")}</div><div id="a-tab"></div>`);
   document.querySelectorAll("[data-mtab]").forEach((b) => (b.onclick = () => agentModal(id, b.dataset.mtab)));
@@ -129,6 +129,7 @@ async function agentModal(id, tab = "profile") {
     }));
     return;
   }
+  if (tab === "links") return relationshipsTab(box, a, all, admin);
   if (tab === "history") {
     box.innerHTML = `<h3>Playbook v${a.playbook_version}</h3><pre>${esc(a.playbook || "Empty: the agent learns from finished work.")}</pre>
       ${a.trial_playbook ? `<h3>Trial playbook (${a.trial_outcomes.length} task(s) so far)</h3><pre>${esc(a.trial_playbook)}</pre>` : ""}
@@ -167,6 +168,32 @@ async function agentModal(id, tab = "profile") {
   $("#a-pause") && ($("#a-pause").onclick = () => act("lifecycle", { state: a.lifecycle === "paused" ? "active" : "paused" }));
   $("#a-retire") && ($("#a-retire").onclick = () => act("lifecycle", { state: "retired" }, "Retire this agent permanently? Its history is kept."));
   $("#a-merge") && ($("#a-merge").onclick = () => act("merge", undefined, "Fold this clone's experience into its original and retire it?"));
+}
+
+// Relationships with their kind, where they come from (inferred from profiles, observed in verified work,
+// corrected by an administrator) and their evidence; an administrator can set a weight or expire one (SPEC-12).
+const REL_KINDS = ["similar", "collaborated", "complementary_skill", "research_partner", "testing_partner", "reviewed_by", "mentored_by", "depends_on", "handover_to", "supervises", "knowledge_contributor"];
+async function relationshipsTab(box, a, all, admin) {
+  const rels = await api(`/api/agents/${a.id}/relationships`);
+  const phrase = (r) => r.directed ? `${esc(r.a)} <b>${esc(r.kind.replace(/_/g, " "))}</b> ${esc(r.b)}` : `<b>${esc(r.kind.replace(/_/g, " "))}</b> with ${esc(r.a_id === a.id ? r.b : r.a)}`;
+  box.innerHTML = `<p class="muted">Inferred links come from profiles (role, skills, the specialists its peers work with, a mentor candidate); observed ones only from verified work (gate results, reviews, dependencies, handovers, knowledge it used). Expired links are kept but no longer used.</p>
+    <table class="rel-table"><tr><th>Relationship</th><th>Origin</th><th class="num">Weight</th><th>Evidence</th>${admin ? "<th></th>" : ""}</tr>
+    ${rels.map((r) => `<tr class="${r.status === "expired" ? "off" : ""}"><td>${phrase(r)}${r.status === "expired" ? ' <span class="pill">expired</span>' : ""}</td><td>${pill(r.origin)}</td><td class="num">${r.weight.toFixed(2)}</td><td class="muted ellipsis" style="max-width:220px" title="${esc(r.evidence.join("\n"))}">${esc(r.evidence.slice(-3).join(", "))}</td>${admin ? `<td>${ib("edit", "Correct this relationship", `data-rel="${r.id}"`, "sm")}</td>` : ""}</tr>`).join("") || `<tr><td colspan="5" class="muted">No relationships yet.</td></tr>`}</table>
+    ${admin ? `<h3>Correct or add a relationship</h3><form id="rel-f"><div class="row"><div class="grow"><label for="rel-o">Other agent</label><select id="rel-o">${all.filter((x) => x.id !== a.id).map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join("")}</select></div>
+      <div class="grow"><label for="rel-k">Kind (directed kinds read: ${esc(a.name)} → other)</label><select id="rel-k">${REL_KINDS.map((k) => `<option>${k}</option>`).join("")}</select></div></div>
+      <div class="row"><div class="grow"><label for="rel-w">Weight 0–1 (empty: unchanged)</label><input id="rel-w" type="number" min="0" max="1" step="0.05"></div><div class="grow"><label for="rel-s">Status</label><select id="rel-s"><option value="">unchanged</option><option>active</option><option>expired</option></select></div></div>
+      <label for="rel-r">Reason (audited)</label><input id="rel-r" required maxlength="500">
+      <div class="row" style="margin-top:8px"><button class="btn icon primary" title="Save the correction" aria-label="Save the correction">${icon("save", 16)}</button></div></form>` : ""}`;
+  if (!admin) return;
+  box.querySelectorAll("[data-rel]").forEach((b) => (b.onclick = () => {
+    const r = rels.find((x) => x.id === Number(b.dataset.rel));
+    $("#rel-o").value = String(r.a_id === a.id ? r.b_id : r.a_id); $("#rel-k").value = r.kind; $("#rel-w").value = r.weight; $("#rel-s").value = r.status; $("#rel-r").focus();
+  }));
+  $("#rel-f").onsubmit = async (e) => {
+    e.preventDefault();
+    const w = $("#rel-w").value;
+    try { await api(`/api/agents/${a.id}/relationships`, { method: "POST", body: { other_id: Number($("#rel-o").value), kind: $("#rel-k").value, weight: w === "" ? null : Number(w), status: $("#rel-s").value || null, reason: $("#rel-r").value } }); toast("Corrected"); agentModal(a.id, "links"); } catch (err) { toast(err.message); }
+  };
 }
 
 // --- Tools & MCP ----------------------------------------------------------------------------

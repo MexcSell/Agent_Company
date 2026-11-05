@@ -338,9 +338,20 @@ def _link_similar(s: Session, agent: Agent, k: int = 3, threshold: float = 0.2) 
             s.add(Relationship(a_id=a_id, b_id=b_id, kind="similar", weight=score))
 
 
+# Relationship kinds (SPEC-12 S12-R-01). Symmetric ones are stored once per pair (lower id first); directed
+# ones read "a <kind> b". Inferred kinds come from profiles, observed ones from verified work (network.py).
+SYMMETRIC = {"similar", "collaborated", "complementary_skill", "research_partner", "testing_partner"}
+DIRECTED = {"reviewed_by", "mentored_by", "depends_on", "handover_to", "supervises", "knowledge_contributor"}
+KINDS = SYMMETRIC | DIRECTED
+INFERRED = {"similar", "complementary_skill"}
+# kinds whose agents share experience: their knowledge ranks higher for each other (learning.retrieve)
+SHARING = {"similar", "collaborated", "complementary_skill", "mentored_by", "knowledge_contributor"}
+
+
 def related(s: Session, agent_id: int, limit: int = 5) -> list[tuple[Agent, float]]:
     rels = s.scalars(select(Relationship).where(
-        or_(Relationship.a_id == agent_id, Relationship.b_id == agent_id))
+        or_(Relationship.a_id == agent_id, Relationship.b_id == agent_id), Relationship.kind.in_(SHARING),
+        Relationship.status != "expired")
         .order_by(Relationship.weight.desc())).all()
     out: dict[int, float] = {}
     for r in rels:
@@ -354,10 +365,10 @@ def related(s: Session, agent_id: int, limit: int = 5) -> list[tuple[Agent, floa
 def connect(s: Session, a_id: int, b_id: int, kind: str = "collaborated", inc: float = 0.1,
             evidence: str | None = None) -> None:
     """Strengthen (or, with a negative `inc`, weaken) a link. With `evidence`, the same evidence never
-    changes the link twice (duplicate records are ignored, SPEC-12 AR-015)."""
-    if a_id == b_id:
+    changes the link twice (duplicate records are ignored, SPEC-12 AR-015). A directed kind keeps its order."""
+    if a_id == b_id or not a_id or not b_id:
         return
-    lo, hi = sorted((a_id, b_id))
+    lo, hi = (a_id, b_id) if kind in DIRECTED else sorted((a_id, b_id))
     rel = s.scalars(select(Relationship).where(
         Relationship.a_id == lo, Relationship.b_id == hi, Relationship.kind == kind)).first()
     if rel is None:
@@ -399,7 +410,7 @@ def _team_weights(s: Session, goal_id: int | None) -> dict[int, float]:
     if not team:
         return {}
     out: dict[int, float] = {}
-    for r in s.scalars(select(Relationship).where(Relationship.kind == "collaborated",
+    for r in s.scalars(select(Relationship).where(Relationship.kind == "collaborated", Relationship.status != "expired",
                                                   or_(Relationship.a_id.in_(team), Relationship.b_id.in_(team)))):
         for me, other in ((r.a_id, r.b_id), (r.b_id, r.a_id)):
             if other in team and me not in team:
@@ -556,8 +567,17 @@ def _clone(s: Session, src: Agent) -> Agent:
     s.add(clone)
     s.flush()
     connect(s, clone.id, base.id, "similar", 0.7)
+    _link_new(s, clone, list(base.skills or {}))
     record_version(s, clone, "system", f"cloned from {base.name}")
     return clone
+
+
+def _link_new(s: Session, agent: Agent, skills: list[str]) -> None:
+    """Complementary specialists and a mentor candidate for a new agent (SPEC-12 S12-R-02)."""
+    from agent_company import network
+
+    s.flush()
+    network.link_on_creation(s, agent, skills)
 
 
 def _recruit(s: Session, role: str, skills: list[str], writes: bool | None) -> Agent:
@@ -579,6 +599,7 @@ def _recruit(s: Session, role: str, skills: list[str], writes: bool | None) -> A
     s.add(agent)
     s.flush()
     _link_similar(s, agent, threshold=0.05)  # a recruit always learns from its closest peers
+    _link_new(s, agent, skills)
     record_version(s, agent, "system", f"recruited for {role}")
     return agent
 
@@ -767,6 +788,7 @@ def create_agent(role: str, title: str = "", skills: dict[str, int] | None = Non
         s.add(a)
         s.flush()
         _link_similar(s, a, threshold=0.05)
+        _link_new(s, a, list(a.skills or {}))
         record_version(s, a, actor, "created")
         return agent_dict(a)
 
