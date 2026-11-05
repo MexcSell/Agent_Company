@@ -405,11 +405,20 @@ async function goalDetail(id, openIds = new Set()) {
     GOAL_ACTIVE.includes(g.status) && g.status !== "paused" && me.is_admin ? ib("pause", "Pause the goal (tasks already started finish)", 'data-act="pause"') : "",
     g.status === "paused" && me.is_admin ? ib("play", "Resume the goal from its checkpoint", 'data-act="resume"', "primary") : "",
     GOAL_ACTIVE.includes(g.status) ? ib("stop", "Cancel the goal", 'data-act="cancel"', "danger") : "",
+    me.is_admin && !["approved", "rejected", "cancelled"].includes(g.status) ? ib("settings", "Change the goal's budget (cost, tokens, agents at once)", 'data-budget="1"') : "",
     ib("clock", "Execution trace: every run, gate and operation in order", 'data-trace="1"'),
   ].join("");
+  // S04-R-09: the goal's budget per dimension; a goal's budget also covers the child goals its proposals spawn
+  const b = g.budget || { limits: {}, used: {}, remaining: {} }, lim = b.limits || {};
+  const budgetLine = [
+    lim.cost_usd ? `cost ${money(b.used.cost_usd)} of ${money(lim.cost_usd)}${b.remaining.cost_usd != null ? ` (${money(b.remaining.cost_usd)} left with child goals)` : ""}` : "",
+    lim.tokens ? `tokens ${fmt.format(b.used.tokens)} of ${fmt.format(lim.tokens)}` : "",
+    lim.agents ? `at most ${lim.agents} agent${lim.agents === 1 ? "" : "s"} at once` : "",
+  ].filter(Boolean).join(" · ");
   $("#goal-detail").innerHTML = `<div class="row" style="padding-right:24px"><h2 class="grow" style="margin:0">#${g.id} ${esc(g.title)}</h2>${pill(g.status)}${actions}</div>
     <p class="muted">Iteration ${g.iteration}/${g.max_iterations} · branch <code>${esc(g.branch || "-")}</code> · worktree <code>${esc(g.worktree || "-")}</code>${g.estimated_cost_usd ? ` · estimate ${money(g.estimated_cost_usd)}` : ""}</p>
-    ${g.status === "paused" && g.paused_for ? `<p class="muted">${g.paused_for === "cost_overrun" ? "Paused: it cost more than twice its estimate. Resuming accepts the cost so far as the new estimate." : "Paused: its budget is used up. Raise the goal budget (Settings) before resuming."}</p>` : ""}
+    ${budgetLine ? `<p class="muted">Budget: ${budgetLine}${g.parent_goal_id ? ` · shared from goal #${Number(g.parent_goal_id)}` : ""}</p>` : ""}
+    ${g.status === "paused" && g.paused_for ? `<p class="muted">${g.paused_for === "cost_overrun" ? "Paused: it cost more than twice its estimate. Resuming accepts the cost so far as the new estimate." : "Paused: its budget is used up. Raise the goal's budget (the settings button above, or Settings for every goal) before resuming."}</p>` : ""}
     ${g.result ? `<pre>${esc(g.result)}</pre>` : ""}
     ${Object.keys(g.baseline || {}).length ? `<h3>Before any change</h3>${Object.entries(g.baseline).map(([c, r]) => `<div class="muted">${r.passed ? "✓" : "✗"} <code>${esc(c)}</code> ${r.passed ? "passed" : "already failing"}</div>`).join("")}` : ""}
     ${Object.keys(g.history?.at(-1)?.stages || {}).length ? `<h3>Gate by stage <span class="muted">(iteration ${g.history.at(-1).iteration})</span></h3><div class="row">${Object.entries(g.history.at(-1).stages).map(([st, v]) => `<span class="pill ${v === "pass" ? "done" : v === "fail" ? "failed" : v === "waiting" ? "pending" : ""}" title="${esc(st)}: ${esc(v)}">${esc(st)} ${v === "pass" ? "✓" : v === "fail" ? "✗" : v === "waiting" ? "…" : "–"}</span>`).join("")}</div>` : ""}
@@ -433,6 +442,17 @@ async function goalDetail(id, openIds = new Set()) {
     try { await api(`/api/decisions/${b.dataset.dec}/decide`, { method: "POST", body: { approve, note } }); goalDetail(id, openIds); } catch (err) { toast(err.message); }
   }));
   $("#goal-detail").querySelector("[data-trace]").onclick = () => goalTrace(id).catch((err) => toast(err.message));
+  const bb = $("#goal-detail").querySelector("[data-budget]");
+  if (bb) bb.onclick = async () => {
+    const own = b.own || {}, ask = (label, v) => prompt(`${label} (0 = the setting for every goal)`, String(v ?? 0));
+    const cost = ask("Cost budget in USD", own.budget_usd); if (cost === null) return;
+    const tokens = ask("Token budget", own.budget_tokens); if (tokens === null) return;
+    const agents = ask("Agents working at once", own.max_active_agents); if (agents === null) return;
+    try {
+      await api(`/api/goals/${id}/budget`, { method: "POST", body: { budget_usd: Number(cost) || 0, budget_tokens: parseInt(tokens, 10) || 0, max_active_agents: parseInt(agents, 10) || 0 } });
+      toast("Budget changed"); goalDetail(id, openIds);
+    } catch (err) { toast(err.message); }
+  };
   $("#goal-detail").querySelectorAll("[data-act]").forEach((b) => (b.onclick = async () => {
     try { await api(`/api/goals/${id}/${b.dataset.act}`, { method: "POST" }); toast(`Goal ${b.dataset.act}d`); goalDetail(id); } catch (err) { toast(err.message); }
   }));

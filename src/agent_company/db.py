@@ -404,6 +404,11 @@ class Goal(Base):
     permits: Mapped[list[Any]] = mapped_column(default=list)  # change boundaries lifted: dependencies, config
     # the cost the order or the planner expected; spending twice that pauses the goal (S14-R-03). 0 = none
     estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    # the goal's own budget (S04-R-09, budgets.py); 0 = the setting (goal_budget_usd, goal_token_budget,
+    # goal_agent_limit). A child goal's budget is capped by its parent's remainder when it is created.
+    budget_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    budget_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    max_active_agents: Mapped[int] = mapped_column(Integer, default=0)  # tasks (agents) working at once
     # the project's conversation lane the order came from; its reports go there and its goals run in order
     topic: Mapped[str] = mapped_column(String(64), default="general")
     # the order's classification (its attachments, its project at creation); the project's current one may raise it

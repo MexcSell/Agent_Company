@@ -59,8 +59,9 @@ def set_status(task_id: int, status: str, **fields: object) -> None:
 
 
 def run_dag(task_ids: list[int], worker: Callable[[int], bool], worktree: str,
-            cancelled: Callable[[], bool] = lambda: False) -> dict[int, str]:
-    """Run tasks respecting dependencies. `worker(task_id)` returns True on success."""
+            cancelled: Callable[[], bool] = lambda: False, max_agents: int = 0) -> dict[int, str]:
+    """Run tasks respecting dependencies. `worker(task_id)` returns True on success. `max_agents` (> 0) caps
+    how many of these tasks, each staffed by one agent, run at once (the goal's budget, S04-R-09)."""
     with session() as s:
         rows = list(s.scalars(select(Task).where(Task.id.in_(task_ids))))
         tasks = {t.id: (t.key, list(t.depends_on), t.priority, t.writes) for t in rows}
@@ -82,7 +83,8 @@ def run_dag(task_ids: list[int], worker: Callable[[int], bool], worktree: str,
             return _guarded(worker, tid)
 
     running: dict[Future[bool], int] = {}
-    with ThreadPoolExecutor(max_workers=max(1, len(tasks))) as pool:
+    cap = max_agents if max_agents > 0 else len(tasks)
+    with ThreadPoolExecutor(max_workers=max(1, min(cap, len(tasks)))) as pool:
         while True:
             for tid, st in state.items():
                 if st != "queued":
@@ -99,7 +101,7 @@ def run_dag(task_ids: list[int], worker: Callable[[int], bool], worktree: str,
             ready = sorted((tid for tid, st in state.items() if st == "queued"
                             and all(state[d] == "done" for d in deps_of(tid))),
                            key=lambda t: (tasks[t][2], t))
-            for tid in ready:
+            for tid in ready[:max(0, cap - len(running))]:
                 state[tid] = "running"
                 running[pool.submit(run_one, tid)] = tid
             if not running:

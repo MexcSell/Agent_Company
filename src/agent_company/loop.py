@@ -22,7 +22,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from agent_company import (blackboard, contracts, decisions, executors, learning, network, quality, registry, research,
+from agent_company import (blackboard, budgets, contracts, decisions, executors, learning, network, quality, registry, research,
                            router, specs, usage, worktrees)
 from agent_company.config import settings
 from agent_company.db import Agent, Event, Goal, Task, log_event, session
@@ -38,11 +38,14 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                 parent_goal_id: int | None = None, allowed_paths: list[str] | None = None,
                 protect_tests: bool = False, extract_checks: bool = False,
                 permits: list[str] | None = None, estimated_cost_usd: float = 0.0, topic: str = "general",
-                classification: str = "", trial: dict[str, Any] | None = None) -> int:
+                classification: str = "", trial: dict[str, Any] | None = None, budget_usd: float = 0.0,
+                budget_tokens: int = 0, max_active_agents: int = 0) -> int:
     """Create a goal. `extract_checks` (only for trusted authors) adds the test/lint commands
     the description names in backticks when no quality commands are given. `classification` (S14-R-05) can
     only raise the level: the goal is at least as classified as its project and its attachments. `trial`
-    (eval goals only, SPEC-13) carries experiment sides, model overrides, the trainee and hidden checks."""
+    (eval goals only, SPEC-13) carries experiment sides, model overrides, the trainee and hidden checks.
+    `budget_usd`, `budget_tokens` and `max_active_agents` are the goal's own budget (S04-R-09); a child goal's cost
+    and tokens are capped to its parent's remainder, and no child is created when the parent has nothing left."""
     from agent_company.checks import extract_check_commands
     from agent_company.governance import check_command, stops
 
@@ -71,6 +74,9 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
 
     if classification:
         check_level(classification)
+    own = {"budget_usd": max(0.0, float(budget_usd or 0)), "budget_tokens": max(0, int(budget_tokens or 0))}
+    if parent_goal_id is not None:
+        own = budgets.for_child(parent_goal_id, own)
     with session() as s:
         project = s.get(Project, project_id) if project_id is not None else None
         from agent_company.projects import refusal
@@ -88,7 +94,8 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                  parent_goal_id=parent_goal_id, allowed_paths=[p.strip() for p in allowed_paths or [] if p.strip()],
                  protect_tests=protect_tests, permits=sorted(set(permits or [])),
                  estimated_cost_usd=max(0.0, float(estimated_cost_usd or 0)), topic=topic or "general",
-                 classification=level, trial=dict(trial or {}))
+                 classification=level, trial=dict(trial or {}), max_active_agents=max(0, int(max_active_agents or 0)),
+                 **own)
         s.add(g)
         s.flush()
         gid = g.id
@@ -324,13 +331,20 @@ def _budget_note(goal: Goal, started: float) -> str:
     with session() as s:  # the planner may have set the estimate after `goal` was loaded
         row = s.get(Goal, goal.id)
         estimate = (row.estimated_cost_usd or 0.0) if row else 0.0
-    spent = usage.goal_spend(goal.id) if cfg.goal_budget_usd > 0 or estimate > 0 else 0.0
+        lim = budgets.limits(row) if row else {"cost_usd": 0, "tokens": 0}
+    spent = usage.goal_spend(goal.id) if lim["cost_usd"] > 0 or estimate > 0 else 0.0
     if estimate > 0 and spent > COST_OVERRUN * estimate:  # behaviour rule (S14-R-03)
         raise CostOverrun(f"spent ${spent:.2f}, more than {COST_OVERRUN:g}× the estimate of ${estimate:.2f}")
-    if cfg.goal_budget_usd > 0:
-        if spent >= cfg.goal_budget_usd:
-            raise BudgetExhausted(f"cost budget of ${cfg.goal_budget_usd:.2f} used (${spent:.2f})")
-        shares.append(("cost", spent / cfg.goal_budget_usd))
+    if lim["cost_usd"] > 0:  # S04-R-09: the goal's own budget covers what its child goals use or hold
+        held = budgets.committed(goal.id, "cost_usd")
+        if held >= lim["cost_usd"]:
+            raise BudgetExhausted(f"cost budget of ${lim['cost_usd']:.2f} used (${held:.2f})")
+        shares.append(("cost", held / lim["cost_usd"]))
+    if lim["tokens"] > 0:
+        held = budgets.committed(goal.id, "tokens")
+        if held >= lim["tokens"]:
+            raise BudgetExhausted(f"token budget of {lim['tokens']:,} used ({int(held):,})")
+        shares.append(("token", held / lim["tokens"]))
     if cfg.goal_time_budget > 0:
         elapsed = time.monotonic() - started
         if elapsed >= cfg.goal_time_budget:
@@ -1156,11 +1170,12 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
 
             _update_goal(goal_id, status="running", reason=f"iteration {iteration}: {len(ids)} task(s)")
             worker = _make_worker(goal, notes, feedback, started, planner_id)
-            run_dag(ids, worker, goal.worktree, lambda: cancelled(goal_id))
+            agents = budgets.limits(_goal(goal_id))["agents"]  # S04-R-09: agents working at once
+            run_dag(ids, worker, goal.worktree, lambda: cancelled(goal_id), max_agents=agents)
             if not _halted(goal_id):
                 reviews = _review_conflicts(goal_id, iteration)  # S04-R-03
                 if reviews:
-                    run_dag(reviews, worker, goal.worktree, lambda: cancelled(goal_id))
+                    run_dag(reviews, worker, goal.worktree, lambda: cancelled(goal_id), max_agents=agents)
                     _decide_conflicts(goal_id, iteration, reviews)
             halted = _halted(goal_id)
             if halted:

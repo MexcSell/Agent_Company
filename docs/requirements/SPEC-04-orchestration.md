@@ -33,7 +33,7 @@ orchestrator → `loop.py`; scheduler → `scheduler.run_dag`; team → agents s
 | S04-FR-18 | Retry failed tasks | P0 | done (S04-R-06): retries by failure type, capped by the goal deadline (`loop._execute`) |
 | S04-FR-19 | Handle timeouts and cancellations | P0 | done (`loop.cancel`, command timeouts, `goal_time_budget`) |
 | S04-FR-20 | Recover interrupted workflows | P1 | done: a restart resumes the planned iteration without re-running finished tasks (S04-R-05) |
-| S04-FR-21 | Enforce execution budgets | P0 | partial: goal cost and time (pause or stop), per-task cost, turns and deadline (G-R-01); tokens, active agents and child-goal caps → S04-R-09 |
+| S04-FR-21 | Enforce execution budgets | P0 | done (S04-R-09): goal cost, tokens, time and agents at once (pause or stop), child goals capped by the parent, per-task cost, turns and deadline (G-R-01) |
 | S04-FR-22 | Support human approval checkpoints | P0 | done (merge approval) |
 | S04-FR-23 | Record orchestration decisions | P0 | done (S04-R-02 `decisions.py`, S04-R-04 `goal_transitions`) |
 | S04-FR-24 | Support strategy selection | P1 | open → S04-R-11 |
@@ -47,7 +47,7 @@ orchestrator → `loop.py`; scheduler → `scheduler.run_dag`; team → agents s
 ## Specific requirements
 
 Status (2026-11-05): S04-R-01 done · S04-R-02 done · S04-R-03 done · S04-R-04 done · S04-R-05 done ·
-S04-R-06 done · S04-R-07 done · S04-R-08 done · S04-R-09 partial · S04-R-10 done · S04-R-11 open ·
+S04-R-06 done · S04-R-07 done · S04-R-08 done · S04-R-09 done · S04-R-10 done · S04-R-11 open ·
 S04-R-12 partial. Details under each item.
 
 ### S04-R-01 Blackboard (shared, versioned goal context) — §10
@@ -203,12 +203,18 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
   need an administrator and are audited; unused budget returns to the parent.
 - Exhaustion pauses or stops according to a setting (`budget_exhausted_action`: `pause|stop`).
 - Acceptance: a child goal requesting more than the parent's remainder is capped.
-- **Status: partial.** Done: `budget_exhausted_action` (default `pause`; an iteration cut short is not
-  judged, its unrun tasks run after the resume, and resuming refuses while the goal is still over
-  budget); per-task cost, turns and deadline in the contract (G-R-01). Open: token and active-agent
-  dimensions, per-goal budgets with child-goal caps and returns. The time budget counts per run of the
-  loop, so a resumed goal gets a fresh time window.
-- **Status: open.**
+- **Status: done** (`budgets.py`, `tests/test_budgets.py`). Goal columns `budget_usd`, `budget_tokens`,
+  `max_active_agents` (0 = the settings `goal_budget_usd`, `goal_token_budget`, `goal_agent_limit`). `_budget_note`
+  pauses or stops on cost and tokens (`budget_exhausted_action`, default `pause`; an iteration cut short is not
+  judged, its unrun tasks run after the resume, and resuming refuses while the goal is still over budget); a goal's
+  cost and tokens count what its child goals use or hold. Active agents: `run_dag(max_agents=)` caps how many of a
+  goal's tasks (one agent each) run at once. Child goals: `budgets.for_child` caps a proposal goal to the parent's
+  remainder (an event records the cap); with nothing left the proposal is recorded as rejected and no goal is made.
+  A running child holds its budget; once it ends only its use counts, so the unused part returns to the parent.
+  Increases: `POST /api/goals/{id}/budget` (administrators, audited; a child stays within its parent), the settings
+  button in the goal view. Per-task cost, turns and deadline stay in the contract (G-R-01). The time budget counts
+  per run of the loop, so a resumed goal gets a fresh time window. Not done: the room budgets of the diagram
+  (company → research/engineering/QA/security); project budgets (S05-R-06) cap all of a project's goals instead.
 
 ### S04-R-10 Agent-to-agent messages — §9.2, §9.3
 - Message contract: `sender_agent_id`, `recipient_agent_id` or `channel`, `goal_id`, `task_id`,

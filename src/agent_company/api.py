@@ -23,6 +23,7 @@ from agent_company import (
     agentdefs,
     auth,
     blackboard,
+    budgets,
     catalog,
     containers,
     decisions,
@@ -175,6 +176,12 @@ class GoalBody(BaseModel):
     protect_tests: bool = False
     permits: list[str] = Field(default_factory=list)  # change boundaries lifted (admins): dependencies, config
     estimated_cost_usd: float = Field(default=0.0, ge=0, le=10_000)  # twice this pauses the goal (S14-R-03)
+
+
+class GoalBudgetBody(BaseModel):
+    budget_usd: float | None = None
+    budget_tokens: int | None = None
+    max_active_agents: int | None = None
 
 
 class CrawlBody(BaseModel):
@@ -1609,6 +1616,7 @@ def create_app(start_background: bool = True) -> FastAPI:
         d["transitions"] = workflow.history(goal_id)
         d["decisions"] = decisions.list_decisions(goal_id=goal_id)
         d["blackboard"] = blackboard.read(goal_id)
+        d["budget"] = budgets.summary(goal_id)
         return d
 
     # --- knowledge items (SPEC-11): lessons with provenance; people review, agents never do ---
@@ -1709,6 +1717,17 @@ def create_app(start_background: bool = True) -> FastAPI:
             raise HTTPException(400, str(e)) from e
         _audit(admin, "goal_pause", goal_id)
         return {"ok": True}
+
+    @app.post("/api/goals/{goal_id}/budget")
+    def goal_budget(goal_id: int, body: GoalBudgetBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        """Change a goal's budget (S04-R-09): administrators only, audited; a child stays within its parent."""
+        try:
+            out = budgets.set_budget(goal_id, f"user:{admin['name']}", body.budget_usd, body.budget_tokens,
+                                     body.max_active_agents)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "goal_budget", goal_id, after=body.model_dump(exclude_none=True))
+        return out
 
     @app.post("/api/goals/{goal_id}/resume")
     def goal_resume(goal_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
@@ -2483,7 +2502,8 @@ def _goal_dict(g: Goal) -> dict[str, Any]:
             "quality_commands": g.quality_commands, "result": g.result, "project_id": g.project_id,
             "origin": g.origin, "parent_goal_id": g.parent_goal_id, "allowed_paths": g.allowed_paths,
             "protect_tests": g.protect_tests, "permits": g.permits or [], "baseline": g.baseline, "history": g.history,
-            "estimated_cost_usd": g.estimated_cost_usd or 0.0,
+            "estimated_cost_usd": g.estimated_cost_usd or 0.0, "budget_usd": g.budget_usd or 0.0,
+            "budget_tokens": g.budget_tokens or 0, "max_active_agents": g.max_active_agents or 0,
             "paused_for": (g.checkpoint or {}).get("paused_for", ""),
             "created_at": g.created_at.isoformat(), "updated_at": g.updated_at.isoformat()}
 

@@ -933,10 +933,18 @@ def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = Tr
                      "classification": origin.classification if origin else ""}
         out = proposal_dict(p, dict(s.execute(select(Agent.id, Agent.name)).all()))
     if spawn is not None:
-        gid = loop.create_goal(spawn["title"], spawn["description"], spawn["repo"], quality_commands=spawn["checks"],
-                               created_by=spawn["created_by"], project_id=spawn["project_id"], origin="proposal",
-                               parent_goal_id=spawn["parent"], topic=spawn["topic"],
-                               classification=spawn["classification"])
+        try:
+            gid = loop.create_goal(spawn["title"], spawn["description"], spawn["repo"],
+                                   quality_commands=spawn["checks"], created_by=spawn["created_by"],
+                                   project_id=spawn["project_id"], origin="proposal", parent_goal_id=spawn["parent"],
+                                   topic=spawn["topic"], classification=spawn["classification"])
+        except ValueError as e:  # e.g. the parent goal's budget is used (S04-R-09): recorded, not turned into a goal
+            with session() as s:
+                p = s.get(Proposal, proposal_id)
+                p.status, p.decided_by = "rejected", f"{p.decided_by} ({e})"[:128]
+                out = proposal_dict(p, dict(s.execute(select(Agent.id, Agent.name)).all()))
+            log_event("proposal", f"proposal {proposal_id} not turned into a goal: {e}", goal_id=out["goal_id"])
+            return out
         with session() as s:
             s.get(Proposal, proposal_id).spawned_goal_id = gid
         out["spawned_goal_id"] = gid
