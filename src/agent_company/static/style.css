@@ -39,7 +39,9 @@ pre { background: var(--panel-2); border: 1px solid var(--border); border-radius
 .main { display: flex; flex-direction: column; min-width: 0; }
 .topbar { height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .topbar-right { display: flex; gap: 8px; align-items: center; }
-.view { flex: 1; overflow: auto; padding: 16px; }
+.view { flex: 1; overflow: auto; padding: 16px; scrollbar-gutter: stable; }
+/* Scrollbars: a thin, always-visible line (the page's sits at the window's right edge from the first paint). */
+* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent; }
 
 .btn { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit; }
 .btn:hover { background: var(--panel-2); }
@@ -151,7 +153,10 @@ pre.code { max-height: 70vh; }
 .card { padding: var(--pad, 14px); border-radius: var(--radius, 8px); }
 .view { padding: var(--view-pad, 16px); }
 .grid { gap: var(--gap, 12px); }
-.main { width: 100%; max-width: var(--max-width, none); margin: 0 auto; }
+/* Centred formats narrow the content, not the scroll box, so the page's scrollbar stays at the window's right edge. */
+.main { width: 100%; }
+.view { padding-inline: max(var(--view-pad, 16px), calc((100% - var(--max-width, 100%)) / 2)); }
+.topbar { padding-inline: max(16px, calc((100% - var(--max-width, 100%)) / 2)); }
 .rail-label { display: none; }
 .shell[data-labels="1"] { grid-template-columns: 92px 1fr; }
 .shell[data-labels="1"] .rail button { width: 82px; height: 52px; display: flex; flex-direction: column; gap: 2px; font-size: 10.5px; }

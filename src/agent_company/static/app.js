@@ -219,7 +219,7 @@ async function updateBadges() {
 function show(id) {
   if (id !== current) VIEWS.find((x) => x.id === current)?.leave?.();  // e.g. Machines closes its console
   current = id; store.set("ac.view", id);
-  $("#view").classList.remove("flush", "fit");
+  $("#view").classList.remove("flush", "fit"); $("#view").scrollTop = 0;  // a new page starts at its top
   const v = VIEWS.find((x) => x.id === id); $("#view-title").textContent = v.title; renderRail();
   $("#view").classList.remove("enter"); void $("#view").offsetWidth; $("#view").classList.add("enter");
   clearTimeout(show.enterTimer); show.enterTimer = setTimeout(() => $("#view").classList.remove("enter"), 700);  // live re-renders don't animate

@@ -36,7 +36,7 @@ function currentLayout() { return LAYOUTS.find((l) => l.id === store.get("ac.lay
 function applyLayout() {
   const l = currentLayout(), d = DENSITY[l.density], root = document.documentElement.style;
   root.setProperty("--pad", d.pad); root.setProperty("--gap", d.gap); root.setProperty("--view-pad", d.view);
-  root.setProperty("--radius", `${l.radius}px`); root.setProperty("--max-width", l.maxWidth ? `${l.maxWidth}px` : "none");
+  root.setProperty("--radius", `${l.radius}px`); root.setProperty("--max-width", l.maxWidth ? `${l.maxWidth}px` : "100%");
   const shell = $("#app");
   shell.dataset.rail = l.rail; shell.dataset.labels = l.labels ? "1" : ""; shell.dataset.floating = l.floating ? "1" : "";
   shell.style.zoom = l.scale === 1 ? "" : String(l.scale);
