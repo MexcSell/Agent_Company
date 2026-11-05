@@ -93,9 +93,13 @@ reliable. The requirements below are the parts the core pipeline needs now.
   comparison written by `experiments.update` concludes it (better → supported, not better → rejected, a side
   with no runs → inconclusive; evolution smoke trials use `passed`). API: `GET/POST /api/hypotheses`,
   `POST /api/hypotheses/{id}/evidence|result|status` (result and status for administrators; all audited); the
-  GM's toolbox `gm hypothesis|hypotheses|hypothesis-status` acts as an agent; Knowledge → Hypotheses. Not done:
-  hypotheses as knowledge items of class `HYPOTHESIS` (they are their own table; knowledge items keep the class
-  for lessons).
+  GM's toolbox `gm hypothesis|hypotheses|hypothesis-status` acts as an agent; Knowledge → Hypotheses. Hypotheses
+  stay their own table while open; a supported or rejected one becomes a knowledge item once
+  (`hypotheses._knowledge`, `Hypothesis.knowledge_id`): `MEASURED` with a recorded test result, `INFERENCE` when a
+  person concluded it with a note; supported → `semantic`, rejected → `negative`; outcome `analysis` (evolution does
+  not count it as anyone's success); sources `hypothesis:<id>`, the test's source and the goal; screened and
+  classified like a lesson (nothing stored for secret work); a `DERIVED_FROM` edge to `hypothesis:<id>` in the
+  knowledge graph. Inconclusive and open hypotheses never reach prompts.
 
 ### S07-R-04 Predictions with calibration — §11 (AT-014..016) — P2
 - Planner time/cost estimates are predictions; record them with the actual outcome

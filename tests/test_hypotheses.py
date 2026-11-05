@@ -114,3 +114,34 @@ def test_the_api_records_and_audits_every_step():
         assert app.get("/api/hypotheses?status=supported").json()[0]["id"] == hid
         actions = {a["action"] for a in app.get("/api/audit").json()["records"]}
         assert {"hypothesis_create", "hypothesis_evidence", "hypothesis_status", "hypothesis_result"} <= actions
+
+
+def test_a_concluded_hypothesis_becomes_a_knowledge_item_once():
+    """S07-R-03 with SPEC-11: supported/rejected hypotheses are knowledge; open and inconclusive ones are not."""
+    from agent_company import kgraph, learning
+
+    h = new()
+    for to in ("investigating", "testing"):
+        hypotheses.set_status(h["id"], to, "user:admin")
+    hypotheses.record_result(h["id"], "9 of 10 small tasks passed, 5 of 10 large",
+                             {"source": "eval:smoke", "passed": True}, "agent:qa")
+    out = hypotheses.set_status(h["id"], "supported", "agent:general_manager")
+    item = learning.item(out["knowledge_id"])
+    assert item["evidence_class"] == "MEASURED" and item["kind"] == "semantic" and item["status"] == "approved"
+    assert "Smaller tasks pass the gate more often" in item["text"] and "it held" in item["text"]
+    assert item["sources"][:2] == [f"hypothesis:{h['id']}", "eval:smoke"]
+    assert hypotheses.set_status(h["id"], "archived", "user:admin")["knowledge_id"] == out["knowledge_id"]
+    graph = kgraph.neighbourhood(f"hypothesis:{h['id']}")
+    assert any(e["rel"] == "DERIVED_FROM" for e in graph["edges"])
+
+    rejected = hypotheses.create("Retrying the planner twice fixes bad plans", actor="user:admin")
+    for to in ("investigating", "testing"):
+        hypotheses.set_status(rejected["id"], to, "user:admin")
+    neg = hypotheses.set_status(rejected["id"], "rejected", "user:admin", "the last 12 re-plans failed the same way")
+    item = learning.item(neg["knowledge_id"])
+    assert item["kind"] == "negative" and item["evidence_class"] == "INFERENCE" and "did not hold" in item["text"]
+
+    open_one = hypotheses.create("Haiku reviews as well as Sonnet", actor="user:admin")
+    hypotheses.set_status(open_one["id"], "investigating", "user:admin")
+    hypotheses.set_status(open_one["id"], "testing", "user:admin")
+    assert hypotheses.set_status(open_one["id"], "inconclusive", "user:admin")["knowledge_id"] is None

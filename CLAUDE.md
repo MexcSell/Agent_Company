@@ -62,7 +62,7 @@ feature came from.
   commit in `dataset` and a `budget_usd` that stops route/template experiments; `retrieval` target: ranking weights on
   the retrieval evals + `benchmarks/retrieval.py`, applied and rolled back by an administrator); `hypotheses.py`
   (ASEAO07 S07-R-03: statements under test with evidence; an experiment's comparison concludes its hypothesis; an agent
-  never marks one supported without a recorded test result); `training.py`
+  never marks one supported without a recorded test result; a concluded one becomes a knowledge item); `training.py`
   (capability gaps, learning plans: practice + hidden final eval suites run by the trainee in scratch repos,
   certification only from the harness; learning metrics) + `exercises.py` (S13-R-02 exercises written by the
   instructor on an administrator's request, kept only when each check fails on the seed and passes with the reference

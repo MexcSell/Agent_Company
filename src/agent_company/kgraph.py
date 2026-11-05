@@ -1,11 +1,12 @@
 """The knowledge graph (SPEC-11 S11-R-07): `kg_edges` between entities of the existing tables.
 
-Entities are `type:id`: agent, project, goal, task, knowledge (lessons), decision, source, incident, and the
+Entities are `type:id`: agent, project, goal, task, knowledge (lessons), decision, source, incident, hypothesis, and the
 names technology, skill and user. Edges are written as side effects, in the caller's session (one writer):
 
   agent  CREATED       knowledge     a lesson was stored (learning.learn)
   knowledge APPLIES_TO technology    its technologies
   knowledge DERIVED_FROM goal|task   where it came from
+  knowledge DERIVED_FROM hypothesis  a concluded hypothesis (hypotheses._knowledge)
   goal   USED          knowledge     retrieved for one of the goal's tasks (learning.retrieve)
   knowledge VERIFIED_BY user         a person approved it (learning.review)
   agent  EXPERIENCED_IN skill        a task with that skill passed the gate (weight = passed tasks)
@@ -26,13 +27,13 @@ from typing import Any
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from agent_company.db import (Agent, Decision, Goal, Incident, KgEdge, Lesson, Project, Relationship, Source, Task,
-                              session)
+from agent_company.db import (Agent, Decision, Goal, Hypothesis, Incident, KgEdge, Lesson, Project, Relationship,
+                              Source, Task, session)
 
 RELS = {"CREATED", "USED", "DEPENDS_ON", "SUPPORTS", "CONTRADICTS", "DERIVED_FROM", "APPLIES_TO", "SUPERSEDES",
         "VERIFIED_BY", "EXPERIENCED_IN", "ASSIGNED_TO", "COLLABORATED_WITH"}
-TYPES = {"agent", "project", "goal", "task", "knowledge", "decision", "source", "incident", "technology", "skill",
-         "user"}
+TYPES = {"agent", "project", "goal", "task", "knowledge", "decision", "source", "incident", "hypothesis", "technology",
+         "skill", "user"}
 NAMED = {"technology", "skill", "user"}  # ids are names, not rows
 MAX_DEPTH, MAX_EDGES = 3, 2000
 _REF = re.compile(r"^(?:(agent|project|goal|task|knowledge|decision|source|incident)[:#]|(K))(\d+)$", re.I)
@@ -132,7 +133,8 @@ def _label(s: Session, typ: str, ident: str) -> dict[str, Any]:
     if typ in NAMED:
         return {"label": ident}
     row = s.get({"agent": Agent, "project": Project, "goal": Goal, "task": Task, "knowledge": Lesson,
-                 "decision": Decision, "source": Source, "incident": Incident}[typ], int(ident))
+                 "decision": Decision, "source": Source, "incident": Incident, "hypothesis": Hypothesis}[typ],
+                int(ident))
     if row is None:
         return {"label": f"{typ} {ident} (deleted)", "missing": True}
     if typ == "knowledge":
@@ -145,6 +147,8 @@ def _label(s: Session, typ: str, ident: str) -> dict[str, Any]:
         return {"label": row.url[:200]}
     if typ == "incident":
         return {"label": row.title[:120], "status": row.status}
+    if typ == "hypothesis":
+        return {"label": row.statement[:120], "status": row.status}
     return {"label": row.name}
 
 

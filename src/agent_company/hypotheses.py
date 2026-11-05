@@ -12,6 +12,11 @@ An agent cannot mark a hypothesis supported without a recorded test result (`rec
 a note (the API audits it). An experiment (SPEC-13) that states a hypothesis gets one here in `testing`, and its
 comparison concludes it: better than the baseline -> supported, not better -> rejected, a side without runs ->
 inconclusive.
+
+A supported or rejected hypothesis becomes a knowledge item (SPEC-11) once: `MEASURED` when a test result is
+recorded, `INFERENCE` when a person concluded it with a note instead; a rejected one is a `negative` item, so agents
+learn what did not hold. Its sources name the hypothesis and the test; it is screened and classified like a lesson
+(the project's level; nothing is stored for a secret project). Open and inconclusive hypotheses stay out of prompts.
 """
 
 from __future__ import annotations
@@ -43,6 +48,7 @@ def _row(h: Hypothesis) -> dict[str, Any]:
             "expected_outcome": h.expected_outcome, "actual_outcome": h.actual_outcome,
             "test_result": h.test_result or {}, "status": h.status, "project_id": h.project_id, "goal_id": h.goal_id,
             "experiment_id": h.experiment_id, "agent_id": h.agent_id, "created_by": h.created_by, "note": h.note,
+            "knowledge_id": h.knowledge_id,
             "next": sorted(TRANSITIONS.get(h.status, set())), "created_at": h.created_at.isoformat(),
             "updated_at": h.updated_at.isoformat() if h.updated_at else None}
 
@@ -141,7 +147,47 @@ def set_status(hypothesis_id: int, to: str, actor: str, note: str = "", s: Sessi
         h.note = note.strip()[:2000]
     log_event("hypothesis", f"hypothesis #{h.id} {before} -> {to} by {actor}" + (f": {note[:200]}" if note else ""),
               goal_id=h.goal_id, s=s, hypothesis_id=h.id, actor=actor, before=before, to=to)
+    if to in ("supported", "rejected") and h.knowledge_id is None:
+        h.knowledge_id = _knowledge(s, h)
     return _row(h)
+
+
+def _knowledge(s: Session, h: Hypothesis) -> int | None:
+    """The concluded hypothesis as a knowledge item (S07-R-03 with SPEC-11): what was tested and what it showed."""
+    from agent_company import kgraph
+    from agent_company.db import Agent, Goal, Lesson, Project
+    from agent_company.learning import goal_level, highest, screen
+
+    g = s.get(Goal, h.goal_id) if h.goal_id else None
+    p = s.get(Project, h.project_id or (g.project_id if g else None) or 0)
+    author = h.agent_id if h.agent_id and s.get(Agent, h.agent_id) is not None else (p.manager_id if p else None)
+    if author is None:
+        author = s.scalar(select(Agent.id).where(Agent.role == "general_manager", Agent.parent_id.is_(None)))
+    if author is None:
+        return None
+    tested = bool(h.test_result)
+    verdict = "held" if h.status == "supported" else "did not hold"
+    text = (f"Hypothesis tested: {h.statement} — it {verdict}"
+            + (f" ({h.test_method})" if h.test_method else "") + ". "
+            + (f"Result: {h.actual_outcome}" if tested and h.actual_outcome else f"Concluded by a person: {h.note}")
+            ).strip()[:1000]
+    level = highest(goal_level(s, g) if g else None, p.classification if p else None)
+    status, reason = screen(text)
+    if level == "secret":
+        text, status, reason = "(withheld: the work is classified secret)", "rejected", "secret goal or project"
+    source = str((h.test_result or {}).get("source") or "")
+    sources = [f"hypothesis:{h.id}"] + ([source] if ":" in source else []) + ([f"goal:{h.goal_id}"] if h.goal_id else [])
+    item = Lesson(agent_id=author, goal_id=h.goal_id, project_id=p.id if p else None, text=text, outcome="analysis",
+                  kind="semantic" if h.status == "supported" else "negative",
+                  evidence_class="MEASURED" if tested else "INFERENCE", sources=sources, status=status,
+                  status_reason=reason, classification=level, report={})
+    s.add(item)
+    s.flush()
+    kgraph.link(s, ("knowledge", item.id), "DERIVED_FROM", ("hypothesis", h.id), ref=h.status)
+    if status != "approved":
+        log_event("security", f"hypothesis #{h.id} as knowledge {status}: {reason}", goal_id=h.goal_id, s=s,
+                  rule="memory_poisoning")
+    return item.id
 
 
 def for_experiment(s: Session, experiment_id: int, statement: str, test_method: str, expected: str,

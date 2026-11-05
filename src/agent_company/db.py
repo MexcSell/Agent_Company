@@ -820,6 +820,7 @@ class Hypothesis(Base):
     expected_outcome: Mapped[str] = mapped_column(Text, default="")
     actual_outcome: Mapped[str] = mapped_column(Text, default="")
     test_result: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"source", "passed", ...}; empty = untested
+    knowledge_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # the item its conclusion became
     status: Mapped[str] = mapped_column(String(16), default="proposed", index=True)
     project_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
