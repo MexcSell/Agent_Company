@@ -683,10 +683,11 @@ def _record_visit(shift_id: int, src_url: str, result: dict[str, Any], seconds: 
         if result.get("new"):
             found.append({"url": src_url, "text": f"{result['new']} new page(s) collected from {src_url}", "at": at})
         st["findings"] = [*st.get("findings", []), *found][-KEEP:]
-        questions = [q for q in st.get("open_questions", []) if q.get("source") != src_url or
-                     (q["key"].startswith("error:") and errors) or (q["key"].startswith("flagged:") and flagged)]
+        # a failed visit resolves nothing; a clean one resolves the source's problems and the pages no longer flagged
+        questions = [q for q in st.get("open_questions", []) if q.get("source") != src_url or errors
+                     or q["key"].removeprefix("flagged:") in flagged]
         problems = [p for p in st.get("known_problems", []) if p.get("source") != src_url]
-        unverified = [u for u in st.get("unverified", []) if u.get("source") != src_url or u["url"] in flagged]
+        unverified = [u for u in st.get("unverified", []) if u.get("source") != src_url or errors or u["url"] in flagged]
         keys = {q["key"] for q in questions}
         if errors:
             problems.append({"source": src_url, "url": errors[0]["url"], "error": str(errors[0]["error"])[:300],
