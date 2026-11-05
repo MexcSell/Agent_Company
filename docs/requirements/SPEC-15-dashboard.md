@@ -16,7 +16,7 @@ those technologies are `skip` unless a requirement here cannot be met without th
 | --- | --- | --- |
 | Company overview | Dashboard | — |
 | Organization chart | Agents (hierarchy) | room/position editing → SPEC-01 S01-R-01 |
-| Agent management | Agents | versions, rollback, health → SPEC-02 |
+| Agent management | Agents | — (versions and rollback on the agent card, health flags; SPEC-02) |
 | Project management | Projects | — (Plan tab; topics in Orders & reports) |
 | Task management | Goals | decisions, workflow history, blackboard done; stage-wise gate → ASEAO09 S09-R-01; trace has an API but no view |
 | Research center | Research | request fields, monitoring rules, claims review → ASEAO06 |

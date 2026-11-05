@@ -66,7 +66,7 @@ the order is safety and correctness of that pipeline first, then management, the
    S09-R-01 staged gates and G-R-04 measured enablement gate done too, then G-R-01 contract fields
    and S04-R-03 conflict review. Step 2 is complete.
 3. **Management**: ASEAO05 milestones, risks/blockers, insights, action items done 2026-11-05
-   (S05-R-01..R-04, S05-R-05 partial); topics (S05-R-07) with G-R-07 done too. Left: SPEC-02 versions and health; S06-R-02
+   (S05-R-01..R-04, S05-R-05 partial); topics (S05-R-07) with G-R-07 done too; SPEC-02 versions and health (S02-R-01, R-02). Left: S02-R-03 per-agent quotas; S06-R-02
    source monitoring; S14-R-05 classification; SPEC-15 views. (S14-R-04 incidents was done in step 1.)
 4. **Later**: SPEC-13 experiments and learning plans, SPEC-12 mentoring and network view,
    S11-R-07 knowledge graph, G-R-05 MCP, G-R-06 A2A, then gated rooms one at a time.

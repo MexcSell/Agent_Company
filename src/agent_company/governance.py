@@ -281,10 +281,13 @@ def stop(level: str, scope: str | int, actor: str, reason: str) -> dict[str, Any
                 agents = list(s.scalars(q))
                 if not agents:
                     raise KeyError(f"{LEVELS[level]} {scope}")
+                from agent_company.registry import record_version
+
                 for a in agents:
                     if a.lifecycle == "active":
                         a.lifecycle = "paused"
                         paused.append(a.id)
+                        record_version(s, a, actor, f"paused by stop {level}")
             if level == "E3":
                 for g in s.scalars(select(Goal).where(Goal.project_id == int(scope), Goal.status.in_(ACTIVE))):
                     set_status(s, g, "cancelled", f"E3 stop: {reason}"[:500], actor)
@@ -323,8 +326,11 @@ def lift(level: str, scope: str | int, actor: str) -> dict[str, Any]:
         for aid in hit[0].get("paused", []):
             a = s.get(Agent, aid)
             if a is not None and a.lifecycle == "paused":
+                from agent_company.registry import record_version
+
                 a.lifecycle = "active"
                 restored.append(aid)
+                record_version(s, a, actor, f"stop {level} lifted")
     audit(actor, "emergency_lift", f"{level} {LEVELS[level]} {scope}", after={"restored_agents": restored},
           severity="high")
     notify(f"Stop {level} lifted: {LEVELS[level]} {scope}", f"Lifted by {actor}.", level="success",

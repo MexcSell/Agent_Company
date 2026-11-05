@@ -1,4 +1,11 @@
-"""Agent Registry: rooms, agents, hierarchy, relationships and staffing."""
+"""Agent Registry: rooms, agents, hierarchy, relationships and staffing.
+
+Every configuration change of an agent is a numbered snapshot (`agent_versions`, SPEC-02 S02-R-01): creation,
+card edits, lifecycle changes, emergency stops and their lifting, merges. A snapshot can be rolled back, and an
+update based on a stale version is refused. Health (S02-R-02): an agent whose recent runs keep failing in the
+executor, or whose model fails its test, is `degraded` and not staffed until an administrator resets it or its
+model is changed; agents idle longer than `inactive_days` are listed for retirement review.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +17,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from agent_company import org
-from agent_company.db import Agent, Relationship, Room, log_event, now, session
+from agent_company.db import Agent, AgentVersion, Relationship, Room, log_event, now, session
 
 _staff_lock = threading.Lock()
 
@@ -25,7 +32,200 @@ def agent_dict(a: Agent) -> dict[str, Any]:
         "lifecycle": a.lifecycle, "playbook_version": a.playbook_version, "in_trial": bool(a.experiment),
         "plugins": list(a.plugins or []), "definition_version": a.definition_version or 0,
         "last_active_at": a.last_active_at.isoformat() if a.last_active_at else None,
+        "config_version": a.config_version or 0, "health": a.health or "ok", "health_reason": a.health_reason or "",
     }
+
+
+# --- configuration versions (SPEC-02 S02-R-01) ------------------------------------------
+
+# What a version records and a rollback restores. The playbook is versioned on its own (evolution.versions /
+# restore) and the definition file in its git repository; skill levels grown by experience are not versions.
+CONFIG_FIELDS = ("skills", "permissions", "model_pref", "superior_id", "room_key", "enabled", "lifecycle", "goal",
+                 "plugins")
+
+
+class StaleVersion(ValueError):
+    """An update was based on an older configuration version than the current one (AT-023)."""
+
+
+def config_of(a: Agent) -> dict[str, Any]:
+    snap = {k: getattr(a, k) for k in CONFIG_FIELDS}
+    snap["skills"], snap["permissions"], snap["plugins"] = (dict(a.skills or {}), list(a.permissions or []),
+                                                             list(a.plugins or []))
+    return snap
+
+
+def record_version(s: Session, a: Agent, changed_by: str, reason: str) -> int | None:
+    """Snapshot the agent's configuration if it differs from its latest version; returns the new version."""
+    snap = config_of(a)
+    last = s.scalars(select(AgentVersion).where(AgentVersion.agent_id == a.id)
+                     .order_by(AgentVersion.version.desc())).first()
+    if last is not None and last.snapshot == snap:
+        return None
+    a.config_version = max(a.config_version or 0, last.version if last else 0) + 1
+    s.add(AgentVersion(agent_id=a.id, version=a.config_version, snapshot=snap, changed_by=str(changed_by)[:128],
+                       reason=str(reason)[:500]))
+    s.flush()
+    return a.config_version
+
+
+def config_versions(agent_id: int) -> list[dict[str, Any]]:
+    with session() as s:
+        if s.get(Agent, agent_id) is None:
+            raise KeyError(agent_id)
+        return [{"version": v.version, "snapshot": v.snapshot, "changed_by": v.changed_by, "reason": v.reason,
+                 "at": v.created_at.isoformat()}
+                for v in s.scalars(select(AgentVersion).where(AgentVersion.agent_id == agent_id)
+                                   .order_by(AgentVersion.version.desc()))]
+
+
+def _check_model(s: Session, pref: Any, agent_id: int) -> None:
+    """A model preference names a catalog model or another agent (`agent:<id>`) (SPEC-02 AT-008)."""
+    from agent_company.db import ModelEntry
+
+    if not pref:
+        return
+    pref = str(pref)
+    if pref.startswith("agent:"):
+        if pref[6:] == str(agent_id):
+            raise ValueError("an agent cannot use itself as its model")
+        if not pref[6:].isdigit() or s.get(Agent, int(pref[6:])) is None:
+            raise ValueError(f"no agent {pref[6:]} to take the model from")
+        return
+    if s.scalars(select(ModelEntry.id).where(ModelEntry.name == pref)).first() is None:
+        raise ValueError(f"'{pref}' is not in the model catalog")
+
+
+# --- health and inactivity (SPEC-02 S02-R-02) ---------------------------------------------
+
+HEALTH_WINDOW, DEGRADED_ERRORS = 5, 3  # 3 executor errors among the last 5 runs
+STOPPED = "terminated by signal"  # an emergency stop or a cancel ended the run: not the agent's fault
+
+
+def _set_health(s: Session, a: Agent, state: str, reason: str, reset: bool = False) -> bool:
+    """Set the health; `reset` also starts a new window (earlier runs and model tests no longer count)."""
+    if reset:
+        a.health_since = now()
+    if (a.health or "ok") == state and (a.health_reason or "") == reason:
+        return False
+    a.health, a.health_reason = state, reason[:1000]
+    log_event("agent_health", f"{a.name} is {state}" + (f": {reason}" if reason else ""), agent_id=a.id, s=s)
+    if state == "degraded":
+        from agent_company.governance import notify
+
+        notify(f"Agent degraded: {a.name}"[:256], f"{reason} It is not staffed until an administrator resets its "
+               "health (agent card) or changes its model.", level="warning", source="agents", admin_only=True, s=s)
+    return True
+
+
+def _since(a: Agent):  # noqa: ANN202
+    return a.health_since.replace(tzinfo=None) if a.health_since else None
+
+
+def first_model(role: str, model_pref: str | None) -> str | None:
+    """The model an agent asks for first: its preference (or the agent it borrows from), else its role's route.
+    Not `router.resolve`, which moves on to a fallback when that model is unavailable."""
+    from agent_company import router
+    from agent_company.db import Route
+
+    pref = router.agent_model(model_pref)[0]
+    if pref:
+        return pref
+    with session() as s:
+        r = s.get(Route, role)
+        return r.model_name if r else None
+
+
+def _health_reason(s: Session, a: Agent, first: str | None) -> str:
+    from agent_company.db import Run
+
+    q = select(Run).where(Run.agent_id == a.id, Run.purpose != "test")
+    if _since(a) is not None:
+        q = q.where(Run.started_at > _since(a))
+    runs = s.scalars(q.order_by(Run.id.desc()).limit(HEALTH_WINDOW)).all()
+    errors = [r for r in runs if not r.ok and STOPPED not in (r.error or "")]
+    if len(errors) >= DEGRADED_ERRORS:
+        return (f"{len(errors)} of its last {len(runs)} runs failed in the executor (last: "
+                f"{(errors[0].error or 'no detail').strip()[:200]}).")
+    if not first:
+        return ""
+    test = s.scalars(select(Run).where(Run.purpose == "test", Run.model_name == first).order_by(Run.id.desc())).first()
+    if test is not None and not test.ok and (_since(a) is None or test.started_at.replace(tzinfo=None) > _since(a)):
+        return f"its model {first} failed its test ({(test.error or 'no detail').strip()[:200]})."
+    return ""
+
+
+def check_health(agent_id: int) -> str:
+    with session() as s:
+        a = s.get(Agent, agent_id)
+        if a is None:
+            return "ok"
+        role, pref = a.role, a.model_pref
+    first = first_model(role, pref)
+    with session() as s:
+        a = s.get(Agent, agent_id)
+        reason = _health_reason(s, a, first)
+        _set_health(s, a, "degraded" if reason else "ok", reason)
+        return a.health
+
+
+def after_run(agent_id: int) -> None:
+    """Called for every recorded run (usage.record): the agent was active, and its health may have changed."""
+    with session() as s:
+        a = s.get(Agent, agent_id)
+        if a is not None:
+            a.last_active_at = now()
+    check_health(agent_id)
+
+
+def recheck_model(model_name: str) -> list[int]:
+    """After a model test: re-check the active agents that ask for that model first."""
+    hit = []
+    with session() as s:
+        agents = [(a.id, a.role, a.model_pref) for a in s.scalars(select(Agent).where(Agent.lifecycle == "active"))]
+    for aid, role, pref in agents:
+        if first_model(role, pref) == model_name:
+            check_health(aid)
+            hit.append(aid)
+    return hit
+
+
+def reset_health(agent_id: int, actor: str) -> dict[str, Any]:
+    with session() as s:
+        a = s.get(Agent, agent_id)
+        if a is None:
+            raise KeyError(agent_id)
+        _set_health(s, a, "ok", "", reset=True)
+        log_event("agent_health", f"{a.name}: health reset by {actor}", agent_id=a.id, s=s)
+        return agent_dict(a)
+
+
+def inactive(days: int | None = None) -> list[dict[str, Any]]:
+    """Active original agents idle for more than `inactive_days`: candidates for retirement review. The company
+    GM and clones are left out (clones are retired after their goal)."""
+    from datetime import timedelta
+
+    from agent_company.config import settings
+
+    days = settings().inactive_days if days is None else days
+    cutoff = (now() - timedelta(days=days)).replace(tzinfo=None)
+    out = []
+    with session() as s:
+        for a in s.scalars(select(Agent).where(Agent.lifecycle == "active", Agent.parent_id.is_(None))):
+            if a.role == "general_manager":
+                continue
+            last = (a.last_active_at or a.created_at).replace(tzinfo=None)
+            if last < cutoff:
+                out.append(agent_dict(a) | {"idle_days": (now().replace(tzinfo=None) - last).days,
+                                            "never_active": a.last_active_at is None})
+    return sorted(out, key=lambda x: -x["idle_days"])
+
+
+def health_overview() -> dict[str, Any]:
+    with session() as s:
+        degraded = [agent_dict(a) for a in s.scalars(select(Agent).where(Agent.health == "degraded",
+                                                                         Agent.lifecycle != "retired"))]
+    return {"degraded": degraded, "inactive": inactive()}
 
 
 def seed() -> None:
@@ -54,6 +254,8 @@ def seed() -> None:
     with session() as s:
         for a in s.scalars(select(Agent)).all():
             _link_similar(s, a)
+            if not a.config_version:  # agents from before versioning get their current state as version 1
+                record_version(s, a, "system", "baseline")
 
 
 def similarity(a: Agent, b: Agent) -> float:
@@ -189,14 +391,17 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
     why = ""
     with _staff_lock, session() as s:
         pool = s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active")).all()
-        idle = [a for a in pool if a.status == "idle"]
+        idle = [a for a in pool if a.status == "idle" and a.health != "degraded"]  # S02-R-02
         team = _team_weights(s, goal_id)
         if idle:
             agent = max(idle, key=lambda a: _skill_score(a, skills, team))
             action = "assigned"
-        elif pool:
-            agent = _clone(s, max(pool, key=lambda a: _skill_score(a, skills, team)))
+        elif pool:  # all busy or degraded: a fresh clone (a clone starts healthy, with its own runs)
+            healthy = [a for a in pool if a.health != "degraded"] or pool
+            agent = _clone(s, max(healthy, key=lambda a: _skill_score(a, skills, team)))
             action = "cloned"
+            if any(a.status == "idle" and a.health == "degraded" for a in pool):
+                why = "its idle agents are degraded"
         elif s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "paused")).first():
             # an emergency stop (E1/E4) or an administrator paused this role's agents: recruiting a
             # replacement would walk around the stop
@@ -205,7 +410,7 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
             found = _covering(s, skills, writes)
             if found is not None:  # discovery before recruitment (SPEC-03 S03-R-02): no duplicate specialist
                 base, share = found
-                agent = base if base.status == "idle" else _clone(s, base)
+                agent = base if base.status == "idle" and base.health != "degraded" else _clone(s, base)
                 action = "reused" if agent is base else "cloned"
                 why = f"{base.role} {base.name} covers {share:.0%} of {', '.join(skills)}: no new '{role}' recruited"
             else:
@@ -263,6 +468,7 @@ def _clone(s: Session, src: Agent) -> Agent:
     s.add(clone)
     s.flush()
     connect(s, clone.id, base.id, "similar", 0.7)
+    record_version(s, clone, "system", f"cloned from {base.name}")
     return clone
 
 
@@ -285,6 +491,7 @@ def _recruit(s: Session, role: str, skills: list[str], writes: bool | None) -> A
     s.add(agent)
     s.flush()
     _link_similar(s, agent, threshold=0.05)  # a recruit always learns from its closest peers
+    record_version(s, agent, "system", f"recruited for {role}")
     return agent
 
 
@@ -318,8 +525,10 @@ EDITABLE = {"enabled", "model_pref", "skills", "playbook", "superior_id", "goal"
 PERMISSIONS = {"read", "write", "shell", "network"}
 
 
-def update_agent(agent_id: int, changes: dict[str, Any]) -> dict[str, Any]:
-    """Update an agent. Names are fixed by design and cannot be edited."""
+def update_agent(agent_id: int, changes: dict[str, Any], actor: str = "system",
+                 expected_version: int | None = None) -> dict[str, Any]:
+    """Update an agent and record the new configuration version. Names are fixed by design and cannot be edited.
+    With `expected_version`, an update made on an older version than the current one is refused (StaleVersion)."""
     bad = set(changes) - EDITABLE
     if bad:
         raise ValueError(f"not editable: {', '.join(sorted(bad))}")
@@ -327,6 +536,9 @@ def update_agent(agent_id: int, changes: dict[str, Any]) -> dict[str, Any]:
         a = s.get(Agent, agent_id)
         if a is None:
             raise KeyError(agent_id)
+        if expected_version is not None and int(expected_version) != (a.config_version or 0):
+            raise StaleVersion(f"{a.name} was changed meanwhile (now version {a.config_version}, this edit was "
+                               f"made on version {expected_version}); reload and edit again")
         if "superior_id" in changes and changes["superior_id"] == agent_id:
             raise ValueError("an agent cannot report to itself")
         if "permissions" in changes and not set(changes["permissions"]) <= PERMISSIONS:
@@ -336,12 +548,45 @@ def update_agent(agent_id: int, changes: dict[str, Any]) -> dict[str, Any]:
         if "plugins" in changes and not (isinstance(changes["plugins"], list)
                                          and all(isinstance(x, str) and len(x) <= 64 for x in changes["plugins"])):
             raise ValueError("plugins is a list of catalog names")
-        pref = changes.get("model_pref")
-        if pref and str(pref).startswith("agent:") and str(pref)[6:] == str(agent_id):
-            raise ValueError("an agent cannot use itself as its model")
+        if "model_pref" in changes:
+            _check_model(s, changes["model_pref"], agent_id)
+            if (changes["model_pref"] or None) != a.model_pref and a.health == "degraded":
+                _set_health(s, a, "ok", f"model changed by {actor}", reset=True)
         for k, v in changes.items():
             setattr(a, k, v)
         s.flush()
+        record_version(s, a, actor, "changed " + ", ".join(sorted(changes)))
+        return agent_dict(a)
+
+
+def rollback(agent_id: int, version: int, actor: str) -> dict[str, Any]:
+    """Restore the configuration of an earlier version, recorded as a new version (S02-R-01, AT-016)."""
+    with session() as s:
+        a = s.get(Agent, agent_id)
+        if a is None:
+            raise KeyError(agent_id)
+        v = s.scalars(select(AgentVersion).where(AgentVersion.agent_id == agent_id,
+                                                 AgentVersion.version == version)).first()
+        if v is None:
+            raise KeyError(f"agent {agent_id} version {version}")
+        snap = dict(v.snapshot)
+        if a.lifecycle == "retired":
+            raise ValueError("retirement is permanent")
+        if snap.get("lifecycle") == "retired":
+            raise ValueError("rolling back to a retired version would retire the agent; retire it instead")
+        if snap.get("lifecycle") != "active" and a.role == "general_manager" and a.parent_id is None:
+            raise ValueError("the company General Manager cannot be paused or retired")
+        if snap.get("lifecycle") != a.lifecycle and a.status == "busy":
+            raise ValueError("the agent is working; try again when it is idle")
+        _check_model(s, snap.get("model_pref"), agent_id)
+        if snap.get("superior_id") is not None and s.get(Agent, snap["superior_id"]) is None:
+            snap["superior_id"] = None
+        for k in CONFIG_FIELDS:
+            if k in snap:
+                setattr(a, k, snap[k])
+        s.flush()
+        record_version(s, a, actor, f"rolled back to v{version}")
+        log_event("agent", f"{a.name}: configuration rolled back to v{version} by {actor}", agent_id=a.id, s=s)
         return agent_dict(a)
 
 
@@ -381,7 +626,8 @@ def agent_detail(agent_id: int) -> dict[str, Any]:
 # --- manual management and lifecycle (SPEC02 §6: active, paused, retired) -------------
 
 def create_agent(role: str, title: str = "", skills: dict[str, int] | None = None, room: str = "",
-                 superior_id: int | None = None, goal: str = "", writes: bool = False) -> dict[str, Any]:
+                 superior_id: int | None = None, goal: str = "", writes: bool = False, actor: str = "system"
+                 ) -> dict[str, Any]:
     role = _slug(role)
     with session() as s:
         spec = org.ROLES.get(role)
@@ -406,6 +652,7 @@ def create_agent(role: str, title: str = "", skills: dict[str, int] | None = Non
         s.add(a)
         s.flush()
         _link_similar(s, a, threshold=0.05)
+        record_version(s, a, actor, "created")
         return agent_dict(a)
 
 
@@ -420,7 +667,7 @@ def clone_agent(agent_id: int) -> dict[str, Any]:
         return agent_dict(c)
 
 
-def set_lifecycle(agent_id: int, state: str) -> dict[str, Any]:
+def set_lifecycle(agent_id: int, state: str, actor: str = "system") -> dict[str, Any]:
     if state not in {"active", "paused", "retired"}:
         raise ValueError("state is active, paused or retired")
     with session() as s:
@@ -434,4 +681,5 @@ def set_lifecycle(agent_id: int, state: str) -> dict[str, Any]:
         if state != "active" and a.status == "busy":
             raise ValueError("the agent is working; try again when it is idle")
         a.lifecycle, a.enabled = state, state == "active"
+        record_version(s, a, actor, f"lifecycle {state}")
         return agent_dict(a)

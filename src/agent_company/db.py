@@ -77,8 +77,27 @@ class Agent(Base):
     experiment: Mapped[dict[str, Any]] = mapped_column(default=dict)  # running candidate playbook trial
     plugins: Mapped[list[Any]] = mapped_column(default=list)  # names of catalog plugins/skills it may use
     definition_version: Mapped[int] = mapped_column(Integer, default=0)  # its agent file (agentdefs.py)
+    config_version: Mapped[int] = mapped_column(Integer, default=0)  # latest AgentVersion (SPEC-02 S02-R-01)
+    health: Mapped[str] = mapped_column(String(16), default="ok")  # ok|degraded (S02-R-02)
+    health_reason: Mapped[str] = mapped_column(Text, default="")
+    health_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # runs before: ignored
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AgentVersion(Base):
+    """A snapshot of an agent's configuration after each change: the lifecycle history and what a rollback
+    restores (SPEC-02 S02-R-01). The playbook has its own versions (PlaybookVersion)."""
+
+    __tablename__ = "agent_versions"
+    __table_args__ = (UniqueConstraint("agent_id", "version"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    changed_by: Mapped[str] = mapped_column(String(128), default="system")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class PlaybookVersion(Base):

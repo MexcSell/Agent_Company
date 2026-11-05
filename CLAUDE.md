@@ -7,7 +7,7 @@ feature came from.
 ## Layout
 
 - `src/agent_company/` – one module per service:
-  `registry.py` + `org.py` (agents, rooms), `scheduler.py`, `router.py` (models, routes, fallback,
+  `registry.py` + `org.py` (agents, rooms; configuration versions with rollback, health: degraded/inactive), `scheduler.py`, `router.py` (models, routes, fallback,
   provider catalogs), `contracts.py` (task contracts with scope, risk, budget, deadline; output lines),
   `executors.py` (tracked subprocesses: `terminate` for stops), `worktrees.py`,
   `quality.py` + `checks.py` (gate: contracts, review verdicts with logic verification, secrets, syntax, scope,

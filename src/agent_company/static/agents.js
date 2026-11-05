@@ -2,7 +2,8 @@
 // Agents: the organisation (every layer of the hierarchy on one screen, scaled to fit) beside the agent list
 // (the only part that scrolls); Tools & MCP (mcp.py) and Skills & plugins (catalog.py) as tabs.
 // The agent card edits model (also another agent's, for the General Manager), plugins and the agent's
-// definition file: the body learning rewrites (agentdefs.py).
+// definition file: the body learning rewrites (agentdefs.py). Every configuration change is a version the card's
+// history can roll back to; degraded agents (failing runs or model test) are flagged and can be reset (SPEC-02).
 
 let agentsTab = store.get("ac.agents.tab") || "org";
 
@@ -22,11 +23,12 @@ async function viewAgents(quiet) {
 
 // --- organisation ---------------------------------------------------------------------------
 async function viewOrg(quiet) {
-  const [all, rooms] = await Promise.all([api("/api/agents"), api("/api/rooms")]);
+  const [all, rooms, health] = await Promise.all([api("/api/agents"), api("/api/rooms"), api("/api/agents/health").catch(() => ({ degraded: [], inactive: [] }))]);
   const showRetired = store.get("ac.retired") === "1";
   const agents = all.filter((a) => showRetired || a.lifecycle !== "retired");
   const retired = all.length - all.filter((a) => a.lifecycle !== "retired").length;
-  $("#ag-tools").innerHTML = `<span class="muted">${agents.length} agents · ${all.filter((a) => a.status === "busy").length} working</span>
+  const attention = health.degraded.length || health.inactive.length ? `<button type="button" class="btn sm" id="a-attn" title="Degraded agents and agents idle long enough to review for retirement">${health.degraded.length ? `${health.degraded.length} degraded` : ""}${health.degraded.length && health.inactive.length ? " · " : ""}${health.inactive.length ? `${health.inactive.length} inactive` : ""}</button>` : "";
+  $("#ag-tools").innerHTML = `${attention}<span class="muted">${agents.length} agents · ${all.filter((a) => a.status === "busy").length} working</span>
     ${retired ? `<label class="row" style="margin:0"><input type="checkbox" id="a-retired" style="width:auto" ${showRetired ? "checked" : ""}> retired (${retired})</label>` : ""}
     ${me.is_admin ? ib("user_add", "Add an agent", 'id="a-new"', "primary") : ""}`;
   const byId = new Map(agents.map((a) => [a.id, a])), kids = new Map();
@@ -40,7 +42,7 @@ async function viewOrg(quiet) {
   };
   const roots = kids.get(0) || [];
   const body = $("#ag-body");
-  const listHtml = rooms.map((r) => { const m = agents.filter((a) => a.room === r.key); return m.length ? `<div class="ag-room"><h3>${esc(r.name)}${r.rotational ? ' <span class="pill">rotational</span>' : ""}</h3>${m.map((a) => `<div class="list-item agent-row" data-aid="${a.id}"><div class="row nowrap"><span class="avatar" style="width:26px;height:26px">${roleIcon(a.role)}</span><strong class="grow">${esc(a.name)}</strong>${pill(a.lifecycle === "retired" ? "retired" : a.lifecycle === "paused" ? "paused" : a.enabled ? a.status : "disabled")}</div><div class="muted ellipsis">${esc(a.role)} · L${a.level} · ${a.tasks_done} done${a.in_trial ? " · trial" : ""}${a.parent_id ? " · clone" : ""}</div></div>`).join("")}</div>` : ""; }).join("");
+  const listHtml = rooms.map((r) => { const m = agents.filter((a) => a.room === r.key); return m.length ? `<div class="ag-room"><h3>${esc(r.name)}${r.rotational ? ' <span class="pill">rotational</span>' : ""}</h3>${m.map((a) => `<div class="list-item agent-row" data-aid="${a.id}"><div class="row nowrap"><span class="avatar" style="width:26px;height:26px">${roleIcon(a.role)}</span><strong class="grow">${esc(a.name)}</strong>${a.health === "degraded" && a.lifecycle !== "retired" ? `<span class="pill failed" title="${esc(a.health_reason)}">degraded</span>` : ""}${pill(a.lifecycle === "retired" ? "retired" : a.lifecycle === "paused" ? "paused" : a.enabled ? a.status : "disabled")}</div><div class="muted ellipsis">${esc(a.role)} · L${a.level} · ${a.tasks_done} done${a.in_trial ? " · trial" : ""}${a.parent_id ? " · clone" : ""}</div></div>`).join("")}</div>` : ""; }).join("");
   const orgHtml = `<ul class="org-tree">${roots.map(tree).join("")}</ul>`;
   if (!quiet || !$("#org-canvas")) {
     body.innerHTML = `<div class="ag-split"><section class="card ag-org"><div class="row"><h2 class="grow" style="margin:0">Organisation</h2><span class="muted">every layer, top to bottom · click an agent for its card</span></div><div class="org-canvas" id="org-canvas"><div class="org-scale" id="org-scale"></div></div></section>
@@ -53,6 +55,15 @@ async function viewOrg(quiet) {
   body.querySelectorAll("[data-aid]").forEach((el) => (el.onclick = () => agentModal(Number(el.dataset.aid))));
   $("#a-retired") && ($("#a-retired").onchange = (e) => { store.set("ac.retired", e.target.checked ? "1" : "0"); viewOrg(); });
   $("#a-new") && ($("#a-new").onclick = () => newAgentForm(rooms, all));
+  $("#a-attn") && ($("#a-attn").onclick = () => attentionModal(health));
+}
+
+function attentionModal(h) {
+  const row = (a, extra) => `<div class="list-item agent-row" data-aid="${a.id}"><div class="row nowrap"><span class="avatar" style="width:26px;height:26px">${roleIcon(a.role)}</span><strong class="grow">${esc(a.name)}</strong>${extra}</div></div>`;
+  modal(`<h2>Agents that need attention</h2>
+    ${h.degraded.length ? `<h3>Degraded (not staffed until reset or given another model)</h3>${h.degraded.map((a) => row(a, `<span class="muted ellipsis">${esc(a.health_reason)}</span>`)).join("")}` : ""}
+    ${h.inactive.length ? `<h3>Inactive (review for retirement)</h3>${h.inactive.map((a) => row(a, `<span class="muted">${a.never_active ? "never worked" : "idle"} ${a.idle_days} days</span>`)).join("")}` : ""}`);
+  document.querySelectorAll("#modal [data-aid]").forEach((el) => (el.onclick = () => agentModal(Number(el.dataset.aid))));
 }
 // The whole hierarchy on one screen: scale the tree down (never up past 1) to fit the panel.
 function fitOrg() {
@@ -91,8 +102,8 @@ async function agentModal(id, tab = "profile") {
     <optgroup label="Models">${m.models.map((x) => `<option value="${esc(x.name)}" ${x.name === a.model_pref ? "selected" : ""}>${esc(x.name)}${x.available ? "" : " (unavailable)"}</option>`).join("")}</optgroup>
     <optgroup label="Another agent (uses its model)">${others.map((x) => `<option value="agent:${x.id}" ${a.model_pref === `agent:${x.id}` ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</optgroup></select>`;
   const plugins = cat.filter((i) => ["plugin", "skill"].includes(i.kind));
-  const tabs = [["profile", "Profile"], ["definition", "Definition"], ["history", "Playbook & history"]];
-  modal(`<div class="row"><div class="avatar">${roleIcon(a.role)}</div><div class="grow"><h2 style="margin:0">${esc(a.name)}</h2><div class="muted">${esc(a.title)} · ${esc(a.room)} · definition v${a.definition_version}</div></div>${pill(a.enabled ? a.status : "disabled")}</div>
+  const tabs = [["profile", "Profile"], ["definition", "Definition"], ["history", "Playbook & history"], ["config", "Versions"]];
+  modal(`<div class="row"><div class="avatar">${roleIcon(a.role)}</div><div class="grow"><h2 style="margin:0">${esc(a.name)}</h2><div class="muted">${esc(a.title)} · ${esc(a.room)} · configuration v${a.config_version} · definition v${a.definition_version}</div></div>${a.health === "degraded" ? '<span class="pill failed">degraded</span>' : ""}${pill(a.enabled ? a.status : "disabled")}</div>
     <div class="ag-tabs small" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-mtab="${k}" aria-selected="${tab === k}">${l}</button>`).join("")}</div><div id="a-tab"></div>`);
   document.querySelectorAll("[data-mtab]").forEach((b) => (b.onclick = () => agentModal(id, b.dataset.mtab)));
   const box = $("#a-tab");
@@ -106,6 +117,18 @@ async function agentModal(id, tab = "profile") {
     $("#a-study") && ($("#a-study").onclick = async () => { toast("Studying…"); try { const r = await api(`/api/learning/study?agent_id=${id}`, { method: "POST" }); toast(r.changed ? `Rewrote ${r.lines} line(s) with ${r.model}` : `No change: ${r.detail || ""}`); agentModal(id, "definition"); } catch (e) { toast(e.message); } });
     return;
   }
+  if (tab === "config") {
+    const cv = await api(`/api/agents/${id}/config-versions`);
+    const show = (snap) => Object.entries(snap).map(([k, v]) => `${k}: ${typeof v === "object" && v !== null ? JSON.stringify(v) : v}`).join("\n");
+    box.innerHTML = `<p class="muted">Each change of the agent's configuration (skills, permissions, model, superior, room, enabled, lifecycle, mission, plugins) is a version. Rolling back restores that version's configuration as a new version; the playbook has its own versions (Playbook &amp; history).</p>
+      ${cv.map((v, i) => `<details class="cv"><summary class="row nowrap"><strong>v${v.version}</strong><span class="grow">${esc(v.reason)} <span class="muted">· ${esc(v.changed_by)} · ${ago(v.at)}</span></span>${admin && i > 0 && a.lifecycle !== "retired" ? ib("refresh", `Roll back to v${v.version}`, `data-rollback="${v.version}"`, "sm") : ""}</summary><pre>${esc(show(v.snapshot))}</pre></details>`).join("") || '<span class="muted">No versions yet.</span>'}`;
+    document.querySelectorAll("[data-rollback]").forEach((b) => (b.onclick = async (e) => {
+      e.preventDefault();
+      if (!confirm(`Restore the configuration of v${b.dataset.rollback}?`)) return;
+      try { await api(`/api/agents/${id}/rollback?version=${b.dataset.rollback}`, { method: "POST" }); toast("Rolled back"); agentModal(id, "config"); if (current === "agents") viewAgents(); } catch (err) { toast(err.message); }
+    }));
+    return;
+  }
   if (tab === "history") {
     box.innerHTML = `<h3>Playbook v${a.playbook_version}</h3><pre>${esc(a.playbook || "Empty: the agent learns from finished work.")}</pre>
       ${a.trial_playbook ? `<h3>Trial playbook (${a.trial_outcomes.length} task(s) so far)</h3><pre>${esc(a.trial_playbook)}</pre>` : ""}
@@ -116,6 +139,7 @@ async function agentModal(id, tab = "profile") {
     return;
   }
   box.innerHTML = `<div class="grid two" style="margin-top:8px"><div>
+      ${a.health === "degraded" ? `<div class="props"><strong>Degraded</strong> ${esc(a.health_reason)} It is not staffed until its health is reset or its model changed. ${admin ? ib("check", "Reset its health (its earlier runs stop counting)", 'id="a-heal"', "sm") : ""}</div>` : ""}
       <h3>Mission</h3><p>${esc(a.goal)}</p><p class="muted">${esc(a.backstory)}</p>
       <h3>Skills</h3><div class="row">${skills || '<span class="muted">none</span>'}</div>
       <h3>Permissions</h3><div class="row">${(a.permissions || []).map((p) => `<span class="pill">${esc(p)}</span>`).join(" ")}</div>
@@ -133,8 +157,9 @@ async function agentModal(id, tab = "profile") {
   const act = async (path, body, sure) => { if (sure && !confirm(sure)) return; try { await api(`/api/agents/${id}/${path}`, { method: "POST", body }); toast("Done"); if (current === "agents") viewAgents(); agentModal(id); } catch (e) { toast(e.message); } };
   $("#a-save").onclick = async () => {
     const plugins2 = [...document.querySelectorAll("[data-plug]:checked")].map((c) => c.dataset.plug);
-    try { await api(`/api/agents/${id}`, { method: "PATCH", body: { model_pref: $("#a-model").value || null, plugins: plugins2 } }); toast("Saved"); agentModal(id); if (current === "agents") viewAgents(); } catch (e) { toast(e.message); }
+    try { await api(`/api/agents/${id}`, { method: "PATCH", body: { model_pref: $("#a-model").value || null, plugins: plugins2, expected_version: a.config_version } }); toast("Saved"); agentModal(id); if (current === "agents") viewAgents(); } catch (e) { toast(e.message); }
   };
+  $("#a-heal") && ($("#a-heal").onclick = () => act("health/reset"));
   $("#a-clone") && ($("#a-clone").onclick = () => act("clone"));
   $("#a-pause") && ($("#a-pause").onclick = () => act("lifecycle", { state: a.lifecycle === "paused" ? "active" : "paused" }));
   $("#a-retire") && ($("#a-retire").onclick = () => act("lifecycle", { state: "retired" }, "Retire this agent permanently? Its history is kept."));

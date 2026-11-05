@@ -344,6 +344,10 @@ def merge_clone(clone_id: int) -> dict[str, Any] | None:
             lesson.agent_id = o.id
             moved += 1
         c.lifecycle, c.enabled, c.xp, c.tasks_done, c.tasks_failed = "retired", False, 0, 0, 0
+        from agent_company.registry import record_version
+
+        record_version(s, o, "system", f"merged clone {c.name}")
+        record_version(s, c, "system", f"merged into {o.name} and retired")
         _event(s, "merge", o.id, f"{c.name} merged into {o.name} ({moved} lesson(s)) and retired")
         out = {"clone": c.name, "into": o.name, "lessons": moved}
     log_event("staff", f"{out['clone']} merged into {out['into']}")

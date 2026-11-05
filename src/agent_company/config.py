@@ -67,6 +67,8 @@ class Settings:
     candidate_smoke: bool = True
     # A goal waiting for approval longer than this many hours becomes a project blocker (ASEAO05 S05-R-02; 0 = never).
     approval_blocker_hours: int = 24
+    # Agents idle longer than this many days are listed for retirement review (SPEC-02 S02-R-02).
+    inactive_days: int = 30
 
     @property
     def worktrees_dir(self) -> Path:
@@ -116,6 +118,7 @@ def load_settings() -> Settings:
         escalate_after=_int("ESCALATE_AFTER", 2),
         candidate_smoke=_bool("CANDIDATE_SMOKE", True),
         approval_blocker_hours=_int("APPROVAL_BLOCKER_HOURS", 24),
+        inactive_days=_int("INACTIVE_DAYS", 30),
     )
 
 

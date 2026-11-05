@@ -37,6 +37,10 @@ def record(*, model_name: str, kind: str, input_tokens: int = 0, output_tokens: 
         s.add(Run(model_name=model_name, kind=kind, input_tokens=input_tokens,
                   output_tokens=output_tokens, cost=cost, duration=duration, ok=ok,
                   error=error[:2000], task_id=task_id, agent_id=agent_id, purpose=purpose, goal_id=goal_id))
+    if agent_id is not None:  # activity and health (SPEC-02 S02-R-02)
+        from agent_company import registry
+
+        registry.after_run(agent_id)
 
 
 def goal_spend(goal_id: int) -> float:

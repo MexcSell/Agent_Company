@@ -98,3 +98,13 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 | T3 | `/stop` cancels the project's goals in every topic, whichever topic it is sent in; `/status` in a topic other than `general` lists only that topic's goals, blockers are project-wide. | by design |
 | T4 | Databases made before topics get the `topic` column (all old messages and goals in `general`) but not its index; filtering is by project first, so this only matters for very long histories. | open (low) |
 | T5 | Assigning agents to a topic changes who reports in its `/standup`, not who is staffed on its goals. | open (staffing by topic is not specified) |
+
+## Added 2026-11-05 (agent versions and health, SPEC-02)
+
+| # | Problem | Status |
+|---|---------|--------|
+| R1 | Skill levels grown by experience (`learning`) are not configuration versions, so rolling back to an older version also resets the skill levels to that version's. | by design (S02-R-01) |
+| R2 | A degraded agent is never staffed, so it gets no runs that could make it healthy again: it stays degraded until an administrator resets its health (agent card) or changes its model. Staffing uses a clone in the meantime. | by design (S02-R-02) |
+| R3 | Runs that end with "terminated by signal" (an emergency stop or a cancel) do not count as executor errors; neither does a failed quality gate. A provider that crashes its CLI with a signal is therefore not detected by the error count. | by design |
+| R4 | `model_pref` must now name a catalog model or an existing agent; an edit setting any other text gets 400. Preferences stored before keep working until the agent is edited. | by design (AT-008) |
+| R5 | A rollback restores the model preference of that version; if that model was deleted since, the rollback is refused. | by design |

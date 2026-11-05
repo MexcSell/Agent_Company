@@ -382,6 +382,9 @@ def test_model(model_id: int) -> dict[str, Any]:
     usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
                  output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
                  error=res.error, purpose="test")
+    from agent_company import registry
+
+    registry.recheck_model(choice.name)  # agents asking for this model first may now be degraded, or healthy
     return {"ok": res.ok, "reply": res.text[:500], "error": res.error[:500], "seconds": round(res.duration, 2),
             "input_tokens": res.input_tokens, "output_tokens": res.output_tokens}
 

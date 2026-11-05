@@ -602,27 +602,66 @@ def create_app(start_background: bool = True) -> FastAPI:
     def agents(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         return registry.list_agents()
 
+    @app.get("/api/agents/health")
+    def agents_health(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        """Degraded agents and agents idle longer than `inactive_days` (SPEC-02 S02-R-02)."""
+        return registry.health_overview()
+
     @app.get("/api/agents/{agent_id}")
     def agent(agent_id: int, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         return registry.agent_detail(agent_id) | {"certification": performance.certification(agent_id)}
+
+    def _enable_gate(agent_id: int, admin: dict[str, Any], override: bool) -> None:
+        cur = registry.agent_detail(agent_id)
+        if not cur["enabled"] and performance.gated(cur["role"]):  # G-R-04: gated roles need a reliable pipeline
+            gate = performance.enablement_gate()
+            if not gate["met"] and not (override and admin["is_admin"]):
+                raise HTTPException(409, "the pipeline is not measured reliable yet: " + "; ".join(gate["reasons"])
+                                    + ". An administrator can override (override_gate).")
+            if not gate["met"]:
+                _audit(admin, "enablement_gate_override", cur["name"], after={"reasons": gate["reasons"]},
+                       severity="high")
 
     @app.patch("/api/agents/{agent_id}")
     def agent_update(agent_id: int, changes: dict[str, Any], admin: dict[str, Any] = Depends(allowed("manage_agents"))
                      ) -> dict[str, Any]:
         override = bool(changes.pop("override_gate", False))
+        expected = changes.pop("expected_version", None)
         if changes.get("enabled"):
-            cur = registry.agent_detail(agent_id)
-            if not cur["enabled"] and performance.gated(cur["role"]):  # G-R-04: gated roles need a reliable pipeline
-                gate = performance.enablement_gate()
-                if not gate["met"] and not (override and admin["is_admin"]):
-                    raise HTTPException(409, "the pipeline is not measured reliable yet: " + "; ".join(gate["reasons"])
-                                        + ". An administrator can override (override_gate).")
-                if not gate["met"]:
-                    _audit(admin, "enablement_gate_override", cur["name"], after={"reasons": gate["reasons"]},
-                           severity="high")
-        out = registry.update_agent(agent_id, changes)
+            _enable_gate(agent_id, admin, override)
+        try:
+            out = registry.update_agent(agent_id, changes, admin["name"], expected)
+        except registry.StaleVersion as e:  # SPEC-02 AT-023: a stale edit is refused, not silently lost
+            raise HTTPException(409, str(e)) from e
         _audit(admin, "agent_update", out["name"], after=changes)
         agentdefs.sync(agent_id, f"settings changed by {admin['name']}: {', '.join(sorted(changes))}")
+        return out
+
+    @app.get("/api/agents/{agent_id}/config-versions")
+    def agent_config_versions(agent_id: int, _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        return registry.config_versions(agent_id)
+
+    @app.post("/api/agents/{agent_id}/rollback")
+    def agent_rollback(agent_id: int, version: int, override_gate: bool = False,
+                       admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        target = next((v for v in registry.config_versions(agent_id) if v["version"] == version), None)
+        if target is None:
+            raise HTTPException(404, f"agent {agent_id} has no version {version}")
+        before = registry.agent_detail(agent_id)
+        if target["snapshot"].get("enabled"):
+            _enable_gate(agent_id, admin, override_gate)
+        out = registry.rollback(agent_id, version, admin["name"])
+        _audit(admin, "agent_rollback", out["name"], before={k: before.get(k) for k in ("model_pref", "enabled",
+                                                                                          "lifecycle", "permissions")},
+               after={"version": version, "now": out["config_version"]}, severity="high")
+        agentdefs.sync(agent_id, f"configuration rolled back to v{version} by {admin['name']}")
+        return out
+
+    @app.post("/api/agents/{agent_id}/health/reset")
+    def agent_health_reset(agent_id: int, admin: dict[str, Any] = Depends(allowed("manage_agents"))
+                           ) -> dict[str, Any]:
+        out = registry.reset_health(agent_id, admin["name"])
+        _audit(admin, "agent_health_reset", out["name"])
         return out
 
     @app.get("/api/performance/enablement")
@@ -632,7 +671,7 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.post("/api/agents")
     def agent_create(body: AgentBody, admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
         out = registry.create_agent(body.role, body.title, body.skills, body.room, body.superior_id, body.goal,
-                                    body.writes)
+                                    body.writes, actor=admin["name"])
         _audit(admin, "agent_create", out["name"], after={"role": out["role"], "room": out["room"]})
         return out
 
@@ -659,7 +698,7 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.post("/api/agents/{agent_id}/lifecycle")
     def agent_lifecycle(agent_id: int, body: LifecycleBody, admin: dict[str, Any] = Depends(allowed("manage_agents"))
                         ) -> dict[str, Any]:
-        out = registry.set_lifecycle(agent_id, body.state)
+        out = registry.set_lifecycle(agent_id, body.state, admin["name"])
         _audit(admin, "agent_lifecycle", out["name"], after={"state": body.state})
         return out
 
