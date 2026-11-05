@@ -59,6 +59,8 @@ feature came from.
   guards + `<name>.py` printing JSON metrics for the `agent_company` first on PYTHONPATH); protected
 - `tests/` – pytest; every test gets its own temp DATA_DIR and runs offline
 - `data/` – SQLite DB, workspaces, worktrees, uploads (git-ignored)
+- `docs/threat-model.md` – threats → controls → tests; update it with any new executor, provider, integration or
+  network path
 - `docs/feature-gap.md` – features taken from AgentForge, /home/thomas/bit and /home/luca/update
 - `docs/requirements/` – implementable requirements derived from every document in /home/luca/update
   (one file per spec, IDs `Sxx-FR/R/D/G-nn`, status per item, suggested order in its README;

@@ -737,7 +737,11 @@ def _depth(s, goal: Goal) -> int:  # noqa: ANN001
 # Proposals that would change authority, budgets or safety controls are decided by a person, never by an
 # agent (SPEC-14 S14-R-02, SEC-007): an agent must not approve a change that raises any agent's authority.
 RESTRICTED = re.compile(r"(?i)\b(permission|privilege|autonomy|budget|setting|route|routing|model choice"
-                        r"|security|approval|emergency|audit|credential|secret|access control|sudo)s?\b")
+                        r"|security|approval|emergency|audit|credential|secret|access control|sudo"
+                        # what the tool gateway decides (S14-R-02, S14-R-06): an agent never widens its own tools
+                        r"|shell|bash|sandbox|allowed ?tool|tool access|mcp|network access|write access|grant"
+                        r"|admin|administrator|root access|G[0-5]|deploy(ment)?|production)s?\b"
+                        r"|\bescalat\w*")
 
 
 def restricted(title: str, description: str = "") -> bool:

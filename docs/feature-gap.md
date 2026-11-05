@@ -121,6 +121,7 @@ Machines code):
 | Security incident records and response | SPEC14 §11 | done (`incidents`, Security view, S14-R-04) |
 | Emergency shutdown with levels E0-E5 (executor, agent, goal, project, room, company), CLI and top-bar control | SPEC14 §12 | done (`governance.stop`, `python -m agent_company stop`, S14-R-01) |
 | Autonomy levels and action classification | SPEC14 §13 | done (`Agent.autonomy` G0–G4, enforced by the tool gateway; only administrators change permissions or autonomy, S14-R-02) |
+| Threat model (STRIDE + AI threats) mapped to controls and tests; security simulations | SPEC14 PDF §19 | done (`docs/threat-model.md`, `tests/test_threats.py`, S14-R-09) |
 | Tool permission contracts: one gateway for every executor run; isolation level, tools and permissions recorded per run | SPEC14 §7.3, §8.2, §8.3 | done (`executors.gate`, `Run.isolation`, S14-R-06; L3 containers and per-call tool logs open, S14-R-07, S14-R-08) |
 | Information classification and data-handling rules | SPEC14 §5 | partial (projects and lessons; uploads, documents, model rule open) → S14-R-05 |
 | MCP tool servers for agents | 1.txt, CDAF guide §11 | done (`mcp.py`, Tools & MCP, G-R-05) |

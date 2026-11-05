@@ -1,0 +1,61 @@
+# Threat model
+
+SPEC-14 S14-R-09 (`ASEAO_SPEC-14_Enterprise_Security_Governance.pdf` §19): STRIDE plus the AI-specific
+threats, each mapped to the control in this repository and the test that holds it. Written against the code of
+2026-11-05.
+
+**Review this file** when a new executor, model provider, integration (MCP server, A2A, webhook) or network
+path (a listener, a crawler target, an outbound call) is added, and add its row and test in the same change.
+
+## Scope and assumptions
+
+- One host, one process (`supervise` → the API on 127.0.0.1:4910, nginx on 4900). SQLite, one writer.
+- Actors: administrators and members (people, `auth.py`); agents (`registry.py`), which run only through
+  executors (`executors.py`); A2A clients an administrator issued (`a2a.py`); the public web (crawler).
+- Agents have no credentials of their own: model keys stay in the server environment and the DB settings;
+  pushing uses each user's own GitHub token or key (`gitsync.py`) and happens only on `/sync` or `AUTO_PUSH`.
+- **Outside this model, by decision of the owner** (CLAUDE.md): the Workspace terminal and Claude Code panel,
+  `containers.py` and `machines.py` are the administrator's own host-wide tools, not agents. They are admin-only,
+  audited, and their WebSockets check the Origin; nothing here constrains what an administrator runs with them.
+- Not defended: a malicious administrator, a compromised host or Python environment, a compromised model provider
+  that returns valid-looking but wrong code that passes every check (the human merge approval is the last line).
+
+## Trust boundaries
+
+| Boundary | What crosses it | Control at the boundary |
+| --- | --- | --- |
+| Browser → API | requests with a session cookie | device sign-in, sealed cookie (`api.py`, `transport.py`), permissions (`auth.py`), first admin only from localhost |
+| A2A client → API | JSON-RPC with a bearer token | `a2a.authenticate` (only the token's SHA-256 is stored); tasks become `origin="a2a"` goals that always wait for approval |
+| Web → knowledge | crawled pages | `research._is_public_host` (no private addresses, also after redirects), robots, `injection_flags`, `classify_source` |
+| Model → worktree | model output, CLI tool calls | the tool gateway (`executors.gate`), `worktrees.ensure_sandboxed`, `write_files`, `governance.check_command`, the quality gate |
+| Worktree → project checkout | merge | independent review, `loop.approve` (a person), `checks.*` at the gate |
+| Server → model provider | prompts | classification clearance per model (`router.cleared`, `learning.goal_level`) |
+| Server → GitHub | pushes | only `/sync` or `AUTO_PUSH`, with the ordering user's own credentials |
+
+## Threats, controls and tests
+
+| Threat | Example here | Controls | Tests |
+| --- | --- | --- | --- |
+| **Spoofing** | someone else's browser uses the API; a forged A2A client | device secrets, sealed cookie bound to the browser (and IP over HTTP), admin registration from localhost only, signup rate limit (`api._signups`); A2A bearer tokens issued by an administrator | `test_api.py`, `test_transport.py`, `test_a2a.py::test_authentication_version_and_unsupported_methods` |
+| **Tampering** | an agent edits files outside its goal, the audit log, or the platform's control plane | `worktrees.ensure_sandboxed`, `write_files` refuses `..` and absolute paths (incident SEV-2, rule `path_escape`); hash-chained audit (`governance.audit`, `verify_audit`); `selfevolve.protected_paths`; change boundaries (`checks.boundary_violations`, `--permit`) and scope (`checks.scope_violations`) | `test_threats.py::test_a_compromised_model_cannot_write_outside_the_worktree`, `test_loop.py`, `test_governance.py::test_audit_chain_detects_tampering`, `test_selfevolve.py`, `test_safety.py` |
+| **Repudiation** | "which agent did this?" | every run records agent, model, executor, goal/task, isolation, tools, permissions used and what was withheld (`Run`, `usage.record`); goal trace (`loop.trace`); audit of administrative actions (`api._audit`); workflow transitions with actor | `test_gateway.py::test_runs_record_the_grant_and_the_loop_audits_what_was_withheld`, `test_orchestration.py`, `test_workflow.py` |
+| **Information disclosure** | a confidential project's lessons or a secret order reach a hosted model or another project | classification on projects, orders, uploads, lessons (`router.cleared`, `NotCleared`); secret work stores no lesson text; cross-project retrieval only of public/internal items (`learning._scope_ok`); credentials in a change stop the goal (`checks.scan_secrets`, SEV-2) | `test_threats.py::test_one_projects_work_never_reaches_another_projects_prompts`, `test_classification.py`, `test_knowledge.py::test_a_confidential_lesson_of_project_a_never_reaches_project_b`, `test_safety.py::test_a_secret_in_the_change_stops_the_goal_and_opens_an_incident` |
+| **Denial of service** | a runaway CLI, an endless loop of iterations, cost blow-up | per-run timeout capped by the tool contract, process groups killed on timeout/stop, 5 M character output cap; goal cost/time budgets that pause, cost > 2× estimate pauses; per-agent concurrency and daily quotas; `MAX_ITERATIONS`; emergency stop E0–E5 that needs no model | `test_safety.py` (E5 kills a running executor within 5 s), `test_failure_modes.py`, `test_registry.py` |
+| **Elevation of privilege** | an agent gets Bash, write access, MCP tools or a higher autonomy level | the tool gateway: `write` + G2 for changes, `shell` for commands, G3 for MCP, G0 runs nothing (S14-R-02, S14-R-06); only administrators change an agent's permissions or autonomy (also by rollback); G5 is reserved to humans; agents never approve a restricted proposal (`projects.RESTRICTED` names permissions, autonomy, tools, shell, sandbox, network/write access, MCP, deployment, …) | `test_gateway.py`, `test_threats.py::test_a_compromised_model_cannot_widen_authority_through_a_proposal`, `test_workflow.py` |
+| **Prompt injection** | a crawled page or a repository file tells the agent to push, exfiltrate or ignore its task | external content is wrapped as data (`<document>` blocks); `research.injection_flags` keeps flagged pages and their lines out of prompts and change notes; whatever the model then does still passes the gateway, `check_command` and the gate; A2A input waits for a person | `test_research.py::test_flagged_pages_never_reach_agent_prompts`, `test_research.py::test_lines_from_a_flagged_page_stay_out_of_change_notes`, `test_a2a.py::test_a_message_becomes_a_goal_that_waits_for_a_person_and_completes` |
+| **Memory poisoning** | a lesson or research note that instructs future agents, or a credential stored as knowledge | `learning.screen` (rejects instructions to agents, quarantines credential-like text), people review queue, contradictions resolved by people, review dates, playbooks take only public/internal items | `test_knowledge.py::test_failures_are_negative_items_and_poisoned_text_is_never_retrieved`, `test_knowledge.py::test_the_report_is_screened_withheld_when_secret_and_shown_by_the_api`, `test_knowledge.py::test_an_opposite_lesson_is_linked_queued_and_ranked_lower_until_resolved` |
+| **Tool misuse** | an acceptance command or a Bash call that deploys, deletes or escalates | `governance.check_command` (refused and audited; three refusals in a goal pause the agent, rule `on_command_refused`); Claude Code's Bash only via `CLAUDE_BASH` (tests and read-only git); Codex in its sandbox; behaviour rules (`loop._behaviour_rules`) | `test_governance.py::test_policy_refuses_dangerous_commands`, `test_governance.py::test_refused_command_fails_gate_and_is_audited`, `test_safety.py` |
+| **Data exfiltration** | an agent sends repository content to an outside host | agents get no web tools (Claude Code's allow-list has no WebFetch/WebSearch; `network` grants none); MCP servers are added and granted by administrators only, need G3, and their calls are logged (`mcp.py`); the crawler is the platform's code, not the agent's; model clearance limits which provider sees what | `test_gateway.py::test_mcp_tools_need_g3`, `test_classification.py` |
+| **Supply chain** | a change adds a malicious dependency; an MCP server package | dependency files are a change boundary (need `--permit dependencies`); new MCP servers only from an administrator; self-evolution candidates are benchmarked on detached worktrees and need approval | `test_safety.py` (change boundaries), `test_selfevolve.py` |
+| **Model compromise** | a model returns plausible but wrong or hostile work | the gate checks what code does (tests, syntax, secrets, scope, boundaries), not what the model says; the reviewer prefers another provider (`avoid_provider`); verdicts need logic verification; the simulator never stands in for a failed real model; merging needs a person | `test_contracts.py`, `test_execution.py`, `test_safety.py` |
+
+## Known gaps
+
+- **L3 isolation** (S14-R-07): runs execute as the server user inside a git worktree, not in a container. A model
+  that escapes Claude Code's or Codex's own tool restrictions could read the host as that user. Run the service in a
+  disposable VM or container without production credentials for untrusted goals.
+- **Tool calls per run** (S14-R-08): the run records the tools it was allowed and the calls Claude Code refused,
+  not each call it made (`--output-format json` does not list them).
+- **Codex read-only runs** may still execute read-only commands inside Codex's sandbox, also for an agent without
+  `shell`.
+- Workload identity, ABAC, HSM/vault and field-level encryption are skipped (single host, SPEC-14 "Skipped").

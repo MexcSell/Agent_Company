@@ -74,7 +74,7 @@ the order is safety and correctness of that pipeline first, then management, the
    links of new agents, fair staffing, mentoring and corrections (done 2026-11-05: S12-R-01..R-04, R-06); S11-R-07
    knowledge graph (done 2026-11-05); G-R-05 MCP (done); S12-R-05 shifts with S06-R-05 handovers and S12-R-07 network view (done 2026-11-05).
    G-R-06 A2A (done 2026-11-05). SPEC-14 tool gateway with autonomy levels and isolation recorded per run (S14-R-02,
-   S14-R-06; S14-R-07/R-08 partial) done 2026-11-05. Still open: gated rooms one at a time.
+   S14-R-06; S14-R-07/R-08 partial) and S14-R-09 threat model done 2026-11-05. Still open: gated rooms one at a time.
 
 ![Specification dependency map](images/spec01-spec-dependency-map.png)
 
