@@ -1,7 +1,7 @@
 # Requirements from `/home/luca/update/`
 
 Implementable requirements derived from every document in `/home/luca/update/`, written against the
-code of 2026-11-04; statuses updated on 2026-11-05 after the safety and pipeline-quality work. `docs/feature-gap.md` is the short status list; these files are the
+code of 2026-11-04; statuses updated on 2026-11-06 after the last open items were implemented. `docs/feature-gap.md` is the short status list; these files are the
 detail an implementer works from.
 
 ## Files
@@ -114,11 +114,19 @@ the order is safety and correctness of that pipeline first, then management, the
    S09-R-07 performance, compatibility and accessibility gate stages (`required_test_stages`), then S04-R-09
    daily room budgets over a room and its sub-rooms, then S07-R-03 concluded hypotheses as knowledge items, then
    SPEC-02 FR-18 recovery probes of degraded agents (S03-FR-14 onboarding confirmed as met).
-5. **Still open** (2026-11-05): the gated rooms one at a time
-   (G-R-04); L3 for the agent CLIs themselves (they need network and their logins, see the threat model's known
-   gaps). Conditional: S11 embedding search (only if S11-R-08 shows
-   FTS insufficient), per-room eval suites (G-R-04).
-   Deliberately not taken: S06-FR-04 date ranges and languages (no such data in the knowledge store).
+5. **Still open** (2026-11-06): every requirement that can be implemented under the current rules is done. What
+   remains, and why it is not implemented now:
+   - **Gated** (CLAUDE.md: only the core pipeline and the research rooms are enabled until G-R-04's measured
+     enablement gate passes for a room): the further rooms one at a time with their per-room eval suites (G-R-04),
+     ASEAO07 analytical requests (S07-FR-01..07, 11; S07-FR-12 reproducibility is partial for the same reason),
+     S01-FR-07 company objectives per department, S01-FR-11 transactional restructuring, S03-FR-18 workforce
+     forecasts, S03-FR-20 restructuring recommendations, the Innovation lab view (SPEC-15).
+   - **Needs network and the CLIs' logins**: L3 isolation for the agent CLIs themselves (the threat model's known
+     gaps); checks and benchmarks already run in L3.
+   - **Conditional on evidence**: S11 embedding search, only if S11-R-08 shows keyword and FTS retrieval
+     insufficient (recall@5 holds today).
+   - **Deliberately not taken**: S06-FR-04 date ranges and languages (no such data in the knowledge store),
+     S02-FR-17 runtime migration (single host).
 
 ![Specification dependency map](images/spec01-spec-dependency-map.png)
 

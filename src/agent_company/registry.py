@@ -391,6 +391,9 @@ _recovering = threading.Lock()
 
 def recovery_tick() -> None:
     """For the goal queue's watcher: a sweep in a thread of its own (a probe may take minutes), one at a time."""
+    with session() as s:  # the quiet path: one query, no thread, nothing logged
+        if s.scalar(select(Agent.id).where(Agent.health == "degraded", Agent.lifecycle == "active").limit(1)) is None:
+            return
     if not _recovering.acquire(blocking=False):
         return
 
