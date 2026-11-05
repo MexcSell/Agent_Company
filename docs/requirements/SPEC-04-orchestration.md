@@ -21,7 +21,7 @@ orchestrator → `loop.py`; scheduler → `scheduler.run_dag`; team → agents s
 | S04-FR-06 | Discover suitable agents | P0 | done (`registry.staff`) |
 | S04-FR-07 | Dynamically form agent teams | P0 | done (`registry.staff`, `learning.link_team`) |
 | S04-FR-08 | Assign and delegate tasks | P0 | done |
-| S04-FR-09 | Support hierarchical supervisors | P0 | partial: GM plans, `Agent.superior_id` exists, no supervisor intervention → S04-R-07 |
+| S04-FR-09 | Support hierarchical supervisors | P0 | done (S04-R-07): escalations reach the goal GM, room manager, executive GM or a person (`escalation.py`) |
 | S04-FR-10 | Support agent-to-agent communication | P0 | done (S04-R-10, `blackboard.extract_messages`/`inbox`) |
 | S04-FR-11 | Support parallel execution | P0 | done (`scheduler.run_dag`) |
 | S04-FR-12 | Support sequential execution | P0 | done |
@@ -47,7 +47,7 @@ orchestrator → `loop.py`; scheduler → `scheduler.run_dag`; team → agents s
 ## Specific requirements
 
 Status (2026-11-05): S04-R-01 done · S04-R-02 done · S04-R-03 done · S04-R-04 done · S04-R-05 done ·
-S04-R-06 done · S04-R-07 partial · S04-R-08 partial · S04-R-09 partial · S04-R-10 done · S04-R-11 open ·
+S04-R-06 done · S04-R-07 done · S04-R-08 done · S04-R-09 partial · S04-R-10 done · S04-R-11 open ·
 S04-R-12 partial. Details under each item.
 
 ### S04-R-01 Blackboard (shared, versioned goal context) — §10
@@ -169,9 +169,17 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
 - Escalation depth is chosen by decision category (S04-R-02) and impact, not only by attempt
   count. Each escalation is an `events` row with `level`.
 - Acceptance: a `critical` decision escalates directly to level 5.
-- **Status: partial.** The level is chosen by category and recorded (`decisions.record`, `events`
-  kind `escalation`); critical goes to a person. Routing to levels 2–4 (GM, room manager, executive GM)
-  is open.
+- **Status: done** (`escalation.py`, `tests/test_escalation.py`). `escalation.recipient` resolves each level:
+  1 the agent, 2 the goal project's manager (else the company GM), 3 the head of the agent's room (the enabled
+  agent there that reports outside it; a head goes to its superior), 4 the manager of the protected platform
+  project, 5 nobody (an admin notification). `escalation.escalate` writes the `escalation` event with `level`,
+  `recipient`, `recipient_agent_id` and leaves levels 2–4 as a `request` on the goal's blackboard, read in the
+  recipient's next prompt (the planner now reads the GM's inbox). Decisions: `level_for(category, protected,
+  human)`; technical and organizational decisions on the protected project go to 4; recorded decisions of level
+  3–4 are escalated to that agent. A check that keeps failing climbs one level per `escalate_after` iterations
+  (2, 3 to the room manager of the writing agent, 4, 5 to a person). Limitation: the inbox delivers by role, so a
+  level-2 or level-4 request addressed to a GM is read by whichever GM agent plans the goal; `recipient_agent_id`
+  is recorded on the message and the event, not enforced.
 
 ### S04-R-08 Communication-loop prevention — §9.4
 - Maximum proposal/goal chain depth (follow `Goal.parent_goal_id`; setting `max_goal_depth`,
@@ -179,8 +187,9 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
 - Per-task message budget for agent messages (S04-R-10), duplicate-message detection,
   escalation after repeated unanswered requests.
 - Acceptance: a proposal from a goal at depth 3 is recorded but not turned into a goal.
-- **Status: partial.** Done: `max_goal_depth`, per-task message budget (3), duplicate messages
-  dropped. Open: escalation after repeated unanswered requests.
+- **Status: done.** `max_goal_depth`, per-task message budget (3), duplicate messages dropped; a `request`
+  repeated `escalate_after` times with no message from its recipient back to its sender escalates once to the
+  goal's GM (level 2, `blackboard._asked_again`).
 
 ### S04-R-09 Budget dimensions and allocation — §15, §15.1
 

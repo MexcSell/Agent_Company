@@ -132,8 +132,10 @@ MESSAGE_HELP = ("To tell another role something it needs, add a line: MESSAGE <f
 def extract_messages(goal_id: int, task_id: int, task_key: str, sender_agent_id: int, sender_role: str,
                      output: str) -> int:
     """Store the MESSAGE lines of a task output (at most MESSAGES_PER_TASK; a repeat of a message already on
-    the goal's board is dropped). Returns how many were stored."""
-    have = {(e["meta"].get("to"), e["content"].strip().lower()) for e in read(goal_id, ["messages"])}
+    the goal's board is dropped). Returns how many were stored. A request repeated `escalate_after` times without
+    an answer from its recipient escalates to the goal's GM (S04-R-08)."""
+    board = read(goal_id, ["messages"])
+    have = {(e["meta"].get("to"), e["content"].strip().lower()): e for e in board}
     stored = 0
     for kind, to, body in _MESSAGE.findall(output):
         if stored >= MESSAGES_PER_TASK:
@@ -142,12 +144,44 @@ def extract_messages(goal_id: int, task_id: int, task_key: str, sender_agent_id:
             break
         to, body = to.lower(), body.strip()[:1000]
         if (to, body.lower()) in have:
+            first = have[(to, body.lower())]
+            if first is not None and first["meta"].get("kind") == "request":
+                _asked_again(goal_id, first, board, sender_agent_id)
+            have[(to, body.lower())] = None  # one repeat per output counts once
             continue
-        have.add((to, body.lower()))
+        have[(to, body.lower())] = None
         put(goal_id, "messages", f"{task_key}:{stored + 1}", body, author_agent_id=sender_agent_id, task_id=task_id,
-            meta={"from": sender_role, "to": to, "kind": kind.lower(), "delivered": []})
+            meta={"from": sender_role, "to": to, "kind": kind.lower(), "delivered": [], "asked": 1})
         stored += 1
     return stored
+
+
+def _answered(request: dict[str, Any], board: list[dict[str, Any]]) -> bool:
+    """A later message from the request's recipient back to its sender answers it."""
+    m = request["meta"]
+    return any(e["id"] > request["id"] and e["meta"].get("from") == m.get("to") and e["meta"].get("to") == m.get("from")
+               for e in board)
+
+
+def _asked_again(goal_id: int, request: dict[str, Any], board: list[dict[str, Any]], sender_agent_id: int) -> None:
+    from agent_company import escalation
+    from agent_company.config import settings
+
+    if _answered(request, board) or request["meta"].get("escalated"):
+        return
+    with session() as s:
+        row = s.get(BlackboardEntry, request["id"])
+        meta = dict(row.meta or {})
+        meta["asked"] = int(meta.get("asked", 1)) + 1
+        due = meta["asked"] >= settings().escalate_after
+        if due:
+            meta["escalated"] = True
+        row.meta = meta
+        asked = meta["asked"]
+    if due:
+        escalation.escalate(2, f"request from {request['meta'].get('from')} to {request['meta'].get('to')} asked "
+                               f"{asked} times without an answer: {request['content'][:300]}",
+                            goal_id=goal_id, agent_id=sender_agent_id, message_key=request["key"])
 
 
 def inbox(goal_id: int, role: str, agent_id: int) -> str:

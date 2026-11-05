@@ -4,8 +4,10 @@ A decision names its topic, the alternatives considered, the recommendation, rea
 assumptions and an estimated confidence. Decisions that need a person (`requires_human_approval`, and
 every `critical` one) block the goal's merge until an administrator approves them.
 
-Escalation levels (S04-R-07): 1 assigned agent, 2 goal GM, 3 room manager, 4 executive GM of the platform
-project, 5 human. The level follows the category, not only the attempt count: `critical` goes straight to 5.
+Escalation levels (S04-R-07, `escalation.py`): 1 assigned agent, 2 goal GM, 3 room manager, 4 executive GM of the
+platform project, 5 human. The level follows the category and the impact, not only the attempt count: `critical`
+goes straight to 5, technical and organizational decisions about the protected platform project to 4. Decisions of
+level 3 and 4 that need no person are escalated to that level's agent, who reads them in its next prompt.
 """
 
 from __future__ import annotations
@@ -14,11 +16,12 @@ from typing import Any
 
 from sqlalchemy import select
 
-from agent_company.db import Decision, Goal, log_event, now, session
+from agent_company import escalation
+from agent_company.db import Decision, Goal, Project, log_event, now, session
 
 CATEGORIES = ["operational", "technical", "organizational", "financial", "critical"]
 OPEN = ("draft", "submitted", "under_review", "escalated")
-LEVEL_BY_CATEGORY = {"operational": 1, "technical": 2, "organizational": 3, "financial": 4, "critical": 5}
+LEVEL_BY_CATEGORY = escalation.LEVEL_BY_CATEGORY
 
 
 def _row(d: Decision) -> dict[str, Any]:
@@ -41,9 +44,10 @@ def record(goal_id: int | None, topic: str, recommendation: str, alternatives: l
 
     category = category if category in CATEGORIES else "technical"
     human = bool(requires_human_approval) or category == "critical"
-    level = 5 if human else LEVEL_BY_CATEGORY[category]
     with session() as s:
         g = s.get(Goal, goal_id) if goal_id else None
+        p = s.get(Project, g.project_id if g else project_id) if (g and g.project_id) or project_id else None
+        level = escalation.level_for(category, protected=bool(p and p.protected), human=human)
         d = Decision(goal_id=goal_id, project_id=g.project_id if g else project_id, topic=str(topic)[:256],
                      alternatives=list(alternatives or [])[:10], recommendation=str(recommendation)[:4000],
                      reasoning=str(reasoning)[:4000], evidence=list(evidence or [])[:20],
@@ -59,12 +63,16 @@ def record(goal_id: int | None, topic: str, recommendation: str, alternatives: l
         out = _row(d)
         if human:
             log_event("escalation", f"decision #{d.id} '{d.topic}' needs a person (level 5)", goal_id=goal_id,
-                      agent_id=agent_id, s=s, level=5, decision_id=d.id)
+                      agent_id=agent_id, s=s, level=5, recipient="human", decision_id=d.id)
             notify(f"Decision needs approval: {d.topic}"[:256], f"{d.recommendation[:500]}", level="warning",
                    source="decision", goal_id=goal_id, project_id=d.project_id, admin_only=True, s=s)
         else:
             log_event("decision", f"decision #{d.id} '{d.topic}': {d.recommendation[:200]}", goal_id=goal_id,
                       agent_id=agent_id, s=s, level=level, decision_id=d.id)
+    if not human and level in (3, 4):
+        escalation.escalate(level, f"{category} decision #{out['id']} '{out['topic']}': {out['recommendation'][:300]}"
+                            " (recorded; answer with a MESSAGE recommendation if it should change)",
+                            goal_id=goal_id, agent_id=agent_id, decision_id=out["id"])
     return out
 
 

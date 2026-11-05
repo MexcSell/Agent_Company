@@ -470,6 +470,7 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                      if feedback else "")
                   + (f"\nResearch notes:\n{notes}\n" if notes else "")
                   + f"\nAvailable roles:\n{role_lines}\n\n"
+                  + blackboard.inbox(goal.id, "general_manager", gm.id)
                   + (learning.experience_context(gm.id, goal_id=goal.id, query=f"{goal.title} {goal.description}")
                      + "\n\n")
                   + PLAN_INSTRUCTIONS)
@@ -1326,7 +1327,11 @@ def _record_history(goal_id: int, iteration: int, report: dict[str, Any]) -> Non
 
 def _escalate_repeated(goal_id: int, iteration: int) -> str:
     """The same check failing in `escalate_after` consecutive iterations goes back to the planner as an
-    escalation (S04-R-06, level 2 of S04-R-07): an `escalation` event and a note asking for another approach."""
+    escalation (S04-R-06, level 2 of S04-R-07): an `escalation` event and a note asking for another approach.
+    Each further `escalate_after` iterations of the same failure go one level higher (S04-R-07): the room manager
+    of the agent that wrote the code, the executive GM, then a person."""
+    from agent_company import escalation
+
     n = settings().escalate_after
     hist = {h["iteration"]: set(h.get("failed_checks") or []) for h in _goal(goal_id).history or []}
     if iteration < n or any(i not in hist for i in range(iteration - n + 1, iteration + 1)):
@@ -1334,11 +1339,22 @@ def _escalate_repeated(goal_id: int, iteration: int) -> str:
     repeated = sorted(set.intersection(*(hist[i] for i in range(iteration - n + 1, iteration + 1))))
     if not repeated:
         return ""
-    log_event("escalation", f"failing in {n} iterations in a row: {', '.join(repeated)}; escalated to the planner "
-              "(level 2)", goal_id=goal_id, level=2, checks=repeated)
-    return (f"\n\nEscalation: {', '.join(repeated)} failed in the last {n} iterations in a row. Repeating the same "
-            "approach will not fix it: re-plan with a different approach, or split the failing part into smaller "
-            "tasks with their own checks.")
+    streak, still = 0, set(repeated)
+    for i in range(iteration, 0, -1):
+        still &= hist.get(i, set())
+        if not still:
+            break
+        streak += 1
+    level = min(5, 1 + streak // n)
+    with session() as s:
+        writer = s.scalars(select(Task.agent_id).where(Task.goal_id == goal_id, Task.iteration == iteration,
+                                                       Task.writes, Task.agent_id.is_not(None))
+                           .order_by(Task.id)).first()
+    escalation.escalate(level, f"failing in {streak} iterations in a row: {', '.join(repeated)}",
+                        goal_id=goal_id, agent_id=writer, deliver=level > 2, checks=repeated, streak=streak)
+    return (f"\n\nEscalation: {', '.join(repeated)} failed in the last {streak} iterations in a row. Repeating the "
+            "same approach will not fix it: re-plan with a different approach, or split the failing part into "
+            "smaller tasks with their own checks.")
 
 
 BUDGET_SKIP = "skipped (budget): "

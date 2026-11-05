@@ -87,10 +87,10 @@ Machines code):
 | Conflict resolution between agents' results | SPEC04 §12.1 | done (`loop._review_conflicts`, S04-R-03) |
 | Goal workflow states with a transition log; pause/resume | SPEC04 §13.1 | done (`workflow.py`, S04-R-04) |
 | Durable recovery: resume interrupted goals after a restart; merge/push never repeated | SPEC04 §13.2 | done (`Goal.checkpoint`, `operations`, checkpoint commits and worktree reconcile, S04-R-05) |
-| Retry policy and escalation levels for failed tasks | SPEC04 §14 | done / partial (retry by failure type, budget pause, re-plan, repeated-check escalation, S04-R-06; routing to escalation levels 3-4 open → S04-R-07) |
+| Retry policy and escalation levels for failed tasks | SPEC04 §14 | done (retry by failure type, budget pause, re-plan, repeated-check escalation, S04-R-06; levels 1-5 routed to agent, goal GM, room manager, executive GM, a person, `escalation.py`, S04-R-07) |
 | Task contract fields: scope, risk, test plan, budget, deadline, requirement keys; findings and next actions | Designing guide §3 | done (`contracts.TaskContract`, G-R-01) |
 | Execution trace per goal | SPEC04 FR-30, SPEC14 | partial (`/api/goals/{id}/trace`; tool calls open) → S04-R-12 |
-| Goal-chain depth limit for proposals | SPEC04 §9.4 | done (`max_goal_depth`, S04-R-08 partial) |
+| Goal-chain depth limit for proposals | SPEC04 §9.4 | done (`max_goal_depth`, message budget, duplicates dropped, unanswered requests escalated, S04-R-08) |
 | Project registration fields (rooms, skills, stack, budget, deadline, priority) and lifecycle (pause, resume, archive, cancel, complete) | ASEAO05 FR-05..09 | done (`projects.set_status`, project budget caps its goals, priority queue, S05-R-06) |
 | Milestones, blockers and risks, insights, upcoming action items per project | ASEAO05 §7-10 | done (`management.py`, Projects → Plan, S05-R-01..R-04; time and weighted progress partial, S05-R-05) |
 | Continuous monitoring of registered sources (beyond the rotation) | ASEAO06 §13 | done (per-source intervals, page versions, intelligence events; S06-R-02) |
