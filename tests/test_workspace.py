@@ -610,13 +610,13 @@ def test_plan_limits_from_the_claude_sign_in(admin, monkeypatch):
     p = admin.get("/api/workspace/claude-usage").json()["plan"]
     assert p["available"] and p["plan"] == "pro" and calls == ["tok"]
     assert [(x["label"], x["percent"], x["severity"]) for x in p["limits"]] == [
-        ("Session (5 h)", 25.0, "normal"), ("This week", 91.0, "warning"), ("This week · Fable", 2.0, "normal")]
+        ("5-hour session", 25.0, "normal"), ("Weekly limit", 91.0, "warning"), ("Weekly limit · Fable", 2.0, "normal")]
     assert "tok" not in json.dumps(p)  # the token never reaches the browser
     admin.get("/api/workspace/claude-usage")
     assert calls == ["tok"]  # read once a minute
     # The older answer shape; a refused sign-in says so.
     assert [x["label"] for x in workspace._parse_limits({"five_hour": {"utilization": 3}, "seven_day": {"utilization": 9}})] == [
-        "Session (5 h)", "This week"]
+        "5-hour session", "Weekly limit"]
 
     def refused(token):
         raise workspace.urllib.error.HTTPError(workspace.USAGE_URL, 401, "no", {}, None)

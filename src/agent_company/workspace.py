@@ -868,7 +868,7 @@ def host_activity(cwd: str = "") -> dict[str, Any]:
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"  # what Claude Code's own /usage reads
 LIMITS_TTL = 60.0
 _limits_cache: dict[str, Any] = {"key": None, "at": 0.0, "out": None}
-_LIMIT_LABELS = {"session": "Session (5 h)", "weekly_all": "This week"}
+_LIMIT_LABELS = {"session": "5-hour session", "weekly_all": "Weekly limit"}
 
 
 def _oauth_usage(token: str) -> dict[str, Any]:
@@ -886,13 +886,13 @@ def _parse_limits(d: dict[str, Any]) -> list[dict[str, Any]]:
         kind = str(x.get("kind") or "")
         scope = x.get("scope") if isinstance(x.get("scope"), dict) else {}
         model = (scope.get("model") or {}).get("display_name") if isinstance(scope.get("model"), dict) else None
-        label = _LIMIT_LABELS.get(kind) or (f"This week · {model}" if model else kind.replace("_", " ").capitalize())
+        label = _LIMIT_LABELS.get(kind) or (f"Weekly limit · {model}" if model else kind.replace("_", " ").capitalize())
         out.append({"kind": kind, "label": label, "percent": float(x["percent"]),
                     "severity": str(x.get("severity") or "normal"), "resets_at": str(x.get("resets_at") or "")})
     if not out:  # the older answer: one object per window
-        for key, kind, label in (("five_hour", "session", "Session (5 h)"), ("seven_day", "weekly_all", "This week"),
-                                 ("seven_day_opus", "weekly_scoped", "This week · Opus"),
-                                 ("seven_day_sonnet", "weekly_scoped", "This week · Sonnet")):
+        for key, kind, label in (("five_hour", "session", "5-hour session"), ("seven_day", "weekly_all", "Weekly limit"),
+                                 ("seven_day_opus", "weekly_scoped", "Weekly limit · Opus"),
+                                 ("seven_day_sonnet", "weekly_scoped", "Weekly limit · Sonnet")):
             w = d.get(key)
             if isinstance(w, dict) and isinstance(w.get("utilization"), int | float):
                 out.append({"kind": kind, "label": label, "percent": float(w["utilization"]), "severity": "normal",
