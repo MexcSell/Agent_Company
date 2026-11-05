@@ -304,6 +304,17 @@ td.row > * { margin: 2px 4px 2px 0; }
 
 .list-item.selected { box-shadow: inset 3px 0 0 var(--accent); }
 
+/* Page loading: a thin bar under the top bar (after a short pause, so fast pages don't flicker); the last
+   picture of the page is dimmed until the fresh one replaces it. */
+.topbar { position: relative; }
+.loadbar { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; pointer-events: none; z-index: 2;
+  background: linear-gradient(90deg, transparent, var(--accent) 40%, var(--accent) 60%, transparent) 0 0 / 40% 100% no-repeat;
+  animation: fade .2s .12s both, loadbar 1.1s .12s cubic-bezier(.4, 0, .2, 1) infinite; }
+@keyframes loadbar { from { background-position: -70% 0; } to { background-position: 170% 0; } }
+.view.loading[inert] { opacity: .6; transition: opacity .25s .15s; }
+.view-wait { display: flex; align-items: center; gap: 8px; padding: 12px 2px; }
+.view.stale > * { visibility: hidden; }  /* a page the user had left finished over this one: redrawn shortly */
+
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 /* Settings → Navigation */

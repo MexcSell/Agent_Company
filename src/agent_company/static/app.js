@@ -216,14 +216,47 @@ async function updateBadges() {
     renderRail(); setFavicon(o);
   } catch { /* signed out */ }
 }
+// The page each view showed last: painted at once when the user comes back, while the fresh one loads
+// (a far-away browser waits a round trip or two for it). Views that keep their own windows are not kept.
+const viewCache = {};
+let showSeq = 0;
+function enter() {
+  const view = $("#view");
+  view.classList.remove("enter"); void view.offsetWidth; view.classList.add("enter");
+  clearTimeout(enter.timer); enter.timer = setTimeout(() => view.classList.remove("enter"), 700);  // live re-renders don't animate
+}
 function show(id) {
-  if (id !== current) VIEWS.find((x) => x.id === current)?.leave?.();  // e.g. Machines closes its console
+  const view = $("#view");
+  if (id !== current) {
+    VIEWS.find((x) => x.id === current)?.leave?.();  // e.g. Machines closes its console
+    if (!SELF_UPDATING.has(current) && !view.classList.contains("loading"))
+      viewCache[current] = { html: view.innerHTML, cls: ["flush", "fit"].filter((c) => view.classList.contains(c)) };
+  }
   current = id; store.set("ac.view", id);
-  $("#view").classList.remove("flush", "fit"); $("#view").scrollTop = 0;  // a new page starts at its top
+  view.classList.remove("flush", "fit"); view.scrollTop = 0;  // a new page starts at its top
   const v = VIEWS.find((x) => x.id === id); $("#view-title").textContent = v.title; renderRail();
-  $("#view").classList.remove("enter"); void $("#view").offsetWidth; $("#view").classList.add("enter");
-  clearTimeout(show.enterTimer); show.enterTimer = setTimeout(() => $("#view").classList.remove("enter"), 700);  // live re-renders don't animate
-  clearInterval(refreshTimer); render(); updateBadges();
+  const snap = !SELF_UPDATING.has(id) && viewCache[id];
+  if (snap) { view.innerHTML = snap.html; view.classList.add(...snap.cls); enter(); }
+  else if (!SELF_UPDATING.has(id)) view.innerHTML = `<div class="view-wait muted"><span class="spin"></span> Loading ${esc(v.title)}…</div>`;
+  // The bar and an inert page until the view has its data; the last page is only a picture of it.
+  const seq = ++showSeq;
+  show.overwritten = false;
+  view.classList.remove("stale"); view.classList.add("loading"); view.inert = !!snap; $("#loadbar").hidden = false;
+  const done = async () => {
+    if (seq !== showSeq || !view.classList.contains("loading")) return;
+    if (show.overwritten) {  // a page the user had left finished over this one: build this one again
+      show.overwritten = false; view.classList.remove("flush", "fit");
+      await render();
+      if (seq !== showSeq) return;
+    }
+    view.classList.remove("loading", "stale"); view.inert = false; $("#loadbar").hidden = true;
+    iconize(view);  // now, not 300 ms later: buttons don't change shape after the page appears
+    if (!snap) enter();
+  };
+  clearTimeout(show.guard); show.guard = setTimeout(done, 15000);  // a request that never answers must not lock the page
+  clearInterval(refreshTimer);
+  render().finally(done);
+  updateBadges();
   // Live events push changes; polling stays as a slower fallback when the stream is down.
   refreshTimer = setInterval(() => { if (!liveOk) refreshNow(); }, 5000);
 }
@@ -231,6 +264,7 @@ function show(id) {
 const SELF_UPDATING = new Set(["workspace", "files", "machines"]);
 function refreshNow() {
   if (document.hidden || !$("#modal").hidden || document.activeElement?.closest("form:not(#composer)")) return;
+  if ($("#view").classList.contains("loading")) return;  // the page is still being built
   if (!SELF_UPDATING.has(current)) render(true);
   updateBadges();
 }
@@ -247,8 +281,14 @@ function connectLive() {
   };
 }
 async function render(quiet) {
-  const fn = VIEW_FNS[current];
-  try { await fn(quiet); } catch (e) { if (e.status === 401) return tryDevice(); if (!quiet) $("#view").innerHTML = `<div class="card">Could not load: ${esc(e.message)}</div>`; }
+  const id = current, fn = VIEW_FNS[id];
+  try { await fn(quiet); } catch (e) { if (e.status === 401) return tryDevice(); if (!quiet && id === current) $("#view").innerHTML = `<div class="card">Could not load: ${esc(e.message)}</div>`; }
+  // A slow page that finished after the user moved on wrote over the newer one: hide it, and draw the
+  // current page again (at once, or when its own load ends: it may have been building into what was replaced).
+  if (id !== current) {
+    if (!$("#view").classList.contains("loading")) { $("#view").classList.remove("flush", "fit"); render(); }
+    else { show.overwritten = true; $("#view").classList.add("stale"); }
+  }
 }
 function modal(html) { $("#modal-body").innerHTML = html; $("#modal").hidden = false; }
 $("#modal-close").onclick = () => ($("#modal").hidden = true);

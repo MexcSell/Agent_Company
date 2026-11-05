@@ -45,17 +45,20 @@ const Machines = (() => {
   async function open() {
     wire();
     if (!d) root().innerHTML = `<div class="mc-headline"><p class="muted">${lead}</p></div>${loading("Loading machines…")}`;
+    else render();  // what was seen last, at once; load() brings it up to date
     await load();
     schedule();
   }
   function close() { clearTimeout(timer); disconnect(); }
   async function load() {
     if (!root()) return;
+    // The selected machine loads alongside the list: one round trip instead of two.
+    const guess = sel || store.get("ac.machines.sel"), early = guess ? api(`${API}/${encodeURIComponent(guess)}`).catch(() => null) : null;
     try { d = await api(API); }
     catch (e) { d = null; disconnect(); root().innerHTML = `<p class="muted">${lead}</p><div class="card mc-empty">${esc(e.message)}</div>`; return; }
     if (!d.items.some((x) => x.name === sel)) sel = store.get("ac.machines.sel") || null;
     if (!d.items.some((x) => x.name === sel)) sel = d.items[0]?.name ?? null;
-    cur = sel ? await api(`${API}/${encodeURIComponent(sel)}`).catch(() => cur) : null;
+    cur = sel ? (sel === guess && await early) || await api(`${API}/${encodeURIComponent(sel)}`).catch(() => cur) : null;
     render();
   }
   function schedule() {

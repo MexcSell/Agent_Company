@@ -14,6 +14,8 @@ let projectFiles = store.get("ac.project.files") === "1";
 const gmPanels = new Map();  // project id -> { el, panel }
 
 async function viewProjects(quiet) {
+  // The selected project's details load alongside the list: one round trip instead of two.
+  const guess = selectedProject, early = guess !== null ? api(`/api/projects/${guess}`).catch(() => null) : null;
   const list = await api("/api/projects");
   if (!list.some((p) => p.id === selectedProject)) selectedProject = (list.find((p) => !p.protected) || list[0])?.id ?? null;
   if (!quiet || !$("#proj-list")) {
@@ -41,7 +43,7 @@ async function viewProjects(quiet) {
   }));
   $("#proj-list").querySelectorAll("[data-check]").forEach((c) => (c.onchange = () => toggleCheck(Number(c.dataset.check))));
   if ($("#p-del")) $("#p-del").disabled = projectChecked.size === 0;
-  if (selectedProject !== null) await projectMain(selectedProject, quiet);  // projectMain keeps what is already shown
+  if (selectedProject !== null) await projectMain(selectedProject, quiet, selectedProject === guess ? early : null);  // projectMain keeps what is already shown
 }
 
 function toggleCheck(id) {
@@ -125,8 +127,8 @@ function gmPanel(d) {
   return g;
 }
 
-async function projectMain(id, incremental) {
-  const d = await api(`/api/projects/${id}`);
+async function projectMain(id, incremental, early = null) {
+  const d = (early && await early) || await api(`/api/projects/${id}`);
   // The GM conversation is a CLI agent (Claude Code or Codex, whichever the GM resolves to now) and the
   // administrators' tool (CLAUDE.md); with an API model as GM, or for other users, orders go to the agent loop.
   const cli = ["claude_code", "codex"].includes(d.gm?.kind);
