@@ -10,7 +10,7 @@ Acceptance condition types:
   json_schema  {"type": "json_schema"}                     output parses as JSON matching output_schema
   file_exists  {"type": "file_exists", "path": "app.py"}   file exists in the worktree
   command      {"type": "command", "run": "pytest -q"}     command exits 0 in the worktree
-               a command may name its gate stage, "stage": "integration" (unit|integration|security|static):
+               a command may name its gate stage, "stage": "integration" (unit|integration|security|static|performance|compatibility|accessibility):
                the quality gate then runs it again itself as a check of that stage (S09-R-02)
 """
 
@@ -35,7 +35,8 @@ class Condition(BaseModel):
     path: str | None = None
     run: str | None = None
     requirement_keys: list[str] | None = None  # a command condition: the requirements it tests (S09-R-06)
-    stage: Literal["unit", "integration", "security", "static"] | None = None  # a command's gate stage
+    stage: Literal["unit", "integration", "security", "static", "performance", "compatibility",
+                   "accessibility"] | None = None  # a command's gate stage
 
     @field_validator("requirement_keys")
     @classmethod

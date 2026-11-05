@@ -87,7 +87,8 @@ async function projectForm(p = null) {
       <div class="grow"><label for="pr-ag">Agents at once (company: ${rules.company.goal_agent_limit || "none"})</label><input id="pr-ag" type="number" min="0" value="${rules.own.goal_agent_limit || ""}"></div></div>
       <div class="row"><label class="row grow"><input type="checkbox" id="pr-appr" style="width:auto" ${rules.effective.require_approval ? "checked" : ""} ${rules.company.require_approval ? "disabled" : ""}> Merges wait for a person</label>
       <div class="grow"><label for="pr-rec">Recruitment approval</label><select id="pr-rec">${["never", "permanent_only", "always"].map((c, i, all) => all.indexOf(rules.company.recruit_requires_approval) <= i ? `<option ${rules.effective.recruit_requires_approval === c ? "selected" : ""}>${c}</option>` : "").join("")}</select></div>
-      <div class="grow"><label for="pr-sbx" title="Quality commands of this project's goals run agent code: required = only in the L3 sandbox">Sandbox for agent code</label><select id="pr-sbx">${["off", "auto", "required"].map((c, i, all) => all.indexOf(rules.company.sandbox) <= i ? `<option ${rules.effective.sandbox === c ? "selected" : ""}>${c}</option>` : "").join("")}</select></div></div>` : ""}
+      <div class="grow"><label for="pr-sbx" title="Quality commands of this project's goals run agent code: required = only in the L3 sandbox">Sandbox for agent code</label><select id="pr-sbx">${["off", "auto", "required"].map((c, i, all) => all.indexOf(rules.company.sandbox) <= i ? `<option ${rules.effective.sandbox === c ? "selected" : ""}>${c}</option>` : "").join("")}</select></div></div>
+      <label for="pr-stages" title="Every goal of the project must run checks in these gate stages: tag the project's check commands, e.g. [performance] python bench.py, [accessibility] npx pa11y-ci">Required test stages, comma-separated: performance, compatibility, accessibility, integration… (company: ${esc((rules.company.required_test_stages || []).join(", ") || "none")})</label><input id="pr-stages" value="${esc((rules.own.required_test_stages || []).join(", "))}">` : ""}
     ${me.is_admin && p ? `<label for="pf-class">Classification (what agents may carry to other projects: public and internal lessons only; secret ones are not stored)</label><select id="pf-class">${["public", "internal", "confidential", "restricted", "secret"].map((c) => `<option ${(p.classification || "internal") === c ? "selected" : ""}>${c}</option>`).join("")}</select>` : ""}
     <div class="row" style="margin-top:12px"><button class="btn icon primary" title="${p ? "Save" : "Create"}" aria-label="${p ? "Save" : "Create"}">${icon(p ? "save" : "check", 16)}</button></div></form>`);
   // The folder follows the name until it is edited: <folder above Agent Company>/<name>.
@@ -114,7 +115,8 @@ async function projectForm(p = null) {
     try {
       if (p) await api(`/api/projects/${p.id}`, { method: "PATCH", body });
       if (rules) await api(`/api/projects/${p.id}/policy`, { method: "PUT", body: { goal_budget_usd: +$("#pr-cost").value || 0, goal_token_budget: +$("#pr-tok").value || 0,
-        goal_agent_limit: +$("#pr-ag").value || 0, require_approval: $("#pr-appr").checked && !rules.company.require_approval, recruit_requires_approval: $("#pr-rec").value, sandbox: $("#pr-sbx").value } });
+        goal_agent_limit: +$("#pr-ag").value || 0, require_approval: $("#pr-appr").checked && !rules.company.require_approval, recruit_requires_approval: $("#pr-rec").value, sandbox: $("#pr-sbx").value,
+        required_test_stages: $("#pr-stages").value.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean) } });
       else { const r = await api("/api/projects", { method: "POST", body: { ...body, path: $("#pf-path")?.value.trim() || "" } }); selectedProject = r.id; }
       $("#modal").hidden = true; lastMessageId = 0; viewProjects();
     } catch (err) { toast(err.message); }

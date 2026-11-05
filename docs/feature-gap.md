@@ -116,6 +116,7 @@ Machines code):
 | Change boundaries: no skipped tests, removed assertions, new dependencies or CI/.env edits without a permit | ASEAO08 §12.2 | done (`checks.boundary_violations`, S08-R-04) |
 | Dependency control: changed dependencies itemised per goal, `pip-audit`/`npm audit` at the gate's security stage (a vulnerability the change brought in fails), merged changes recorded; CycloneDX SBOM of every merged commit | ASEAO08 §15 | done (`dependencies.py`, S08-R-05) |
 | Quality gates as named stages; an open critical defect blocks the merge | ASEAO09 §13 | done (`quality.stages`, S09-R-01) |
+| Load, stress, compatibility and accessibility testing as gate stages the company or a project can require | ASEAO09 §7.7–7.10 | done (`performance`/`compatibility`/`accessibility` stages, setting `required_test_stages`, S09-R-07) |
 | Risk-based test strategy per goal: mandatory integration/security stages for high-risk goals, security review of sensitive areas, files with earlier failures | ASEAO09 §6 | done (`teststrategy.py`, S09-R-02) |
 | Test-strategy selection by test category and risk | ASEAO09 §6-7 | done (`teststrategy.py`, S09-R-02) |
 | Independent verification: the gate re-runs every command and records commit, exit code, duration, output tail and toolchain versions | ASEAO09 §12 | done (`quality.evaluate`, `quality.environment`, goal history `verification`, S09-R-04) |

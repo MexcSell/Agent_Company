@@ -16,6 +16,11 @@ A high-risk goal must have checks in the `integration` and `security` stages: th
 mandatory stage that fails when no check of that stage ran. The planner can satisfy `integration` with a command
 acceptance condition carrying `"stage": "integration"`; the gate runs it again itself (quality.evaluate). The
 `security` stage holds the secret scan until a dependency audit exists (S08-R-05).
+
+The setting `required_test_stages` (ASEAO09 §7.7-7.10) makes stages mandatory for every goal: `performance` (load
+and stress), `compatibility`, `accessibility` or any other command stage. A project's own rule adds stages to the
+company's, never removes one. The checks are the project's tagged quality commands (`[accessibility] npx pa11y-ci`)
+or acceptance conditions the planner writes with that stage; there is no built-in load or accessibility runner.
 """
 
 from __future__ import annotations
@@ -45,6 +50,13 @@ def sensitive(path: str) -> bool:
         return False
     return any(w.lower() in SENSITIVE_WORDS for w in _SPLIT.split(path.strip("*")) if w)
 HIGH_STAGES = ["integration", "security"]
+# what a check of each stage does, for the planner and the gate's feedback (ASEAO09 §7.7-7.10)
+STAGE_HINTS = {"integration": "tests the changed parts together.",
+               "performance": "loads or stresses the changed code with a threshold that fails when it is too slow "
+                              "(a timed benchmark, locust/k6 headless with a limit).",
+               "compatibility": "runs the tests on every supported version or platform (e.g. a tox/nox matrix).",
+               "accessibility": "checks the changed pages with an automated accessibility checker (axe, pa11y, "
+                                "Lighthouse with a minimum score)."}
 RISKS = ["low", "medium", "high"]
 CAP = 20  # paths and files listed per field
 
@@ -81,12 +93,15 @@ def _defect_history(s: Any, g: Goal, area: list[str]) -> dict[str, list[int]]:
 
 def derive(goal_id: int, plan: list[contracts.TaskContract] | None = None, iteration: int = 1) -> dict[str, Any]:
     from agent_company.learning import CLASSIFICATIONS, goal_level
+    from agent_company.policies import effective
 
     with session() as s:
         g = s.get(Goal, goal_id)
         if g is None:
             raise KeyError(goal_id)
         level = goal_level(s, g)
+        # ASEAO09 §7.7-7.10: stages the company or the project requires of every goal (eval goals only measure)
+        ruled = [] if g.origin == "eval" else list(effective("required_test_stages", g.project_id, s) or [])
         changed = _changed(g) if iteration > 1 else []
         area = sorted({*(g.allowed_paths or []), *(p for c in plan or [] for p in c.in_scope), *changed})
         history = _defect_history(s, g, area)
@@ -111,8 +126,11 @@ def derive(goal_id: int, plan: list[contracts.TaskContract] | None = None, itera
         risk = max(risk, 1)
         reasons.append(f"{len(history)} file(s) with earlier failures: " + ", ".join(list(history)[:5]))
     high = risk == 2
+    if ruled:
+        reasons.append("required by the rules: " + ", ".join(ruled))
+    stages = list(dict.fromkeys([*(HIGH_STAGES if high else []), *ruled]))
     return {"risk": RISKS[risk], "reasons": reasons or ["no sensitive area, classification or defect history"],
-            "mandatory_stages": HIGH_STAGES if high else [], "reviewers": ["qa"] + (["security"] if high else []),
+            "mandatory_stages": stages, "reviewers": ["qa"] + (["security"] if high else []),
             "sensitive_paths": touched, "defect_history": history, "area": area[:CAP],
             "iteration": iteration, "at": now().isoformat()}
 
@@ -146,10 +164,13 @@ def mandatory(goal: Goal) -> list[str]:
 def planner_note(strategy: dict[str, Any]) -> str:
     lines = [f"\nTest strategy: risk {strategy['risk']} ({'; '.join(strategy['reasons'])})."]
     if strategy["mandatory_stages"]:
-        lines.append("Mandatory gate stages: " + ", ".join(strategy["mandatory_stages"]) + ". Give a task an "
-                     'acceptance condition {"type": "command", "run": "<integration test command>", '
-                     '"stage": "integration"} that exercises the changed parts together; the gate runs it itself. '
-                     "Writing tasks in sensitive areas get a security review.")
+        first = next((st for st in strategy["mandatory_stages"] if st != "security"), "integration")
+        lines.append("Mandatory gate stages: " + ", ".join(strategy["mandatory_stages"]) + ". For each stage but "
+                     'security, give a task an acceptance condition {"type": "command", "run": "<command>", '
+                     f'"stage": "{first}"}} (with that stage\'s name); the gate runs it itself. '
+                     + " ".join(f"A {st} check {STAGE_HINTS[st]}" for st in strategy["mandatory_stages"]
+                                if st in STAGE_HINTS)
+                     + " Writing tasks in sensitive areas get a security review.")
     if strategy["defect_history"]:
         lines.append("These files failed checks in earlier goals; test them explicitly: "
                      + ", ".join(strategy["defect_history"]))

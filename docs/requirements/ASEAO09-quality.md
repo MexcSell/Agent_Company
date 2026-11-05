@@ -118,6 +118,19 @@ scope checks (`quality.py`, `checks.py`); defects opened/closed/reopened automat
   requirements (the goal's and its tasks'). `untested`: requirements past draft and not retired with no passing
   check on their current version, shown on the project's Plan tab.
 
-### Not taken now
-- Load/stress/compatibility/accessibility testing (§7.7–7.10): `open`, per project via check
-  commands; no built-in runner.
+### S09-R-07 Load, stress, compatibility and accessibility stages — §7.7–7.10
+- Gate stages `performance` (load and stress), `compatibility` and `accessibility` beside the functional ones; a
+  project's check commands and the planner's acceptance conditions can name them; the company or a project can make
+  them mandatory for every goal.
+- Acceptance: a project that requires `accessibility` fails a goal with no accessibility check; a tagged
+  `[performance]` command satisfies its stage.
+- **Status: done** (`quality.NONFUNCTIONAL_STAGES`, `teststrategy.STAGE_HINTS`, setting `required_test_stages`,
+  `tests/test_teststrategy.py::test_required_nonfunctional_stages_come_from_the_rules_and_tagged_project_commands`).
+  Commands carry the stage tag (`[performance] python bench.py --max-ms 200`, `[accessibility] npx pa11y-ci`);
+  contract conditions accept `"stage": "performance|compatibility|accessibility"`. The setting
+  `required_test_stages` (a list of command stages) adds them to every goal's mandatory stages through the test
+  strategy (`required by the rules: …`); a project's own rule (Projects → edit → Stricter rules) adds stages, never
+  removes the company's (`policies.effective` takes the union). The gate adds a `stage <name>` row that fails when no
+  check of that stage ran, and its feedback tells the planner what such a check does. The goal page lists these
+  stages only when a check of theirs ran or they are required. Eval goals get no rule stages (they only measure).
+  There is no built-in load or accessibility runner: the project's tools are the checks.

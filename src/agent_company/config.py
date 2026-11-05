@@ -102,6 +102,8 @@ class Settings:
     sandbox: str = "auto"
     # S08-R-05: pip-audit / npm audit of changed manifests at the gate: off | warn | block
     dependency_audit: str = "block"
+    # ASEAO09 §7.7-7.10: gate stages every goal must run checks in (e.g. performance, accessibility)
+    required_test_stages: list[str] = field(default_factory=list)
     # S11-R-04: the instructor's verdict on a flagged contradiction: off | advise | decide
     contradiction_judge: str = "advise"
     sandbox_memory_mb: int = 4096
@@ -181,6 +183,8 @@ def load_settings() -> Settings:
         sandbox=(os.environ.get("SANDBOX") or "auto").lower(),
         dependency_audit=(os.environ.get("DEPENDENCY_AUDIT") or "block").lower(),
         contradiction_judge=(os.environ.get("CONTRADICTION_JUDGE") or "advise").lower(),
+        required_test_stages=[x.strip().lower() for x in (os.environ.get("REQUIRED_TEST_STAGES") or "").split(",")
+                              if x.strip()],
         sandbox_memory_mb=_int("SANDBOX_MEMORY_MB", 4096),
         sandbox_tasks=_int("SANDBOX_TASKS", 512),
         sandbox_cpus=float(os.environ.get("SANDBOX_CPUS") or 2.0),

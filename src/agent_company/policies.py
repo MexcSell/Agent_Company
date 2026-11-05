@@ -35,12 +35,12 @@ GOVERNANCE_KEYS = ("require_approval", "goal_budget_usd", "goal_token_budget", "
                    "budget_exhausted_action", "recruit_requires_approval", "qualify_recruits", "proposal_policy",
                    "max_proposal_goals", "max_goal_depth", "candidate_smoke", "auto_push", "a2a_enabled",
                    "blocked_commands", "sandbox", "sandbox_memory_mb", "sandbox_tasks", "sandbox_cpus", "sandbox_paths",
-                   "sandbox_env", "dependency_audit")
+                   "sandbox_env", "dependency_audit", "required_test_stages")
 # A project's own rules and what "stricter" means for each: a lower limit (0 = none), approval switched on, a later
 # step of the recruitment-approval order.
 LIMIT_KEYS = ("goal_budget_usd", "goal_token_budget", "goal_agent_limit")
 RECRUIT_ORDER = ("never", "permanent_only", "always")
-PROJECT_KEYS = (*LIMIT_KEYS, "require_approval", "recruit_requires_approval", "sandbox")
+PROJECT_KEYS = (*LIMIT_KEYS, "require_approval", "recruit_requires_approval", "sandbox", "required_test_stages")
 SANDBOX_ORDER = ("off", "auto", "required")
 
 
@@ -268,6 +268,8 @@ def _check_project_rules(rules: dict[str, Any]) -> dict[str, Any]:
                 continue
         elif key == "require_approval" and not v:
             continue
+        elif key == "required_test_stages":  # a project adds stages; the company's stay required anyway
+            v = [x for x in v if x not in (company or [])]
         if v:
             out[key] = v
     return out
@@ -324,4 +326,6 @@ def effective(key: str, project_id: int | None, s: Session | None = None) -> Any
         return max(company, own, key=RECRUIT_ORDER.index)
     if key == "sandbox":
         return max(company, own, key=SANDBOX_ORDER.index)
+    if key == "required_test_stages":
+        return list(dict.fromkeys([*(company or []), *own]))
     return company

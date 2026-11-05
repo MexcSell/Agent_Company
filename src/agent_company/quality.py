@@ -78,9 +78,13 @@ def review_verdict(output: str) -> tuple[bool, str]:
 
 # Named gate stages (ASEAO09 §13, S09-R-01). Commands may carry a stage tag: "[integration] pytest tests/it";
 # untagged commands are unit tests. `regression` compares commands with the baseline; `governance` reflects
-# decisions that wait for a person (it never fails the gate, it holds the merge).
-STAGES = ["requirements", "contract", "static", "security", "unit", "integration", "regression", "review", "governance"]
-COMMAND_STAGES = {"unit", "integration", "regression", "security", "static"}
+# decisions that wait for a person (it never fails the gate, it holds the merge). The non-functional stages of
+# ASEAO09 §7.7-7.10 (load and stress as `performance`, `compatibility`, `accessibility`) hold a project's own tagged
+# commands; they are listed only when a check of theirs ran or the goal's test strategy requires them.
+STAGES = ["requirements", "contract", "static", "security", "unit", "integration", "regression", "performance",
+          "compatibility", "accessibility", "review", "governance"]
+NONFUNCTIONAL_STAGES = ("performance", "compatibility", "accessibility")
+COMMAND_STAGES = {"unit", "integration", "regression", "security", "static", *NONFUNCTIONAL_STAGES}
 _TAG = re.compile(r"^\s*\[([A-Za-z0-9_, -]+)\]\s*")
 _REQ_KEY = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d+$")
 
@@ -132,6 +136,8 @@ def stages(results: list[dict[str, Any]], goal_id: int) -> list[dict[str, Any]]:
 
     rows = []
     for st in STAGES:
+        if st in NONFUNCTIONAL_STAGES and not any(c.get("stage") == st for c in results):
+            continue
         if st == "regression":
             mine = [c for c in results if c.get("baseline_passed")]
         else:
@@ -308,11 +314,12 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
         ran = [c for c in results if c.get("stage") == stage]
         results.append({"check": f"stage {stage}", "passed": bool(ran), "stage": stage,
                         "detail": f"{len(ran)} check(s) ran" if ran else
-                                  f"mandatory for this {risk}-risk goal (test strategy): no check of this stage ran"})
+                                  f"mandatory by the goal's test strategy (risk {risk}): no check of this stage ran"})
         if not ran:
             feedback.append(f"The goal's test strategy makes the {stage} stage mandatory and no {stage} check ran. "
                             + ('Give a task an acceptance condition {"type": "command", "run": "<test command>", '
-                               f'"stage": "{stage}"}} that tests the changed parts together.'
+                               f'"stage": "{stage}"}} that ' + teststrategy.STAGE_HINTS.get(stage, "tests the changed "
+                                                                                             "parts together.")
                                if stage != "security" else "The security stage holds the secret scan of the "
                                "change; it runs once the goal has a base branch."))
     passed = all(c["passed"] for c in results) and bool(rows)

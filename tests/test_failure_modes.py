@@ -101,7 +101,9 @@ def test_the_gate_reports_one_row_per_stage():
     assert st == {"requirements": "skipped", "contract": "pass", "static": "pass", "security": "pass",
                   "unit": "pass", "integration": "pass", "regression": "pass", "review": "pass",
                   "governance": "pass"}
-    assert [r["stage"] for r in out["report"]["stages"]] == quality.STAGES
+    # the non-functional stages are listed only when a check of theirs ran or they are required (S09-R-07)
+    assert [r["stage"] for r in out["report"]["stages"]] == [x for x in quality.STAGES
+                                                             if x not in quality.NONFUNCTIONAL_STAGES]
     with session() as s:
         assert s.get(Goal, gid).history[-1]["stages"]["integration"] == "pass"
     assert quality.split_stage("[foo] make x") == ("unit", "[foo] make x")

@@ -121,3 +121,36 @@ def test_sensitive_paths_are_whole_words():
           "lesson.py", "docs/security.md", "SECURITY.md", "src/keyboard.py"]
     assert [p for p in yes if not teststrategy.sensitive(p)] == []
     assert [p for p in no if teststrategy.sensitive(p)] == []
+
+
+def test_required_nonfunctional_stages_come_from_the_rules_and_tagged_project_commands():
+    """ASEAO09 §7.7-7.10: performance/compatibility/accessibility stages, required by the company or a project."""
+    from agent_company import policies, prefs, quality
+
+    with pytest.raises(ValueError, match="not command stages"):
+        prefs.set_value("required_test_stages", ["usability"], actor="user:admin")
+    gid = loop.create_goal("Plain", quality_commands=["test -f WORKLOG.md"], max_iterations=1)
+    out = loop.run_goal(gid)
+    assert "performance" not in {r["stage"] for r in out["report"]["stages"]}, "unused stages are not listed"
+
+    prefs.set_value("required_test_stages", ["performance"], actor="user:admin")
+    p = projects.create("Shop")
+    policies.set_project_rules(p["id"], {"required_test_stages": ["performance", "accessibility"]}, "user:admin")
+    assert policies.effective("required_test_stages", p["id"]) == ["performance", "accessibility"]
+    assert policies.effective("required_test_stages", None) == ["performance"]
+
+    gid = loop.create_goal("Speed up the cart", repo_path=p["path"], project_id=p["id"], max_iterations=1,
+                           quality_commands=["test -f WORKLOG.md", "[performance] test -f WORKLOG.md"])
+    out = loop.run_goal(gid)
+    ts = loop._goal(gid).test_strategy
+    assert ts["mandatory_stages"] == ["performance", "accessibility"]
+    assert "required by the rules: performance, accessibility" in ts["reasons"]
+    rows = {c["check"]: c for c in out["report"]["checks"]}
+    assert rows["stage performance"]["passed"] and not rows["stage accessibility"]["passed"]
+    assert out["status"] == "failed" and "accessibility checker" in out["report"]["feedback"]
+    st = {r["stage"]: r["status"] for r in out["report"]["stages"]}
+    assert st["performance"] == "pass" and st["accessibility"] == "fail"
+    assert quality.split_tag("[accessibility] npx pa11y-ci")[:2] == ("accessibility", [])
+    assert contracts.Condition(type="command", run="k6 run load.js", stage="performance").stage == "performance"
+    # eval goals only measure: the rules add no stage to them
+    assert teststrategy.derive(loop.create_goal("Eval", origin="eval"))["mandatory_stages"] == []

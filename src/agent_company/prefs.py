@@ -72,6 +72,10 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "dependency_audit": (str, "Changed dependency manifests are audited with pip-audit / npm audit when installed: "
                               "'block' fails the gate on a known vulnerability in an added or changed dependency, "
                               "'warn' only lists it, 'off' runs no audit"),
+    "required_test_stages": (list, "Gate stages every goal must run checks in, one per line: performance (load and "
+                                   "stress), compatibility, accessibility, integration, …; the checks are the "
+                                   "project's quality commands tagged with the stage, e.g. '[accessibility] npx "
+                                   "pa11y-ci'. A project may add stages"),
     "contradiction_judge": (str, "Knowledge contradictions: the instructor's verdict is recorded for the person who "
                                  "resolves the pair ('advise'), also closes a pair it finds compatible as 'both hold' "
                                  "('decide'; it never rejects an item), or no model is asked ('off')"),
@@ -120,6 +124,13 @@ def _coerce(key: str, value: Any) -> Any:
 
             if bad := [n for n in value if SECRETISH.search(n) or not n.replace("_", "").isalnum()]:
                 raise ValueError(f"sandbox_env: {', '.join(bad)} look like credentials or are not variable names")
+        if key == "required_test_stages":
+            from agent_company.quality import COMMAND_STAGES
+
+            value = list(dict.fromkeys(x.strip().lower() for x in value if x.strip()))
+            if bad := [x for x in value if x not in COMMAND_STAGES]:
+                raise ValueError(f"required_test_stages: {', '.join(bad)} are not command stages "
+                                 f"({', '.join(sorted(COMMAND_STAGES))})")
         if key == "retrieval_strategies":
             from agent_company import learning
 
