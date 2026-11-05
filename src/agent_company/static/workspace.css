@@ -65,6 +65,12 @@ kbd { font-family: var(--mono); font-size: 11px; padding: 0 5px; border: 1px sol
 .tr .chev.open { transform: rotate(90deg); }
 .tr .tn { overflow: hidden; text-overflow: ellipsis; }
 .fico { flex: none; }
+/* File icons: VS Code's Seti font, its colour for the light or the dark theme */
+@font-face { font-family: "seti"; src: url("/static/vendor/seti/seti.woff") format("woff"); font-display: block; }
+.fico.seti { display: inline-flex; align-items: center; justify-content: center; overflow: hidden; font-family: "seti"; font-style: normal;
+  font-weight: normal; line-height: 1; color: var(--sl); -webkit-font-smoothing: antialiased; speak: never; }
+:root[data-theme="dark"] .fico.seti { color: var(--sd); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .fico.seti { color: var(--sd); } }
 .fbadge { flex: none; width: var(--s); height: var(--s); display: inline-grid; place-items: center; border-radius: 3px; font: 800 calc(var(--s) * .52)/1 var(--mono);
   color: var(--c); background: color-mix(in srgb, var(--c) 15%, transparent); letter-spacing: -.04em; overflow: hidden; }
 .fbadge.l3 { font-size: calc(var(--s) * .38); }

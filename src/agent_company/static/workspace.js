@@ -21,33 +21,44 @@ window.WSP = window.WSP || {};
   W.rel = (p) => (S.root && p.startsWith(S.root + "/") ? p.slice(S.root.length + 1) : p);
   W.root = () => S.root;
 
-  // --- icons by extension ---------------------------------------------------------------
-  const B = (label, color) => ({ label, color });
-  const EXT = {
-    py: B("PY", "#3776ab"), pyi: B("PY", "#3776ab"), ipynb: B("NB", "#f37626"), js: B("JS", "#d4a800"), mjs: B("JS", "#d4a800"), cjs: B("JS", "#d4a800"),
-    ts: B("TS", "#3178c6"), tsx: B("TSX", "#2f9fd1"), jsx: B("JSX", "#2f9fd1"), json: B("{}", "#c0a000"), jsonc: B("{}", "#c0a000"),
-    md: B("M↓", "#2b7bb9"), mdx: B("MDX", "#2b7bb9"), html: B("<>", "#e34c26"), htm: B("<>", "#e34c26"), css: B("#", "#5b4cc4"), scss: B("#", "#c6538c"), less: B("#", "#1d365d"),
-    sh: B("$_", "#3d9a2c"), bash: B("$_", "#3d9a2c"), zsh: B("$_", "#3d9a2c"), ps1: B("PS", "#2671be"), bat: B("BAT", "#6d8086"),
-    toml: B("TML", "#9c4221"), yaml: B("YML", "#cb171e"), yml: B("YML", "#cb171e"), ini: B("INI", "#6d8086"), cfg: B("CFG", "#6d8086"), env: B("ENV", "#c9a800"),
-    sql: B("SQL", "#e38c00"), db: B("DB", "#5c6bc0"), sqlite: B("DB", "#5c6bc0"), go: B("GO", "#00a7d0"), rs: B("RS", "#c4643c"), rb: B("RB", "#cc342d"),
-    java: B("JV", "#b07219"), kt: B("KT", "#a97bff"), swift: B("SW", "#f05138"), c: B("C", "#5c6bc0"), h: B("H", "#7e57c2"), cpp: B("C++", "#f34b7d"), hpp: B("H++", "#f34b7d"),
-    cs: B("C#", "#178600"), php: B("PHP", "#777bb3"), lua: B("LUA", "#000080"), r: B("R", "#198ce7"), dart: B("DRT", "#00b4ab"), scala: B("SC", "#c22d40"),
-    vue: B("V", "#41b883"), svelte: B("S", "#ff3e00"), xml: B("XML", "#0060ac"), svg: B("SVG", "#e8a300"), txt: B("TXT", "#7a7a7a"), log: B("LOG", "#7a7a7a"),
-    csv: B("CSV", "#1d6f42"), tsv: B("TSV", "#1d6f42"), xlsx: B("XL", "#1d6f42"), xls: B("XL", "#1d6f42"), docx: B("W", "#2b579a"), doc: B("W", "#2b579a"),
-    pptx: B("P", "#d24726"), ppt: B("P", "#d24726"), pdf: B("PDF", "#e5252a"), lock: B("LCK", "#7a7a7a"), diff: B("±", "#41b883"), patch: B("±", "#41b883"),
-    zip: B("ZIP", "#a67c00"), tar: B("TAR", "#a67c00"), gz: B("GZ", "#a67c00"), tgz: B("TGZ", "#a67c00"), bz2: B("BZ", "#a67c00"), xz: B("XZ", "#a67c00"), "7z": B("7Z", "#a67c00"), rar: B("RAR", "#a67c00"),
-    exe: B("EXE", "#6d8086"), bin: B("BIN", "#6d8086"), so: B("SO", "#6d8086"), wasm: B("WA", "#654ff0"), ttf: B("Aa", "#e05050"), woff: B("Aa", "#e05050"), woff2: B("Aa", "#e05050"),
+  // --- file icons: VS Code's default theme (Seti, vendor/seti) --------------------------------
+  // As VS Code picks them: the file name, then its extensions (longest first: "test.js" before "js"),
+  // then the language VS Code gives the extension, else the plain file icon. Coloured for the theme.
+  const LANG = {
+    py: "python", pyi: "python", pyw: "python", js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascriptreact",
+    ts: "typescript", mts: "typescript", cts: "typescript", tsx: "typescriptreact", json: "json", jsonc: "jsonc", jsonl: "jsonl",
+    webmanifest: "json", "code-workspace": "jsonc", md: "markdown", mdx: "markdown", markdown: "markdown", mkd: "markdown",
+    sh: "shellscript", bash: "shellscript", zsh: "shellscript", ksh: "shellscript", bashrc: "shellscript", zshrc: "shellscript",
+    bash_profile: "shellscript", profile: "shellscript", yml: "yaml", yaml: "yaml", html: "html", htm: "html", xhtml: "html",
+    css: "css", scss: "scss", less: "less", xml: "xml", xsd: "xml", xsl: "xml", plist: "xml", csproj: "xml", sql: "sql",
+    go: "go", rs: "rust", rb: "ruby", gemspec: "ruby", rake: "ruby", java: "java", c: "c", cpp: "cpp", cc: "cpp", cxx: "cpp",
+    "c++": "cpp", cs: "csharp", php: "php", swift: "swift", lua: "lua", dart: "dart", pl: "perl", pm: "perl",
+    clj: "clojure", cljs: "clojure", coffee: "coffeescript", fs: "fsharp", fsx: "fsharp", groovy: "groovy", jl: "julia",
+    tex: "latex", m: "objective-c", mm: "objective-cpp", bat: "bat", cmd: "bat", ps1: "powershell", psm1: "powershell",
+    psd1: "powershell", properties: "properties", dockerfile: "dockerfile", containerfile: "dockerfile", mk: "makefile",
+    hbs: "handlebars", handlebars: "handlebars", pug: "jade", env: "dotenv", gitignore: "ignore", ignore: "ignore",
+    cu: "cuda-cpp", erl: "erlang", ex: "elixir", hs: "haskell", tf: "terraform", vue: "vue", jinja: "jinja", j2: "jinja",
   };
-  const NAMES = { dockerfile: B("DK", "#2496ed"), makefile: B("MK", "#6d8086"), ".gitignore": B("GIT", "#f05032"), ".gitattributes": B("GIT", "#f05032"), license: B("©", "#c9a000"),
-    "readme.md": B("i", "#2b7bb9"), ".env": B("ENV", "#c9a800"), "package.json": B("NPM", "#cb3837"), "pyproject.toml": B("PY", "#3776ab"), "uv.lock": B("UV", "#de5fe9"), "claude.md": B("✳", "#d97757") };
-  const GLYPH = {
-    image: ["#26a69a", "M4 5h16v14H4zM8.5 9a1.5 1.5 0 1 0 0 .01M20 16l-5-5-8 8"],
-    audio: ["#e91e63", "M9 18V6l10-2v12M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3zM19 16a3 3 0 1 1-3-3 3 3 0 0 1 3 3z"],
-    video: ["#ff5722", "M3 6h13v12H3zM16 10l5-3v10l-5-3"],
-  };
-  const IMG = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "avif", "tif", "tiff"]), AUD = new Set(["mp3", "wav", "ogg", "flac", "m4a", "aac"]), VID = new Set(["mp4", "webm", "mov", "mkv", "avi"]);
+  const LANG_NAMES = { dockerfile: "dockerfile", containerfile: "dockerfile", makefile: "makefile", gnumakefile: "makefile",
+    "docker-compose.yml": "dockercompose", "docker-compose.yaml": "dockercompose", "compose.yml": "dockercompose", "compose.yaml": "dockercompose",
+    ".env": "dotenv", ".gitignore": "ignore", ".dockerignore": "ignore", gemfile: "ruby", rakefile: "ruby" };
+    const IMG = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "avif", "tif", "tiff"]), AUD = new Set(["mp3", "wav", "ogg", "flac", "m4a", "aac"]), VID = new Set(["mp4", "webm", "mov", "mkv", "avi"]);
   const FOLDER = { src: "#4f8fe8", lib: "#4f8fe8", app: "#4f8fe8", test: "#43a047", tests: "#43a047", spec: "#43a047", docs: "#2aa6d6", doc: "#2aa6d6", ".git": "#f05032", ".github": "#6d8086",
     node_modules: "#7cb342", static: "#fb8c00", public: "#fb8c00", assets: "#fb8c00", images: "#26a69a", data: "#8e5cc8", scripts: "#3d9a2c", bin: "#3d9a2c", config: "#6d8086", ".venv": "#3776ab", venv: "#3776ab", dist: "#a67c00", build: "#a67c00" };
+  function setiIcon(lower) {
+    const T = window.SETI;
+    if (!T) return null;
+    let id = T.n[lower];
+    if (!id) {
+      const parts = lower.split(".");  // ".bashrc" → ["", "bashrc"]: its extension is "bashrc", as in VS Code
+      for (let i = 1; i < parts.length && !id; i++) id = T.e[parts.slice(i).join(".")];
+    }
+    if (!id) {
+      const lang = LANG_NAMES[lower] || (lower.startsWith(".env") ? "dotenv" : "") || (lower.includes(".") ? LANG[lower.slice(lower.lastIndexOf(".") + 1)] : "");
+      id = lang && T.l[lang];
+    }
+    return T.d[id] || T.d[T.f];
+  }
   W.fileIcon = (name, dir, size = 16, open = false) => {
     const lower = name.toLowerCase();
     if (dir) {
@@ -56,15 +67,9 @@ window.WSP = window.WSP || {};
         ? `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v1H8.5a2 2 0 0 0-1.9 1.4L4 19H5a2 2 0 0 1-2-2z" fill="${c}" opacity=".7"/><path d="M6.6 11.4A2 2 0 0 1 8.5 10H22l-2.6 8.2A2 2 0 0 1 17.5 20H4z" fill="${c}"/>`
         : `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="${c}"/>`}</svg>`;
     }
-    const ext = lower.includes(".") ? lower.slice(lower.lastIndexOf(".") + 1) : "";
-    const g = IMG.has(ext) ? GLYPH.image : AUD.has(ext) ? GLYPH.audio : VID.has(ext) ? GLYPH.video : null;
-    if (g) return `<svg class="fico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${g[0]}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${g[1]}"/></svg>`;
-    const b = NAMES[lower] || (lower.startsWith(".env") ? NAMES[".env"] : null) || EXT[ext] || (lower.startsWith("readme") ? NAMES["readme.md"] : null);
-    if (!b) return `<svg class="fico fdoc" width="${size}" height="${size}" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 1h6.3L13.8 5.3v8.9c0 .5-.4.8-.8.8H3.2c-.5 0-.8-.3-.8-.8V1.8c0-.5.3-.8.8-.8z" fill="#8a94a3" fill-opacity=".85"/><path d="M9.5 1v3.5c0 .5.3.8.8.8h3.5z" fill="#fff" fill-opacity=".45"/><path d="M5 8.5h6M5 10.5h6M5 12.5h4" stroke="#fff" stroke-width=".9" stroke-opacity=".8"/></svg>`;
-    // A coloured page with a folded corner and the type's short name: the look of VS Code icon themes.
-    const n = b.label.length, fs = n <= 1 ? 7.4 : n === 2 ? 6.4 : 4.9;
-    return `<svg class="fico fdoc" width="${size}" height="${size}" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 1h6.3L13.8 5.3v8.9c0 .5-.4.8-.8.8H3.2c-.5 0-.8-.3-.8-.8V1.8c0-.5.3-.8.8-.8z" fill="${b.color}"/>`
-      + `<path d="M9.5 1v3.5c0 .5.3.8.8.8h3.5z" fill="#fff" fill-opacity=".45"/><text x="8.1" y="${n <= 2 ? 12.6 : 12.2}" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-weight="800" font-size="${fs}" fill="#fff" letter-spacing="-.2">${esc(b.label)}</text></svg>`;
+    const [ch, dark, light] = setiIcon(lower) || ["e023", "#d4d7d6", "#bfc2c1"];
+    // The glyphs are drawn at 150% of the row's text in VS Code, centred in the icon's box.
+    return `<span class="fico seti" style="--sd:${dark};--sl:${light};width:${size}px;height:${size}px;font-size:${Math.round(size * 1.5)}px" aria-hidden="true">&#x${ch};</span>`;
   };
   const KIND = { py: "python", js: "javascript", mjs: "javascript", jsx: "javascript", ts: "typescript", tsx: "typescript", json: "json", ipynb: "json", md: "markdown", mdx: "markdown",
     html: "html", htm: "html", vue: "html", svelte: "html", xml: "xml", css: "css", scss: "css", less: "css", sh: "shell", bash: "shell", zsh: "shell", toml: "toml", ini: "toml", cfg: "toml", env: "env",
