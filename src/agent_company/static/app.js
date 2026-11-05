@@ -61,6 +61,7 @@ const ROLE_ICON = { general_manager: "general_manager", architect: "architect", 
 const ib = (name, label, attrs = "", cls = "") => `<button type="button" class="btn icon ${cls}" title="${esc(label)}" aria-label="${esc(label)}" ${attrs}>${icon(name, 16)}</button>`;
 const icon = (name, size = 20) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${P[name] || P.specialist}"/></svg>`;
 const roleIcon = (role) => icon(ROLE_ICON[role] || "specialist");
+const STOP_SCOPE = { E0: "an executor", E1: "an agent", E2: "a goal", E3: "a project", E4: "a room", E5: "the whole company" };  // governance.LEVELS
 const GOAL_ACTIVE = ["queued", "planning", "running", "recovering", "paused"];  // workflow.ACTIVE
 const pill = (s) => `<span class="pill ${esc(s)}">${esc(String(s).replace(/_/g, " "))}</span>`;
 
@@ -195,8 +196,8 @@ async function boot() {
   connectLive();
 }
 // --- rail: two groups (top, bottom) in the order an administrator set (Settings → Navigation) -----------
-const NAV_DEFAULT = { top: ["dashboard", "projects", "agents", "models", "evolution", "research", "performance"],
-  bottom: ["workspace", "files", "machines", "notifications", "audit", "system", "settings", "users"] };
+const NAV_DEFAULT = { top: ["dashboard", "projects", "agents", "models", "evolution", "research", "knowledge", "performance"],
+  bottom: ["workspace", "files", "machines", "notifications", "security", "audit", "system", "settings", "users"] };
 let navLayout = null, railEditing = false;
 function navGroups() {
   const lay = navLayout && (navLayout.top || navLayout.bottom) ? navLayout : NAV_DEFAULT;
@@ -271,7 +272,9 @@ async function updateBadges() {
     if (o.build && BUILD && o.build !== BUILD) newBuild = true;  // reloaded on the next page switch
     badges = { users: o.pending_users || 0, notifications: o.unread || 0, projects: (o.pending_proposals || 0) + (o.goals.awaiting_approval || 0) + (o.goals.running || 0) };
     const es = $("#estop");
-    if (es) { es.classList.toggle("on", !!o.stopped); es.title = o.stopped ? "A stop is active: open System to see or lift it" : "Emergency stop: stop all autonomous work now"; }
+    if (es) { es.classList.toggle("on", !!o.stopped); es.title = o.stopped ? `A stop is active (${o.stop_level}): open System to see or lift it` : "Emergency stop: stop all autonomous work now"; }
+    const sl = $("#stop-level");  // S15-R-01: every user sees that work is stopped, and how widely
+    if (sl) { sl.hidden = !o.stop_level; sl.textContent = o.stop_level ? `${o.stop_level} stop` : ""; sl.title = o.stop_level ? `${o.stop_level} stop active (${STOP_SCOPE[o.stop_level]}): autonomous work is ${o.stop_level === "E5" ? "stopped company-wide" : "partly stopped"}` : ""; }
     renderRail(); setFavicon(o);
   } catch { /* signed out */ }
 }
@@ -402,8 +405,9 @@ async function goalDetail(id, openIds = new Set()) {
     GOAL_ACTIVE.includes(g.status) && g.status !== "paused" && me.is_admin ? ib("pause", "Pause the goal (tasks already started finish)", 'data-act="pause"') : "",
     g.status === "paused" && me.is_admin ? ib("play", "Resume the goal from its checkpoint", 'data-act="resume"', "primary") : "",
     GOAL_ACTIVE.includes(g.status) ? ib("stop", "Cancel the goal", 'data-act="cancel"', "danger") : "",
+    ib("clock", "Execution trace: every run, gate and operation in order", 'data-trace="1"'),
   ].join("");
-  $("#goal-detail").innerHTML = `<div class="row"><h2 class="grow" style="margin:0">#${g.id} ${esc(g.title)}</h2>${pill(g.status)}${actions}</div>
+  $("#goal-detail").innerHTML = `<div class="row" style="padding-right:24px"><h2 class="grow" style="margin:0">#${g.id} ${esc(g.title)}</h2>${pill(g.status)}${actions}</div>
     <p class="muted">Iteration ${g.iteration}/${g.max_iterations} · branch <code>${esc(g.branch || "-")}</code> · worktree <code>${esc(g.worktree || "-")}</code>${g.estimated_cost_usd ? ` · estimate ${money(g.estimated_cost_usd)}` : ""}</p>
     ${g.status === "paused" && g.paused_for ? `<p class="muted">${g.paused_for === "cost_overrun" ? "Paused: it cost more than twice its estimate. Resuming accepts the cost so far as the new estimate." : "Paused: its budget is used up. Raise the goal budget (Settings) before resuming."}</p>` : ""}
     ${g.result ? `<pre>${esc(g.result)}</pre>` : ""}
@@ -428,9 +432,34 @@ async function goalDetail(id, openIds = new Set()) {
     if (note === null) return;
     try { await api(`/api/decisions/${b.dataset.dec}/decide`, { method: "POST", body: { approve, note } }); goalDetail(id, openIds); } catch (err) { toast(err.message); }
   }));
+  $("#goal-detail").querySelector("[data-trace]").onclick = () => goalTrace(id).catch((err) => toast(err.message));
   $("#goal-detail").querySelectorAll("[data-act]").forEach((b) => (b.onclick = async () => {
     try { await api(`/api/goals/${id}/${b.dataset.act}`, { method: "POST" }); toast(`Goal ${b.dataset.act}d`); goalDetail(id); } catch (err) { toast(err.message); }
   }));
+}
+
+// The execution trace of a goal (S15-R-04, S04-R-12): workflow, runs, gates, decisions and operations on one
+// time line, with totals per agent and model.
+async function goalTrace(id) {
+  const t = await api(`/api/goals/${id}/trace`);
+  const tasks = Object.fromEntries(t.tasks.map((x) => [x.id, x]));
+  const rows = [
+    ...t.transitions.map((x) => ({ at: x.at, k: "workflow", cls: "", text: `${x.from.replace(/_/g, " ")} → ${x.to.replace(/_/g, " ")}${x.reason ? ` · ${x.reason}` : ""}`, who: x.actor })),
+    ...t.tasks.filter((x) => x.started_at).map((x) => ({ at: x.started_at, k: "task", cls: "", text: `#${x.id} ${x.title} (${x.role}, iteration ${x.iteration})`, who: x.agent || "" })),
+    ...t.tasks.filter((x) => x.finished_at).map((x) => ({ at: x.finished_at, k: x.status, cls: x.status === "done" ? "done" : x.status === "failed" ? "failed" : "", text: `#${x.id} ${x.title}${x.files.length ? ` · ${x.files.length} file(s)` : ""}${x.commit ? ` · ${x.commit.slice(0, 10)}` : ""}`, who: x.agent || "" })),
+    ...t.runs.map((r) => ({ at: r.at, k: "run", cls: r.ok ? "" : "failed", text: `${r.purpose} via ${r.executor} · ${r.model || "-"} · ${r.duration}s · ${fmt.format(r.tokens)} tokens · ${money(r.cost)}${r.task_id && tasks[r.task_id] ? ` · task #${r.task_id}` : ""}${r.ok ? "" : ` · ${r.error}`}`, who: r.agent || "" })),
+    ...t.gates.map((x) => ({ at: x.at, k: "gate", cls: x.passed ? "done" : "failed", text: `${x.message}${(x.checks || []).length ? ": " + x.checks.map((c) => `${c.passed ? "✓" : "✗"} ${c.check}`).join(" · ") : ""}`, who: "" })),
+    ...t.decisions.map((d) => ({ at: d.created_at || d.at, k: "decision", cls: "", text: `#${d.id} ${d.topic}: ${d.status}`, who: d.approver || "" })),
+    ...t.operations.map((o) => ({ at: o.at, k: "operation", cls: o.status === "done" ? "done" : "", text: `${o.key.split(":").slice(2).join(":")} ${o.status}`, who: "" })),
+  ].filter((r) => r.at).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const by = {};
+  t.runs.forEach((r) => { const key = `${r.agent || "?"} · ${r.model || "-"}`; const x = (by[key] ||= { runs: 0, failed: 0, tokens: 0, cost: 0, sec: 0 }); x.runs++; x.failed += r.ok ? 0 : 1; x.tokens += r.tokens; x.cost += r.cost; x.sec += r.duration; });
+  const time = (iso) => new Date(iso + (iso.endsWith("Z") || iso.includes("+") ? "" : "Z")).toLocaleTimeString();
+  $("#goal-detail").innerHTML = `<div class="row" style="padding-right:24px"><button class="btn icon" id="trace-back" title="Back to the goal" aria-label="Back to the goal">${icon("up", 16)}</button><h2 class="grow" style="margin:0">Trace · #${t.goal.id} ${esc(t.goal.title)}</h2>${pill(t.goal.status)}</div>
+    <p class="muted">${t.runs.length} run(s) · ${t.gates.length} gate result(s) · ${t.operations.length} operation(s) · ${money(t.runs.reduce((n, r) => n + r.cost, 0))}</p>
+    ${Object.keys(by).length ? `<div class="table-wrap"><table><tr><th>Agent · model</th><th class="num">Runs</th><th class="num">Failed</th><th class="num">Tokens</th><th class="num">Seconds</th><th class="num">Cost</th></tr>${Object.entries(by).map(([key, x]) => `<tr><td>${esc(key)}</td><td class="num">${x.runs}</td><td class="num">${x.failed}</td><td class="num">${fmt.format(x.tokens)}</td><td class="num">${x.sec.toFixed(1)}</td><td class="num">${money(x.cost)}</td></tr>`).join("")}</table></div>` : ""}
+    <h3>Time line</h3><div class="events">${rows.map((r) => `<div><span class="muted mono">${time(r.at)}</span> <span class="pill ${r.cls}">${esc(r.k)}</span> ${esc(r.text)}${r.who ? ` <span class="muted">${esc(r.who)}</span>` : ""}</div>`).join("") || '<span class="muted">Nothing recorded yet.</span>'}</div>`;
+  $("#trace-back").onclick = () => goalDetail(id);
 }
 
 // --- research -------------------------------------------------------------------

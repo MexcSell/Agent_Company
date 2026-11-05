@@ -89,35 +89,11 @@ async function viewSettings(quiet) {
 }
 
 async function viewAudit() {
-  const [a, inc] = await Promise.all([api("/api/audit"), api("/api/incidents")]);
-  const open = inc.items.filter((i) => i.status !== "closed");
-  const next = (s) => inc.flow[inc.flow.indexOf(s) + 1];
-  $("#view").innerHTML = `<div class="card" style="margin-bottom:12px"><div class="row"><h2 class="grow" style="margin:0">Security incidents</h2><span class="muted">${open.length} open · ${inc.items.length} total</span>${ib("plus", "Open an incident", 'id="inc-new"')}</div>
-    <p class="muted" style="margin:4px 0 8px">Opened by the behaviour rules (credentials in a change, writes outside a worktree, repeated refused commands) or by an administrator. An incident moves forward only (${inc.flow.join(" → ")}); closing needs a root cause and a remediation note, and becomes a lesson for the agent.</p>
-    ${inc.items.length ? `<div class="table-wrap"><table><tr><th>#</th><th>When</th><th>Severity</th><th>Category</th><th>Title</th><th>Goal</th><th>Status</th><th></th></tr>
-    ${inc.items.map((i) => `<tr><td class="num">${i.id}</td><td>${ago(i.at)}</td><td><span class="pill ${i.severity <= "SEV-2" ? "failed" : "pending"}">${esc(i.severity)}</span></td><td>${esc(i.category.replaceAll("_", " "))}</td><td>${esc(i.title)}${i.rule ? ` <span class="muted">(rule ${esc(i.rule)})</span>` : ""}</td><td>${i.goal_id ? `#${i.goal_id}` : ""}</td><td>${pill(i.status)}</td>
-      <td class="nowrap">${i.status !== "closed" ? `<button class="btn" data-inc-next="${i.id}" data-to="${next(i.status)}">${esc(next(i.status))}</button>${i.agent_id ? `<button class="btn" data-inc-contain="${i.id}" data-how="pause_agent">Pause agent</button>` : ""}${i.goal_id ? `<button class="btn" data-inc-contain="${i.id}" data-how="cancel_goal">Cancel goal</button>` : ""}` : `<span class="muted">${esc(i.root_cause.slice(0, 80))}</span>`}</td></tr>`).join("")}</table></div>` : '<span class="muted">No incidents.</span>'}</div>
-    <div class="card"><div class="row"><h2 class="grow" style="margin:0">Audit log</h2>${a.chain.ok ? pill("ok") + `<span class="muted">hash chain intact over ${a.chain.records} record(s)</span>` : `<span class="pill failed">chain broken at #${a.chain.broken_at}</span>`}</div>
+  const a = await api("/api/audit");
+  $("#view").innerHTML = `<div class="card"><div class="row"><h2 class="grow" style="margin:0">Audit log</h2>${a.chain.ok ? pill("ok") + `<span class="muted">hash chain intact over ${a.chain.records} record(s)</span>` : `<span class="pill failed">chain broken at #${a.chain.broken_at}</span>`}<button class="btn keep-text" id="audit-sec">Security incidents</button></div>
     <div class="table-wrap" style="margin-top:8px"><table><tr><th>#</th><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Change</th><th>Hash</th></tr>
     ${a.records.map((r) => `<tr><td class="num">${r.id}</td><td>${ago(r.created_at)}</td><td>${esc(r.actor)}</td><td>${r.severity === "high" ? '<span class="pill failed">high</span> ' : ""}${esc(r.action)}</td><td>${esc(r.target)}</td><td class="mono">${esc(JSON.stringify(r.after))}</td><td class="mono muted">${esc(r.hash)}</td></tr>`).join("")}</table></div></div>`;
-  const send = async (id, body) => { try { await api(`/api/incidents/${id}`, { method: "POST", body }); viewAudit(); } catch (e) { toast(e.message); } };
-  document.querySelectorAll("[data-inc-next]").forEach((b) => (b.onclick = () => {
-    const to = b.dataset.to;
-    if (to === "closed") {
-      const root_cause = prompt("Root cause of the incident?"); if (!root_cause) return;
-      const note = prompt("Remediation: what was done so it does not happen again?"); if (!note) return;
-      return send(b.dataset.incNext, { status: to, root_cause, note });
-    }
-    send(b.dataset.incNext, { status: to, note: prompt(`Note for "${to}" (optional)`) || "" });
-  }));
-  document.querySelectorAll("[data-inc-contain]").forEach((b) => (b.onclick = () => { if (confirm(`${b.textContent} as containment?`)) send(b.dataset.incContain, { contain: b.dataset.how }); }));
-  $("#inc-new").onclick = async () => {
-    const title = prompt("Incident title"); if (!title) return;
-    const category = prompt(`Category (${inc.categories.join(", ")})`, "policy_violation"); if (!category) return;
-    const severity = prompt("Severity (SEV-1 worst … SEV-4)", "SEV-3") || "SEV-3";
-    const goal = prompt("Goal id it concerns (optional)") || "";
-    try { await api("/api/incidents", { method: "POST", body: { title, category, severity, goal_id: goal ? Number(goal) : null } }); viewAudit(); } catch (e) { toast(e.message); }
-  };
+  $("#audit-sec").onclick = () => show("security");  // incidents moved to the Security view (S15-R-03)
 }
 
 async function viewEvolution() {

@@ -111,3 +111,45 @@ def test_settings_notifications_and_audit_api():
         assert app.get("/api/overview").json()["unread"] >= 1
         app.post("/api/notifications/read")
         assert app.get("/api/notifications").json()["unread"] == 0
+
+
+def test_security_view_counts_refusals_per_agent_and_orders_incidents():
+    from sqlalchemy import select
+
+    from agent_company.db import Agent
+
+    with session() as s:
+        dev = s.scalars(select(Agent).where(Agent.role == "developer")).first().id
+    g = loop.create_goal("refusals")
+    for _ in range(2):
+        governance.on_command_refused(g, dev, "sudo rm -rf /", "privilege escalation")
+    low = governance.open_incident("policy_violation", "SEV-4", "minor", "user:admin")
+    bad = governance.open_incident("data_leakage", "SEV-1", "leak", "user:admin")
+    governance.update_incident(low["id"], "user:admin", status="contained")
+    governance.security_alert("Something odd", "detail", g, dev, "test_rule")
+    out = governance.security_summary()
+    assert out["refused"][0]["agent_id"] == dev and out["refused"][0]["count"] == 2 and out["refused"][0]["goals"] == 1
+    assert [i["id"] for i in out["incidents"]][:2] == [bad["id"], low["id"]], "worst severity first"
+    assert any(a["title"] == "Something odd" for a in out["alerts"]) and out["open"] == 2
+    assert out["level"] is None and out["stops"] == []
+
+
+def test_every_user_sees_the_stop_level_but_only_admins_see_the_details():
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
+        app.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
+        guest_secret = secrets.token_urlsafe(32)
+        other = TestClient(app.app)
+        uid = other.post("/api/auth/register", json={"name": "guest", "device_secret": guest_secret}).json()["user"]["id"]
+        app.post(f"/api/users/{uid}/approve")
+        other.post("/api/auth/device", json={"device_secret": guest_secret})
+        assert other.get("/api/overview").json()["stop_level"] is None
+        governance.stop("E3", 7, "user:admin", "maintenance")
+        governance.stop("E1", 3, "user:admin", "odd agent")
+        o = other.get("/api/overview").json()
+        assert o["stop_level"] == "E3" and o["stopped"] is False
+        assert other.get("/api/security").status_code == 403
+        sec = app.get("/api/security").json()
+        assert sec["level"] == "E3" and {x["level"] for x in sec["stops"]} == {"E1", "E3"}
+        governance.set_emergency(True, "user:admin", "drill")
+        assert other.get("/api/overview").json()["stop_level"] == "E5"
+        assert app.get("/api/security").json()["stops"][0]["level"] == "E5"

@@ -253,6 +253,22 @@ class Lesson(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class KgEdge(Base):
+    """An edge of the knowledge graph (SPEC-11 S11-R-07); for now CONTRADICTS and SUPERSEDES between knowledge
+    items. `evidence` holds why the edge exists and, for a contradiction, its review state and resolution."""
+
+    __tablename__ = "kg_edges"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    src_type: Mapped[str] = mapped_column(String(16))  # agent|project|goal|task|knowledge|source|decision|...
+    src_id: Mapped[str] = mapped_column(String(64), index=True)
+    rel: Mapped[str] = mapped_column(String(24), index=True)  # CONTRADICTS|SUPERSEDES|...
+    dst_type: Mapped[str] = mapped_column(String(16))
+    dst_id: Mapped[str] = mapped_column(String(64), index=True)
+    weight: Mapped[float] = mapped_column(Float, default=1.0)
+    evidence: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class ModelEntry(Base):
     __tablename__ = "models"
     id: Mapped[int] = mapped_column(primary_key=True)

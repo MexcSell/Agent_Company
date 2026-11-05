@@ -17,8 +17,8 @@ graph is an edge table and search is SQLite FTS5. Revisit only if retrieval eval
 
 ## Specific requirements
 
-Status (2026-11-05): S11-R-01 done · S11-R-02 open · S11-R-03 partial · S11-R-04 open · S11-R-05 done ·
-S11-R-06 partial · S11-R-07 open · S11-R-08 open.
+Status (2026-11-05): S11-R-01 done · S11-R-02 open · S11-R-03 partial · S11-R-04 done · S11-R-05 done ·
+S11-R-06 done · S11-R-07 partial · S11-R-08 open.
 
 ### S11-R-01 Knowledge items with type, evidence class and provenance — §3.1, §6.1
 - Extend `lessons` (via `_add_missing_columns`) or add `knowledge` with: `type`
@@ -57,8 +57,8 @@ S11-R-06 partial · S11-R-07 open · S11-R-08 open.
   their source goal IDs.
 - **Status: partial.** Done: scope filter before ranking, ranking by task-term coverage + who learned
   it + recency, K-number and source goal per item, wrapped as data, retrieval logged; the acceptance
-  tests above pass (`tests/test_knowledge.py`). Open: FTS5, weights as settings, the contradiction
-  penalty, research documents and project standards in the package.
+  tests above pass (`tests/test_knowledge.py`). Open: FTS5, weights as settings, research
+  documents and project standards in the package. The contradiction penalty is done (S11-R-04).
 
 ### S11-R-04 Contradiction handling — §6.3
 - When a new item states the opposite of an approved one on the same subject (same technology +
@@ -66,6 +66,14 @@ S11-R-06 partial · S11-R-07 open · S11-R-08 open.
   review is queued (the instructor or a reviewer of a different provider). The resolution and its
   rationale are recorded; nothing is silently overwritten.
 - Acceptance: KT-006.
+- **Status: done** (`learning._link_contradictions`, `contradictions`, `resolve`). Without a model call the
+  lesson step judges "the opposite" deterministically: a technology in common, at least half of the terms shared
+  (Jaccard, negation words left out) and a negation (*not, never, avoid, without, don't* …) in exactly one of the
+  two; lessons of the same goal are progress, not contradiction. A pair gets a `CONTRADICTS` edge in `kg_edges`
+  and an administrator notification; both items stay approved but lose 1.0 in ranking and are marked *disputed
+  by K…* in prompts. A person resolves it in the Knowledge view (*older holds*, *both hold*, *newer holds*, with a
+  required rationale); the losing item is rejected with the reason, the edge keeps the resolution. A model judge
+  (the instructor) is open.
 
 ### S11-R-05 Memory-poisoning protection — §10.4
 - Before storing: secret scan (reuse `checks.scan_secrets` patterns) → quarantine on hit (KT-016);
@@ -81,8 +89,10 @@ S11-R-06 partial · S11-R-07 open · S11-R-08 open.
 ### S11-R-06 Lifecycle: versioning, expiry, deletion — §10.3
 - New versions supersede old ones (KT-013); items past `review_due_at` drop out of retrieval
   until reviewed (KT-014); deletion removes the item, its FTS row and graph edges (KT-015).
-- **Status: partial:** review dates done (`learning.expire_due`, run by the evolution cycle, rebuilds
-  playbooks); superseding versions and deletion are open.
+- **Status: done:** review dates (`learning.expire_due`, run by the evolution cycle, rebuilds playbooks);
+  `learning.supersede` writes version n+1 with `supersedes_id`, a `SUPERSEDES` edge and the old item's sources
+  plus `knowledge:<old id>`, the old item becomes `superseded` and leaves retrieval; `learning.delete` removes the
+  item and every edge naming it. Both rebuild the agent's playbook. There is no FTS row yet (S11-R-03).
 
 ### S11-R-07 Knowledge graph (edge table) — §7
 - Table `kg_edges`: `src_type`, `src_id`, `rel`, `dst_type`, `dst_id`, `weight`, `evidence`,
@@ -94,6 +104,8 @@ S11-R-06 partial · S11-R-07 open · S11-R-08 open.
   `ASSIGNED_TO`; decision → `SUPPORTS` evidence). `relationships` stays the agent-agent store.
 - API `GET /api/knowledge/graph?entity=type:id&depth=2` (paginated, KT-019); a graph view in the
   dashboard is `open` (P2).
+- **Status: partial:** the `kg_edges` table exists with these columns; only `CONTRADICTS` and `SUPERSEDES`
+  between knowledge items are written. The other relations, the side effects and the graph API are open.
 
 ### S11-R-08 Retrieval evaluation — §8.3, KT-023
 - A small eval set (`evals/retrieval.json`: task → expected knowledge IDs) and a metric

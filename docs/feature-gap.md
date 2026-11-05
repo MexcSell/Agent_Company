@@ -102,16 +102,18 @@ Machines code):
 | Quality gates as named stages; an open critical defect blocks the merge | ASEAO09 §13 | done (`quality.stages`, S09-R-01) |
 | Test-strategy selection by test category and risk | ASEAO09 §6-7 | open → S09-R-02 |
 | Innovation experiments, portfolio and technology radar | ASEAO10 §10-14, §21 | open → S10-R-02, S10-G-01..G-06 |
-| Knowledge graph of agents, projects, technologies and lessons | SPEC11 §7, 1.txt (Neo4j) | open → S11-R-07 |
-| Knowledge items with provenance; task-relevant, project-scoped retrieval | SPEC11 §3, §8 | done / partial (`learning.retrieve`; FTS5 and contradiction penalty open) → S11-R-01, S11-R-03 |
-| Contradiction handling between stored lessons | SPEC11 §6.3 | open → S11-R-04 |
+| Knowledge graph of agents, projects, technologies and lessons | SPEC11 §7, 1.txt (Neo4j) | partial (`kg_edges` table; only contradiction and supersede edges so far) → S11-R-07 |
+| Knowledge items with provenance; task-relevant, project-scoped retrieval | SPEC11 §3, §8 | done / partial (`learning.retrieve` with the contradiction penalty; FTS5 open) → S11-R-01, S11-R-03 |
+| Contradiction handling between stored lessons | SPEC11 §6.3 | done (`CONTRADICTS` edges, people resolve with a rationale, S11-R-04) |
+| Knowledge versions (supersede) and deletion with their links | SPEC11 §10.3 | done (`learning.supersede`, `delete`, S11-R-06) |
+| Dashboard: Knowledge view (search, review queue, contradictions side by side), Security view (stops, incidents, refused commands per agent, alerts), goal trace, stop level for every user | SPEC-15 | done (`static/knowledge.js`, `static/security.js`, S15-R-01..R-04) |
 | Memory-poisoning protection for learned lessons | SPEC11 §10.4 | done (`learning.screen`, people review, S11-R-05) |
 | Agent mentoring and knowledge transfer | SPEC12 §9 | open → S12-R-04 |
 | Collaboration recommendation with bias and reputation-manipulation protection | SPEC12 §11, §18 | open → S12-R-03, S12-R-06 |
 | Autonomous learning planner and training-exercise generator | SPEC13 §6, §8 | open → S13-R-01, S13-R-02 |
 | A/B testing of playbook or model changes | SPEC13 §10.4 | partial (a candidate must pass the smoke suite against the current playbook before its live trial, S13-D-02; promotion needs a clear improvement, S13-D-01) → S13-R-05 |
 | Agent behaviour monitoring with deterministic rules | SPEC14 §10 | done (six rules, cost-vs-estimate included, S14-R-03) |
-| Security incident records and response | SPEC14 §11 | done (`incidents`, Audit view, S14-R-04) |
+| Security incident records and response | SPEC14 §11 | done (`incidents`, Security view, S14-R-04) |
 | Emergency shutdown with levels E0-E5 (executor, agent, goal, project, room, company), CLI and top-bar control | SPEC14 §12 | done (`governance.stop`, `python -m agent_company stop`, S14-R-01) |
 | Autonomy levels and action classification | SPEC14 §13 | partial (agents cannot approve authority-raising proposals; autonomy levels open) → S14-R-02 |
 | Information classification and data-handling rules | SPEC14 §5 | partial (projects and lessons; uploads, documents, model rule open) → S14-R-05 |

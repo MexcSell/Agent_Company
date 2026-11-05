@@ -375,6 +375,16 @@ class DecideBody(BaseModel):
     note: str = Field(default="", max_length=2000)
 
 
+class SupersedeBody(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+    note: str = Field(default="", max_length=1000)
+
+
+class ResolveBody(BaseModel):
+    resolution: str  # learning.RESOLUTIONS
+    rationale: str = Field(min_length=1, max_length=2000)
+
+
 class IncidentUpdateBody(BaseModel):
     status: str | None = None
     note: str = Field(default="", max_length=2000)
@@ -617,7 +627,8 @@ def create_app(start_background: bool = True) -> FastAPI:
         return {"goals": by_status, "agents": agents, "pending_users": pending, "documents": docs,
                 "usage": usage.summary()["totals"], "unread": governance.unread_count(user),
                 "pending_proposals": proposals, "build": static_build(),
-                "stopped": (bool(governance.emergency()) or bool(governance.stops())) if user["is_admin"] else False}
+                "stopped": (bool(governance.emergency()) or bool(governance.stops())) if user["is_admin"] else False,
+                "stop_level": governance.stop_level()}  # every user sees the level (S15-R-01), not its scope
 
     # --- agents ---
     @app.get("/api/rooms")
@@ -1364,9 +1375,38 @@ def create_app(start_background: bool = True) -> FastAPI:
 
     # --- knowledge items (SPEC-11): lessons with provenance; people review, agents never do ---
     @app.get("/api/knowledge")
-    def knowledge_list(status: str = "", agent_id: int | None = None, _: dict[str, Any] = Depends(admin_user)
-                       ) -> list[dict[str, Any]]:
-        return learning.knowledge(status, agent_id)
+    def knowledge_list(status: str = "", agent_id: int | None = None, q: str = "", kind: str = "",
+                       limit: int = 200, _: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
+        return learning.knowledge(status, agent_id, max(1, min(limit, 1000)), q, kind)
+
+    @app.get("/api/knowledge/contradictions")
+    def knowledge_contradictions(state: str = "open", _: dict[str, Any] = Depends(admin_user)
+                                 ) -> list[dict[str, Any]]:
+        return learning.contradictions(state)
+
+    @app.post("/api/knowledge/contradictions/{edge_id}/resolve")
+    def knowledge_resolve(edge_id: int, body: ResolveBody, admin: dict[str, Any] = Depends(admin_user)
+                          ) -> dict[str, Any]:
+        out = learning.resolve(edge_id, body.resolution, f"user:{admin['name']}", body.rationale)
+        _audit(admin, "knowledge_resolve", f"contradiction {edge_id}", after={"resolution": body.resolution})
+        return out
+
+    @app.get("/api/knowledge/{item_id}")
+    def knowledge_item(item_id: int, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return learning.item(item_id)
+
+    @app.post("/api/knowledge/{item_id}/supersede")
+    def knowledge_supersede(item_id: int, body: SupersedeBody, admin: dict[str, Any] = Depends(admin_user)
+                            ) -> dict[str, Any]:
+        out = learning.supersede(item_id, body.text, f"user:{admin['name']}", body.note)
+        _audit(admin, "knowledge_supersede", item_id, after={"new": out["id"], "status": out["status"]})
+        return out
+
+    @app.delete("/api/knowledge/{item_id}")
+    def knowledge_delete(item_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = learning.delete(item_id)
+        _audit(admin, "knowledge_delete", item_id, after=out, severity="high")
+        return out
 
     @app.post("/api/knowledge/{item_id}/review")
     def knowledge_review(item_id: int, body: DecideBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
@@ -2061,7 +2101,11 @@ def create_app(start_background: bool = True) -> FastAPI:
         except KeyError as e:
             raise HTTPException(404, str(e).strip("'")) from e
 
-    # --- security incidents (S14-R-04) ---
+    # --- security view (SPEC-15 S15-R-03) and incidents (S14-R-04) ---
+    @app.get("/api/security")
+    def security(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return governance.security_summary()
+
     @app.get("/api/incidents")
     def incidents_list(status: str = "", _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         return {"items": governance.list_incidents(status), "categories": governance.INCIDENT_CATEGORIES,

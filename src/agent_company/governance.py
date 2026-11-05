@@ -464,6 +464,42 @@ def security_alert(title: str, body: str = "", goal_id: int | None = None, agent
         log_event("security", title, goal_id=goal_id, agent_id=agent_id, s=s, rule=rule)
 
 
+def stop_level() -> str | None:
+    """The widest active stop (E5 … E0), or None: shown to every user (SPEC-15 S15-R-01), without its scope."""
+    active = ({"E5"} if emergency() else set()) | {x["level"] for x in stops()}
+    return max(active, key=lambda lv: int(lv[1])) if active else None
+
+
+def security_summary(alerts: int = 50) -> dict[str, Any]:
+    """The Security view (SPEC-15 S15-R-03): incidents (open first, worst severity first), recent security
+    alerts, refused commands per agent, active stops."""
+    from agent_company.db import Agent, Event
+
+    items = sorted(list_incidents(), key=lambda i: (i["status"] == "closed", i["severity"], -i["id"]))
+    with session() as s:
+        names = dict(s.execute(select(Agent.id, Agent.name)).all())
+        rows = s.execute(select(Event.agent_id, func.count(), func.count(func.distinct(Event.goal_id)),
+                                func.max(Event.created_at))
+                         .where(Event.kind == "command_refused").group_by(Event.agent_id)).all()
+        refused = sorted(({"agent_id": a, "agent": names.get(a, "unknown") if a else "(no agent)", "count": n,
+                           "goals": g, "last_at": at.isoformat() if at else None} for a, n, g, at in rows),
+                         key=lambda r: -r["count"])
+        recent = [{"id": e.id, "agent": names.get(e.agent_id), "goal_id": e.goal_id, "message": e.message,
+                   "at": e.created_at.isoformat()}
+                  for e in s.scalars(select(Event).where(Event.kind == "command_refused")
+                                     .order_by(Event.id.desc()).limit(20))]
+        notes = [{"id": n.id, "level": n.level, "title": n.title, "body": n.body, "goal_id": n.goal_id,
+                  "at": n.created_at.isoformat()}
+                 for n in s.scalars(select(Notification).where(Notification.source == "security")
+                                    .order_by(Notification.id.desc()).limit(alerts))]
+    e5 = emergency()
+    return {"incidents": items, "flow": INCIDENT_FLOW, "categories": INCIDENT_CATEGORIES, "severities": SEVERITIES,
+            "open": sum(1 for i in items if i["status"] != "closed"),
+            "alerts": notes, "refused": refused, "recent_refusals": recent,
+            "stops": ([{"level": "E5", "scope": "company", **e5}] if e5 else []) + stops(),
+            "level": stop_level()}
+
+
 REFUSALS_BEFORE_PAUSE = 3
 
 
