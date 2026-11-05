@@ -117,6 +117,23 @@ push only on `/sync`. The 13 engineering teams (§3) are **gated** (CLAUDE.md).
 ### S08-R-05 Dependency control — §15 (AT-021, AT-022)
 - On merge, record new/changed dependencies; when `pip-audit`/`npm audit` are installed, run them
   as gate checks for changed manifests. SBOM generation: `open` (P2).
+- **Status: done** except the SBOM (`dependencies.py`: `changes`, `audit`, `check`, `on_merged`; setting
+  `dependency_audit` off|warn|block, a governance key; `tests/test_dependencies.py`). `changes` itemises every
+  manifest and lock file the change touched (requirements files, `pyproject.toml` with optional dependencies,
+  dependency groups and Poetry tables, `package.json`, `package-lock.json`, `uv.lock`, `poetry.lock`, `Cargo.toml`/
+  `.lock`, `go.mod`; other manifests count as changed without names) between the merge base and the tested commit,
+  both sides read from git objects; a manifest that is a symlink is recorded as such and never followed. The gate
+  (after the change boundaries, which still need `--permit dependencies`) runs `pip-audit -r <file> --no-deps
+  --disable-pip` on a changed pinned requirements file and on `uv export --frozen` of a `uv.lock` (the export
+  offline, never building the project), and `npm audit --package-lock-only` where a `package-lock.json` is; fixed
+  argument lists, the worktree read-only, in the L3 sandbox with network as the goal's sandbox mode allows. A known
+  vulnerability in a dependency the change added or changed fails a `dependency audit <tool> <dir>` row of the
+  `security` stage (a defect of severity high, so `warn` can unblock a goal whose advisory has no fix); one in an
+  untouched dependency is listed in the row and passes. An audit that cannot run (tool missing, unpinned
+  requirements, no lock file, no report, sandbox required and unavailable) adds a note, never a passing row. The
+  goal history keeps `dependencies` (changes and notes) per iteration, the goal page shows them, and the merge
+  logs the last iteration's changes as a `dependencies` event with the commit. An audit row is retested by the
+  next gate, not by the defect `retest` (S09-R-03), which re-runs command checks only.
 
 ### S08-R-06 Release candidates and rollback — §20 (AT-024..027) — gated
 - Agents never deploy (CLAUDE.md). Release candidates = approved merges with tag; rollback =

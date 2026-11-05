@@ -23,7 +23,7 @@ from typing import Any
 from sqlalchemy import select
 
 from agent_company import checks as checks_mod
-from agent_company import contracts, sandbox, strategies, teststrategy, worktrees
+from agent_company import contracts, dependencies, sandbox, strategies, teststrategy, worktrees
 from agent_company.config import settings
 from agent_company.db import Goal, Task, session
 
@@ -224,6 +224,7 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
 
     results: list[dict[str, Any]] = []
     feedback: list[str] = []
+    deps: dict[str, Any] = {}
     for key, title, role, status, output, gate in rows:
         failed = [c for c in gate.get("acceptance", []) if not c["passed"]]
         ok = status == "done" and not failed
@@ -263,6 +264,13 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
             results.append(c | {"stage": _stage_of(c["check"])})
             if not c["passed"]:
                 feedback.append(f"{c['check'].capitalize()} check failed:\n{c['detail']}")
+        # S08-R-05: changed dependencies, audited when the tools are installed (also when the boundary check failed)
+        deps = dependencies.check(worktree, base, mode)
+        for c in deps.pop("rows"):
+            results.append(c)
+            if not c["passed"]:
+                feedback.append(f"Dependency audit ({c['tool']}) found known vulnerabilities in dependencies this "
+                                f"change added or updated; pick versions with a fix or other packages:\n{c['detail']}")
     for cmd in commands:
         stage, keys, run = split_tag(cmd)
         info: dict[str, Any] = {}
@@ -319,5 +327,6 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
         "head": worktrees.git(worktree, "rev-parse", "HEAD"),
         "environment": environment() if commands else {},
         "changed_files": worktrees.changed_files(worktree, base) if base else [],
+        "dependencies": deps,
         "needs_approval": passed and _require_approval(goal_id),
     }

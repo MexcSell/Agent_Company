@@ -93,8 +93,9 @@ the order is safety and correctness of that pipeline first, then management, the
    requirements they test, and S08-R-02 Architecture Decision Records. S07-R-04 estimate accuracy per role, then
    S07-R-02 root-cause analysis of failing goals. S09-R-03 defect priority and lifecycle, then
    S09-R-02 the risk-based test strategy per goal.
-   S09-R-05 evaluation dimensions with sample sizes and the adversarial suite done 2026-11-05.
-5. **Still open** (2026-11-05): S08-R-05 dependency audit, S06-R-03/R-04/R-06/R-07 claim-level evidence, report review, research →
+   S09-R-05 evaluation dimensions with sample sizes and the adversarial suite done 2026-11-05, then S08-R-05
+   dependency changes, audit at the gate and record at the merge (SBOM still open).
+5. **Still open** (2026-11-05): S06-R-03/R-04/R-06/R-07 claim-level evidence, report review, research →
    proposal pipeline and knowledge transfer, S14-R-05's remainder (uploads, documents, model rule), S04-FR-27/28
    orchestration self-evaluation, SE-R-21 retrieval strategy per query class; the gated rooms one at a time
    (G-R-04); L3 for the agent CLIs themselves (they need network and their logins, see the threat model's known

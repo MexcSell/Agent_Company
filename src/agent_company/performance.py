@@ -40,7 +40,7 @@ PRIORITY = {"critical": 1, "high": 2, "medium": 3, "low": 4, "info": 5}  # the d
 def severity_of(check: str) -> str:
     if check in {"secret scan"} or "refused by the command policy" in check:
         return "critical"
-    if check.startswith("command") or check == "syntax" or check.startswith("stage "):
+    if check.startswith(("command", "stage ", "dependency audit")) or check == "syntax":
         return "high"
     if check == "scope" or check.startswith("review"):
         return "medium"

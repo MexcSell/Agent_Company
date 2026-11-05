@@ -108,6 +108,7 @@ Machines code):
 | Requirements traceability (requirement → task → test) | ASEAO08 §5.3, ASEAO09 §5.1 | done (`requirements.py`: versions, conflicts as decisions, links from tasks, checks and merges, S08-R-01; check commands and acceptance commands naming keys, untested requirements, S09-R-06) |
 | Code-review checklist with a logic-verification step (trace data flow; no approval for code that only looks clean) and de-duplicated comments | ASEAO08 §13, `extensions/analysis_results.md` | done (`quality.REVIEW_CHECKLIST`, `review_verdict`, `merge_findings`, S08-R-03) |
 | Change boundaries: no skipped tests, removed assertions, new dependencies or CI/.env edits without a permit | ASEAO08 §12.2 | done (`checks.boundary_violations`, S08-R-04) |
+| Dependency control: changed dependencies itemised per goal, `pip-audit`/`npm audit` at the gate's security stage (a vulnerability the change brought in fails), merged changes recorded; SBOM | ASEAO08 §15 | done except the SBOM (`dependencies.py`, S08-R-05) |
 | Quality gates as named stages; an open critical defect blocks the merge | ASEAO09 §13 | done (`quality.stages`, S09-R-01) |
 | Risk-based test strategy per goal: mandatory integration/security stages for high-risk goals, security review of sensitive areas, files with earlier failures | ASEAO09 §6 | done (`teststrategy.py`, S09-R-02) |
 | Test-strategy selection by test category and risk | ASEAO09 §6-7 | done (`teststrategy.py`, S09-R-02) |

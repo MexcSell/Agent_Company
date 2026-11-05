@@ -25,7 +25,7 @@ scope checks (`quality.py`, `checks.py`); defects opened/closed/reopened automat
   so `quality_commands` stays a list of strings. `requirements` stays `skipped`: traceability (S08-R-01, S09-R-06)
   is recorded by `requirements.on_gate` after the gate, and unknown keys are logged, not fatal, so it has no
   pass/fail of its own;
-  `security` holds the secret scan (no dependency audit yet, S08-R-05); `governance` is `waiting` while a
+  `security` holds the secret scan and, when manifests changed, the dependency audit (S08-R-05); `governance` is `waiting` while a
   decision needs a person (it holds the merge, it does not fail the gate).
 
 ### S09-R-02 Risk-based test strategy — §6 (AT-001)
@@ -47,8 +47,8 @@ scope checks (`quality.py`, `checks.py`); defects opened/closed/reopened automat
   adds a `stage <name>` row per mandatory stage that fails when no check of that stage ran (a defect of severity
   high). The planner satisfies `integration` with a command acceptance condition carrying `"stage": "integration"`
   (`contracts.Condition.stage`: unit|integration|security|static); the gate runs it again itself on the tested
-  commit as a `command` row of that stage (S09-R-04), for done and failed tasks. The `security` stage is the secret
-  scan until a dependency audit exists (S08-R-05), so it is met whenever the goal has a base branch. Templates that
+  commit as a `command` row of that stage (S09-R-04), for done and failed tasks. The `security` stage holds the secret
+  scan (and the dependency audit when manifests changed, S08-R-05), so it is met whenever the goal has a base branch. Templates that
   change no files (`strategies.skips_checks`) have no mandatory stages.
 
 ### S09-R-03 Defect fields and lifecycle — §11 (AT-014, AT-015)

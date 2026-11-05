@@ -167,6 +167,7 @@ Besides each task's contract and the reviewer's verdict, every iteration's chang
 | Syntax | A changed Python, JSON, TOML or shell file does not parse; JavaScript, Ruby, PHP and Go too when `node`, `ruby`, `php` or `gofmt` is installed |
 | Scope | A changed file is outside the goal's allowed paths (`--allow 'src/*'`), or an existing test was changed or deleted while tests are protected (`--protect-tests`); new tests are always allowed |
 | Commands | A quality command exits non-zero |
+| Dependency audit | A dependency the change added or updated has a known vulnerability (`pip-audit` on pinned requirements or a `uv.lock`, `npm audit` on a `package-lock.json`, when installed; setting `dependency_audit`: `block`, `warn` or `off`). Old advisories of untouched dependencies are listed but do not fail; the goal view lists every dependency change and the merge records them |
 
 The gate runs the commands itself; an agent's "tests pass" never counts. For each
 command it keeps the commit it ran on, the exit code, the duration, the output tail

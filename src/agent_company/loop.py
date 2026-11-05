@@ -1446,7 +1446,8 @@ def _record_history(goal_id: int, iteration: int, report: dict[str, Any]) -> Non
                       "verification": [{k: c.get(k) for k in ("command", "stage", "commit", "exit_code", "timed_out",
                                                               "duration_s", "passed", "isolation", "output_tail")}
                                        for c in report.get("checks", []) if c.get("command")],
-                      "environment": report.get("environment") or {}}]
+                      "environment": report.get("environment") or {},
+                      "dependencies": report.get("dependencies") or {}}]  # S08-R-05
 
 
 def _escalate_repeated(goal_id: int, iteration: int) -> str:
@@ -1814,6 +1815,9 @@ def approve(goal_id: int, actor: str = "system") -> dict[str, Any]:
     _update_goal(goal_id, status="approved", reason=f"merged {sha[:10]}", actor=actor)
     selfevolve.on_merged(goal_id, sha, actor)
     requirements.on_merged(goal_id, sha)
+    from agent_company import dependencies
+
+    dependencies.on_merged(goal_id, sha)  # S08-R-05: the dependency changes this merge brought in
     from agent_company.projects import post_for_goal
 
     post_for_goal(goal_id, f"Goal #{goal_id} approved and merged ({sha[:10]}).", kind="result")

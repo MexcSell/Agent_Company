@@ -9,9 +9,10 @@ they run under bubblewrap (namespaces, as containers use them) instead of direct
                a hook that host-side git runs later. `data/`, `.env`, other worktrees, `/home` and the server user's
                home are not there (`_secrets` are hidden even below a bound directory); HOME is
                `data/sandbox/home`, used by sandboxed runs only (their tool caches, never the host's).
-  network      none. The one exception is the prepare step (`PREPARE`): a fixed install command for a lock file
+  network      none. The exceptions are the prepare step (`PREPARE`): a fixed install command for a lock file
                (`uv sync --frozen`, `npm ci --ignore-scripts`), run with network when the lock file changed since
-               the last prepare of that directory, so offline checks find their dependencies.
+               the last prepare of that directory, so offline checks find their dependencies; and the dependency
+               audit (`dependencies.audit`: `pip-audit`, `npm audit` with fixed arguments, the worktree read-only).
   processes    own PID, IPC and UTS namespaces, every capability dropped, a new session, killed with its parent.
   limits       memory (no swap), tasks and CPU through a transient systemd scope when `systemd-run` works;
                otherwise the run notes "no resource limits". The timeout is the caller's.
@@ -264,9 +265,11 @@ def _prepare(workdir: Path, env: dict[str, str], timeout: int) -> str:
 
 
 def run(argv: list[str], cwd: Path, timeout: int, *, mode: str | None = None, writable: list[Path] | None = None,
-        readonly: list[Path] | None = None, env: dict[str, str] | None = None, prepare: bool = False) -> Outcome:
+        readonly: list[Path] | None = None, env: dict[str, str] | None = None, prepare: bool = False,
+        network: bool = False) -> Outcome:
     """Run `argv` in `cwd` at L3 (or L2 as the mode allows). `writable` defaults to `[cwd]`; `env` replaces the
-    filtered default. `prepare` installs lock-file dependencies first (see `PREPARE`)."""
+    filtered default. `prepare` installs lock-file dependencies first (see `PREPARE`). `network` is for the
+    platform's own fixed commands only (the dependency audit, S08-R-05), never for agent-written code."""
     mode = mode or settings().sandbox
     cwd = Path(cwd).resolve()
     writable = [Path(p).resolve() for p in (writable if writable is not None else [cwd])]
@@ -280,5 +283,6 @@ def run(argv: list[str], cwd: Path, timeout: int, *, mode: str | None = None, wr
     notes = [] if limits_available() else ["no resource limits (systemd-run unavailable)"]
     if prepare:
         notes.append(_prepare(cwd, {k: v for k, v in env.items() if k != "UV_OFFLINE"}, timeout))
-    rc, out, timed_out = _execute(build(argv, cwd, writable=writable, readonly=readonly, env=env), cwd, None, timeout)
+    rc, out, timed_out = _execute(build(argv, cwd, writable=writable, readonly=readonly, env=env, network=network),
+                                  cwd, None, timeout)
     return Outcome(rc, out, "L3", "; ".join(n for n in notes if n), timed_out)

@@ -100,6 +100,8 @@ class Settings:
     retrieval_w_contradiction: float = 1.0
     # L3 isolation of the commands that run agent-written code (sandbox.py, S14-R-07): off | auto | required.
     sandbox: str = "auto"
+    # S08-R-05: pip-audit / npm audit of changed manifests at the gate: off | warn | block
+    dependency_audit: str = "block"
     sandbox_memory_mb: int = 4096
     sandbox_tasks: int = 512
     sandbox_cpus: float = 2.0
@@ -172,6 +174,7 @@ def load_settings() -> Settings:
         retrieval_w_recency=float(os.environ.get("RETRIEVAL_W_RECENCY") or 0.3),
         retrieval_w_contradiction=float(os.environ.get("RETRIEVAL_W_CONTRADICTION") or 1.0),
         sandbox=(os.environ.get("SANDBOX") or "auto").lower(),
+        dependency_audit=(os.environ.get("DEPENDENCY_AUDIT") or "block").lower(),
         sandbox_memory_mb=_int("SANDBOX_MEMORY_MB", 4096),
         sandbox_tasks=_int("SANDBOX_TASKS", 512),
         sandbox_cpus=float(os.environ.get("SANDBOX_CPUS") or 2.0),

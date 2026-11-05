@@ -66,6 +66,9 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "sandbox_cpus": (float, "CPU cores a sandboxed command may use (needs systemd-run)"),
     "sandbox_paths": (list, "Extra read-only paths (toolchains) visible in the sandbox, one per line"),
     "sandbox_env": (list, "Extra environment variable names passed to checked commands, one per line"),
+    "dependency_audit": (str, "Changed dependency manifests are audited with pip-audit / npm audit when installed: "
+                              "'block' fails the gate on a known vulnerability in an added or changed dependency, "
+                              "'warn' only lists it, 'off' runs no audit"),
 }
 RETRIEVAL_KEYS = {k for k in SCHEMA if k.startswith("retrieval_w_")}
 LIMITS: dict[str, tuple[float, float]] = {
@@ -84,7 +87,7 @@ LIMITS: dict[str, tuple[float, float]] = {
 CHOICES: dict[str, set[str]] = {"proposal_policy": {"user", "superiors"}, "executor": {"auto", "offline"},
                                 "transport": {"https", "http"}, "budget_exhausted_action": {"pause", "stop"},
                                 "recruit_requires_approval": {"never", "permanent_only", "always"},
-                                "sandbox": {"off", "auto", "required"}}
+                                "sandbox": {"off", "auto", "required"}, "dependency_audit": {"off", "warn", "block"}}
 
 
 def _coerce(key: str, value: Any) -> Any:
