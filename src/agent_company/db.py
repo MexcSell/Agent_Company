@@ -107,6 +107,10 @@ class Agent(Base):
     health: Mapped[str] = mapped_column(String(16), default="ok")  # ok|degraded (S02-R-02)
     health_reason: Mapped[str] = mapped_column(Text, default="")
     health_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # runs before: ignored
+    # S02-FR-18 automatic recovery: when it became degraded, the last probe of its model and how many failed
+    degraded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    recovery_probe_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    recovery_probes: Mapped[int] = mapped_column(Integer, default=0)
     # SPEC-03 S03-R-04: a recruit's first tasks are always reviewed; 0 = not (or no longer) on probation
     probation_tasks_left: Mapped[int] = mapped_column(Integer, default=0)
     probation_failures: Mapped[int] = mapped_column(Integer, default=0)

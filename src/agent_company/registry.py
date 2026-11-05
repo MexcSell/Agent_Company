@@ -217,12 +217,15 @@ def _set_health(s: Session, a: Agent, state: str, reason: str, reset: bool = Fal
     if was == state:
         return False
     a.health = state
+    a.degraded_at = now() if state == "degraded" else None
+    a.recovery_probe_at, a.recovery_probes = None, 0
     log_event("agent_health", f"{a.name} is {state}" + (f": {reason}" if reason else ""), agent_id=a.id, s=s)
     if state == "degraded":  # once per degradation, not for every failing run after it
         from agent_company.governance import notify
 
         notify(f"Agent degraded: {a.name}"[:256], f"{reason} It is not staffed until an administrator resets its "
-               "health (agent card) or changes its model.", level="warning", source="agents", admin_only=True, s=s)
+               "health (agent card) or changes its model, or a recovery probe of its model passes.", level="warning",
+               source="agents", admin_only=True, s=s)
     return True
 
 
@@ -319,6 +322,87 @@ def reset_health(agent_id: int, actor: str) -> dict[str, Any]:
         _set_health(s, a, "ok", "", reset=True)
         log_event("agent_health", f"{a.name}: health reset by {actor}", agent_id=a.id, s=s)
         return agent_dict(a)
+
+
+RECOVERY_MAX_HOURS = 6
+
+
+def _probe_due(a: Agent, minutes: int, at: Any) -> bool:
+    start = a.recovery_probe_at or a.degraded_at
+    if start is None:
+        return True
+    wait = min(minutes * 2 ** (a.recovery_probes or 0), RECOVERY_MAX_HOURS * 60)
+    return start.replace(tzinfo=None) + timedelta(minutes=wait) <= at.replace(tzinfo=None)
+
+
+def recover_degraded(at: Any = None) -> list[int]:
+    """S02-FR-18 automatic runtime recovery. A degraded agent is never staffed, so no run of its own can show that it
+    works again: every `health_recovery_minutes` (doubling after each failed probe, at most 6 h) its first model gets
+    the model test, once per model per sweep. A passing probe starts a new health window, as an administrator's reset
+    would; a failing one keeps it degraded until the next probe. 0 switches the probes off."""
+    from agent_company import router
+    from agent_company.config import settings
+    from agent_company.db import ModelEntry
+
+    minutes = settings().health_recovery_minutes
+    if minutes <= 0:
+        return []
+    at = at or now()
+    with session() as s:
+        due = [(a.id, a.role, a.model_pref) for a in s.scalars(select(Agent).where(
+            Agent.health == "degraded", Agent.lifecycle == "active", Agent.enabled)) if _probe_due(a, minutes, at)]
+    results: dict[str, bool] = {}
+    recovered = []
+    for aid, role, pref in due:
+        model = first_model(role, pref)
+        if model and model not in results:
+            with session() as s:
+                m = s.scalars(select(ModelEntry).where(ModelEntry.name == model)).first()
+                mid = m.id if m else None
+            try:
+                results[model] = bool(mid) and bool(router.test_model(mid).get("ok"))
+            except Exception:  # noqa: BLE001 - a probe that cannot run counts as failed
+                results[model] = False
+        ok = bool(model) and results.get(model, False)
+        with session() as s:
+            a = s.get(Agent, aid)
+            if a is None or a.health != "degraded":  # the model test's own re-check may have cleared it already
+                if a is not None and ok:
+                    recovered.append(aid)
+                continue
+            if ok:
+                _set_health(s, a, "ok", "", reset=True)
+                log_event("agent_health", f"{a.name} recovered automatically: a probe of {model} passed",
+                          agent_id=a.id, s=s, model=model)
+                from agent_company.governance import notify
+
+                notify(f"Agent recovered: {a.name}"[:256], f"A recovery probe of {model} passed; it is staffed again.",
+                       level="info", source="agents", admin_only=True, s=s)
+                recovered.append(aid)
+            else:
+                a.recovery_probe_at, a.recovery_probes = at, (a.recovery_probes or 0) + 1
+                log_event("agent_health", f"{a.name}: recovery probe of {model or 'no model'} failed "
+                          f"({a.recovery_probes})", agent_id=a.id, s=s)
+    return recovered
+
+
+_recovering = threading.Lock()
+
+
+def recovery_tick() -> None:
+    """For the goal queue's watcher: a sweep in a thread of its own (a probe may take minutes), one at a time."""
+    if not _recovering.acquire(blocking=False):
+        return
+
+    def run() -> None:
+        try:
+            recover_degraded()
+        except Exception as e:  # noqa: BLE001 - try again on the next tick
+            log_event("error", f"recovery sweep failed: {e}")
+        finally:
+            _recovering.release()
+
+    threading.Thread(target=run, daemon=True, name="agent-recovery").start()
 
 
 def inactive(days: int | None = None) -> list[dict[str, Any]]:

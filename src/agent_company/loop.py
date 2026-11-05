@@ -2104,6 +2104,7 @@ class GoalQueue:
                     if gid not in self.seen:
                         self.submit(gid)
                 resume_after_quota()  # S02-R-03: a new UTC day
+                registry.recovery_tick()  # S02-FR-18: probe the models of degraded agents when due
             except Exception:  # noqa: BLE001 - try again on the next tick
                 pass
 

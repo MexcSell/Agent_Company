@@ -72,6 +72,10 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "dependency_audit": (str, "Changed dependency manifests are audited with pip-audit / npm audit when installed: "
                               "'block' fails the gate on a known vulnerability in an added or changed dependency, "
                               "'warn' only lists it, 'off' runs no audit"),
+    "health_recovery_minutes": (int, "A degraded agent is not staffed; after this many minutes its model is probed "
+                                     "with the model test, and a passing probe makes it healthy again (the wait "
+                                     "doubles after each failed probe, at most 6 h; 0 = never, an administrator "
+                                     "resets it)"),
     "required_test_stages": (list, "Gate stages every goal must run checks in, one per line: performance (load and "
                                    "stress), compatibility, accessibility, integration, …; the checks are the "
                                    "project's quality commands tagged with the stage, e.g. '[accessibility] npx "
@@ -90,7 +94,7 @@ LIMITS: dict[str, tuple[float, float]] = {
     "min_improvement": (0, 100), "max_goal_depth": (1, 10), "escalate_after": (1, 10),
     "approval_blocker_hours": (0, 720), "inactive_days": (1, 3650), "explore_rate": (0, 1),
     "improvement_min_score": (0, 100), "improvement_max_regression": (0, 100),
-    "shift_seconds": (0, 7 * 86400),
+    "shift_seconds": (0, 7 * 86400), "health_recovery_minutes": (0, 1440),
     "sandbox_memory_mb": (128, 262_144), "sandbox_tasks": (16, 65_536), "sandbox_cpus": (0.1, 256),
     **{k: (0, 10) for k in RETRIEVAL_KEYS},
 }

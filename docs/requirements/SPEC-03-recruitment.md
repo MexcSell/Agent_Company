@@ -48,7 +48,7 @@ registration.*
 | S03-FR-11 | Approve or reject candidates | P0 | done (`recruitment.approve`/`reject`, Evolution → Recruitment) |
 | S03-FR-12 | Register approved candidates | P0 | done |
 | S03-FR-13 | Assign room and position | P0 | done (`room_key`, `superior_id`) |
-| S03-FR-14 | Onboarding | P0 | partial: similar-agent links → SPEC-12 S12-R-02 |
+| S03-FR-14 | Onboarding | P0 | done: a recruit gets the room, title, superior and permissions of its job description (permissions a new role must not have wait for an administrator), a backstory from it, links to its closest peers (`_link_similar`), complementary specialists and a mentor candidate (SPEC-12 S12-R-02), the related agents' experience in its context, then the qualification run (`qualify_recruits`) and reviewed probation tasks (S03-R-04) |
 | S03-FR-15 | Probation periods | P1 | done (`Agent.probation_tasks_left`) |
 | S03-FR-16 | Temporary agents | P0 | done (clones retired after the goal) |
 | S03-FR-17 | Permanent recruitment | P1 | done (`create_agent`) |

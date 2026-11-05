@@ -326,3 +326,37 @@ def test_at014_an_unauthorized_launch_is_denied_and_audited():
             ("user:member", "goal_create_denied", "warning"), ("user:member", "project_command_denied", "warning"),
             ("user:member", "research_request_denied", "warning"), ("user:member", "goal_create_denied", "warning")]
     assert governance.verify_audit()["ok"]
+
+
+def test_a_degraded_agent_recovers_when_a_probe_of_its_model_passes(monkeypatch):
+    """S02-FR-18: degraded agents are not staffed, so a periodic probe of their model brings them back."""
+    from agent_company import prefs
+
+    aid = _agent()
+    _fail(aid, 3)
+    assert registry.agent_detail(aid)["health"] == "degraded"
+    probes = []
+    answers = iter([False, True])
+
+    def probe(model_id):
+        probes.append(model_id)
+        return {"ok": next(answers)}
+
+    monkeypatch.setattr(router, "test_model", probe)
+    assert registry.recover_degraded() == [] and probes == [], "not due right after the degradation"
+    later = now() + timedelta(minutes=16)
+    assert registry.recover_degraded(at=later) == [] and len(probes) == 1, "the probe failed"
+    with session() as s:
+        assert s.get(Agent, aid).recovery_probes == 1
+    assert registry.recover_degraded(at=later + timedelta(minutes=20)) == [], "the wait doubled to 30 minutes"
+    assert len(probes) == 1
+    assert registry.recover_degraded(at=later + timedelta(minutes=31)) == [aid]
+    a = registry.agent_detail(aid)
+    assert a["health"] == "ok" and a["health_reason"] == ""
+    assert registry.staff("developer").id == aid, "staffed again"
+    with session() as s:
+        assert any(n.title.startswith("Agent recovered") for n in s.scalars(select(Notification)))
+    registry.release(aid)
+    prefs.set_value("health_recovery_minutes", 0, actor="user:admin")
+    _fail(aid, 3)
+    assert registry.recover_degraded(at=now() + timedelta(days=1)) == [] and len(probes) == 2, "switched off"

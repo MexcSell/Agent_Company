@@ -39,7 +39,7 @@ Provisioning/Starting/Stopping collapse into a run's start and end.
 | S02-FR-15 | Clone from templates | P1 | done (`clone_agent`, role specs) |
 | S02-FR-16 | Controlled model replacement | P1 | done (routes, model test) |
 | S02-FR-17 | Runtime migration | P2 | skip (single host) |
-| S02-FR-18 | Automatic runtime recovery | P1 | partial: goals resume after a restart (SPEC-04 S04-R-05), transient errors are retried (S04-R-06) |
+| S02-FR-18 | Automatic runtime recovery | P1 | done: goals resume after a restart (SPEC-04 S04-R-05), transient errors are retried and the next model in the chain is tried (S04-R-06); a degraded agent's model is probed every `health_recovery_minutes` (15; doubling after a failed probe, at most 6 h; `registry.recover_degraded`, from the goal queue's watcher in its own thread) and a passing probe makes it healthy and staffed again (notified) |
 | S02-FR-19 | Retire without deleting history | P0 | done (`set_lifecycle`) |
 | S02-FR-20 | Complete lifecycle history | P0 | done (S02-R-01: every lifecycle change, stops and lifts included) |
 | S02-FR-21 | Capability discovery | P1 | done (SPEC-03 S03-R-02 coverage search, S03-R-01 capability gaps) |
