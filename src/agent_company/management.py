@@ -9,7 +9,8 @@ Blockers and generated action items are derived, not hooked into every code path
 should be open from the current state (goals paused for budget, goals waiting for approval longer than
 `approval_blocker_hours`, milestones whose required goal failed; pending proposals, unresolved defects, open
 blockers, failed milestone criteria), opens what is missing and closes what no longer holds. It runs after
-every goal and whenever a project's status is read, so it heals itself after a restart.
+every goal and whenever a project's status is read, so it heals itself after a restart. The `NEXT:` lines of a
+merged goal's final tasks become follow-up items once; people close those.
 
 Agents report insights in a fenced JSON block: ```json {"insights": [{"title", "description", "evidence",
 "expected_benefit", "estimated_cost", "confidence"}]} ```. A person moves them along
@@ -447,6 +448,43 @@ def _wanted_items(s: Session, project_id: int, manager_id: int | None) -> dict[s
     return want
 
 
+FOLLOW_UP_DAYS = 30
+
+
+def _norm(text: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", text.lower()).split())
+
+
+def _follow_ups(s: Session, project_id: int, manager_id: int | None) -> int:
+    """`NEXT:` lines of a merged goal's final tasks become action items once (G-R-01): follow-up work after the
+    merge. Unlike the derived items they are not closed by `sync`; a person closes them, and a closed one is not
+    made again. An open item with the same text is not repeated."""
+    made = {src for (src,) in s.execute(select(ActionItem.source).where(ActionItem.project_id == project_id,
+                                                                         ActionItem.source.like("next:%")))}
+    seen = {_norm(a.title.removeprefix("Follow up: ")) for a in s.scalars(select(ActionItem).where(
+        ActionItem.project_id == project_id, ActionItem.status.in_(("open", "in_progress"))))}
+    opened = 0
+    rows = s.execute(select(Task, Goal).join(Goal, Task.goal_id == Goal.id).where(
+        Goal.project_id == project_id, Goal.origin != "eval", Goal.status == "approved",
+        Task.iteration == Goal.iteration, Goal.updated_at >= now() - timedelta(days=FOLLOW_UP_DAYS))
+        .order_by(Task.id)).all()
+    for t, g in rows:
+        for n, text in enumerate((t.gate or {}).get("next_actions") or []):
+            source, key = f"next:{t.id}:{n}", _norm(str(text))
+            if source in made or not key:
+                continue
+            made.add(source)
+            if key in seen:
+                continue
+            seen.add(key)
+            s.add(ActionItem(project_id=project_id, source=source, title=f"Follow up: {text}"[:256],
+                             description=f"Named by task '{t.key}' of goal #{g.id} ({g.title}) after it merged.",
+                             priority=3, goal_id=g.id, responsible_agent_id=manager_id,
+                             expected_output="done, or ordered as a goal"))
+            opened += 1
+    return opened
+
+
 def _notify_overdue(s: Session, p: Project) -> None:
     from agent_company.governance import notify
 
@@ -494,13 +532,14 @@ def sync(project_id: int | None) -> dict[str, int]:
             ActionItem.project_id == project_id, ActionItem.source != "",
             ActionItem.status.in_(("open", "in_progress"))))}
         for source, a in items.items():
-            if source not in want_items:
+            if source not in want_items and not source.startswith("next:"):
                 a.status = "done"
                 counts["closed"] += 1
         for source, fields in want_items.items():
             if source not in items:
                 s.add(ActionItem(project_id=project_id, source=source, **fields))
                 counts["opened"] += 1
+        counts["opened"] += _follow_ups(s, project_id, p.manager_id)
         _notify_overdue(s, p)
     return counts
 

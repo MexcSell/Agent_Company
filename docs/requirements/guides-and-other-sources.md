@@ -38,8 +38,10 @@ Task outputs gain `findings` and `next_actions` (parsed like proposals) that fee
   the Security Room is disabled); `budget.cost_usd` fails a run that costs more, `budget.turns` becomes
   Claude Code's `--max-turns`, `deadline` caps the run's timeout; `test_plan`, `in_scope` and
   `requirement_keys` go into the prompt. `FINDING:` and `NEXT:` lines are stored on the task's gate and
-  shown in the trace and the goal view; they do not become action items (S05-R-04 generates those from proposals, defects, blockers and milestone
-  criteria; NEXT lines as action items is still open). Also
+  shown in the trace and the goal view. Once the goal merges, the `NEXT:` lines of its final iteration's tasks
+  become project action items `Follow up: …` once (`management._follow_ups`, source `next:<task>:<n>`, priority 3,
+  the project GM responsible; goals approved in the last 30 days; an open item with the same text is not repeated);
+  `sync` never closes them and a closed one is not made again. Also
   `decision_topic` for S04-R-03.
 
 ### G-R-02 Operational metrics — Designing guide §10, Subscription guide §7

@@ -259,3 +259,32 @@ def test_plan_api_flow():
         assert app.get("/api/projects/9999/plan").status_code == 404
         actions = {x["action"] for x in app.get("/api/audit").json()["records"]}
         assert {"milestone_create", "milestone_complete", "risk_create", "action_item_update"} <= actions
+
+
+def test_next_lines_of_a_merged_goal_become_follow_up_items_once():
+    from agent_company.db import Task
+
+    p = _project()
+    gid = _goal(p["id"], "running")
+    with session() as s:
+        g = s.get(Goal, gid)
+        s.add(Task(goal_id=gid, iteration=g.iteration, key="build", title="Build", role="developer",
+                   gate={"next_actions": ["Add a CLI flag for verbose output", "Write the changelog"]}))
+        s.add(Task(goal_id=gid, iteration=g.iteration, key="test", title="Test", role="qa",
+                   gate={"next_actions": ["write the changelog."]}))  # same text as another line
+        s.add(Task(goal_id=gid, iteration=g.iteration - 1, key="old", title="Old", role="qa",
+                   gate={"next_actions": ["From an earlier iteration"]}))
+    management.sync(p["id"])
+    assert not any(a["source"].startswith("next:") for a in management.ranked_items(p["id"]))  # not merged yet
+    with session() as s:
+        set_status(s, s.get(Goal, gid), "approved", "test")
+    management.sync(p["id"])
+    follow = [a for a in management.ranked_items(p["id"]) if a["source"].startswith("next:")]
+    assert sorted(a["title"] for a in follow) == ["Follow up: Add a CLI flag for verbose output",
+                                                   "Follow up: Write the changelog"]
+    assert all(a["goal_id"] == gid and a["automatic"] for a in follow)
+    management.sync(p["id"])  # neither repeated nor closed by the next sync
+    assert len([a for a in management.ranked_items(p["id"]) if a["source"].startswith("next:")]) == 2
+    management.update_item(follow[0]["id"], {"status": "done"})
+    management.sync(p["id"])  # a closed one is not made again
+    assert len([a for a in management.ranked_items(p["id"]) if a["source"].startswith("next:")]) == 1
