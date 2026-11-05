@@ -84,6 +84,14 @@ reliable. The requirements below are the parts the core pipeline needs now.
 ### S07-R-04 Predictions with calibration — §11 (AT-014..016) — P2
 - Planner time/cost estimates are predictions; record them with the actual outcome
   (SPEC-05 S05-R-05) and show estimate accuracy per role in the Performance view.
+- **Status: done** (`performance.calibration`, `report()["calibration"]`, Performance → Estimate accuracy;
+  `tests/test_performance.py`). The prediction is the task contract's `estimated_minutes` (S05-R-05), the outcome
+  the summed duration of the task's runs; per role over finished tasks of non-benchmark goals: samples, estimated
+  and actual totals, the median actual/estimate ratio, the mean absolute percentage error and the share within
+  ±50%. Goal cost: `estimated_cost_usd` (the order's or the planner's) against the model cost of finished goals.
+  A label (calibrated, underestimates above ×1.5, overestimates below ×0.67) only from `CALIBRATION_MIN` (5)
+  samples; fewer are shown as "too few samples". Not taken: AT-015/016 forecasts of other kinds (there is no other
+  prediction source yet).
 
 ### S07-R-05 Opportunity detection — §12 (AT-017) — gated
 - Belongs to the innovation pipeline (ASEAO10); enable with the analysis/innovation rooms.

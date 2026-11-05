@@ -12,10 +12,15 @@ level drops by one when the newest evidence is older than CERT_TTL_DAYS.
 Performance (ASEAO07 §15): agent completion, review-failure, rework and reliability
 rates, duration, cost and collaboration effectiveness; the same per room; and
 company-level goal outcomes.
+
+Calibration (ASEAO07 §11, S07-R-04): the planner's estimates are predictions. Each finished task's
+`estimated_minutes` is compared with the time its runs took, per role; each finished goal's estimated cost with
+its model cost. Reported with sample sizes; nothing is concluded from fewer than CALIBRATION_MIN samples.
 """
 
 from __future__ import annotations
 
+import statistics
 from collections import defaultdict
 from datetime import timedelta
 from typing import Any
@@ -230,6 +235,49 @@ def gated(role: str) -> bool:
     return spec is not None and not spec.enabled
 
 
+CALIBRATION_MIN = 5  # fewer samples: shown, but not labelled as over- or underestimating
+
+
+def _accuracy(pairs: list[tuple[float, float]]) -> dict[str, Any]:
+    """(estimate, actual) pairs: the median actual/estimate ratio (above 1 = it took longer than predicted), the mean
+    absolute percentage error, the share within ±50% of the estimate, and a label once there are enough samples."""
+    ratios = [a / e for e, a in pairs]
+    med = statistics.median(ratios)
+    bias = ("too few samples" if len(pairs) < CALIBRATION_MIN else "underestimates" if med > 1.5
+            else "overestimates" if med < 1 / 1.5 else "calibrated")
+    return {"samples": len(pairs), "median_ratio": round(med, 2),
+            "mape": round(statistics.fmean(abs(a - e) / e for e, a in pairs), 3),
+            "within_50": round(sum(0.5 <= r <= 1.5 for r in ratios) / len(ratios), 3), "bias": bias,
+            "estimated": round(sum(e for e, _ in pairs), 2), "actual": round(sum(a for _, a in pairs), 2)}
+
+
+def calibration(s: Any = None) -> dict[str, Any]:
+    """Estimate accuracy (S07-R-04): per role, the finished tasks' estimated minutes against the minutes their runs
+    took; and the finished goals' estimated cost against their model cost. Benchmark goals are left out."""
+    if s is None:
+        with session() as s2:
+            return calibration(s2)
+    real = select(Goal.id).where(Goal.origin != "eval")
+    minutes = dict(s.execute(select(Run.task_id, func.sum(Run.duration)).where(Run.task_id.is_not(None))
+                             .group_by(Run.task_id)).all())
+    by_role: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for t in s.scalars(select(Task).where(Task.status == "done", Task.goal_id.in_(real))):
+        try:
+            est = float((t.contract or {}).get("estimated_minutes") or 0)
+        except (TypeError, ValueError):
+            continue
+        if est > 0 and minutes.get(t.id):
+            by_role[t.role].append((est, float(minutes[t.id]) / 60.0))
+    spend = dict(s.execute(select(Run.goal_id, func.sum(Run.cost)).where(Run.goal_id.is_not(None))
+                           .group_by(Run.goal_id)).all())
+    costs = [(float(g.estimated_cost_usd), float(spend[g.id])) for g in s.scalars(
+        select(Goal).where(Goal.origin != "eval", Goal.estimated_cost_usd > 0,
+                           Goal.status.in_(("approved", "awaiting_approval", "failed", "rejected"))))
+             if spend.get(g.id)]
+    return {"time_by_role": [{"role": role} | _accuracy(pairs) for role, pairs in sorted(by_role.items())],
+            "goal_cost": _accuracy(costs) if costs else None, "min_samples": CALIBRATION_MIN}
+
+
 def report() -> dict[str, Any]:
     with session() as s:
         all_goals = s.scalars(select(Goal)).all()
@@ -270,4 +318,5 @@ def report() -> dict[str, Any]:
             "cost_per_passed_goal": round(sum(spend.get(g.id, 0) or 0 for g in passed) / len(passed), 6) if passed else None,
             "open_defects": open_defects,
         }
-    return {"company": company, "rooms": rooms, "agents": agents}
+        calibrated = calibration(s)
+    return {"company": company, "rooms": rooms, "agents": agents, "calibration": calibrated}

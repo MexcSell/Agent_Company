@@ -455,6 +455,10 @@ models through Ollama (`ollama/<model>` plus `OLLAMA_API_BASE`). The Codex CLI
   file of tasks with seed files and check commands; eval goals never merge, push
   or notify. The offline simulator solves none of the bundled tasks, on purpose:
   they need real code.
+- **Estimate accuracy:** the planner's `estimated_minutes` per task and a goal's
+  estimated cost are predictions; the Performance page compares them with the time
+  the task's runs took (per role) and the goal's model cost: samples, median ratio,
+  error and the share within ±50%, labelled once there are five samples.
 - **Defects:** every failed gate check becomes a defect of its goal (critical:
   credentials or a refused command; high: failing command or syntax; medium:
   scope or reviewer FAIL; low: a task contract). It closes when a later iteration

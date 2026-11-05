@@ -3,6 +3,14 @@
 
 const pct = (v) => (v === null || v === undefined ? "–" : `${Math.round(v * 100)}%`);
 
+// S07-R-04: the planner's estimates are predictions; ratio = actual / estimate (above 1: it took longer)
+function calibrationCard(cal) {
+  if (!cal) return "";
+  const row = (name, a, unit) => `<tr><td>${esc(name)}</td><td class="num">${a.samples}</td><td class="num">${a.estimated}${unit} → ${a.actual}${unit}</td><td class="num">×${a.median_ratio}</td><td class="num">${pct(a.within_50)}</td><td>${a.bias === "calibrated" ? pill("done").replace(/>[^<]+</, ">calibrated<") : `<span class="muted">${esc(a.bias)}</span>`}</td></tr>`;
+  const rows = cal.time_by_role.map((x) => row(x.role, x, " min")).join("") + (cal.goal_cost ? row("goal cost (USD)", cal.goal_cost, "") : "");
+  return `<div class="card"><h2>Estimate accuracy</h2><p class="muted">Planner estimates against what happened: task minutes per role, goal cost. Median ratio actual/estimate; within ±50%; labelled from ${Number(cal.min_samples)} samples.</p><div class="table-wrap"><table><tr><th>Role</th><th class="num">Samples</th><th class="num">Estimated → actual</th><th class="num">Ratio</th><th class="num">±50%</th><th></th></tr>${rows || '<tr><td colspan="6" class="muted">No finished task had an estimate yet.</td></tr>'}</table></div></div>`;
+}
+
 async function viewPerformance(quiet) {
   if (quiet && $("#ev-form")) return;
   const [r, defects, certs, evals, rec] = await Promise.all([api("/api/performance"), api("/api/defects?status=open"), api("/api/certifications"), api("/api/evals"), api("/api/recruitment/effectiveness")]);
@@ -12,6 +20,7 @@ async function viewPerformance(quiet) {
     <div class="grid halves" style="margin-top:12px">
       <div class="grid"><div class="card"><h2>Open defects</h2><div class="table-wrap"><table><tr><th>Severity</th><th>Check</th><th>Goal</th><th>Iterations</th><th></th></tr>${defects.slice(0, 40).map((d) => `<tr><td>${pill(d.severity === "critical" || d.severity === "high" ? "failed" : "pending").replace(/>[^<]+</, `>${esc(d.severity)}<`)}</td><td>${esc(d.check)}<div class="muted ellipsis" style="max-width:320px">${esc(d.detail.split("\n")[0])}</div></td><td><a href="#" data-goal="${d.goal_id}">#${d.goal_id}</a></td><td class="num">${d.first_iteration}–${d.last_iteration}</td><td>${me.is_admin ? `<button class="btn sm" data-dst="${d.id}" data-s="accepted_risk">Accept risk</button><button class="btn sm" data-dst="${d.id}" data-s="deferred">Defer</button>` : ""}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No open defects.</td></tr>'}</table></div></div>
       <div class="card"><h2>Rooms</h2><table><tr><th>Room</th><th class="num">Agents</th><th class="num">Tasks</th><th class="num">Completion</th><th class="num">Cost</th></tr>${r.rooms.map((x) => `<tr><td>${esc(x.name)}</td><td class="num">${x.agents}</td><td class="num">${x.tasks}</td><td class="num">${pct(x.completion_rate)}</td><td class="num">${money(x.cost)}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No work yet.</td></tr>'}</table></div>
+      ${calibrationCard(r.calibration)}
       <div class="card"><h2>Eval harness</h2><p class="muted">Runs a suite of checkable tasks several times in fresh repositories; a task is solved only if every run passes. Compare labels to see whether a model or routing change helped.</p>
         ${me.is_admin ? `<form id="ev-form" class="row"><select id="ev-suite" style="width:auto">${evals.suites.map((s) => `<option>${esc(s.name)}</option>`).join("")}</select><input id="ev-label" placeholder="label, e.g. sonnet-v1" required pattern="[\\w.-]{1,64}" class="grow"><input id="ev-rep" type="number" min="1" max="10" value="1" style="width:70px" title="repeats"><button class="btn primary">Run</button></form>` : ""}
         <div class="events" style="margin-top:8px">${evals.labels.map((l) => `<div class="row"><a href="#" data-label="${esc(l.label)}" class="grow">${esc(l.label)}</a><span class="muted">${l.passed}/${l.runs} runs passed · ${ago(l.at)}</span></div>`).join("") || '<span class="muted">No eval runs yet.</span>'}</div>

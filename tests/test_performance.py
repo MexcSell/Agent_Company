@@ -155,3 +155,38 @@ def test_an_administrator_can_override_the_gate_and_it_is_audited():
         r = app.patch(f"/api/agents/{sec_id}", json={"enabled": True, "override_gate": True})
         assert r.status_code == 200 and r.json()["enabled"] is True
         assert "enablement_gate_override" in {x["action"] for x in app.get("/api/audit").json()["records"]}
+
+
+def test_estimates_are_compared_with_what_happened(monkeypatch):
+    """S07-R-04: task minutes per role and goal cost, estimate against actual, with sample sizes."""
+    from agent_company import executors
+    from agent_company.db import Goal, Run, Task
+
+    real = executors.standard_plan
+
+    def plan(goal):
+        out = real(goal)
+        for t in out["tasks"]:
+            t["estimated_minutes"] = 10
+        return out | {"estimated_cost_usd": 0.5}
+
+    monkeypatch.setattr(executors, "standard_plan", plan)
+    monkeypatch.setattr(performance, "CALIBRATION_MIN", 2)
+    gids = [loop.create_goal(f"Build tool {i}", quality_commands=[]) for i in range(2)]
+    for gid in gids:
+        loop.run_goal(gid)
+    with session() as s:
+        for r in s.scalars(select(Run).where(Run.task_id.is_not(None))):
+            role = s.get(Task, r.task_id).role
+            r.duration = {"developer": 1800.0, "architect": 600.0}.get(role, 120.0)  # 3x, 1x, 0.2x the estimate
+            r.cost = 0.25
+        assert all(s.get(Goal, g).estimated_cost_usd == 0.5 for g in gids)
+    cal = performance.report()["calibration"]
+    by = {x["role"]: x for x in cal["time_by_role"]}
+    assert by["developer"]["samples"] == 2 and by["developer"]["median_ratio"] == 3.0
+    assert by["developer"]["bias"] == "underestimates" and by["developer"]["within_50"] == 0
+    assert by["architect"]["bias"] == "calibrated" and by["architect"]["mape"] == 0
+    assert by["qa"]["bias"] == "overestimates"
+    assert cal["goal_cost"]["samples"] == 2 and cal["goal_cost"]["actual"] > cal["goal_cost"]["estimated"] > 0
+    monkeypatch.setattr(performance, "CALIBRATION_MIN", 5)
+    assert performance.calibration()["time_by_role"][0]["bias"] == "too few samples"
