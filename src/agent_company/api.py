@@ -67,6 +67,9 @@ def reset_after_restart() -> None:
     with session() as s:
         for a in s.scalars(select(Agent).where(Agent.status == "busy")):
             a.status = "idle"
+        for a in s.scalars(select(Agent)):
+            if a.active_goals:
+                a.active_goals = []
 
 
 # --- auth dependencies --------------------------------------------------------------

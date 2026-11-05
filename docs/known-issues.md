@@ -126,3 +126,12 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 | W1 | Sources are only visited while the rotation runs (Settings → `rotation_interval` > 0); with it at 0 (the default) per-source intervals do nothing and only the Run buttons fetch. | by design |
 | W2 | The rotation now wakes every 5 minutes (or its interval, if shorter) and takes one due source per wake-up, so every source is visited once per its interval; before, one source was visited per rotation interval in turn. With many hourly sources a wake-up still serves only one. | by design |
 | W3 | A change is "relevant" when the new page contains one of the subject's words anywhere, not when the changed lines do. | open (low) |
+
+## Added 2026-11-05 (per-agent concurrency and quotas, SPEC-02 S02-R-03)
+
+| # | Problem | Status |
+|---|---------|--------|
+| Q1 | A quota stops new tasks, not a run already going: an agent can end the day above its quota by the cost of the tasks it was running when it crossed it. | by design |
+| Q2 | Quota days are UTC days. A goal paused for a quota resumes on the goal queue's watcher (every 5 s, server only), not from the CLI. | by design |
+| Q3 | Only the base agent's quota counts; a quota set on a clone is ignored (clones take their base's limits). | by design |
+| Q4 | Costs come from the model catalog's prices; runs on models without a price (Claude Code on a subscription, the simulator) cost $0 and never use a quota. | open (quotas need priced models) |

@@ -33,7 +33,51 @@ def agent_dict(a: Agent) -> dict[str, Any]:
         "plugins": list(a.plugins or []), "definition_version": a.definition_version or 0,
         "last_active_at": a.last_active_at.isoformat() if a.last_active_at else None,
         "config_version": a.config_version or 0, "health": a.health or "ok", "health_reason": a.health_reason or "",
+        "max_concurrent": a.max_concurrent or 1, "daily_cost_quota_usd": a.daily_cost_quota_usd or 0.0,
+        "active_goals": list(a.active_goals or []),
     }
+
+
+# --- concurrency and quotas (SPEC-02 S02-R-03) -----------------------------------------------
+
+class QuotaExceeded(RuntimeError):
+    """Every agent that could take the work has used its daily cost quota."""
+
+
+def day_start():  # noqa: ANN201
+    """Quotas are per UTC day."""
+    t = now()
+    return t.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _family(s: Session, a: Agent) -> tuple[Agent, list[int]]:
+    base = s.get(Agent, a.parent_id) if a.parent_id else a
+    base = base or a
+    return base, [base.id, *s.scalars(select(Agent.id).where(Agent.parent_id == base.id))]
+
+
+def spent_today(s: Session, a: Agent) -> float:
+    """What the agent and its clones (the quota covers them together) spent since 00:00 UTC."""
+    from agent_company.db import Run
+
+    _, ids = _family(s, a)
+    return float(s.scalar(select(func.coalesce(func.sum(Run.cost), 0.0)).where(
+        Run.agent_id.in_(ids), Run.started_at >= day_start().replace(tzinfo=None))) or 0.0)
+
+
+def over_quota(s: Session, a: Agent) -> str:
+    base, _ = _family(s, a)
+    quota = base.daily_cost_quota_usd or 0.0
+    if quota <= 0:
+        return ""
+    spent = spent_today(s, a)
+    return f"{base.name} used ${spent:.2f} of its ${quota:.2f} daily quota" if spent >= quota else ""
+
+
+def _free(a: Agent, goal_id: int | None) -> bool:
+    """A slot is free, and it is not already working on this goal (two of its runs would share a session)."""
+    active = list(a.active_goals or [])
+    return len(active) < max(1, a.max_concurrent or 1) and (goal_id is None or goal_id not in active)
 
 
 # --- configuration versions (SPEC-02 S02-R-01) ------------------------------------------
@@ -41,7 +85,7 @@ def agent_dict(a: Agent) -> dict[str, Any]:
 # What a version records and a rollback restores. The playbook is versioned on its own (evolution.versions /
 # restore) and the definition file in its git repository; skill levels grown by experience are not versions.
 CONFIG_FIELDS = ("skills", "permissions", "model_pref", "superior_id", "room_key", "enabled", "lifecycle", "goal",
-                 "plugins")
+                 "plugins", "max_concurrent", "daily_cost_quota_usd")
 
 
 class StaleVersion(ValueError):
@@ -406,12 +450,17 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
     why = ""
     with _staff_lock, session() as s:
         pool = s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active")).all()
-        idle = [a for a in pool if a.status == "idle" and a.health != "degraded"]  # S02-R-02
+        quota = {a.id: over_quota(s, a) for a in pool}  # S02-R-03: the quota covers an agent and its clones
+        idle = [a for a in pool if _free(a, goal_id) and a.health != "degraded" and not quota[a.id]]  # S02-R-02
         team = _team_weights(s, goal_id)
         if idle:
             agent = max(idle, key=lambda a: _skill_score(a, skills, team))
             action = "assigned"
-        elif pool:  # all busy or degraded: a fresh clone (a clone starts healthy, with its own runs)
+        elif pool:  # all busy, degraded or over quota: a fresh clone (a clone starts healthy, with its own runs)
+            if all(quota.values()):  # a clone would spend from the same quota
+                raise QuotaExceeded(f"every {role} agent has used its daily quota ({next(iter(quota.values()))}); "
+                                    "it resets at 00:00 UTC")
+            pool = [a for a in pool if not quota[a.id]]
             healthy = [a for a in pool if a.health != "degraded"]
             if not healthy and all(MODEL_TEST in (a.health_reason or "") for a in pool):
                 # a clone would ask for the same failing model: cloning cannot help
@@ -430,12 +479,15 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
             found = _covering(s, skills, writes)
             if found is not None:  # discovery before recruitment (SPEC-03 S03-R-02): no duplicate specialist
                 base, share = found
-                agent = base if base.status == "idle" and base.health != "degraded" else _clone(s, base)
+                if over_quota(s, base):
+                    raise QuotaExceeded(f"{over_quota(s, base)}; it covers {', '.join(skills)} (resets at 00:00 UTC)")
+                agent = base if _free(base, goal_id) and base.health != "degraded" else _clone(s, base)
                 action = "reused" if agent is base else "cloned"
                 why = f"{base.role} {base.name} covers {share:.0%} of {', '.join(skills)}: no new '{role}' recruited"
             else:
                 agent = _recruit(s, role, skills, writes)
                 action = "recruited"
+        agent.active_goals = [*(agent.active_goals or []), goal_id or 0]
         agent.status = "busy"
         agent.last_active_at = now()
         s.flush()
@@ -484,7 +536,8 @@ def _clone(s: Session, src: Agent) -> Agent:
     clone = Agent(name=name, role=base.role, title=base.title, room_key=base.room_key,
                   superior_id=base.superior_id, parent_id=base.id, goal=base.goal,
                   backstory=base.backstory, skills=dict(base.skills), permissions=list(base.permissions),
-                  model_pref=base.model_pref, playbook=base.playbook, enabled=True)
+                  model_pref=base.model_pref, playbook=base.playbook, enabled=True,
+                  max_concurrent=base.max_concurrent or 1)
     s.add(clone)
     s.flush()
     connect(s, clone.id, base.id, "similar", 0.7)
@@ -515,11 +568,21 @@ def _recruit(s: Session, role: str, skills: list[str], writes: bool | None) -> A
     return agent
 
 
-def release(agent_id: int) -> None:
+def release(agent_id: int, goal_id: int | None = None) -> None:
+    """One task of the agent ended (for `goal_id`): its slot is free; it is idle once no task is left."""
     name = None
-    with session() as s:
+    with _staff_lock, session() as s:
         a = s.get(Agent, agent_id)
-        if a is not None and a.status == "busy":
+        if a is None:
+            return
+        active = list(a.active_goals or [])
+        key = goal_id or 0
+        if key in active:
+            active.remove(key)
+        elif active:
+            active.pop()
+        a.active_goals = active
+        if not active and a.status == "busy":
             a.status = "idle"
             name = a.name
     if name:
@@ -541,7 +604,8 @@ def list_rooms() -> list[dict[str, Any]]:
                  "rotational": r.rotational, "agents": counts.get(r.key, 0)} for r in rooms]
 
 
-EDITABLE = {"enabled", "model_pref", "skills", "playbook", "superior_id", "goal", "permissions", "plugins"}
+EDITABLE = {"enabled", "model_pref", "skills", "playbook", "superior_id", "goal", "permissions", "plugins",
+            "max_concurrent", "daily_cost_quota_usd"}
 PERMISSIONS = {"read", "write", "shell", "network"}
 
 
@@ -565,6 +629,20 @@ def update_agent(agent_id: int, changes: dict[str, Any], actor: str = "system",
             raise ValueError(f"permissions are a subset of {sorted(PERMISSIONS)}")
         if a.lifecycle == "retired" and changes.get("enabled"):
             raise ValueError("a retired agent cannot be enabled")
+        if "max_concurrent" in changes:
+            try:
+                changes["max_concurrent"] = int(changes["max_concurrent"])
+            except (TypeError, ValueError):
+                changes["max_concurrent"] = 0
+            if not 1 <= changes["max_concurrent"] <= 8:
+                raise ValueError("max_concurrent is 1 to 8")
+        if "daily_cost_quota_usd" in changes:
+            try:
+                changes["daily_cost_quota_usd"] = round(float(changes["daily_cost_quota_usd"] or 0), 4)
+            except (TypeError, ValueError):
+                changes["daily_cost_quota_usd"] = -1.0
+            if not 0 <= changes["daily_cost_quota_usd"] <= 10_000:
+                raise ValueError("daily_cost_quota_usd is 0 (none) to 10000")
         if "plugins" in changes and not (isinstance(changes["plugins"], list)
                                          and all(isinstance(x, str) and len(x) <= 64 for x in changes["plugins"])):
             raise ValueError("plugins is a list of catalog names")
@@ -634,6 +712,8 @@ def agent_detail(agent_id: int) -> dict[str, Any]:
                           for h in s.scalars(select(Handover).where(
                               or_(Handover.from_agent_id == a.id, Handover.to_agent_id == a.id))
                               .order_by(Handover.id.desc()).limit(10))]
+        d["spent_today"] = round(spent_today(s, a), 6)
+        d["quota_reason"] = over_quota(s, a)
         d["trial_playbook"] = (a.experiment or {}).get("playbook")
         d["trial_outcomes"] = (a.experiment or {}).get("outcomes", [])
         runs = s.scalars(select(Run).where(Run.agent_id == a.id)).all()

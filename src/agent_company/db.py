@@ -78,6 +78,10 @@ class Agent(Base):
     plugins: Mapped[list[Any]] = mapped_column(default=list)  # names of catalog plugins/skills it may use
     definition_version: Mapped[int] = mapped_column(Integer, default=0)  # its agent file (agentdefs.py)
     config_version: Mapped[int] = mapped_column(Integer, default=0)  # latest AgentVersion (SPEC-02 S02-R-01)
+    # S02-R-03: how many goals it may work on at once, and a daily cost quota for it and its clones (0 = none)
+    max_concurrent: Mapped[int] = mapped_column(Integer, default=1)
+    daily_cost_quota_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    active_goals: Mapped[list[Any]] = mapped_column(default=list)  # one entry per task it is working on now
     health: Mapped[str] = mapped_column(String(16), default="ok")  # ok|degraded (S02-R-02)
     health_reason: Mapped[str] = mapped_column(Text, default="")
     health_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # runs before: ignored

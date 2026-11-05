@@ -396,7 +396,7 @@ def _research(goal: Goal, iteration: int, feedback: str) -> str:
                            ["research"])
         return notes
     finally:
-        registry.release(agent.id)
+        registry.release(agent.id, goal.id)
 
 
 # --- planning -------------------------------------------------------------------
@@ -472,7 +472,7 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
         _chat_plan(goal, iteration, plan, summary, gm.id)
         return plan, gm.id
     finally:
-        registry.release(gm.id)
+        registry.release(gm.id, goal.id)
 
 
 def _cleared_for(goal_id: int, plan: list[contracts.TaskContract]) -> None:
@@ -581,7 +581,7 @@ def _configure(goal: Goal) -> None:
     except Exception as e:  # noqa: BLE001 - configuration is a preparation step
         log_event("error", f"configure step: {e}", goal_id=goal.id)
     finally:
-        registry.release(gm.id)
+        registry.release(gm.id, goal.id)
 
 
 def _chat_plan(goal: Goal, iteration: int, plan: list[contracts.TaskContract], summary: str, gm_id: int) -> None:
@@ -690,9 +690,14 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
         role, note = registry.resolve_role(contract.role)
         if note:
             log_event("staff", note, goal_id=goal.id)
-        agent = registry.staff(role, contract.skills, goal.id, writes=contract.writes)
-        writes = contract.writes and "write" in (agent.permissions or [])
         from agent_company.scheduler import set_status
+
+        try:
+            agent = registry.staff(role, contract.skills, goal.id, writes=contract.writes)
+        except registry.QuotaExceeded as e:  # S02-R-03: the task waits; the goal pauses after the iteration
+            set_status(task_id, "skipped", output=f"{QUOTA_SKIP}{e}")
+            return False
+        writes = contract.writes and "write" in (agent.permissions or [])
 
         set_status(task_id, "running", agent_id=agent.id, role=role)
         try:
@@ -772,7 +777,7 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                           kind="result" if ok else "error", agent_id=agent.id, task_id=task_id, proposals=raised)
             return ok
         finally:
-            registry.release(agent.id)
+            registry.release(agent.id, goal.id)
 
     return work
 
@@ -979,10 +984,13 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                 _update_goal(goal_id, status="planning", reason=f"iteration {iteration}"
                              + (": revision required" if iteration > 1 else ""))
                 log_event("iteration", f"iteration {iteration} started", goal_id=goal_id)
-                notes = _research(goal, iteration, feedback)
-                if iteration == 1:
-                    _configure(goal)
-                plan, planner_id = _plan(goal, iteration, feedback, notes)
+                try:
+                    notes = _research(goal, iteration, feedback)
+                    if iteration == 1:
+                        _configure(goal)
+                    plan, planner_id = _plan(goal, iteration, feedback, notes)
+                except registry.QuotaExceeded as e:  # the planner (or the researcher) is out of quota
+                    return _out_of_quota(goal_id, str(e), report)
                 _cleared_for(goal_id, plan)
                 ids = _persist(goal_id, iteration, plan)
                 _spec_step(specs.write_plan, goal, iteration, plan)
@@ -1002,6 +1010,9 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
             halted = _halted(goal_id)
             if halted:
                 return {"status": halted}
+            quota = _quota_skipped(goal_id, iteration)
+            if quota:  # an agent it needs is out of quota: the iteration is incomplete, do not judge it
+                return _out_of_quota(goal_id, quota, report)
             if _budget_skipped(goal_id, iteration):  # the iteration is incomplete: do not judge it
                 try:
                     _budget_note(_goal(goal_id), started)
@@ -1174,6 +1185,51 @@ def _escalate_repeated(goal_id: int, iteration: int) -> str:
 
 
 BUDGET_SKIP = "skipped (budget): "
+QUOTA_SKIP = "skipped (quota): "
+
+
+def _quota_skipped(goal_id: int, iteration: int) -> str:
+    with session() as s:
+        for t in s.scalars(select(Task).where(Task.goal_id == goal_id, Task.iteration == iteration)):
+            if t.status == "skipped" and (t.output or "").startswith(QUOTA_SKIP):
+                return t.output[len(QUOTA_SKIP):]
+    return ""
+
+
+def _out_of_quota(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, Any]:
+    """An agent the goal needs has used its daily quota (S02-R-03, AT-019): the goal waits, paused, and resumes by
+    itself after 00:00 UTC (`resume_after_quota`), or when an administrator resumes it after raising the quota.
+    Benchmark runs end instead."""
+    from agent_company.governance import notify
+
+    g = _goal(goal_id)
+    if g.origin == "eval":
+        _update_goal(goal_id, status="failed", result=f"Stopped: {why}.")
+        return {"status": "failed", "iterations": g.iteration, "report": report, "quota": why}
+    _update_goal(goal_id, status="paused", reason=f"quota: {why}"[:500])
+    with session() as s:
+        row = s.get(Goal, goal_id)
+        row.checkpoint = {**(row.checkpoint or {}), "paused_for": "quota", "paused_why": why,
+                          "paused_day": registry.day_start().date().isoformat()}
+    log_event("goal", f"waiting for a quota: {why}", goal_id=goal_id)
+    notify(f"Goal #{goal_id} waits for an agent's daily quota"[:256], f"{g.title}\n{why}. It resumes after 00:00 UTC, "
+           "or now if you raise the quota and resume it.", level="warning", source="goal", goal_id=goal_id,
+           project_id=g.project_id, admin_only=True)
+    return {"status": "paused", "iterations": g.iteration, "report": report, "quota": why}
+
+
+def resume_after_quota() -> list[int]:
+    """Goals paused for a quota on an earlier UTC day go back to the queue (the goal queue's watcher calls this)."""
+    today = registry.day_start().date().isoformat()
+    with session() as s:
+        ids = [g.id for g in s.scalars(select(Goal).where(Goal.status == "paused"))
+               if (g.checkpoint or {}).get("paused_for") == "quota" and (g.checkpoint or {}).get("paused_day", today) < today]
+    for gid in ids:
+        try:
+            resume(gid, "quota reset")
+        except ValueError as e:  # still over budget, say
+            log_event("goal", f"not resumed after the quota reset: {e}", goal_id=gid)
+    return ids
 
 
 def _budget_skipped(goal_id: int, iteration: int) -> bool:
@@ -1512,6 +1568,7 @@ class GoalQueue:
                 for gid in ids:
                     if gid not in self.seen:
                         self.submit(gid)
+                resume_after_quota()  # S02-R-03: a new UTC day
             except Exception:  # noqa: BLE001 - try again on the next tick
                 pass
 

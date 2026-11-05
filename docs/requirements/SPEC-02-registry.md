@@ -45,7 +45,7 @@ Provisioning/Starting/Stopping collapse into a run's start and end.
 | S02-FR-21 | Capability discovery | P1 | partial → SPEC-03 S03-R-02 |
 | S02-FR-22 | Configuration rollback | P1 | done (`registry.rollback`; playbook `restore`) |
 | S02-FR-23 | Detect inactive and unhealthy agents | P1 | done (`registry.health_overview`, S02-R-02) |
-| S02-FR-24 | Quotas and concurrency limits | P1 | partial: global `max_parallel`; per agent → S02-R-03 |
+| S02-FR-24 | Quotas and concurrency limits | P1 | done (global `max_parallel`; per agent S02-R-03) |
 
 ## Specific requirements
 
@@ -90,10 +90,20 @@ Provisioning/Starting/Stopping collapse into a run's start and end.
 
 ### S02-R-04 Spec acceptance tests (§15) still to cover
 Tests to add to `tests/` (the rest are met by existing behaviour or tests):
-AT-014 unauthorized launch → denied and audited; AT-019 quota exceeded → queued (S02-R-03).
+AT-014 unauthorized launch → denied and audited.
 Done in `tests/test_agent_versions.py`: AT-004, AT-008, AT-013 (repeated executor errors; agents have no
-heartbeat, they run per task), AT-016, AT-023.
+heartbeat, they run per task), AT-016, AT-019 (paused, then resumed the next day), AT-023.
 
 ### S02-R-03 Per-agent concurrency and quotas — FR-24
 - `Agent.max_concurrent` (default 1, as today via `busy`) and an optional daily cost quota per
   agent; exceeding it makes the agent unavailable until the next day.
+- **Status: done** (`Agent.max_concurrent`, `daily_cost_quota_usd`, `active_goals`; `registry._free`,
+  `spent_today`, `over_quota`, `QuotaExceeded`, `release(agent_id, goal_id)`; `loop._out_of_quota`,
+  `resume_after_quota` (called by the goal queue's watcher); agent card → Goals at once, Daily cost quota;
+  `tests/test_agent_versions.py`). An agent takes up to `max_concurrent` goals at once (1 to 8), never the same
+  goal twice (two runs of one agent in one goal would share its Claude Code session); `status` is `busy` while it
+  works on any. The quota covers the agent and its clones together (a clone would otherwise bypass it), counts
+  `Run.cost` since 00:00 UTC, and staffing neither clones nor reuses an agent past it. AT-019: a task whose role is
+  out of quota is skipped, the iteration is not judged, and the goal is paused (`paused_for: quota`); it goes back
+  to the queue by itself on the next UTC day, or when an administrator raises the quota and resumes it. A planner
+  out of quota pauses the goal the same way. Both settings are configuration versions.

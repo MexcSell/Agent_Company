@@ -193,3 +193,81 @@ def test_agent_version_api():
         assert {"agent_update", "agent_rollback", "agent_health_reset"} <= actions
     with session() as s:
         assert s.scalars(select(AgentVersion).where(AgentVersion.agent_id == aid)).first() is not None
+
+
+# --- concurrency and quotas (S02-R-03, AT-019) --------------------------------------------------
+
+def _spend(agent_id, usd):
+    usage.record(model_name="Offline simulator", kind="offline", cost=usd, agent_id=agent_id)
+
+
+def _goals(n):
+    from agent_company import loop
+
+    return [loop.create_goal(f"goal {i}") for i in range(n)]
+
+
+def test_an_agent_takes_as_many_goals_as_its_limit_but_never_one_goal_twice():
+    aid = _agent()
+    g1, g2, g3 = _goals(3)
+    registry.update_agent(aid, {"max_concurrent": 2})
+    a = registry.staff("developer", goal_id=g1)
+    b = registry.staff("developer", goal_id=g2)
+    assert a.id == b.id == aid, "two goals share the agent"
+    c = registry.staff("developer", goal_id=g1)
+    assert c.parent_id == aid, "the same goal twice would share a session: a clone"
+    d = registry.staff("developer", goal_id=g3)
+    assert d.id != aid, "at its limit"
+    registry.release(aid, g1)
+    assert registry.agent_detail(aid)["status"] == "busy" and registry.agent_detail(aid)["active_goals"] == [g2]
+    registry.release(aid, g2)
+    assert registry.agent_detail(aid)["status"] == "idle"
+    with pytest.raises(ValueError):
+        registry.update_agent(aid, {"max_concurrent": 0})
+
+
+def test_a_used_quota_covers_the_clones_and_blocks_staffing():
+    aid = _agent()
+    registry.update_agent(aid, {"daily_cost_quota_usd": 1.0})
+    clone = registry.clone_agent(aid)
+    g1, g2 = _goals(2)
+    _spend(clone["id"], 0.6)
+    got = registry.staff("developer", goal_id=g1).id
+    assert got in {aid, clone["id"]}
+    registry.release(got, g1)
+    _spend(aid, 0.5)
+    assert "used $1.10 of its $1.00" in registry.agent_detail(aid)["quota_reason"]
+    with pytest.raises(registry.QuotaExceeded, match="resets at 00:00 UTC"):
+        registry.staff("developer", goal_id=g2)
+    with pytest.raises(ValueError):
+        registry.update_agent(aid, {"daily_cost_quota_usd": -1})
+
+
+def test_a_goal_waits_for_a_quota_and_resumes_the_next_day():
+    from agent_company import loop
+    from agent_company.db import Goal
+
+    dev = _agent()
+    registry.update_agent(dev, {"daily_cost_quota_usd": 0.5})
+    _spend(dev, 0.6)
+    gid = loop.create_goal("Write the worklog", quality_commands=["test -f WORKLOG.md"])
+    out = loop.run_goal(gid)
+    g = loop._goal(gid)
+    assert out["status"] == "paused" and g.status == "paused", "AT-019: the work waits instead of failing"
+    assert g.checkpoint["paused_for"] == "quota" and "daily quota" in g.checkpoint["paused_why"]
+    assert loop.resume_after_quota() == [], "not on the same day"
+    with session() as s:
+        row = s.get(Goal, gid)
+        row.checkpoint = {**row.checkpoint, "paused_day": "2000-01-01"}
+    registry.update_agent(dev, {"daily_cost_quota_usd": 0})  # as if the day had turned: the quota is free again
+    from agent_company import loop as lp
+
+    ran = []
+    lp_enqueue = lp.enqueue
+    try:
+        lp.enqueue = ran.append
+        assert loop.resume_after_quota() == [gid]
+    finally:
+        lp.enqueue = lp_enqueue
+    assert loop._goal(gid).status == "queued" and ran == [gid]
+    assert loop.run_goal(gid)["status"] == "awaiting_approval"

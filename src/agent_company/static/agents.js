@@ -139,14 +139,17 @@ async function agentModal(id, tab = "profile") {
     return;
   }
   box.innerHTML = `<div class="grid two" style="margin-top:8px"><div>
+      ${a.quota_reason ? `<div class="props"><strong>Out of quota</strong> ${esc(a.quota_reason)}. Goals that need it wait until 00:00 UTC.</div>` : ""}
       ${a.health === "degraded" ? `<div class="props"><strong>Degraded</strong> ${esc(a.health_reason)} It is not staffed until its health is reset or its model changed. ${admin ? ib("check", "Reset its health (its earlier runs stop counting)", 'id="a-heal"', "sm") : ""}</div>` : ""}
       <h3>Mission</h3><p>${esc(a.goal)}</p><p class="muted">${esc(a.backstory)}</p>
       <h3>Skills</h3><div class="row">${skills || '<span class="muted">none</span>'}</div>
       <h3>Permissions</h3><div class="row">${(a.permissions || []).map((p) => `<span class="pill">${esc(p)}</span>`).join(" ")}</div>
       <h3>Certification</h3><p><span class="pill ${a.certification.level >= 3 ? "done" : "info"}">L${a.certification.level}</span> ${esc(a.certification.meaning)} <span class="muted">(${a.certification.evidence.passed}/${a.certification.evidence.outcomes} passed over ${a.certification.evidence.goals} goals${a.certification.expired ? "; expired" : ""})</span></p>
-      <h3>Stats</h3><table><tr><td>Level / XP</td><td class="num">${a.level} / ${a.xp}</td></tr><tr><td>Tasks done / failed</td><td class="num">${a.tasks_done} / ${a.tasks_failed}</td></tr><tr><td>Runs</td><td class="num">${a.usage.runs}</td></tr><tr><td>Input / output tokens</td><td class="num">${fmt.format(a.usage.input_tokens)} / ${fmt.format(a.usage.output_tokens)}</td></tr><tr><td>Cost</td><td class="num">${money(a.usage.cost)}</td></tr><tr><td>Last active</td><td class="num">${ago(a.last_active_at)}</td></tr></table>
+      <h3>Stats</h3><table><tr><td>Level / XP</td><td class="num">${a.level} / ${a.xp}</td></tr><tr><td>Tasks done / failed</td><td class="num">${a.tasks_done} / ${a.tasks_failed}</td></tr><tr><td>Runs</td><td class="num">${a.usage.runs}</td></tr><tr><td>Input / output tokens</td><td class="num">${fmt.format(a.usage.input_tokens)} / ${fmt.format(a.usage.output_tokens)}</td></tr><tr><td>Cost</td><td class="num">${money(a.usage.cost)}</td></tr><tr><td>Spent today (with clones)</td><td class="num">${money(a.spent_today)}${a.daily_cost_quota_usd ? ` of ${money(a.daily_cost_quota_usd)}` : ""}</td></tr><tr><td>Last active</td><td class="num">${ago(a.last_active_at)}</td></tr></table>
     </div><div>
       ${admin ? `<h3>Settings</h3><label>Model${isGm ? " — the General Manager: Claude Code by default; pick an API model, a Claude Code at another address (Models → Add), or another agent" : " (overrides the role route)"}</label>${modelSelect}
+        <div class="row"><div class="grow"><label for="a-conc">Goals at once</label><input id="a-conc" type="number" min="1" max="8" value="${a.max_concurrent}"></div>
+          <div class="grow"><label for="a-quota">Daily cost quota, $ (0 = none; covers its clones; resets 00:00 UTC)</label><input id="a-quota" type="number" min="0" step="0.01" value="${a.daily_cost_quota_usd}"></div></div>
         <label>Plugins and skills it uses (from Agents → Skills & plugins)</label><div class="plug-picks">${plugins.map((p) => `<label class="plug"><input type="checkbox" data-plug="${esc(p.name)}" ${(a.plugins || []).includes(p.name) ? "checked" : ""}><span>${esc(p.name)}</span><small>${esc(p.kind)}</small></label>`).join("") || '<span class="muted">The catalog is empty.</span>'}</div>
         <div class="row" style="margin-top:10px">${ib("save", "Save", 'id="a-save"', "primary")}
         ${a.lifecycle !== "retired" ? `${ib("clone", "Clone", 'id="a-clone"')}${ib(a.lifecycle === "paused" ? "play" : "pause", a.lifecycle === "paused" ? "Resume" : "Pause", 'id="a-pause"')}${a.parent_id ? ib("merge", "Merge into original", 'id="a-merge"') : ""}${ib("trash", "Retire", 'id="a-retire"', "danger")}` : '<span class="muted">Retired agents keep their history.</span>'}</div>` : ""}
@@ -157,7 +160,7 @@ async function agentModal(id, tab = "profile") {
   const act = async (path, body, sure) => { if (sure && !confirm(sure)) return; try { await api(`/api/agents/${id}/${path}`, { method: "POST", body }); toast("Done"); if (current === "agents") viewAgents(); agentModal(id); } catch (e) { toast(e.message); } };
   $("#a-save").onclick = async () => {
     const plugins2 = [...document.querySelectorAll("[data-plug]:checked")].map((c) => c.dataset.plug);
-    try { await api(`/api/agents/${id}`, { method: "PATCH", body: { model_pref: $("#a-model").value || null, plugins: plugins2, expected_version: a.config_version } }); toast("Saved"); agentModal(id); if (current === "agents") viewAgents(); } catch (e) { toast(e.message); }
+    try { await api(`/api/agents/${id}`, { method: "PATCH", body: { model_pref: $("#a-model").value || null, plugins: plugins2, max_concurrent: +$("#a-conc").value, daily_cost_quota_usd: +$("#a-quota").value, expected_version: a.config_version } }); toast("Saved"); agentModal(id); if (current === "agents") viewAgents(); } catch (e) { toast(e.message); }
   };
   $("#a-heal") && ($("#a-heal").onclick = () => act("health/reset"));
   $("#a-clone") && ($("#a-clone").onclick = () => act("clone"));
