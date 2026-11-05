@@ -258,6 +258,14 @@ off while its agents work on a goal. Changes of a room's lead or a project's
 General Manager are kept as a position history, so a decision stays attached to the
 position. The whole organisation exports as JSON or CSV (`/api/org/export`).
 
+An administrator can delegate merge approval for one project to another user until
+a date (Users → Delegate); the right is checked on every approval, so revoking it
+or letting it expire takes effect at once, and every delegated approval is audited.
+Governance settings (approval, budgets, recruitment approval, command rules, …) keep
+every version with its author on Settings → Policy versions and can be restored. A
+project may add stricter rules of its own (a lower goal budget, approval required),
+never weaker ones.
+
 ## Which agent uses which model
 
 The defaults put strong models on planning and design, a coding agent on code, a

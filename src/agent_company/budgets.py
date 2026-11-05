@@ -18,7 +18,6 @@ from typing import Any
 from sqlalchemy import select
 
 from agent_company import usage
-from agent_company.config import settings
 from agent_company.db import Goal, log_event, session
 from agent_company.workflow import ACTIVE
 
@@ -26,10 +25,19 @@ DIMENSIONS = {"cost_usd": "budget_usd", "tokens": "budget_tokens"}  # the ones a
 
 
 def limits(g: Goal) -> dict[str, float]:
-    """The goal's effective budget: cost_usd, tokens, agents (0 = no limit)."""
-    cfg = settings()
-    return {"cost_usd": float(g.budget_usd or cfg.goal_budget_usd or 0), "tokens": int(g.budget_tokens or cfg.goal_token_budget or 0),
-            "agents": int(g.max_active_agents or cfg.goal_agent_limit or 0)}
+    """The goal's effective budget: cost_usd, tokens, agents (0 = no limit). Without its own value, the setting made
+    stricter by the project's own rule (policies.effective, S01-R-05)."""
+    from sqlalchemy.orm import object_session
+
+    from agent_company.policies import effective
+
+    s = object_session(g)
+
+    def rule(key: str) -> Any:
+        return effective(key, g.project_id, s) or 0
+
+    return {"cost_usd": float(g.budget_usd or rule("goal_budget_usd")), "tokens": int(g.budget_tokens or rule("goal_token_budget")),
+            "agents": int(g.max_active_agents or rule("goal_agent_limit"))}
 
 
 def _used(goal_id: int, dim: str) -> float:
@@ -61,7 +69,12 @@ def remaining(goal_id: int, dim: str = "cost_usd") -> float | None:
 def for_child(parent_id: int, requested: dict[str, float] | None = None) -> dict[str, float]:
     """The budget columns of a new child goal: what it asked for (else the setting, else the parent's remainder),
     capped to the parent's remainder. Raises ValueError when the parent has nothing left."""
+    from agent_company.policies import effective
+
     requested = requested or {}
+    with session() as s:
+        parent = s.get(Goal, parent_id)
+        project_id = parent.project_id if parent else None
     out: dict[str, float] = {}
     for dim, column in DIMENSIONS.items():
         left = remaining(parent_id, dim)
@@ -71,7 +84,7 @@ def for_child(parent_id: int, requested: dict[str, float] | None = None) -> dict
             continue
         if left <= 0:
             raise ValueError(f"the parent goal's {dim.replace('_usd', '')} budget is used")
-        default = settings().goal_budget_usd if dim == "cost_usd" else settings().goal_token_budget
+        default = effective("goal_budget_usd" if dim == "cost_usd" else "goal_token_budget", project_id)
         ask = want or default or left
         if ask > left:
             log_event("budget", f"child goal's {dim} budget capped to the parent's remainder ({ask:g} → {left:g})",

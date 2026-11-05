@@ -401,7 +401,7 @@ async function goalDetail(id, openIds = new Set()) {
   const g = await api(`/api/goals/${id}`);
   const iters = [...new Set(g.tasks.map((t) => t.iteration))].sort((a, b) => b - a);
   const actions = [
-    g.status === "awaiting_approval" && me.is_admin ? ib("check", "Approve and merge", 'data-act="approve"', "primary") + ib("x", "Reject", 'data-act="reject"', "danger") : "",
+    g.status === "awaiting_approval" && (me.is_admin || (me.delegations || []).some((d) => d.permission === "approve_goals" && d.project_id === g.project_id)) ? ib("check", "Approve and merge", 'data-act="approve"', "primary") + ib("x", "Reject", 'data-act="reject"', "danger") : "",
     GOAL_ACTIVE.includes(g.status) && g.status !== "paused" && me.is_admin ? ib("pause", "Pause the goal (tasks already started finish)", 'data-act="pause"') : "",
     g.status === "paused" && me.is_admin ? ib("play", "Resume the goal from its checkpoint", 'data-act="resume"', "primary") : "",
     GOAL_ACTIVE.includes(g.status) ? ib("stop", "Cancel the goal", 'data-act="cancel"', "danger") : "",
@@ -598,6 +598,7 @@ async function viewUsers() {
         u.device_bound ? btn(u, "reset_device", "Reset computer") : "",
         u.status === "active" && !u.is_admin ? btn(u, "make_admin", "Make admin") : "",
         !u.is_admin ? btn(u, "perms", "Permissions") : "",
+        u.status === "active" && !u.is_admin ? btn(u, "delegate", "Delegate") : "",
         btn(u, "git", "Git"),
         !u.is_admin ? btn(u, "delete", "Delete", "danger") : ""].join("")}</td></tr>`).join("")}</table></div></div>`;
   document.querySelectorAll("[data-u]").forEach((b) => (b.onclick = async () => {
@@ -605,6 +606,7 @@ async function viewUsers() {
     const user = users.find((x) => x.id === Number(u));
     if (act === "perms") return permissionsForm(user);
     if (act === "git") return gitForm(user);
+    if (act === "delegate") return delegateForm(user);
     if (["delete", "reset_device"].includes(act) && !confirm(`${act.replace("_", " ")} this user?`)) return;
     try { await api(act === "delete" ? `/api/users/${u}` : `/api/users/${u}/${act}`, { method: act === "delete" ? "DELETE" : "POST" }); viewUsers(); updateBadges(); } catch (e) { toast(e.message); }
   }));
@@ -624,6 +626,22 @@ function setFavicon(o) {
 registerView({ id: "dashboard", title: "Dashboard", icon: "dashboard" }, viewDashboard);
 registerView({ id: "research", title: "Research", icon: "research" }, viewResearch);
 registerView({ id: "users", title: "Users", icon: "users", admin: true }, viewUsers);
+
+// Delegated approval rights (SPEC-01 S01-R-03): one project, until an expiry; revocable at once.
+async function delegateForm(u) {
+  const [list, d] = await Promise.all([api("/api/projects"), api("/api/delegations")]);
+  const names = new Map(list.map((p) => [p.id, p.name]));
+  const mine = d.items.filter((x) => x.user_id === u.id);
+  const until = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10);
+  modal(`<h2>Delegations · ${esc(u.name)}</h2><p class="muted">A delegate may approve or reject the goals of one project that wait for a merge, until the expiry (at most ${d.max_days} days). The platform project stays with administrators; agents never receive approval rights.</p>
+    <form id="dl" class="row"><select id="dl-p" class="grow">${list.filter((p) => !p.protected).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select><input id="dl-until" type="date" value="${until}" style="width:auto"><input id="dl-note" placeholder="Note" class="grow"><button class="btn primary">Delegate</button></form>
+    ${mine.length ? `<table><tr><th>Project</th><th>Right</th><th>Until</th><th>State</th><th></th></tr>${mine.map((x) => `<tr><td>${esc(names.get(x.project_id) || `#${x.project_id}`)}</td><td>${esc(x.permission)}</td><td>${esc(x.expires_at.slice(0, 10))}</td><td>${pill(x.state)}</td><td>${x.state === "active" ? `<button class="btn sm danger" data-rev="${x.id}">Revoke</button>` : ""}</td></tr>`).join("")}</table>` : '<p class="muted">No delegations yet.</p>'}`);
+  $("#dl").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api("/api/delegations", { method: "POST", body: { user_id: u.id, project_id: Number($("#dl-p").value), expires_at: `${$("#dl-until").value}T23:59:59Z`, note: $("#dl-note").value } }); delegateForm(u); } catch (err) { toast(err.message); }
+  };
+  document.querySelectorAll("[data-rev]").forEach((b) => (b.onclick = async () => { try { await api(`/api/delegations/${b.dataset.rev}/revoke`, { method: "POST" }); delegateForm(u); } catch (err) { toast(err.message); } }));
+}
 
 async function permissionsForm(u) {
   const list = await api("/api/projects");

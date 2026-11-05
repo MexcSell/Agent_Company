@@ -65,6 +65,7 @@ async function deleteProjects() {
 async function projectForm(p = null) {
   const base = p ? "" : await api("/api/projects-defaults").then((d) => d.base).catch(() => "");
   const rooms = p && me.is_admin ? await api("/api/rooms").catch(() => []) : [];
+  const rules = p && me.is_admin && !p.protected ? await api(`/api/projects/${p.id}/policy`).catch(() => null) : null;
   const gms = p && me.is_admin ? (await api("/api/agents").catch(() => [])).filter((a) => a.lifecycle === "active" && (a.role === "general_manager" || a.id === p.manager_id)) : [];
   modal(`<h2>${icon("projects", 18)} ${p ? "Edit project" : "New project"}</h2><form id="pf">
     <label for="pf-name">Name</label><input id="pf-name" required value="${esc(p?.name || "")}" ${p?.protected ? "disabled" : ""}>
@@ -80,6 +81,12 @@ async function projectForm(p = null) {
       <div class="row"><div class="grow"><label for="pf-budget">Budget, $ (caps all its goals; 0 = none; $${(p.spent_usd || 0).toFixed(2)} used)</label><input id="pf-budget" type="number" min="0" step="0.01" value="${p.budget_usd || 0}"></div>
       <div class="grow"><label for="pf-deadline">Deadline</label><input id="pf-deadline" type="date" value="${esc((p.deadline || "").slice(0, 10))}"></div>
       <div class="grow"><label for="pf-prio">Priority (queue order)</label><select id="pf-prio">${["low", "normal", "high", "critical"].map((c) => `<option ${(p.priority || "normal") === c ? "selected" : ""}>${c}</option>`).join("")}</select></div></div>` : ""}
+    ${rules ? `<h3>Stricter rules for this project</h3><p class="muted">Empty or 0 = the company rule. A project may only tighten them (Settings → Policy versions keeps every change).</p>
+      <div class="row"><div class="grow"><label for="pr-cost">Goal budget, $ (company: ${rules.company.goal_budget_usd || "none"})</label><input id="pr-cost" type="number" min="0" step="0.01" value="${rules.own.goal_budget_usd || ""}"></div>
+      <div class="grow"><label for="pr-tok">Goal tokens (company: ${rules.company.goal_token_budget || "none"})</label><input id="pr-tok" type="number" min="0" value="${rules.own.goal_token_budget || ""}"></div>
+      <div class="grow"><label for="pr-ag">Agents at once (company: ${rules.company.goal_agent_limit || "none"})</label><input id="pr-ag" type="number" min="0" value="${rules.own.goal_agent_limit || ""}"></div></div>
+      <div class="row"><label class="row grow"><input type="checkbox" id="pr-appr" style="width:auto" ${rules.effective.require_approval ? "checked" : ""} ${rules.company.require_approval ? "disabled" : ""}> Merges wait for a person</label>
+      <div class="grow"><label for="pr-rec">Recruitment approval</label><select id="pr-rec">${["never", "permanent_only", "always"].map((c, i, all) => all.indexOf(rules.company.recruit_requires_approval) <= i ? `<option ${rules.effective.recruit_requires_approval === c ? "selected" : ""}>${c}</option>` : "").join("")}</select></div></div>` : ""}
     ${me.is_admin && p ? `<label for="pf-class">Classification (what agents may carry to other projects: public and internal lessons only; secret ones are not stored)</label><select id="pf-class">${["public", "internal", "confidential", "restricted", "secret"].map((c) => `<option ${(p.classification || "internal") === c ? "selected" : ""}>${c}</option>`).join("")}</select>` : ""}
     <div class="row" style="margin-top:12px"><button class="btn icon primary" title="${p ? "Save" : "Create"}" aria-label="${p ? "Save" : "Create"}">${icon(p ? "save" : "check", 16)}</button></div></form>`);
   // The folder follows the name until it is edited: <folder above Agent Company>/<name>.
@@ -105,6 +112,8 @@ async function projectForm(p = null) {
     if (!p?.protected) body.name = $("#pf-name").value.trim();
     try {
       if (p) await api(`/api/projects/${p.id}`, { method: "PATCH", body });
+      if (rules) await api(`/api/projects/${p.id}/policy`, { method: "PUT", body: { goal_budget_usd: +$("#pr-cost").value || 0, goal_token_budget: +$("#pr-tok").value || 0,
+        goal_agent_limit: +$("#pr-ag").value || 0, require_approval: $("#pr-appr").checked && !rules.company.require_approval, recruit_requires_approval: $("#pr-rec").value } });
       else { const r = await api("/api/projects", { method: "POST", body: { ...body, path: $("#pf-path")?.value.trim() || "" } }); selectedProject = r.id; }
       $("#modal").hidden = true; lastMessageId = 0; viewProjects();
     } catch (err) { toast(err.message); }

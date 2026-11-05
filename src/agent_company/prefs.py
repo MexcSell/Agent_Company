@@ -50,6 +50,8 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "improvement_auto_rollback": (bool, "Revert a deployed code improvement automatically when the safe restart refuses it"),
     "a2a_enabled": (bool, "Publish the A2A agent card and take tasks from A2A clients issued on Security -> A2A clients"),
     "shift_seconds": (int, "Length of a research shift on the rotation in seconds (0 = every rotation turn is a shift)"),
+    "blocked_commands": (list, "Regular expressions (one per line) the command policy refuses on top of its built-in "
+                               "rules; they cannot loosen them"),
 }
 LIMITS: dict[str, tuple[float, float]] = {
     "max_iterations": (1, 10), "max_parallel": (1, 16), "command_timeout": (10, 7200),
@@ -78,6 +80,14 @@ def _coerce(key: str, value: Any) -> Any:
             value = [x.strip() for x in value.split("\n") if x.strip()]
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
             raise ValueError(f"{key} must be a list of strings")
+        if key == "blocked_commands":
+            import re
+
+            for pattern in value:
+                try:
+                    re.compile(pattern)
+                except re.error as e:
+                    raise ValueError(f"blocked_commands: {pattern!r} is not a regular expression ({e})") from e
         return value
     try:
         value = typ(value)
@@ -114,7 +124,10 @@ def describe() -> list[dict[str, Any]]:
              "overridden": k in stored, "choices": sorted(CHOICES.get(k, []))} for k, (t, d) in SCHEMA.items()]
 
 
-def set_value(key: str, value: Any) -> Any:
+def set_value(key: str, value: Any, actor: str = "system") -> Any:
+    """Store an override. A governance setting (policies.GOVERNANCE_KEYS) records a policy version (S01-R-05)."""
+    from agent_company import policies
+
     if key not in SCHEMA:
         raise ValueError(f"unknown setting {key!r}")
     v = _coerce(key, value)
@@ -122,6 +135,8 @@ def set_value(key: str, value: Any) -> Any:
         from agent_company import transport
 
         transport.apply(v)
+    if key in policies.GOVERNANCE_KEYS:
+        policies.baseline()
     with session() as s:
         row = s.get(Setting, key)
         if row is None:
@@ -129,19 +144,27 @@ def set_value(key: str, value: Any) -> Any:
         else:
             row.value = {"v": v}
     load()
+    if key in policies.GOVERNANCE_KEYS:
+        policies.record("company", actor, f"{key} = {v}")
     return v
 
 
-def clear(key: str) -> None:
+def clear(key: str, actor: str = "system") -> None:
+    from agent_company import policies
+
     if key == "transport":  # back to the .env value
         from agent_company import transport
 
         transport.apply(config.load_settings().transport)
+    if key in policies.GOVERNANCE_KEYS:
+        policies.baseline()
     with session() as s:
         row = s.get(Setting, key)
         if row is not None:
             s.delete(row)
     load()
+    if key in policies.GOVERNANCE_KEYS:
+        policies.record("company", actor, f"{key} back to the .env value")
 
 
 # --- dashboard layout: JSON values kept apart from the .env settings ----------------------------

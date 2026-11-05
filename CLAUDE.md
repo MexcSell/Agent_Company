@@ -10,6 +10,8 @@ feature came from.
   `registry.py` + `org.py` (agents, rooms; configuration versions with rollback, health: degraded/inactive),
   `organization.py` (SPEC-01: room editing with parent, lead and switch, no cycles; a disabled room's agents are not
   staffed; position history `room:<key>:lead`/`project:<id>:gm`; organisation export JSON/CSV),
+  `policies.py` (SPEC-01: delegated `approve_goals` per project with expiry, checked per call; versions of the
+  governance settings with restore; a project's own rules may only be stricter, `effective` at the use sites),
   `recruitment.py` (SPEC-03: capability gaps from verified proficiency, recruitment records with job descriptions,
   approval policy `recruit_requires_approval` that pauses the goal, probation with reviewed tasks; with `qualify_recruits` a
   new writing recruit is first a `candidate` that runs an eval suite, then approved or rejected), `scheduler.py`, `router.py` (models, routes, fallback,

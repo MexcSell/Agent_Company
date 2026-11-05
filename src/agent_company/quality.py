@@ -100,6 +100,15 @@ def _stage_of(check: str) -> str:
     return "unit"
 
 
+def _require_approval(goal_id: int) -> bool:
+    """`require_approval`, switched on for a project whose own rules ask for it (policies.effective, S01-R-05)."""
+    from agent_company.policies import effective
+
+    with session() as s:
+        g = s.get(Goal, goal_id)
+        return bool(effective("require_approval", g.project_id if g else None, s))
+
+
 def stages(results: list[dict[str, Any]], goal_id: int) -> list[dict[str, Any]]:
     """One row per stage: pass, fail or skipped (no check of that stage ran), with its checks."""
     from agent_company import decisions
@@ -223,5 +232,5 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
         "commit": sha,
         "head": worktrees.git(worktree, "rev-parse", "HEAD"),
         "changed_files": worktrees.changed_files(worktree, base) if base else [],
-        "needs_approval": passed and settings().require_approval,
+        "needs_approval": passed and _require_approval(goal_id),
     }

@@ -45,6 +45,7 @@ from agent_company import (
     network,
     organization,
     performance,
+    policies,
     prefs,
     projects,
     recruitment,
@@ -124,6 +125,18 @@ def admin_user(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     if not user["is_admin"]:
         raise HTTPException(403, "administrators only")
     return user
+
+
+def goal_approver(goal_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    """Administrators, or a user holding a delegation of `approve_goals` for the goal's project right now (S01-R-03)."""
+    if user["is_admin"]:
+        return user
+    with session() as s:
+        g = s.get(Goal, goal_id)
+        project_id = g.project_id if g else None
+    if not policies.allows(user, "approve_goals", project_id):
+        raise HTTPException(403, "administrators, or a delegate for this goal's project")
+    return {**user, "delegated": True}
 
 
 def allowed(perm: str):  # noqa: ANN201
@@ -231,6 +244,19 @@ class ResearchBody(BaseModel):
 
 class SettingBody(BaseModel):
     value: Any
+
+
+class DelegationBody(BaseModel):
+    user_id: int
+    project_id: int
+    expires_at: str
+    permission: str = "approve_goals"
+    note: str = Field("", max_length=500)
+
+
+class RestoreBody(BaseModel):
+    scope: str = "company"
+    version: int
 
 
 class NoticeBody(BaseModel):
@@ -749,7 +775,73 @@ def create_app(start_background: bool = True) -> FastAPI:
 
     @app.get("/api/auth/me")
     def me(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-        return user
+        return {**user, "delegations": [] if user["is_admin"] else policies.list_delegations(user["id"], active_only=True)}
+
+    # --- delegated rights (S01-R-03) ---
+    @app.get("/api/delegations")
+    def delegations(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return {"items": policies.list_delegations(), "permissions": policies.DELEGABLE, "max_days": policies.MAX_DAYS}
+
+    @app.post("/api/delegations")
+    def delegation_create(body: DelegationBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = policies.delegate(f"user:{admin['name']}", body.user_id, body.permission, body.project_id,
+                                    body.expires_at, body.note)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "delegation_grant", out["id"], after={k: out[k] for k in ("permission", "user", "project_id",
+                                                                              "expires_at")}, severity="high")
+        return out
+
+    @app.post("/api/delegations/{delegation_id}/revoke")
+    def delegation_revoke(delegation_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = policies.revoke(delegation_id, f"user:{admin['name']}")
+        except KeyError as e:
+            raise HTTPException(404, "unknown delegation") from e
+        _audit(admin, "delegation_revoke", delegation_id, after={"user": out["user"], "project_id": out["project_id"]})
+        return out
+
+    # --- versioned policies (S01-R-05) ---
+    @app.get("/api/policy/versions")
+    def policy_versions(scope: str = "company", _: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
+        try:
+            return policies.versions(scope)
+        except (KeyError, ValueError) as e:
+            raise HTTPException(400, f"unknown scope {scope}") from e
+
+    @app.post("/api/policy/restore")
+    def policy_restore(body: RestoreBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = policies.restore(body.scope, body.version, f"user:{admin['name']}")
+        except KeyError as e:
+            raise HTTPException(404, str(e).strip("'\"")) from e
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "policy_restore", body.scope, after={"restored": body.version, "version": out["version"]},
+               severity="high")
+        return out
+
+    @app.get("/api/projects/{project_id}/policy")
+    def project_policy(project_id: int, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            return policies.project_rules(project_id)
+        except KeyError as e:
+            raise HTTPException(404, "unknown project") from e
+
+    @app.put("/api/projects/{project_id}/policy")
+    def project_policy_set(project_id: int, rules: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                           ) -> dict[str, Any]:
+        """A project's own rules: stricter than the company's or refused."""
+        try:
+            before = policies.project_rules(project_id)["own"]
+            out = policies.set_project_rules(project_id, rules, f"user:{admin['name']}")
+        except KeyError as e:
+            raise HTTPException(404, "unknown project") from e
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "project_policy", project_id, before=before, after=out["own"])
+        return out
 
     # --- users (admin) ---
     @app.get("/api/users")
@@ -2058,15 +2150,17 @@ def create_app(start_background: bool = True) -> FastAPI:
         return out
 
     @app.post("/api/goals/{goal_id}/approve")
-    def goal_approve(goal_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+    def goal_approve(goal_id: int, admin: dict[str, Any] = Depends(goal_approver)) -> dict[str, Any]:
         out = loop.approve(goal_id, actor=f"user:{admin['name']}")
-        _audit(admin, "goal_approve", goal_id, after=out)
+        _audit(admin, "goal_approve", goal_id, after={**out, "delegated": bool(admin.get("delegated"))},
+               severity="high" if admin.get("delegated") else "info")
         return out
 
     @app.post("/api/goals/{goal_id}/reject")
-    def goal_reject(goal_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+    def goal_reject(goal_id: int, admin: dict[str, Any] = Depends(goal_approver)) -> dict[str, Any]:
         loop.reject(goal_id, actor=f"user:{admin['name']}")
-        _audit(admin, "goal_reject", goal_id)
+        _audit(admin, "goal_reject", goal_id, after={"delegated": bool(admin.get("delegated"))},
+               severity="high" if admin.get("delegated") else "info")
         return {"ok": True}
 
     @app.post("/api/goals/{goal_id}/cancel")
@@ -2584,13 +2678,13 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.put("/api/settings/{key}")
     def settings_put(key: str, body: SettingBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         before = getattr(settings(), key, None)
-        value = prefs.set_value(key, body.value)
+        value = prefs.set_value(key, body.value, actor=f"user:{admin['name']}")
         _audit(admin, "setting_set", key, before={"value": before}, after={"value": value})
         return {"key": key, "value": value}
 
     @app.delete("/api/settings/{key}")
     def settings_clear(key: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
-        prefs.clear(key)
+        prefs.clear(key, actor=f"user:{admin['name']}")
         _audit(admin, "setting_clear", key)
         return {"ok": True}
 

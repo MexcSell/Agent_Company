@@ -89,6 +89,8 @@ class Settings:
     shift_seconds: int = 0
     # Outside callers may give the company tasks over A2A (G-R-06): the agent card is published and /api/a2a answers.
     a2a_enabled: bool = False
+    # Regular expressions the command policy refuses on top of governance.DANGEROUS (SPEC-01 S01-R-05).
+    blocked_commands: list[str] = field(default_factory=list)
 
     @property
     def worktrees_dir(self) -> Path:

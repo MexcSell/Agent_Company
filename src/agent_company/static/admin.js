@@ -70,15 +70,21 @@ function wireNavCard() {
 
 async function viewSettings(quiet) {
   if (quiet && $("#s-table")) return;
-  const [all, tls] = await Promise.all([api("/api/settings"), api("/api/tls")]);
+  const [all, tls, versions] = await Promise.all([api("/api/settings"), api("/api/tls"), api("/api/policy/versions").catch(() => [])]);
   const rows = all.filter((r) => r.key !== "transport");
   const input = (r) => r.type === "bool" ? `<select data-k="${r.key}"><option value="true" ${r.value ? "selected" : ""}>on</option><option value="false" ${r.value ? "" : "selected"}>off</option></select>`
     : r.choices.length ? `<select data-k="${r.key}">${r.choices.map((c) => `<option ${c === r.value ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`
     : r.type === "list" ? `<textarea data-k="${r.key}" rows="2">${esc((r.value || []).join("\n"))}</textarea>`
     : `<input data-k="${r.key}" value="${esc(r.value)}" ${r.type === "str" ? "" : 'type="number" step="any"'}>`;
   $("#view").innerHTML = navCard() + connectionCard(tls, all.find((r) => r.key === "transport")) + `<div class="card"><h2>Settings</h2><p class="muted">Saved settings override <code>.env</code> and apply immediately. Reset returns a setting to its <code>.env</code> value.</p>
-    <div class="table-wrap"><table id="s-table">${rows.map((r) => `<tr><td><strong>${esc(r.key)}</strong><div class="muted">${esc(r.description)}</div></td><td style="min-width:200px">${input(r)}</td><td class="row nowrap">${ib("save", "Save", `data-save="${r.key}"`, "sm primary")}${r.overridden ? ib("refresh", "Reset to the .env value", `data-reset="${r.key}"`, "sm") : ""}</td></tr>`).join("")}</table></div></div>`;
+    <div class="table-wrap"><table id="s-table">${rows.map((r) => `<tr><td><strong>${esc(r.key)}</strong><div class="muted">${esc(r.description)}</div></td><td style="min-width:200px">${input(r)}</td><td class="row nowrap">${ib("save", "Save", `data-save="${r.key}"`, "sm primary")}${r.overridden ? ib("refresh", "Reset to the .env value", `data-reset="${r.key}"`, "sm") : ""}</td></tr>`).join("")}</table></div></div>
+    <div class="card"><h2>Policy versions</h2><p class="muted">Every change of a governance setting (approval, budgets, recruitment approval, proposals, command rules, …) is kept as a version with its author. Restoring one is a change of its own. Projects add stricter rules on their edit form.</p>
+    ${versions.length ? `<div class="table-wrap"><table><tr><th class="num">Version</th><th>Change</th><th>By</th><th>When</th><th></th></tr>${versions.map((v, i) => `<tr><td class="num">${v.version}</td><td>${esc(v.note)}</td><td>${esc(v.author)}</td><td>${ago(v.created_at)}</td><td>${i ? `<button class="btn sm" data-restore="${v.version}">Restore</button>` : '<span class="muted">in force</span>'}</td></tr>`).join("")}</table></div>` : '<p class="muted">No governance setting changed yet.</p>'}</div>`;
   wireNavCard();
+  document.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = async () => {
+    if (!confirm(`Restore the governance settings of version ${b.dataset.restore}?`)) return;
+    try { await api("/api/policy/restore", { method: "POST", body: { scope: "company", version: Number(b.dataset.restore) } }); toast("Restored"); viewSettings(); } catch (e) { toast(e.message); }
+  }));
   document.querySelectorAll("[data-save]").forEach((b) => (b.onclick = async () => {
     const el = document.querySelector(`[data-k="${b.dataset.save}"]`);
     try { await api(`/api/settings/${b.dataset.save}`, { method: "PUT", body: { value: el.value } }); toast("Saved"); viewSettings(); } catch (e) { toast(e.message); }

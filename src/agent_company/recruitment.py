@@ -203,8 +203,15 @@ def _row(r: Recruitment, names: dict[int, str]) -> dict[str, Any]:
             "created_at": r.created_at.isoformat(), "decided_at": r.decided_at.isoformat() if r.decided_at else None}
 
 
-def needs_approval(decision: str) -> bool:
-    policy = settings().recruit_requires_approval
+def needs_approval(decision: str, goal_id: int | None = None, s: Session | None = None) -> bool:
+    """By `recruit_requires_approval`, made stricter by the goal's project's own rule (policies.effective)."""
+    from agent_company.policies import effective
+
+    project_id = None
+    if goal_id is not None and s is not None:
+        g = s.get(Goal, goal_id)
+        project_id = g.project_id if g else None
+    policy = effective("recruit_requires_approval", project_id, s)
     return (policy == "always" and decision in {"clone", "recruit"}) or (policy == "permanent_only"
                                                                           and decision == "recruit")
 
@@ -264,7 +271,7 @@ def open_request(s: Session, role: str, skills: list[str], writes: bool | None, 
 
 def _ask_or_approve(s: Session, rec: Recruitment, notify: Callable[..., Any]) -> None:
     """The approval policy (S03-R-05): the record waits for an administrator, or is approved by policy."""
-    if needs_approval(rec.decision):
+    if needs_approval(rec.decision, rec.goal_id, s):
         g = s.get(Goal, rec.goal_id) if rec.goal_id else None
         jd = rec.job_description or {}
         rec.status = "pending"

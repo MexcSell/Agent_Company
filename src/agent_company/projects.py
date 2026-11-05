@@ -215,7 +215,10 @@ def visible(user: dict[str, Any]):  # noqa: ANN201
     if allowed == "all":
         return q
     granted = list(allowed) if isinstance(allowed, list) else []
-    return q.where(or_(Project.created_by == user["id"], Project.id.in_(granted or [-1])))
+    from agent_company.policies import delegated
+
+    return q.where(or_(Project.created_by == user["id"], Project.id.in_(granted or [-1]),
+                       Project.id.in_(delegated(user["id"]))))  # while a delegation holds (S01-R-03)
 
 
 def list_projects(user: dict[str, Any]) -> list[dict[str, Any]]:

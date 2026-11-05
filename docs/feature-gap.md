@@ -70,7 +70,7 @@ Machines code):
 | --- | --- | --- |
 | Tamper-evident (hash-chained) audit log | SPEC01 §10.5, SPEC14 | done (`governance.audit`, `verify_audit`) |
 | Room editing (hierarchy without cycles, lead, switch), position history, organisation export (JSON/CSV) | SPEC01 FR-02, FR-03, FR-13 | done (`organization.py`, Agents → Rooms, S01-R-01, R-02, R-04) |
-| Delegation of approval rights; versioned organisational policies | SPEC01 FR-09, FR-14 | open → S01-R-03, S01-R-05 |
+| Delegation of approval rights; versioned organisational policies, stricter project rules | SPEC01 FR-09, FR-14 | done (`policies.py`, Users → Delegate, Settings → Policy versions, S01-R-03, S01-R-05) |
 | Dangerous-operation policy for commands; approval for destructive actions | SPEC14 §8.4 | done (`governance.check_command`, used by every quality command) |
 | Secret scanning of changes in the quality gate | SPEC14, subscription guide §7 | done (`checks.scan_secrets`) |
 | Prompt-injection flags on collected material; flagged pages kept out of prompts; material wrapped as untrusted data | SPEC14 §9, SPEC11 §10.4 | done (`research.injection_flags`) |

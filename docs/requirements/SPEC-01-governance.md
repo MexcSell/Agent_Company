@@ -36,12 +36,12 @@ and SPEC-15 dashboard; SPEC-02 feeds SPEC-03 recruitment and SPEC-04 orchestrati
 | S01-FR-06 | Authority and permission management | P0 | partial: user permissions done; agent autonomy → SPEC-14 S14-R-02 |
 | S01-FR-07 | Company objectives decomposed to departments | P0 | gated (goals are per project) |
 | S01-FR-08 | Department KPIs | P1 | partial: room metrics in `performance.report` |
-| S01-FR-09 | Delegation (scope, expiry, revocable) | P0 | open → S01-R-03 |
-| S01-FR-10 | Decision and approval workflow | P0 | done for goals (SPEC-04 S04-R-02, `decisions.py`); delegation of approval rights → S01-R-03 |
+| S01-FR-09 | Delegation (scope, expiry, revocable) | P0 | done (`policies.delegate`, `allows`, S01-R-03) |
+| S01-FR-10 | Decision and approval workflow | P0 | done for goals (SPEC-04 S04-R-02, `decisions.py`); merge approval delegable per project (S01-R-03) |
 | S01-FR-11 | Transactional restructuring | P1 | gated |
 | S01-FR-12 | Immutable governance audit | P0 | done (`governance.audit`, `verify_audit`) |
 | S01-FR-13 | Organizational reports (JSON/CSV) | P1 | done (`organization.export`, `/api/org/export`, S01-R-04) |
-| S01-FR-14 | Versioned organizational policies | P0 | open → S01-R-05 |
+| S01-FR-14 | Versioned organizational policies | P0 | done (`policy_versions`, `Project.policy`, S01-R-05) |
 
 ## Specific requirements
 
@@ -63,10 +63,16 @@ and SPEC-15 dashboard; SPEC-02 feeds SPEC-03 recruitment and SPEC-04 orchestrati
   created), `organization.positions`, `holder(position, at)`, `GET /api/org/positions`; a project's GM is
   editable (`manager_id`, `manager_reason`) on the project form.
 
-### S01-R-03 Delegation of approval rights — FR-09
+### S01-R-03 Delegation of approval rights — FR-09 — done
 - An administrator can delegate a permission (e.g. approve merges for project X) to another user
   with scope (project) and expiry; revocation is immediate for new actions. Audited.
 - Agents can never receive delegated approval rights over their own work.
+- Done 2026-11-05 in `policies.py` (`delegations` table): the delegable right is `approve_goals` (approve or reject
+  the project's goals waiting for a merge), for one project, at most 365 days, to an active non-admin user, never
+  for the platform project. `api.goal_approver` checks the grant on each call, so revocation and expiry hold for the
+  next action; the delegate sees the project while the grant holds (`projects.visible`) and `/api/auth/me` lists
+  the active grants. Grant, revoke and each delegated approval are audited (high). Agents have no user row, so no
+  delegation reaches them. Users → Delegate. Tests: `tests/test_policies.py`.
 
 ### S01-R-04 Organization export — FR-13 — done
 - `GET /api/org/export?format=json|csv`: rooms, agents (role, superior, lifecycle, certification
@@ -80,3 +86,13 @@ and SPEC-15 dashboard; SPEC-02 feeds SPEC-03 recruitment and SPEC-04 orchestrati
   A project may add stricter rules but cannot weaken company-wide ones.
 - Acceptance: lowering `goal_budget_usd` for one project works; raising it above the company limit
   is rejected.
+- Done 2026-11-05: `policy_versions` (scope `company` or `project:<id>`) records the overrides and the values in
+  force of `policies.GOVERNANCE_KEYS` (approval, goal budgets, budget action, recruitment approval and
+  qualification, proposals, goal depth, candidate smoke, auto push, A2A, and the new `blocked_commands`: company
+  command rules on top of the built-in ones) on each `prefs.set_value`/`clear`, with the author; the first change
+  records the prior state as version 1. `POST /api/policy/restore` (a new version itself), Settings → Policy
+  versions. A project's own rules (`Project.policy`: goal cost/token/agent limits, `require_approval`,
+  `recruit_requires_approval`) are refused when weaker; `policies.effective` takes the stricter of both in
+  `budgets.limits`, `quality` (needs approval) and `recruitment.needs_approval`, so a company limit lowered later
+  still wins. Not taken: per-project command rules (commands run without a project context) and an autonomy
+  default (autonomy comes from the role template).

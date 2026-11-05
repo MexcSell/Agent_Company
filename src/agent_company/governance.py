@@ -154,10 +154,19 @@ DANGEROUS: list[tuple[str, re.Pattern[str]]] = [
 
 
 def check_command(cmd: str) -> str | None:
-    """Return why a command is refused, or None if it may run."""
+    """Return why a command is refused, or None if it may run. Administrators add rules (`blocked_commands`,
+    versioned as policy, S01-R-05); they never remove the built-in ones."""
     for reason, pattern in DANGEROUS:
         if pattern.search(cmd):
             return reason
+    from agent_company.config import settings
+
+    for extra in settings().blocked_commands or []:
+        try:
+            if re.search(extra, cmd, re.I):
+                return f"company rule /{extra}/"
+        except re.error:  # validated on save; an .env value is not
+            return f"company rule /{extra}/ is not a valid pattern (refusing to be safe)"
     return None
 
 
