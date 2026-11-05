@@ -98,7 +98,8 @@ Machines code):
 | Requirements traceability (requirement → task → test) | ASEAO08 §5.3, ASEAO09 §5.1 | open → S08-R-01, S09-R-06 |
 | Code-review checklist with a logic-verification step (trace data flow; no approval for code that only looks clean) and de-duplicated comments | ASEAO08 §13, `extensions/analysis_results.md` | done (`quality.REVIEW_CHECKLIST`, `review_verdict`, `merge_findings`, S08-R-03) |
 | Change boundaries: no skipped tests, removed assertions, new dependencies or CI/.env edits without a permit | ASEAO08 §12.2 | done (`checks.boundary_violations`, S08-R-04) |
-| Quality gates as named stages; test-strategy selection by test category | ASEAO09 §6-7, §13 | open → S09-R-01, S09-R-02 |
+| Quality gates as named stages; an open critical defect blocks the merge | ASEAO09 §13 | done (`quality.stages`, S09-R-01) |
+| Test-strategy selection by test category and risk | ASEAO09 §6-7 | open → S09-R-02 |
 | Innovation experiments, portfolio and technology radar | ASEAO10 §10-14, §21 | open → S10-R-02, S10-G-01..G-06 |
 | Knowledge graph of agents, projects, technologies and lessons | SPEC11 §7, 1.txt (Neo4j) | open → S11-R-07 |
 | Knowledge items with provenance; task-relevant, project-scoped retrieval | SPEC11 §3, §8 | done / partial (`learning.retrieve`; FTS5 and contradiction penalty open) → S11-R-01, S11-R-03 |

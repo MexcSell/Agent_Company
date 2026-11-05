@@ -46,8 +46,8 @@ separate view, no refused-command counts.
 
 ### S15-R-04 Goal detail — SPEC-04, ASEAO09
 Workflow state history, stage-wise gate table, decision records with approve/reject, trace.
-**Status: partial:** workflow history, decisions with approve/reject, the blackboard, pause/resume are on
-the goal page; the stage-wise gate table and a trace view are open.
+**Status: partial:** workflow history, the gate by stage, decisions with approve/reject, the blackboard and
+pause/resume are on the goal page; a trace view is open (the trace has an API).
 
 ### S15-R-05 Project detail — ASEAO05
 Milestones, risk/blocker register, insights, upcoming action items, weighted progress, topics.

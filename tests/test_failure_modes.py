@@ -88,3 +88,38 @@ def test_an_automatic_merge_that_conflicts_leaves_the_goal_for_a_person(env, mon
     with session() as s:
         assert "automatic merge was refused" in s.get(Goal, gid).result
     assert not (r / ".git" / "MERGE_HEAD").exists()
+
+
+# --- ASEAO09 S09-R-01: named gate stages ------------------------------------------------------
+
+def test_the_gate_reports_one_row_per_stage():
+    from agent_company import quality
+
+    gid = loop.create_goal("Staged", quality_commands=["test -f WORKLOG.md", "[integration] true"])
+    out = loop.run_goal(gid)
+    st = {r["stage"]: r["status"] for r in out["report"]["stages"]}
+    assert st == {"requirements": "skipped", "contract": "pass", "static": "pass", "security": "pass",
+                  "unit": "pass", "integration": "pass", "regression": "pass", "review": "pass",
+                  "governance": "pass"}
+    assert [r["stage"] for r in out["report"]["stages"]] == quality.STAGES
+    with session() as s:
+        assert s.get(Goal, gid).history[-1]["stages"]["integration"] == "pass"
+    assert quality.split_stage("[foo] make x") == ("unit", "[foo] make x")
+
+
+def test_a_command_that_passed_before_and_fails_now_is_a_regression():
+    gid = loop.create_goal("Regress", quality_commands=["test ! -f WORKLOG.md"], max_iterations=1)
+    out = loop.run_goal(gid)
+    st = {r["stage"]: r["status"] for r in out["report"]["stages"]}
+    assert out["status"] == "failed" and st["regression"] == "fail" and st["unit"] == "fail"
+
+
+def test_an_open_critical_defect_blocks_approval():
+    from agent_company.db import Defect
+
+    gid = loop.create_goal("Critical defect", quality_commands=["test -f WORKLOG.md"])
+    assert loop.run_goal(gid)["status"] == "awaiting_approval"
+    with session() as s:
+        s.add(Defect(goal_id=gid, check="secret scan", severity="critical", detail="key in config.py"))
+    with pytest.raises(ValueError, match="critical"):
+        loop.approve(gid)

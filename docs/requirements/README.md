@@ -61,7 +61,7 @@ the order is safety and correctness of that pipeline first, then management, the
 2. **Pipeline quality**: done 2026-11-05 — S04-R-01 blackboard, S04-R-02 decision records,
    S04-R-04 workflow states, S04-R-10 messages, S11-R-01, S11-R-05; partial S11-R-03, S04-R-12.
    S03-R-02 duplicate prevention and G-R-03 failure-mode tests done as well.
-   Left: S09-R-01 staged gates, G-R-01 contract fields, G-R-04 measured enablement gate,
+   S09-R-01 staged gates done too. Left: G-R-01 contract fields, G-R-04 measured enablement gate,
    S04-R-03 conflict review.
 3. **Management**: ASEAO05 milestones, risks/blockers, insights, action items, topics; SPEC-02
    versions and health; S06-R-02 source monitoring; S14-R-04 incidents; S14-R-05 classification;

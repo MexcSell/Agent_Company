@@ -72,6 +72,55 @@ def review_verdict(output: str) -> tuple[bool, str]:
     return True, outcome[-1].upper() if outcome else "PASS"
 
 
+# Named gate stages (ASEAO09 §13, S09-R-01). Commands may carry a stage tag: "[integration] pytest tests/it";
+# untagged commands are unit tests. `regression` compares commands with the baseline; `governance` reflects
+# decisions that wait for a person (it never fails the gate, it holds the merge).
+STAGES = ["requirements", "contract", "static", "security", "unit", "integration", "regression", "review", "governance"]
+COMMAND_STAGES = {"unit", "integration", "regression", "security", "static"}
+_STAGE_TAG = re.compile(r"^\s*\[([a-z_]+)\]\s*", re.I)
+
+
+def split_stage(cmd: str) -> tuple[str, str]:
+    """('integration', 'pytest tests/it') for '[integration] pytest tests/it'; untagged → unit."""
+    m = _STAGE_TAG.match(cmd)
+    if m and m.group(1).lower() in COMMAND_STAGES:
+        return m.group(1).lower(), cmd[m.end():]
+    return "unit", cmd
+
+
+def _stage_of(check: str) -> str:
+    if check.startswith("task "):
+        return "contract"
+    if check.startswith("review "):
+        return "review"
+    if check == "secret scan":
+        return "security"
+    if check in {"syntax", "scope", "boundaries"}:
+        return "static"
+    return "unit"
+
+
+def stages(results: list[dict[str, Any]], goal_id: int) -> list[dict[str, Any]]:
+    """One row per stage: pass, fail or skipped (no check of that stage ran), with its checks."""
+    from agent_company import decisions
+
+    rows = []
+    for st in STAGES:
+        if st == "regression":
+            mine = [c for c in results if c.get("baseline_passed")]
+        else:
+            mine = [c for c in results if c.get("stage") == st]
+        if st == "governance":
+            waiting = decisions.blocking(goal_id)
+            rows.append({"stage": st, "status": "waiting" if waiting else "pass", "checks": len(waiting),
+                         "failed": [f"decision #{d['id']} {d['topic']}" for d in waiting]})
+            continue
+        failed = [c["check"] for c in mine if not c["passed"]]
+        rows.append({"stage": st, "status": "skipped" if not mine else ("fail" if failed else "pass"),
+                     "checks": len(mine), "failed": failed})
+    return rows
+
+
 def baseline(goal_id: int) -> dict[str, Any]:
     """Run the quality commands on the untouched code, before any agent changes it."""
     with session() as s:
@@ -82,7 +131,7 @@ def baseline(goal_id: int) -> dict[str, Any]:
     out = dict(done)
     for cmd in commands:
         if cmd not in out:
-            ok, detail = contracts.run_command(cmd, worktree, settings().command_timeout)
+            ok, detail = contracts.run_command(split_stage(cmd)[1], worktree, settings().command_timeout)
             out[cmd] = {"passed": ok, "detail": detail[-800:]}
     with session() as s:
         s.get(Goal, goal_id).baseline = out
@@ -108,7 +157,7 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
         failed = [c for c in gate.get("acceptance", []) if not c["passed"]]
         ok = status == "done" and not failed
         detail = "; ".join(c["detail"] for c in failed) or ("" if status == "done" else output[-300:])
-        results.append({"check": f"task {key}", "passed": ok, "detail": detail or status})
+        results.append({"check": f"task {key}", "passed": ok, "detail": detail or status, "stage": "contract"})
         if not ok:
             feedback.append(f"Task '{title}' ({role}) {status}: {detail}")
         if role in REVIEW_ROLES and status == "done":
@@ -116,23 +165,27 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
             if not passed_review:
                 findings = merge_findings(output)
                 results.append({"check": f"review {key}", "passed": False, "detail": why,
-                                "findings": findings})
+                                "findings": findings, "stage": "review"})
                 feedback.append(f"Reviewer '{title}' ({why}):\n"
                                 + ("\n".join(f"- {f}" for f in findings) if findings else output[-1500:]))
+            else:
+                results.append({"check": f"review {key}", "passed": True, "detail": why, "stage": "review"})
 
     from agent_company.gitsync import identity_for
 
     sha = worktrees.commit_all(worktree, f"Goal {goal_id} iteration {iteration}", author=identity_for(ordered_by))
     if base:
         for c in checks_mod.run_static(worktree, base, allowed, protect, permits):
-            results.append(c)
+            results.append(c | {"stage": _stage_of(c["check"])})
             if not c["passed"]:
                 feedback.append(f"{c['check'].capitalize()} check failed:\n{c['detail']}")
     for cmd in commands:
-        ok, detail = contracts.run_command(cmd, worktree, settings().command_timeout)
+        stage, run = split_stage(cmd)
+        ok, detail = contracts.run_command(run, worktree, settings().command_timeout)
         before = baseline.get(cmd)
         preexisting = not ok and before is not None and not before.get("passed")
-        row = {"check": f"command {cmd}", "passed": ok, "detail": detail[-1500:]}
+        row = {"check": f"command {run}", "passed": ok, "detail": detail[-1500:], "stage": stage,
+               "baseline_passed": bool(before and before.get("passed"))}
         if preexisting:
             row["preexisting"] = True
             row["detail"] = "already failing before the agents started\n" + row["detail"]
@@ -148,6 +201,7 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
     return {
         "passed": passed,
         "score": score,
+        "stages": stages(results, goal_id),
         "checks": results,
         "feedback": "\n\n".join(feedback),
         "commit": sha,

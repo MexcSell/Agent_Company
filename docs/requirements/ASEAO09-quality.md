@@ -20,6 +20,11 @@ scope checks (`quality.py`, `checks.py`); defects opened/closed/reopened automat
 - Check commands are tagged with a stage (`{"run": "...", "stage": "unit"}`; untagged = `unit`).
 - Merge is blocked when any mandatory stage fails or a critical defect is open (AT-018).
 - Acceptance: the goal page shows one row per stage; an open critical defect blocks `approve`.
+- **Status: done** (`quality.STAGES`, `stages`, `split_stage`; goal page "Gate by stage"). Commands are
+  tagged with a prefix in the command string (`[integration] pytest tests/it`) rather than a JSON object,
+  so `quality_commands` stays a list of strings. `requirements` stays `skipped` until S08-R-01 exists;
+  `security` holds the secret scan (no dependency audit yet, S08-R-05); `governance` is `waiting` while a
+  decision needs a person (it holds the merge, it does not fail the gate).
 
 ### S09-R-02 Risk-based test strategy — §6 (AT-001)
 - The planner derives a short test strategy per goal from project classification (SPEC-14

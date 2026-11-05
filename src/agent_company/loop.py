@@ -813,7 +813,8 @@ def _record_history(goal_id: int, iteration: int, report: dict[str, Any]) -> Non
         g = s.get(Goal, goal_id)
         g.history = [*(h for h in g.history or [] if h.get("iteration") != iteration),
                      {"iteration": iteration, "commit": report.get("head"), "score": report.get("score", 0.0),
-                      "passed": report["passed"], "scope_failed": "scope" in failed}]
+                      "passed": report["passed"], "scope_failed": "scope" in failed,
+                      "stages": {r["stage"]: r["status"] for r in report.get("stages", [])}}]
 
 
 def _requeue_unfinished(goal_id: int, iteration: int) -> list[int]:
@@ -971,6 +972,11 @@ def approve(goal_id: int, actor: str = "system") -> dict[str, Any]:
     waiting = decisions.blocking(goal_id)
     if waiting:  # S04-R-02: checked at merge time, so a revoked approval blocks too
         raise ValueError("decision(s) waiting for a person: " + ", ".join(f"#{d['id']} {d['topic']}" for d in waiting))
+    from agent_company.performance import list_defects
+
+    critical = [d for d in list_defects("open", goal_id) if d["severity"] == "critical"]
+    if critical:  # S09-R-01: an open critical defect blocks the merge
+        raise ValueError("open critical defect(s): " + ", ".join(d["check"] for d in critical))
     try:
         sha = _merge(goal_id)
     except worktrees.WorktreeError as e:  # the goal stays awaiting approval; the repository is unchanged
