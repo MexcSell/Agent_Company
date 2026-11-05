@@ -127,13 +127,26 @@ def test_a_message_becomes_a_goal_that_waits_for_a_person_and_completes():
     follow = send(c, token, "Also add a goodbye function", taskId=out["id"]).json()["error"]
     assert follow["code"] == a2a.UNSUPPORTED and "send a new message" in follow["message"]
 
+    second = send(c, token, "Add a goodbye function to hello.py").json()["result"]["task"]
+    for _ in range(150):
+        with session() as s:
+            if s.scalars(select(Goal).where(Goal.origin == "a2a", Goal.id != gid)).one().status == "awaiting_approval":
+                break
+        time.sleep(0.1)
+    else:
+        raise AssertionError("the second goal never reached approval")
+    withdrawn = rpc(c, token, "CancelTask", {"id": second["id"]}).json()["result"]
+    assert withdrawn["status"]["state"] == "TASK_STATE_CANCELED", "work waiting for approval can be withdrawn"
+
     assert c.post(f"/api/goals/{gid}/approve").json()["status"] == "approved"
     done = rpc(c, token, "GetTask", {"id": out["id"], "historyLength": 0}).json()["result"]
     assert done["status"]["state"] == "TASK_STATE_COMPLETED" and "history" not in done
     assert done["artifacts"][0]["parts"][0]["text"].startswith("Iteration")
     assert rpc(c, token, "CancelTask", {"id": out["id"]}).json()["error"]["code"] == a2a.NOT_CANCELABLE
     listed = rpc(c, token, "ListTasks", {"pageSize": 1}).json()["result"]
-    assert listed["totalSize"] == 1 and listed["nextPageToken"] == "" and listed["tasks"][0]["id"] == out["id"]
+    assert listed["totalSize"] == 2 and listed["nextPageToken"] == "1" and len(listed["tasks"]) == 1
+    rest = rpc(c, token, "ListTasks", {"pageSize": 1, "pageToken": "1"}).json()["result"]
+    assert rest["nextPageToken"] == "" and {listed["tasks"][0]["id"], rest["tasks"][0]["id"]} == {out["id"], second["id"]}
 
     projects.update(pid, {"classification": "confidential"})  # raised after the fact: the result is withheld
     hidden = rpc(c, token, "GetTask", {"id": out["id"]}).json()["result"]

@@ -310,6 +310,12 @@ def cancel_task(client: dict[str, Any], params: dict[str, Any]) -> dict[str, Any
     if state in TERMINAL:
         raise RpcError(NOT_CANCELABLE, f"the task is {state}")
     loop.cancel(goal_id, actor=f"a2a:{client['name']}")
+    with session() as s:  # loop.cancel leaves finished work waiting for approval alone; the caller withdraws it
+        waiting = (g := s.get(Goal, goal_id)) is not None and g.status == "awaiting_approval"
+    if waiting:
+        from agent_company import workflow
+
+        workflow.transition(goal_id, "cancelled", "withdrawn by its A2A caller", f"a2a:{client['name']}")
     return get_task(client, {"id": t.id})
 
 
@@ -348,4 +354,9 @@ def handle(body: Any, authorization: str | None, version: str | None) -> tuple[d
         return e.body(rid), None, 200
     except (ValueError, KeyError) as e:
         return RpcError(INVALID_PARAMS, str(e)).body(rid), None, 200
+    except Exception as e:  # noqa: BLE001 - a JSON-RPC caller gets a JSON-RPC error, never an HTML 500
+        from agent_company.db import log_event
+
+        log_event("error", f"A2A request failed: {e}"[:1000])
+        return RpcError(INTERNAL, "internal error").body(rid), None, 200
 

@@ -98,7 +98,7 @@ defect is open; retry rate and cost per accepted goal are reported. An administr
   planning, running, recovering, paused, awaiting approval → WORKING (paused and awaiting approval explain
   themselves in `status.message`); approved → COMPLETED with the goal's result as an artifact; failed → FAILED;
   rejected → REJECTED; cancelled → CANCELED. `GetTask` (with `historyLength`), `ListTasks` (newest first, pages
-  with `pageToken`, filters `contextId` and `status`) and `CancelTask` (idempotent; a finished task is -32002)
+  with `pageToken`, filters `contextId` and `status`) and `CancelTask` (idempotent; work waiting for approval is withdrawn; a finished task is -32002)
   see only the caller's tasks; another client's task is -32001. A client cannot be issued for a project
   classified above its clearance, and a result whose goal is later classified above it is withheld. Push
   methods answer -32003, streaming and the extended card -32004.
