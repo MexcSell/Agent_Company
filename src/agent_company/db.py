@@ -213,6 +213,9 @@ class EvalRun(Base):
     tokens: Mapped[int] = mapped_column(Integer, default=0)
     seconds: Mapped[float] = mapped_column(Float, default=0.0)
     score: Mapped[float] = mapped_column(Float, default=0.0)
+    # S09-R-05: what the run did besides passing, read from the gate's history, the runs and refused commands:
+    # compliance, tool_use, security (each a small dict); {} for runs recorded before
+    dimensions: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

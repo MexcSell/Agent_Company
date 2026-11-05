@@ -55,13 +55,30 @@ async function viewPerformance(quiet) {
   document.querySelectorAll("[data-label]").forEach((a) => (a.onclick = async (e) => { e.preventDefault(); evalSummary(await api(`/api/evals/${encodeURIComponent(a.dataset.label)}`)); }));
   $("#cmp-go") && ($("#cmp-go").onclick = async () => {
     const r2 = await api(`/api/evals/compare?a=${encodeURIComponent($("#cmp-a").value)}&b=${encodeURIComponent($("#cmp-b").value)}`);
-    $("#ev-out").innerHTML = `<h3>${esc(r2.a.label)} → ${esc(r2.b.label)}: pass rate ${pct(r2.a.pass_rate)} → ${pct(r2.b.pass_rate)}, cost ${r2.cost_change >= 0 ? "+" : ""}${money(r2.cost_change)}</h3><table>${r2.tasks.map((t) => `<tr><td>${esc(t.task)}</td><td class="num">${t[r2.a.label] ?? "–"}</td><td class="num">${t[r2.b.label] ?? "–"}</td><td class="num">${t.change > 0 ? "+" : ""}${t.change}</td></tr>`).join("")}</table>`;
+    $("#ev-out").innerHTML = `<h3>${esc(r2.a.label)} → ${esc(r2.b.label)}: pass rate ${pct(r2.a.pass_rate)} → ${pct(r2.b.pass_rate)}, cost ${r2.cost_change >= 0 ? "+" : ""}${money(r2.cost_change)}</h3><table><tr><th>Dimension</th><th>Metric</th><th class="num">${esc(r2.a.label)}</th><th class="num">${esc(r2.b.label)}</th><th class="num">Change</th></tr>${Object.entries(r2.dimensions || {}).map(([d, x]) => `<tr><td>${esc(d.replace("_", " "))}</td><td class="muted">${esc(x.metric.replace(/_/g, " "))}</td><td class="num">${fmtDim(x[r2.a.label])} <span class="muted">n=${x.n[r2.a.label]}</span></td><td class="num">${fmtDim(x[r2.b.label])} <span class="muted">n=${x.n[r2.b.label]}</span></td><td class="num">${x.change == null ? "–" : (x.change > 0 ? "+" : "") + x.change}</td></tr>`).join("")}</table><table>${r2.tasks.map((t) => `<tr><td>${esc(t.task)}</td><td class="num">${t[r2.a.label] ?? "–"}</td><td class="num">${t[r2.b.label] ?? "–"}</td><td class="num">${t.change > 0 ? "+" : ""}${t.change}</td></tr>`).join("")}</table>`;
   });
   $("#ev-form") && ($("#ev-form").onsubmit = async (e) => { e.preventDefault(); try { await api("/api/evals/run", { method: "POST", body: { suite: $("#ev-suite").value, label: $("#ev-label").value, repeats: +$("#ev-rep").value } }); toast("Eval started; results appear as runs finish"); } catch (err) { toast(err.message); } });
 }
 
 function evalSummary(s) {
-  $("#ev-out").innerHTML = `<h3>${esc(s.label)} (${esc(s.suite)}): ${s.solved}/${s.tasks} solved, ${pct(s.pass_rate)} of ${s.runs} runs, ${money(s.total_cost)}</h3><table><tr><th>Task</th><th class="num">Passed</th><th class="num">Iterations</th><th class="num">Seconds</th><th>Ended</th></tr>${s.by_task.map((t) => `<tr><td>${esc(t.task)}${t.solved ? " " + pill("done") : ""}</td><td class="num">${t.passed}/${t.runs}</td><td class="num">${t.avg_iterations}</td><td class="num">${t.avg_seconds}</td><td>${esc(t.end_reasons.join(", "))}</td></tr>`).join("")}</table>`;
+  $("#ev-out").innerHTML = `<h3>${esc(s.label)} (${esc(s.suite)}): ${s.solved}/${s.tasks} solved, ${pct(s.pass_rate)} of ${s.runs} runs, ${money(s.total_cost)}</h3>${dimTable(s.dimensions)}<table><tr><th>Task</th><th class="num">Passed</th><th class="num" title="Runs without scope, boundary or contract violations">Compliant</th><th class="num" title="Runs without a failed security check, secret or refused command">Secure</th><th class="num">Iterations</th><th class="num">Seconds</th><th>Ended</th></tr>${s.by_task.map((t) => `<tr><td>${esc(t.task)}${t.solved ? " " + pill("done") : ""}</td><td class="num">${t.passed}/${t.runs}</td><td class="num">${t.compliant ?? "–"}</td><td class="num">${t.secure ?? "–"}</td><td class="num">${t.avg_iterations}</td><td class="num">${t.avg_seconds}</td><td>${esc(t.end_reasons.join(", "))}</td></tr>`).join("")}</table>`;
+}
+
+const fmtDim = (v) => (v == null ? "–" : v);
+
+// S09-R-05: each dimension on its own row with its sample size; no combined score
+function dimTable(d) {
+  if (!d) return "";
+  const rate = (v) => (v == null ? "–" : pct(v));
+  const rows = [
+    ["Task completion", d.completion, `${rate(d.completion.pass_rate)} passed`],
+    ["Contract compliance", d.compliance, `${rate(d.compliance.compliant_rate)} compliant · ${d.compliance.violations} scope/boundary violations · ${d.compliance.contract_failures} failed contracts`],
+    ["Tool use", d.tool_use, `${rate(d.tool_use.accuracy)} of ${d.tool_use.tool_calls} tool calls ok · ${d.tool_use.denied_tools} denied · ${d.tool_use.refused_commands} refused commands · ${d.tool_use.failed_runs} failed runs`],
+    ["Reliability", d.reliability, `${rate(d.reliability.consistent_rate)} consistent · solved in every repeat ${rate(d.reliability.pass_all_rate)} · in any ${rate(d.reliability.pass_any_rate)} (${d.reliability.repeats} repeats)`],
+    ["Security behaviour", d.security, `${rate(d.security.secure_rate)} secure · ${d.security.failed_checks} failed security checks · ${d.security.secrets_found} with secrets · ${d.security.refused_commands} refused commands`],
+    ["Resource efficiency", d.efficiency, `${d.efficiency.avg_seconds}s · ${money(d.efficiency.avg_cost)} · ${d.efficiency.avg_tokens} tokens · ${d.efficiency.avg_iterations} iterations per run${d.efficiency.cost_per_passed == null ? "" : ` · ${money(d.efficiency.cost_per_passed)} per pass`}`],
+  ];
+  return `<table><tr><th>Dimension</th><th class="num">n</th><th>Result</th></tr>${rows.map(([name, x, text]) => `<tr><td>${name}</td><td class="num">${x.n}</td><td>${esc(text)}</td></tr>`).join("")}</table>`;
 }
 
 registerView({ id: "performance", title: "Performance", icon: "performance" }, viewPerformance, 5);

@@ -228,6 +228,9 @@ def main(argv: list[str] | None = None) -> None:
                   f"({out['pass_rate_change']:+.0%}), cost {out['cost_change']:+.4f} USD")
             for t in out["tasks"]:
                 print(f"  {t['task']:<24} {t[args.compare[0]]} -> {t[args.compare[1]]}")
+            for dim, x in out["dimensions"].items():
+                a, b = args.compare
+                print(f"  {dim:<12} {x['metric']:<15} {x[a]} (n={x['n'][a]}) -> {x[b]} (n={x['n'][b]})")
             return
         trial = {"models": {args.role: args.model}} if args.model else None
         label = args.label or (f"model:{args.model}" if args.model else "")
@@ -238,6 +241,8 @@ def main(argv: list[str] | None = None) -> None:
               f"cost {out['total_cost']:.4f} USD, {out['avg_seconds']}s per run")
         for t in out["by_task"]:
             print(f"  {t['task']:<24} {t['passed']}/{t['runs']} {', '.join(t['end_reasons'])}")
+        for dim, x in out["dimensions"].items():  # S09-R-05: each dimension with its sample size
+            print(f"  {dim:<12} " + ", ".join(f"{k} {v}" for k, v in x.items()))
     elif args.cmd == "learn":
         from agent_company import experiments, training
 

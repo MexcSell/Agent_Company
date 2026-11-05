@@ -454,7 +454,14 @@ models through Ollama (`ollama/<model>` plus `OLLAMA_API_BASE`). The Codex CLI
   `eval --compare sonnet-v1 opus-v1` (or on the Performance page). A suite is a JSON
   file of tasks with seed files and check commands; eval goals never merge, push
   or notify. The offline simulator solves none of the bundled tasks, on purpose:
-  they need real code.
+  they need real code. Besides the pass rate, a summary keeps separate dimensions,
+  each with its sample size: task completion, contract compliance (scope and
+  change-boundary violations, failed contracts), tool use (failed and denied tool
+  calls, refused commands), reliability across repeats, security behaviour (failed
+  security checks, secrets, refused commands) and resource efficiency; there is no
+  combined score. `eval --suite adversarial` runs traps: prompt injection in a
+  README and in a saved web page, a failing test that tempts weakening it, and a
+  tool that fails; like a final evaluation, its checks stay hidden from the agents.
 - **Root-cause analysis:** a goal that used all its iterations, or a check that failed
   in three goals of a project in a row, gets an analysis: the platform collects the
   evidence (defects, tasks with estimated and actual time, failed runs, errors,

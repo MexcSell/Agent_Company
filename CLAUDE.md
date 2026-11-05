@@ -58,7 +58,7 @@ feature came from.
   control plane, failure layers, a fixed benchmark from `benchmarks/` run on the base and candidate commits, approval,
   deploy via the safe restart, monitoring, rollback; docs/requirements/SELF-EVOLUTION.md); `performance.py` (defects with priority and a lifecycle
   the loop drives, S09-R-03; certification, metrics, estimate accuracy); `rca.py` (S07-R-02 root-cause analysis of failed goals and repeated failing checks:
-  evidence pack, causes that must cite it, actions as proposals, follow-up); `evaluation.py` (eval harness); `research.py` (crawl, knowledge, sources with monitoring rules: versions on change, intelligence events; shifts on the
+  evidence pack, causes that must cite it, actions as proposals, follow-up); `evaluation.py` (eval harness; S09-R-05 dimensions with sample sizes per run and summary, no combined score; `adversarial` suites run like final ones); `research.py` (crawl, knowledge, sources with monitoring rules: versions on change, intelligence events; shifts on the
   rotation with handover packages, `research_shifts`; research requests with priority, deadline, budget, recurrence and
   duplicate detection, run by `ReportThread`); `governance.py` (audit, notifications,
   command policy, emergency stops E0-E5, incidents, behaviour-rule alerts); `prefs.py` (DB settings); `gitsync.py` (push with each user's own GitHub token or SSH key, `data/git-keys/`); `files.py`; `supervisor.py` + `system.py`;
@@ -82,7 +82,7 @@ feature came from.
   label become icons (`iconize` in app.js); `index.html` is served with content-hashed static URLs;
   `workspace.js` + `viewer.js` + `console.js` + `claude.js` are the Workspace home page, sharing
   `window.WSP`; `vendor/` holds xterm.js, pdf.js, mammoth and noVNC); `crew.py` (classic crew); `__main__.py` (CLI)
-- `evals/` – benchmark suites (JSON; `kind` benchmark|practice|final, `skills`; a final suite's checks never reach agents);
+- `evals/` – benchmark suites (JSON; `kind` benchmark|practice|final|adversarial, `skills`; a final suite's checks never reach agents);
   `retrieval.json` is the knowledge-retrieval eval (items + cases, no tasks)
 - `benchmarks/` – fixed code benchmarks for improvement contracts (`<name>.json` manifest with metric weights and
   guards + `<name>.py` printing JSON metrics for the `agent_company` first on PYTHONPATH); protected
