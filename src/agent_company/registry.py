@@ -12,6 +12,7 @@ from __future__ import annotations
 import random
 import re
 import threading
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -823,7 +824,41 @@ def agent_detail(agent_id: int) -> dict[str, Any]:
         d["usage"] = {"runs": len(runs), "input_tokens": sum(r.input_tokens for r in runs),
                       "output_tokens": sum(r.output_tokens for r in runs),
                       "cost": round(sum(r.cost for r in runs), 6)}
+        d["workload"] = workload(s, a.id)
         return d
+
+
+def workload(s: Session, agent_id: int) -> dict[str, Any]:
+    """Open tasks, hours active in the last 24 h (model runs and research visits) and the last handover the
+    agent gave or received (SPEC-12 S12-R-05)."""
+    from agent_company.db import Handover, ResearchShift, Run, Task
+
+    since = now() - timedelta(hours=24)
+    cut = since.replace(tzinfo=None)
+    open_tasks = s.scalar(select(func.count()).select_from(Task).where(
+        Task.agent_id == agent_id, Task.status.in_(("queued", "running")))) or 0
+    seconds = sum(s.scalars(select(Run.duration).where(Run.agent_id == agent_id, Run.started_at >= since)))
+    last: list[tuple[datetime, dict[str, Any]]] = []
+    for sh in s.scalars(select(ResearchShift).where(ResearchShift.agent_id == agent_id,
+                                                    or_(ResearchShift.ended_at.is_(None),
+                                                        ResearchShift.ended_at >= since))):
+        seconds += sum(v.get("seconds", 0) for v in (sh.state or {}).get("sources", [])
+                       if datetime.fromisoformat(v["retrieved_at"]).replace(tzinfo=None) >= cut)
+    for sh in s.scalars(select(ResearchShift).where(ResearchShift.agent_id == agent_id)
+                        .order_by(ResearchShift.id.desc()).limit(2)):
+        if sh.ended_at is not None:
+            last.append((sh.ended_at, {"kind": "shift", "direction": "gave", "status": sh.status, "shift_id": sh.id,
+                                       "at": sh.ended_at.isoformat()}))
+        if sh.handover:
+            last.append((sh.started_at, {"kind": "shift", "direction": "received", "status": "received",
+                                         "shift_id": sh.id, "at": sh.started_at.isoformat()}))
+    h = s.scalars(select(Handover).where(or_(Handover.from_agent_id == agent_id, Handover.to_agent_id == agent_id))
+                  .order_by(Handover.id.desc())).first()
+    if h is not None:
+        last.append((h.created_at, {"kind": "task", "direction": "gave" if h.from_agent_id == agent_id else "received",
+                                    "status": h.status, "goal_id": h.goal_id, "at": h.created_at.isoformat()}))
+    latest = max(last, key=lambda x: x[0].replace(tzinfo=None))[1] if last else None
+    return {"open_tasks": open_tasks, "hours_24h": round(seconds / 3600, 2), "last_handover": latest}
 
 
 # --- manual management and lifecycle (SPEC02 §6: active, paused, retired) -------------

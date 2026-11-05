@@ -28,7 +28,7 @@ specialists, mentors and past collaborators, and that departments keep a shift s
 
 ## Specific requirements
 
-Status (2026-11-05): S12-R-01 done · S12-R-02 done · S12-R-03 done · S12-R-04 done · S12-R-05 open ·
+Status (2026-11-05): S12-R-01 done · S12-R-02 done · S12-R-03 done · S12-R-04 done · S12-R-05 done ·
 S12-R-06 done · S12-R-07 open.
 
 ### S12-R-01 Relationship kinds with evidence — §2.2
@@ -104,6 +104,21 @@ S12-R-06 done · S12-R-07 open.
 - Track per agent: open tasks, hours active in the last 24 h, last handover status.
 - Acceptance: replacing the agent of a running research shift keeps findings and open questions
   (master criterion).
+- **Status: done** (`research.py`, table `research_shifts`; `tests/test_research.py`): the rotation is worked in
+  shifts that cycle `acquisition → verification → analysis → organisation → review`; the agent on duty makes the
+  shift's source visits. A shift's `state` holds its objective, the visited sources with retrieval dates and
+  durations, findings (new and changed pages), unverified pages (flagged as possible prompt injection), known
+  problems (failed visits) and the open questions they raise; a clean visit of the same source resolves its
+  problems and questions. A shift ends after `shift_seconds` (DB setting; default 0 = every rotation turn), checked on
+  every rotation tick even when no source is due; the next agent on the roster then starts the next phase with the
+  unresolved state and a handover package (objective, sources, findings, confidence and limitations, open
+  questions, unverified pages, known problems, active research requests, outstanding sources, next actions), a
+  `handover_to` link with `shift:<id>` evidence and a note among its lessons. When the agent on duty leaves the
+  roster (paused, disabled, retired: the roster now also requires `lifecycle=active`) or an administrator replaces it
+  (`POST /api/research/shifts/replace`, audited; Research → Shift → Replace agent), the next agent continues the
+  same shift with its whole state. Workload per agent (`registry.workload`, agent card → Profile): open tasks, hours
+  active in the last 24 h (model runs plus research visits), last handover given or received (task or shift).
+  Only one rotation track exists (the external-data room and the research leads share a roster).
 
 ### S12-R-06 Reputation-manipulation protection — §18.1
 - Collaboration scores come only from gate results and QA verdicts, never from message counts.

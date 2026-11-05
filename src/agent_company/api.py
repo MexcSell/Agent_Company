@@ -186,6 +186,11 @@ class SourceBody(CrawlBody):
     notify_room: str = ""
 
 
+class ShiftReplaceBody(BaseModel):
+    reason: str = Field(min_length=3, max_length=300)
+    agent_id: int | None = None  # None = the next agent on the roster
+
+
 class ResearchBody(BaseModel):
     question: str = Field(min_length=5, max_length=2000)
     urls: list[str] = Field(default_factory=list, max_length=10)
@@ -1767,8 +1772,21 @@ def create_app(start_background: bool = True) -> FastAPI:
 
     @app.get("/api/research/sources")
     def sources(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        current = research.shifts(1)
         return {"sources": research.list_sources(), "roster": research.rotation_roster(),
-                "interval": settings().rotation_interval}
+                "interval": settings().rotation_interval, "shift_seconds": settings().shift_seconds,
+                "shift": current[0] if current and current[0]["status"] == "active" else None}
+
+    @app.get("/api/research/shifts")
+    def research_shifts(limit: int = 20, _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        return research.shifts(limit)
+
+    @app.post("/api/research/shifts/replace")
+    def shift_replace(body: ShiftReplaceBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = research.replace_shift_agent(body.reason, body.agent_id)
+        _audit(admin, "shift_replace", f"shift #{out['previous_id']}",
+               after={"shift_id": out["id"], "agent_id": out["agent_id"], "reason": body.reason})
+        return out
 
     @app.post("/api/research/sources")
     def source_add(body: SourceBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:

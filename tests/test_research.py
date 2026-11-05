@@ -257,3 +257,112 @@ def test_retry_after_holds_the_source():
         assert s.get(Source, src["id"]).not_before is not None
     assert research.rotation_tick(client=site({"/": "<p>x</p>"}), allow_private=True) is None
     assert research._retry_after("garbage") == 3600 and research._retry_after("99999999") == 7 * 86400
+
+
+def _flaky_site(pages, broken):
+    """Pages from `pages`; paths in `broken` answer 500."""
+    def handler(req):
+        if req.url.path == "/robots.txt":
+            return httpx.Response(200, text="")
+        if req.url.path in broken:
+            return httpx.Response(500, text="down")
+        return httpx.Response(200, text=pages[req.url.path], headers={"content-type": "text/html"})
+
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_every_rotation_turn_is_a_shift_with_a_handover_by_default():
+    research.add_source("https://docs.example/", depth=0)
+    research.add_source("https://docs.example/b", depth=0)
+    roster = research.rotation_roster()
+    first = research.rotation_tick(client=client(), allow_private=True)
+    second = research.rotation_tick(client=client(), allow_private=True)
+    assert second["shift_id"] != first["shift_id"]
+    rows = research.shifts()
+    assert [(x["phase"], x["status"], x["agent_id"]) for x in rows] == [
+        ("verification", "active", roster[1]), ("acquisition", "handed_over", roster[0])]
+    package = rows[0]["handover"]
+    assert package["from_agent"] and package["to_agent"] and package["phase"] == "acquisition"
+    assert package["sources"][0]["url"] == first["url"] and package["sources"][0]["retrieved_at"]
+    assert package["findings"] and package["confidence"] == "high"
+    assert any(a.startswith("verification:") for a in package["next_actions"])
+    assert [f["url"] for f in rows[0]["findings"]] == [second["url"]], \
+        "findings stay with the shift that made them; the package carries them"
+
+
+def test_replacing_the_agent_of_a_running_shift_keeps_findings_and_open_questions():
+    from sqlalchemy import select
+
+    from agent_company import prefs, registry
+    from agent_company.db import Lesson, Relationship, session
+
+    prefs.set_value("shift_seconds", 4 * 3600)
+    pages = {"/": "<title>Docs</title><p>Install guide.</p>", "/x": "<p>x</p>"}
+    research.add_source("https://ok.example/", depth=0)
+    research.add_source("https://down.example/x", depth=0)
+    a = research.rotation_tick(client=_flaky_site(pages, {"/x"}), allow_private=True)
+    b = research.rotation_tick(client=_flaky_site(pages, {"/x"}), allow_private=True)
+    assert a["shift_id"] == b["shift_id"] and a["agent_id"] == b["agent_id"], "one agent works the whole shift"
+    shift = research.shifts(1)[0]
+    assert shift["findings"] and len(shift["sources"]) == 2
+    assert [q["key"] for q in shift["open_questions"]] == ["error:https://down.example/x"]
+    assert shift["confidence"] == "medium" and shift["known_problems"]
+
+    registry.set_lifecycle(a["agent_id"], "paused")  # the agent on duty leaves mid-shift
+    assert a["agent_id"] not in research.rotation_roster()
+    pages["/"] = "<title>Docs</title><p>Install guide v2.</p>"
+    c = research.rotation_tick(source_id=1, client=_flaky_site(pages, {"/x"}), allow_private=True)
+    assert c["agent_id"] != a["agent_id"] and c["shift_id"] != a["shift_id"]
+    new, old = research.shifts(2)
+    assert old["status"] == "replaced" and new["phase"] == old["phase"] == "acquisition"
+    assert new["handover"]["reason"] == "its agent left the rotation"
+    assert [f["text"] for f in new["findings"][:len(old["findings"])]] == [f["text"] for f in old["findings"]]
+    assert len(new["findings"]) == len(old["findings"]) + 1, "the replacement's own finding is added"
+    assert new["open_questions"] == old["open_questions"] and len(new["sources"]) == 3
+    with session() as s:
+        assert s.scalars(select(Relationship).where(Relationship.kind == "handover_to")).first().evidence == [
+            f"shift:{old['id']}"]
+        assert s.scalars(select(Lesson).where(Lesson.agent_id == c["agent_id"],
+                                              Lesson.text.like("Shift handover%"))).first() is not None
+
+    # a clean visit of the broken source resolves its question; the shift continues
+    research.rotation_tick(source_id=2, client=_flaky_site(pages, set()), allow_private=True)
+    assert research.shifts(1)[0]["open_questions"] == [] and research.shifts(1)[0]["known_problems"] == []
+
+
+def test_an_administrator_replaces_the_agent_on_duty_and_shifts_end_on_time():
+    from datetime import timedelta
+
+    from agent_company import prefs, registry
+    from agent_company.db import ResearchShift, session
+    from agent_company.db import now as now_utc
+
+    prefs.set_value("shift_seconds", 3600)
+    research.add_source("https://docs.example/", depth=0, interval="hourly")
+    first = research.rotation_tick(client=client(), allow_private=True)
+    with pytest.raises(ValueError):
+        research.replace_shift_agent("  ")
+    with pytest.raises(ValueError):
+        research.replace_shift_agent("same agent", agent_id=first["agent_id"])
+    out = research.replace_shift_agent("needs the afternoon off")
+    assert out["agent_id"] != first["agent_id"] and out["handover"]["reason"] == "replaced: needs the afternoon off"
+    assert out["sources"] and out["phase"] == "acquisition"
+
+    with session() as s:  # the shift is over: the next tick hands over even though no source is due
+        s.get(ResearchShift, out["id"]).started_at -= timedelta(hours=2)
+    assert research.rotation_tick(client=client(), allow_private=True) is None
+    now_on = research.shifts(1)[0]
+    assert now_on["phase"] == "verification" and now_on["previous_id"] == out["id"]
+    assert now_on["sources"] == [] and now_on["handover"]["outstanding_sources"] == []
+
+    from agent_company.db import Run
+
+    with session() as s:
+        s.add(Run(agent_id=out["agent_id"], model_name="m", kind="api", duration=1800))
+        s.add(Run(agent_id=out["agent_id"], model_name="m", kind="api", duration=3600,
+                  started_at=now_utc() - timedelta(hours=30)))
+    gave = registry.agent_detail(out["agent_id"])["workload"]
+    assert gave["open_tasks"] == 0 and 0.5 <= gave["hours_24h"] < 0.6, "only the last 24 h count"
+    assert gave["last_handover"]["direction"] == "gave" and gave["last_handover"]["status"] == "handed_over"
+    w = registry.agent_detail(now_on["agent_id"])["workload"]["last_handover"]
+    assert w["kind"] == "shift" and w["direction"] == "received" and w["shift_id"] == now_on["id"]

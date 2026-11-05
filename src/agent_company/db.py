@@ -701,6 +701,24 @@ class Source(Base):
     not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # Retry-After
 
 
+class ResearchShift(Base):
+    """One agent's shift on the research rotation (SPEC-12 S12-R-05, ASEAO06 S06-R-05). `state` holds the shift's
+    objective, visited sources, findings, open questions and known problems; the next shift starts from it, so an
+    agent can be replaced without losing them. `handover` is the package this shift received."""
+
+    __tablename__ = "research_shifts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    room_key: Mapped[str] = mapped_column(String(64), default="rotation")
+    phase: Mapped[str] = mapped_column(String(16))  # acquisition|verification|analysis|organisation|review
+    agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="active")  # active|handed_over|replaced
+    state: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    handover: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    previous_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)

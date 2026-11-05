@@ -10,6 +10,13 @@ subject and a room. A refetched page whose content hash changed becomes a new ve
 kept in `document_versions`); a change that mentions the subject is an intelligence event: an `events` row with
 a diff summary, a note to each agent of the source's room and a notification. `Retry-After` on 429/503 holds
 the source until then.
+
+Shifts (SPEC-12 S12-R-05, ASEAO06 S06-R-05): the rotation is worked in shifts that cycle acquisition ->
+verification -> analysis -> organisation -> review. The agent on duty makes the shift's source visits, which
+record sources with retrieval dates, findings, unverified (flagged) pages, known problems and open questions in
+the shift's `state`. When the shift ends (`shift_seconds`; 0 = every rotation turn) the next agent on the roster
+gets a handover package; when its agent leaves the roster (paused, disabled, retired) or an administrator replaces
+it, the new agent continues the same shift from the same state.
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ import os
 import re
 import socket
 import threading
+import time
 from collections import deque
 from datetime import timedelta
 from html.parser import HTMLParser
@@ -37,6 +45,7 @@ from agent_company.db import (
     DocumentVersion,
     Lesson,
     ResearchReport,
+    ResearchShift,
     Room,
     Source,
     log_event,
@@ -507,9 +516,239 @@ def rotation_roster() -> list[int]:
     with session() as s:
         rot_rooms = list(s.scalars(select(Room.key).where(Room.rotational)))
         agents = s.scalars(select(Agent).where(
-            Agent.enabled, or_(Agent.room_key.in_(rot_rooms), Agent.role == "research"))
+            Agent.enabled, Agent.lifecycle == "active", or_(Agent.room_key.in_(rot_rooms), Agent.role == "research"))
             .order_by(Agent.id)).all()
         return [a.id for a in agents]
+
+
+# --- shifts (SPEC-12 S12-R-05, ASEAO06 S06-R-05) -----------------------------------------
+
+PHASES = ("acquisition", "verification", "analysis", "organisation", "review")
+OBJECTIVES = {
+    "acquisition": "Collect new material from the due sources.",
+    "verification": "Check changed and flagged pages against other sources before anyone relies on them.",
+    "analysis": "Turn the material collected so far into findings for the analysis room.",
+    "organisation": "Organise what was collected into knowledge other agents can retrieve.",
+    "review": "Review the open questions and known problems; decide what the next cycle collects.",
+}
+KEEP = 50  # sources, findings and unverified pages kept per shift
+
+
+def _carried(state: dict[str, Any] | None, phase: str, whole: bool) -> dict[str, Any]:
+    """The state a new shift starts from: everything when it replaces an agent mid-shift (`whole`), else what is
+    still unresolved (open questions, unverified pages, known problems)."""
+    st = dict(state or {})
+    out = {"objective": OBJECTIVES[phase], "sources": [], "findings": [],
+           "unverified": list(st.get("unverified", [])), "open_questions": list(st.get("open_questions", [])),
+           "known_problems": list(st.get("known_problems", []))}
+    if whole:
+        out |= {"sources": list(st.get("sources", [])), "findings": list(st.get("findings", []))}
+    return out
+
+
+def _confidence(state: dict[str, Any]) -> tuple[str, list[str]]:
+    visits = state.get("sources", [])
+    failed = [v for v in visits if v.get("errors")]
+    limits = []
+    if not visits:
+        limits.append("no source was visited in this shift")
+    if failed:
+        limits.append(f"{len(failed)} of {len(visits)} visit(s) had errors")
+    if state.get("unverified"):
+        limits.append(f"{len(state['unverified'])} page(s) flagged as possible prompt injection are unverified")
+    level = "low" if not visits or len(failed) == len(visits) else "medium" if limits else "high"
+    return level, limits
+
+
+def _outstanding(s, at) -> list[dict[str, Any]]:  # noqa: ANN001
+    """Sources held by Retry-After, never visited, or due by their interval (the rotation's when they have none)."""
+    from agent_company.config import settings
+
+    out = []
+    for src in s.scalars(select(Source).where(Source.enabled).order_by(Source.id)):
+        if src.not_before is not None and src.not_before.replace(tzinfo=None) > at.replace(tzinfo=None):
+            out.append({"url": src.url, "reason": f"held until {src.not_before.isoformat()} (Retry-After)"})
+        elif src.last_run_at is None:
+            out.append({"url": src.url, "reason": "never visited"})
+        elif src.interval != "manual" and (INTERVALS.get(src.interval) or settings().rotation_interval) \
+                and _due(src, settings().rotation_interval, at):
+            out.append({"url": src.url, "reason": f"due ({src.interval or 'rotation'})"})
+    return out[:KEEP]
+
+
+def _package(s, shift: ResearchShift, to_agent: Agent | None, reason: str, next_phase: str, at) -> dict[str, Any]:  # noqa: ANN001
+    """The handover package (ASEAO06 §14): objective, sources with retrieval dates, findings,
+    confidence/limitations, open questions, unverified claims, known problems, active requests, outstanding
+    sources and next actions."""
+    st = shift.state or {}
+    frm = s.get(Agent, shift.agent_id) if shift.agent_id else None
+    level, limits = _confidence(st)
+    requests = [{"id": r.id, "question": r.question[:300], "status": r.status}
+                for r in s.scalars(select(ResearchReport).where(ResearchReport.status.in_(("queued", "running")))
+                                   .order_by(ResearchReport.id).limit(20))]
+    outstanding = _outstanding(s, at)
+    actions = []
+    if outstanding:
+        actions.append(f"Visit {len(outstanding)} outstanding source(s)")
+    if st.get("open_questions"):
+        actions.append(f"Answer {len(st['open_questions'])} open question(s)")
+    if st.get("unverified"):
+        actions.append("Verify the flagged pages before their content is used")
+    if requests:
+        actions.append(f"{len(requests)} research request(s) are waiting for a report")
+    actions.append(f"{next_phase}: {OBJECTIVES[next_phase]}")
+    return {"shift_id": shift.id, "from_agent": frm.name if frm else None, "to_agent": to_agent.name if to_agent else None,
+            "reason": reason, "phase": shift.phase, "objective": st.get("objective", OBJECTIVES[shift.phase]),
+            "sources": st.get("sources", []), "findings": st.get("findings", []), "confidence": level,
+            "limitations": limits, "open_questions": [q["text"] for q in st.get("open_questions", [])],
+            "unverified": st.get("unverified", []), "known_problems": st.get("known_problems", []),
+            "active_requests": requests, "outstanding_sources": outstanding, "next_actions": actions}
+
+
+def _hand_over(s, cur: ResearchShift, agent_id: int, at, reason: str, replace: bool) -> ResearchShift:  # noqa: ANN001
+    """Close `cur` and open the next shift for `agent_id`: the next phase with what is unresolved, or (`replace`)
+    the same phase with the whole state."""
+    from agent_company import network, registry
+
+    phase = cur.phase if replace else PHASES[(PHASES.index(cur.phase) + 1) % len(PHASES)]
+    to = s.get(Agent, agent_id)
+    package = _package(s, cur, to, reason, phase, at)
+    cur.status, cur.ended_at = ("replaced" if replace else "handed_over"), at
+    new = ResearchShift(room_key=cur.room_key, phase=phase, agent_id=agent_id, state=_carried(cur.state, phase, replace),
+                        handover=package, previous_id=cur.id, started_at=at)
+    s.add(new)
+    s.flush()
+    if cur.agent_id and cur.agent_id != agent_id:
+        registry.connect(s, cur.agent_id, agent_id, "handover_to", network.OBSERVED_GAIN,
+                                 evidence=f"shift:{cur.id}")
+        note = (f"Shift handover ({phase}) from {package['from_agent']}: {len(package['findings'])} finding(s), "
+                f"{len(package['open_questions'])} open question(s)"
+                + (": " + " | ".join(package["open_questions"][:5]) if package["open_questions"] else "")
+                + ". Next: " + "; ".join(package["next_actions"]))
+        s.add(Lesson(agent_id=agent_id, text=note[:1000], outcome="research"))
+    log_event("shift", f"research shift #{cur.id} ({cur.phase}) {'replaced' if replace else 'handed over'}: "
+              f"{package['from_agent']} -> {package['to_agent']} ({reason})"[:1000], agent_id=agent_id, s=s,
+              shift_id=new.id, previous_id=cur.id)
+    return new
+
+
+def _next_on(roster: list[int], agent_id: int | None) -> int:
+    """The roster member after `agent_id` (by id, so an agent that left the roster still has a successor)."""
+    if agent_id is None:
+        return roster[0]
+    return next((a for a in roster if a > agent_id), roster[0])
+
+
+def _on_duty(s, roster: list[int], at) -> ResearchShift:  # noqa: ANN001
+    """The active shift, after handing it over when it ended or its agent left the roster."""
+    from agent_company.config import settings
+
+    cur = s.scalars(select(ResearchShift).where(ResearchShift.status == "active")
+                    .order_by(ResearchShift.id.desc())).first()
+    if cur is None:
+        last = s.scalars(select(Source.last_agent_id).where(Source.last_agent_id.is_not(None))
+                         .order_by(Source.last_run_at.desc())).first()
+        agent_id = _next_on(roster, last) if last in roster else roster[0]
+        new = ResearchShift(phase=PHASES[0], agent_id=agent_id, state=_carried(None, PHASES[0], False), started_at=at)
+        s.add(new)
+        s.flush()
+        return new
+    if cur.agent_id not in roster:
+        return _hand_over(s, cur, _next_on(roster, cur.agent_id), at, "its agent left the rotation", replace=True)
+    length = settings().shift_seconds
+    started = cur.started_at.replace(tzinfo=None)
+    ended = (length == 0 and (cur.state or {}).get("sources")) or \
+        (length > 0 and started <= at.replace(tzinfo=None) - timedelta(seconds=length))
+    if ended:
+        return _hand_over(s, cur, _next_on(roster, cur.agent_id), at, "shift ended", replace=False)
+    return cur
+
+
+def _record_visit(shift_id: int, src_url: str, result: dict[str, Any], seconds: float) -> None:
+    """What one source visit adds to the shift: the source and when it was read, findings (new and changed
+    pages), unverified pages, known problems and the open questions they raise; a clean visit resolves the
+    source's earlier problems."""
+    at = now().isoformat()
+    with session() as s:
+        shift = s.get(ResearchShift, shift_id)
+        if shift is None:
+            return
+        st = dict(shift.state or {})
+        errors, flagged = result.get("errors") or [], result.get("flagged") or []
+        st["sources"] = [*st.get("sources", []), {
+            "url": src_url, "retrieved_at": at, "stored": result.get("stored", 0), "new": result.get("new", 0),
+            "changed": len(result.get("changed") or []), "errors": len(errors), "seconds": round(seconds, 2)}][-KEEP:]
+        found = [{"url": c["url"], "text": f"{c.get('title') or c['url']} changed (v{c['version']}: "
+                  f"+{c['added']} / -{c['removed']} lines)", "at": at} for c in result.get("changed") or []]
+        if result.get("new"):
+            found.append({"url": src_url, "text": f"{result['new']} new page(s) collected from {src_url}", "at": at})
+        st["findings"] = [*st.get("findings", []), *found][-KEEP:]
+        questions = [q for q in st.get("open_questions", []) if q.get("source") != src_url or
+                     (q["key"].startswith("error:") and errors) or (q["key"].startswith("flagged:") and flagged)]
+        problems = [p for p in st.get("known_problems", []) if p.get("source") != src_url]
+        unverified = [u for u in st.get("unverified", []) if u.get("source") != src_url or u["url"] in flagged]
+        keys = {q["key"] for q in questions}
+        if errors:
+            problems.append({"source": src_url, "url": errors[0]["url"], "error": str(errors[0]["error"])[:300],
+                             "at": at})
+            if f"error:{src_url}" not in keys:
+                questions.append({"key": f"error:{src_url}", "source": src_url, "since": at,
+                                  "text": f"{src_url} could not be read ({str(errors[0]['error'])[:120]}): "
+                                          "is it still the right source?"})
+        seen = {u["url"] for u in unverified}
+        for u in flagged:
+            if u not in seen:
+                unverified.append({"url": u, "source": src_url, "reason": "flagged as possible prompt injection",
+                                   "at": at})
+            if f"flagged:{u}" not in keys:
+                questions.append({"key": f"flagged:{u}", "source": src_url, "since": at,
+                                  "text": f"Can {u} be trusted? It was flagged as possible prompt injection."})
+        st |= {"open_questions": questions[-KEEP:], "known_problems": problems[-KEEP:], "unverified": unverified[-KEEP:]}
+        shift.state = st
+
+
+def shift_dict(x: ResearchShift, names: dict[int, str] | None = None) -> dict[str, Any]:
+    st = x.state or {}
+    level, limits = _confidence(st)
+    return {"id": x.id, "phase": x.phase, "agent_id": x.agent_id, "agent": (names or {}).get(x.agent_id),
+            "status": x.status, "objective": st.get("objective", ""), "sources": st.get("sources", []),
+            "findings": st.get("findings", []), "open_questions": st.get("open_questions", []),
+            "unverified": st.get("unverified", []), "known_problems": st.get("known_problems", []),
+            "confidence": level, "limitations": limits, "handover": x.handover or {}, "previous_id": x.previous_id,
+            "started_at": x.started_at.isoformat(), "ended_at": x.ended_at.isoformat() if x.ended_at else None}
+
+
+def shifts(limit: int = 20) -> list[dict[str, Any]]:
+    """The latest shifts, newest first."""
+    with session() as s:
+        rows = s.scalars(select(ResearchShift).order_by(ResearchShift.id.desc()).limit(max(1, min(limit, 200)))).all()
+        names = dict(s.execute(select(Agent.id, Agent.name).where(
+            Agent.id.in_({r.agent_id for r in rows if r.agent_id}))).all())
+        return [shift_dict(r, names) for r in rows]
+
+
+def replace_shift_agent(reason: str, agent_id: int | None = None) -> dict[str, Any]:
+    """Hand the running shift to another agent of the roster (the next one by default); the shift continues with
+    its whole state."""
+    reason = reason.strip()
+    if not reason:
+        raise ValueError("give a reason")
+    roster = rotation_roster()
+    if not roster:
+        raise ValueError("no agent is on the rotation roster")
+    with session() as s:
+        cur = s.scalars(select(ResearchShift).where(ResearchShift.status == "active")
+                        .order_by(ResearchShift.id.desc())).first()
+        if cur is None:
+            raise ValueError("no shift is running")
+        target = agent_id if agent_id is not None else _next_on(roster, cur.agent_id)
+        if target not in roster:
+            raise ValueError("that agent is not on the rotation roster (an enabled, active research agent)")
+        if target == cur.agent_id:
+            raise ValueError("that agent is already on duty")
+        new = _hand_over(s, cur, target, now(), f"replaced: {reason}"[:300], replace=True)
+        names = dict(s.execute(select(Agent.id, Agent.name).where(Agent.id.in_({cur.agent_id, target} - {None}))).all())
+        return shift_dict(new, names)
 
 
 def rotation_tick(min_age_seconds: int = 0, client: httpx.Client | None = None,
@@ -528,22 +767,22 @@ def rotation_tick(min_age_seconds: int = 0, client: httpx.Client | None = None,
         srcs = s.scalars(select(Source).where(Source.enabled)).all()
         due = [x for x in srcs if x.id == source_id] if source_id is not None else \
             [x for x in srcs if _due(x, min_age_seconds, at)]
+        shift = _on_duty(s, roster, at)  # hands over an ended shift even when nothing is due
         if not due:
             return None
         src = min(due, key=lambda x: (x.last_run_at is not None,
                                       x.last_run_at.replace(tzinfo=None) if x.last_run_at else None, x.id))
-        last = s.scalars(select(Source.last_agent_id).where(Source.last_agent_id.is_not(None))
-                         .order_by(Source.last_run_at.desc())).first()
-        idx = (roster.index(last) + 1) % len(roster) if last in roster else 0
-        agent_id = roster[idx]
+        agent_id, shift_id = shift.agent_id, shift.id
         src.last_run_at, src.last_agent_id = now(), agent_id
         src_id, url, depth, max_pages = src.id, src.url, src.depth, src.max_pages
         subject, room = src.subject or "", src.notify_room or ""
+    started = time.monotonic()
     try:
         result = collect(url, depth, max_pages, agent_id=agent_id, client=client, allow_private=allow_private,
                          keep_text=True)
     except (ValueError, httpx.HTTPError) as e:
         result = {"url": url, "stored": 0, "changed": [], "errors": [{"url": url, "error": str(e)}]}
+    _record_visit(shift_id, url, result, time.monotonic() - started)
     result["events"] = _intelligence(url, subject, room, agent_id, result.get("changed") or [])
     result["changed"] = [{k: v for k, v in c.items() if k != "text"} for c in result.get("changed") or []]
     if result.get("retry_after") is not None:  # the site asked us to wait (§13.2)
@@ -556,7 +795,7 @@ def rotation_tick(min_age_seconds: int = 0, client: httpx.Client | None = None,
         if a is not None:
             a.last_active_at = now()
             a.xp += 2
-    return {"agent_id": agent_id, **result}
+    return {"agent_id": agent_id, "shift_id": shift_id, **result}
 
 
 class RotationThread(threading.Thread):

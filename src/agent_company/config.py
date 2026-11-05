@@ -77,6 +77,8 @@ class Settings:
     improvement_max_regression: int = 25
     # A deployed improvement the safe restart refused (or that came up unhealthy) is reverted automatically.
     improvement_auto_rollback: bool = True
+    # Length of a research shift on the rotation (SPEC-12 S12-R-05); 0 = every rotation turn is a shift of its own.
+    shift_seconds: int = 0
 
     @property
     def worktrees_dir(self) -> Path:
@@ -131,6 +133,7 @@ def load_settings() -> Settings:
         improvement_min_score=float(os.environ.get("IMPROVEMENT_MIN_SCORE") or 2),
         improvement_max_regression=_int("IMPROVEMENT_MAX_REGRESSION", 25),
         improvement_auto_rollback=_bool("IMPROVEMENT_AUTO_ROLLBACK", True),
+        shift_seconds=_int("SHIFT_SECONDS", 0),
     )
 
 

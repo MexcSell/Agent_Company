@@ -384,8 +384,17 @@ agents working on matching goals.
 
 The External Data Room works **in rotation**. Add sources on the Research page;
 each visit (`ROTATION_INTERVAL` seconds, or **Run next**) assigns the next due
-source to the next agent on the roster, so the work and the experience are spread
-across the room.
+source to the agent on duty, so the work and the experience are spread across the
+room. The rotation is worked in **shifts** that cycle acquisition → verification →
+analysis → organisation → review (`shift_seconds` in Settings; 0 makes every visit a
+shift of its own). A shift records the sources it read and when, its findings, pages
+it could not verify, failed visits and the open questions they raise. When it ends,
+the next agent on the roster gets a handover package with all of that plus the
+waiting research requests, outstanding sources and next actions. If the agent on duty
+is paused, disabled or retired, or an administrator presses **Replace agent**, the
+next agent continues the same shift without losing its findings or open questions.
+The agent card shows each agent's open tasks, hours active in the last 24 hours and
+its last handover.
 
 The learning pipeline: new information (crawl) → research (summaries) → knowledge
 (documents) → experiments (goal iterations) → evaluation (quality gate) → improved

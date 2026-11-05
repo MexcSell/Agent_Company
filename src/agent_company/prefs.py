@@ -42,6 +42,7 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "improvement_min_score": (float, "Percent a code-improvement candidate's weighted benchmark score must beat the baseline by"),
     "improvement_max_regression": (int, "Percent any single benchmark metric of a candidate may get worse before it is rejected"),
     "improvement_auto_rollback": (bool, "Revert a deployed code improvement automatically when the safe restart refuses it"),
+    "shift_seconds": (int, "Length of a research shift on the rotation in seconds (0 = every rotation turn is a shift)"),
 }
 LIMITS: dict[str, tuple[float, float]] = {
     "max_iterations": (1, 10), "max_parallel": (1, 16), "command_timeout": (10, 7200),
@@ -51,6 +52,7 @@ LIMITS: dict[str, tuple[float, float]] = {
     "min_improvement": (0, 100), "max_goal_depth": (1, 10), "escalate_after": (1, 10),
     "approval_blocker_hours": (0, 720), "inactive_days": (1, 3650), "explore_rate": (0, 1),
     "improvement_min_score": (0, 100), "improvement_max_regression": (0, 100),
+    "shift_seconds": (0, 7 * 86400),
 }
 CHOICES: dict[str, set[str]] = {"proposal_policy": {"user", "superiors"}, "executor": {"auto", "offline"},
                                 "transport": {"https", "http"}, "budget_exhausted_action": {"pause", "stop"}}

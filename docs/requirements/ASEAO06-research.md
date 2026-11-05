@@ -72,6 +72,10 @@ registered sources (`rotation_tick`), robots.txt and public-host checks (`_robot
 ### S06-R-05 Rotation handover — §14
 - Each rotation turn writes a handover: active requests, completed work, unverified claims,
   outstanding sources, decisions, pending reports, deadlines, known problems (SPEC-12 S12-R-05).
+- **Status: done** with SPEC-12 S12-R-05 (`research_shifts.handover`): active and pending requests (queued or running
+  reports), completed work (visited sources with retrieval dates, findings), unverified pages, outstanding sources
+  (never visited, due, held by Retry-After), known problems, open questions, confidence/limitations and next
+  actions. Decisions and deadlines are not part of the package: research requests have neither yet (S06-R-01).
 
 ### S06-R-06 Research → innovation → goal pipeline — §15 (AT-020)
 - An approved finding can become a proposal tagged `research` (existing proposal flow) with the
