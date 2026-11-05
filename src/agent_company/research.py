@@ -372,12 +372,13 @@ def collect(url: str, depth: int = 1, max_pages: int = 20, agent_id: int | None 
 _WORD = re.compile(r"[A-Za-z0-9_]{3,}")
 
 
-def _reports_hidden_from(s, goal_id: int) -> set[str]:  # noqa: ANN001
+def _reports_hidden_from(s, goal_id: int | None) -> set[str]:  # noqa: ANN001
     """URLs (report://<id>) of research reports a goal may not see: reports of another project whose project or
-    goal is classified above internal (SPEC-14 S14-R-05, like knowledge items)."""
+    goal is classified above internal (SPEC-14 S14-R-05, like knowledge items). Without a goal (material that
+    serves every project) every report above internal is hidden."""
     from agent_company.learning import SHAREABLE, goal_level, highest
 
-    g = s.get(Goal, goal_id)
+    g = s.get(Goal, goal_id) if goal_id else None
     mine = g.project_id if g else None
     hidden = set()
     for r in s.scalars(select(ResearchReport).where(ResearchReport.status == "done")):
@@ -390,9 +391,10 @@ def _reports_hidden_from(s, goal_id: int) -> set[str]:  # noqa: ANN001
     return hidden
 
 
-def search(query: str, limit: int = 5, goal_id: int | None = None) -> list[dict[str, Any]]:
+def search(query: str, limit: int = 5, goal_id: int | None = None, shared_only: bool = False) -> list[dict[str, Any]]:
     """Collected documents matching the query, best first. With a goal, reports written for another project that is
-    classified above internal are left out."""
+    classified above internal are left out; `shared_only` (material for every project) leaves out every report above
+    internal."""
     terms = list(dict.fromkeys(w.lower() for w in _WORD.findall(query)))[:12]
     if not terms:
         return []
@@ -400,7 +402,7 @@ def search(query: str, limit: int = 5, goal_id: int | None = None) -> list[dict[
         cond = or_(*[Document.text.ilike(f"%{t}%") for t in terms],
                    *[Document.title.ilike(f"%{t}%") for t in terms])
         docs = s.scalars(select(Document).where(cond).limit(500)).all()
-        if goal_id is not None:
+        if goal_id is not None or shared_only:
             hidden = _reports_hidden_from(s, goal_id)
             docs = [d for d in docs if d.url not in hidden]
         scored = []

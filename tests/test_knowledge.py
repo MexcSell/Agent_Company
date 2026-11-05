@@ -390,3 +390,38 @@ def test_a_tasks_package_lists_matching_research_documents_but_not_another_proje
     ga, _ = _goal_in(_repo_with(tmp_path / "a", {"README.md": "# A\n"}), project_id=a)
     assert "pricing is confidential" in learning.task_references(ga, "export endpoint")
     assert "pricing" not in str(research.search("export endpoint pricing", goal_id=gid))
+
+
+def test_standards_of_a_detached_head_project_come_from_the_project_not_the_agents_commits(tmp_path):
+    import subprocess
+
+    repo = _repo_with(tmp_path, {"CLAUDE.md": "Tabs, never spaces.\n"})
+    subprocess.run(["git", "checkout", "-q", "--detach"], cwd=repo, check=True)
+    gid, wt = _goal_in(repo)
+    (wt / "CLAUDE.md").write_text("Agents decide the conventions.\n")
+    subprocess.run(["git", "-c", "user.name=a", "-c", "user.email=a@a", "commit", "-qam", "edit"], cwd=wt, check=True)
+    refs = learning.task_references(gid, "anything")
+    assert "Tabs, never spaces." in refs and "Agents decide" not in refs
+
+
+def test_the_study_rotation_never_takes_confidential_lessons_or_reports_into_a_definition(monkeypatch):
+    from agent_company import agentdefs, executors
+    from agent_company.db import Document, ResearchReport
+
+    prompts = []
+    real = executors.OfflineExecutor._study
+    monkeypatch.setattr(executors.OfflineExecutor, "_study", lambda self, req: prompts.append(req.prompt) or real(self, req))
+    p = projects.create("Closed")["id"]
+    projects.update(p, {"classification": "confidential"})
+    dev = agent_of("developer")
+    learning.learn(dev, loop.create_goal("closed work", project_id=p), "Closed pricing rounds half-even.", True, ["python"])
+    learning.learn(dev, None, "Open lesson: pin the parser.", True, ["python"])
+    with session() as s:
+        r = ResearchReport(question="python pricing", status="done", project_id=p)
+        s.add(r)
+        s.flush()
+        s.add(Document(url=f"report://{r.id}", title="Research report: python pricing", category="research report",
+                       text="Closed python pricing details.", flags=[]))
+    agentdefs.study(dev)
+    assert prompts and "pin the parser" in prompts[0]
+    assert "half-even" not in prompts[0] and "Closed python pricing" not in prompts[0]

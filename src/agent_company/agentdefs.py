@@ -192,6 +192,7 @@ def study(agent_id: int | None = None) -> dict[str, Any]:
     """One study visit: the next agent (round robin) turns new knowledge and lessons into its working method."""
     from agent_company import executors, loop, research
     from agent_company.db import Lesson, Setting
+    from agent_company.learning import SHAREABLE
 
     with session() as s:
         agents = s.scalars(select(Agent).where(Agent.enabled, Agent.lifecycle == "active", Agent.parent_id.is_(None))
@@ -210,11 +211,13 @@ def study(agent_id: int | None = None) -> dict[str, Any]:
             nxt = next((a for a in agents if a.id == agent_id), None)
             if nxt is None:
                 raise KeyError(agent_id)
-        lessons = [x.text for x in s.scalars(select(Lesson).where(Lesson.agent_id == nxt.id, Lesson.status == "approved")
+        # a definition file serves every project: only public/internal lessons and reports reach it (S14-R-05)
+        lessons = [x.text for x in s.scalars(select(Lesson).where(Lesson.agent_id == nxt.id, Lesson.status == "approved",
+                                                                  Lesson.classification.in_(SHAREABLE))
                                              .order_by(Lesson.id.desc()).limit(12))]
         s.expunge(nxt)
     topic = " ".join(list((nxt.skills or {}).keys())[:6]) or nxt.role
-    docs = [d for d in research.search(topic, limit=6) if not d["flags"]][:4]
+    docs = [d for d in research.search(topic, limit=6, shared_only=True) if not d["flags"]][:4]
     current = sections(path_for(nxt).read_text(encoding="utf-8")).get("Working method", "") if path_for(nxt).exists() else ""
     prompt = (f"You are improving your own definition as {nxt.title}. Current working method:\n{current or '(none)'}\n\n"
               + ("Your recent lessons:\n" + "\n".join(f"- {x}" for x in lessons) + "\n\n" if lessons else "")

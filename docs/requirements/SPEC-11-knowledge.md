@@ -76,7 +76,7 @@ S11-R-06 done · S11-R-07 done · S11-R-08 done.
   the `retrieval_w_*` settings (S11-R-08 guards them). Each item in the prompt carries its K-number, source goal,
   outcome, author, a *reviewed* mark, limitations and the contradiction warning, wrapped as data. A task's package
   adds the project's standards (the first of `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `README.md`, read from
-  the goal's base branch so an agent's edit in the worktree never reaches other prompts; a file that tries to
+  the goal's base branch in the project's checkout, so an agent's edit in the worktree never reaches other prompts; a file that tries to
   instruct agents is left out) and up to three matching research documents (unflagged; research reports of another
   project above internal are left out). Similar past tasks, the agents who did them and failed approaches arrive
   as lessons (negative items for failures). Without SQLite FTS5 the pool falls back to the latest 300 items.
@@ -146,7 +146,8 @@ S11-R-06 done · S11-R-07 done · S11-R-08 done.
   (text, technologies, evidence class, reviewer, author, one contradiction pair) and 10 tasks with expected items;
   it is ranked in memory with the same FTS5 tokenizer and scoring as `retrieve` and writes nothing. Setting a
   `retrieval_w_*` weight is refused when recall@5 would drop (adapted from "improves": an equal score is allowed);
-  an accepted change is logged with recall before and after. Default weights: recall@5 = 1.0.
+  an accepted change is logged with recall before and after; resetting a weight (back to its `.env` value) is not
+  checked. Default weights: recall@5 = 1.0.
 
 ### Not taken
 - Embedding/vector search: `open` (P2) — add only if S11-R-08 shows keyword+FTS is insufficient.

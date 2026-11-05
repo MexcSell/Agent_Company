@@ -298,7 +298,8 @@ def project_standards(goal_id: int) -> tuple[str, str]:
 
     with session() as s:
         g = s.get(Goal, goal_id)
-        where, base = (g.worktree or g.repo_path, g.base_branch) if g else ("", "")
+        # the project's own checkout: in the worktree a detached base ("HEAD") would be the agents' commits
+        where, base = (g.repo_path or g.worktree, g.base_branch) if g else ("", "")
     if not where or not base or not Path(where).is_dir():
         return "", ""
     for name in STANDARDS:
