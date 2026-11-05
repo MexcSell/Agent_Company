@@ -63,7 +63,9 @@ feature came from.
   (ASEAO07 S07-R-03: statements under test with evidence; an experiment's comparison concludes its hypothesis; an agent
   never marks one supported without a recorded test result); `training.py`
   (capability gaps, learning plans: practice + hidden final eval suites run by the trainee in scratch repos,
-  certification only from the harness; learning metrics); `selfevolve.py` (verified self-evolution of the platform's own code: improvement contracts, protected
+  certification only from the harness; learning metrics) + `exercises.py` (S13-R-02 exercises written by the
+  instructor on an administrator's request, kept only when each check fails on the seed and passes with the reference
+  solution in the sandbox; `data/evals/`, a generated final set needs approval); `selfevolve.py` (verified self-evolution of the platform's own code: improvement contracts, protected
   control plane, failure layers, a fixed benchmark from `benchmarks/` run on the base and candidate commits, approval,
   deploy via the safe restart, monitoring, rollback; docs/requirements/SELF-EVOLUTION.md); `performance.py` (defects with priority and a lifecycle
   the loop drives, S09-R-03; certification, metrics, estimate accuracy, G-R-02 operational metrics `operations`); `rca.py` (S07-R-02 root-cause analysis of failed goals and repeated failing checks:
@@ -151,7 +153,7 @@ feature came from.
 - `uv run python -m agent_company goal "<goal>" --check "<cmd>" [--allow 'src/*'] [--protect-tests] [--permit dependencies|config|skip_tests] [--kind feature|bugfix|refactor|research|docs]`
 - `uv run python -m agent_company improve list|weaknesses|benchmark [name]|create|start|deploy|rollback|cancel <id>` – verified self-evolution
 - `uv run python -m agent_company eval --suite smoke --label <name> [--repeats 3] [--model <name> --role <role>]` / `eval --compare a b`
-- `uv run python -m agent_company learn gaps|raise|plans|plan <agent> <skill>|start <id>|cancel <id>|experiments|metrics|retrieval`
+- `uv run python -m agent_company learn gaps|raise|plans|plan <agent> <skill>|start <id>|cancel <id>|experiments|metrics|retrieval|generate <skill> [practice|final] [count]|suites|approve <suite>`
 - `uv run python -m agent_company requirements list|trace|import [--project <id>]` – requirements and traceability
 - `uv run python -m agent_company strategies evaluate [kind]|recommend <kind>` – self-evaluation of the workflow templates
 - `uv run python -m agent_company sbom [repo] [--rev HEAD] [--out file]` – CycloneDX SBOM of a commit

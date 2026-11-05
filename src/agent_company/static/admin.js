@@ -153,8 +153,8 @@ async function recruitmentPanel() {
 async function learningPanel() {
   let box = $("#lp");
   if (!box) { $("#view").insertAdjacentHTML("beforeend", '<div id="lp" class="grid" style="margin-top:12px"></div>'); box = $("#lp"); }
-  let ex, gaps, plans, orch;
-  try { [ex, gaps, plans, orch] = await Promise.all([api("/api/experiments"), api("/api/learning/gaps"), api("/api/learning/plans"), api("/api/strategies/evaluation")]); } catch (e) { box.innerHTML = `<div class="card"><h2>Experiments</h2><span class="muted">${esc(e.message)}</span></div>`; return; }
+  let ex, gaps, plans, orch, suites;
+  try { [ex, gaps, plans, orch, suites] = await Promise.all([api("/api/experiments"), api("/api/learning/gaps"), api("/api/learning/plans"), api("/api/strategies/evaluation"), api("/api/learning/suites")]); } catch (e) { box.innerHTML = `<div class="card"><h2>Experiments</h2><span class="muted">${esc(e.message)}</span></div>`; return; }
   const may = me.is_admin || me.permissions?.manage_agents;
   const pct = (v) => (typeof v === "number" ? `${Math.round(v * 100)}%` : "–");
   const tone = { rolled_out: "approved", canary: "running", baseline: "running", candidate: "running", review: "pending", rolled_back: "rejected", rejected: "rejected", failed: "failed", proposed: "pending", passed: "done", running: "running", planned: "pending", cancelled: "disabled" };
@@ -194,7 +194,10 @@ async function learningPanel() {
     <div class="grid two"><div class="card"><h2>Capability gaps (${gaps.length})</h2><p class="muted">Per agent and skill, from verified knowledge, gate outcomes, eval runs and recency. Found gaps are raised by “Diagnose all agents now”.</p>
       <div class="events">${gaps.map((g, i) => `<div class="row"><span class="k">${esc(g.category.replace(/_/g, " "))}</span><span class="grow"><a href="#" data-agent="${g.agent_id}">${esc(g.agent)}</a> · ${esc(g.skill)} <span class="muted">${esc(g.detail)} · readiness ${pct(g.readiness)}</span></span>${may && !g.plan_id && g.skill !== "*" ? `<button class="btn sm" data-gap="${i}">Plan</button>` : g.plan_id ? `<span class="muted">plan #${g.plan_id}</span>` : ""}</div>`).join("") || '<span class="muted">No gaps.</span>'}</div></div>
     <div class="card"><h2>Learning plans (${plans.length})</h2><p class="muted">Practice exercises, then a separate final evaluation whose checks the agents never see. Both run as eval goals in scratch repositories; only the final evaluation's result changes a certified level.</p>
-      <div class="events">${plans.map(plan).join("") || '<span class="muted">No plans yet.</span>'}</div></div></div>`;
+      <div class="events">${plans.map(plan).join("") || '<span class="muted">No plans yet.</span>'}</div>
+      <h3 style="margin-top:12px">Exercise suites</h3><p class="muted">Practice and final sets by skill. Generated ones are written by the instructor and kept only when each check fails on the starting files and passes with the reference solution; a generated final set needs an administrator's approval before plans use it.</p>
+      <div class="events">${suites.filter((x) => ["practice", "final"].includes(x.kind)).map((x) => `<div class="row"><span class="k">${esc(x.kind)}</span><span class="grow">${esc(x.name)} <span class="muted">${esc(x.skills.join(", "))} · ${x.tasks.length} task(s)${x.generated ? ` · by ${esc(x.by || "?")}${x.dropped ? `, ${x.dropped} dropped` : ""}` : ""}</span></span>${x.approved ? "" : me.is_admin ? `<button class="btn sm primary" data-sapprove="${esc(x.name)}">Approve</button>` : '<span class="muted">awaits approval</span>'}</div>`).join("") || '<span class="muted">No suites.</span>'}</div>
+      ${me.is_admin ? '<div class="row" style="margin-top:6px"><button class="btn sm" id="ex-gen">Generate exercises</button></div>' : ""}</div></div>`;
   box.querySelectorAll("[data-agent]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); agentModal(Number(a.dataset.agent)); }));
   const run = async (b, path, body) => { b.classList.add("busy"); try { await api(path, { method: "POST", body }); } catch (e) { toast(e.message); } learningPanel(); };
   box.querySelectorAll("[data-ex]").forEach((b) => (b.onclick = () => {
@@ -206,6 +209,12 @@ async function learningPanel() {
   }));
   box.querySelectorAll("[data-rec]").forEach((b) => (b.onclick = () => run(b, `/api/strategies/${b.dataset.rec}/recommend`)));
   box.querySelectorAll("[data-lp]").forEach((b) => (b.onclick = () => run(b, `/api/learning/plans/${b.dataset.id}/${b.dataset.lp}`)));
+  box.querySelectorAll("[data-sapprove]").forEach((b) => (b.onclick = () => { if (confirm(`Use ${b.dataset.sapprove} as a final evaluation set that certifies agents?`)) run(b, `/api/learning/suites/${encodeURIComponent(b.dataset.sapprove)}/approve`); }));
+  $("#ex-gen") && ($("#ex-gen").onclick = async () => {
+    const skill = prompt("Skill to write exercises for", "python"); if (!skill) return;
+    const kind = (prompt("Kind: practice or final", "practice") || "").trim(); if (!kind) return;
+    try { await api("/api/learning/suites", { method: "POST", body: { skill: skill.trim(), kind, count: 3 } }); toast("The instructor is writing the exercises; a notification follows."); } catch (e) { toast(e.message); }
+  });
   box.querySelectorAll("[data-gap]").forEach((b) => (b.onclick = () => { const g = gaps[Number(b.dataset.gap)]; run(b, "/api/learning/plans", { agent_id: g.agent_id, capability: g.skill }); }));
   $("#ex-new") && ($("#ex-new").onclick = async () => {
     const target = prompt(`Target: playbook, route${me.is_admin ? ", strategy or retrieval" : ""}`, "route"); if (!target) return;

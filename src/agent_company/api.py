@@ -620,6 +620,12 @@ class KpiPatch(BaseModel):
     enabled: bool | None = None
 
 
+class ExerciseBody(BaseModel):
+    skill: str
+    kind: str = "practice"
+    count: int = Field(default=3, ge=1, le=6)
+
+
 class PlanBody(BaseModel):
     agent_id: int
     capability: str
@@ -1933,6 +1939,30 @@ def create_app(start_background: bool = True) -> FastAPI:
                                    created_by=f"user:{admin['name']}")
         _audit(admin, "learning_plan_create", out["id"], after={"agent_id": body.agent_id,
                                                                "capability": out["capability"]})
+        return out
+
+    @app.get("/api/learning/suites")
+    def learning_suites(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        from agent_company import evaluation
+
+        return evaluation.list_suites()
+
+    @app.post("/api/learning/suites")
+    def learning_suite_generate(body: ExerciseBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        from agent_company import exercises
+
+        if body.kind not in exercises.KINDS:
+            raise ValueError(f"kind must be one of {', '.join(exercises.KINDS)}")
+        exercises.generate_in_background(body.skill, body.kind, body.count, f"user:{admin['name']}")
+        _audit(admin, "exercises_generate", body.skill[:64], after={"kind": body.kind, "count": body.count})
+        return {"status": "generating", "skill": body.skill, "kind": body.kind}
+
+    @app.post("/api/learning/suites/{name}/approve")
+    def learning_suite_approve(name: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        from agent_company import exercises
+
+        out = exercises.approve(name, f"user:{admin['name']}")
+        _audit(admin, "exercises_approve", name[:64])
         return out
 
     @app.post("/api/learning/plans/{plan_id}/start")

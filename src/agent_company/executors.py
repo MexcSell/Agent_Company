@@ -633,6 +633,24 @@ class OfflineExecutor(Executor):
                 f"{req.data.get('description', '')}\n\nKey points:\n1. Keep the scope small.\n"
                 "2. Define acceptance tests first.\n3. Report evidence, not claims.\n")
 
+    def _exercises(self, req: Request) -> str:
+        """Two small exercises whose checks fail on the seed and pass with the solution (exercises.py)."""
+        final = req.data.get("kind") == "final"
+        mod = (("vowels", "count_vowels", "count_vowels('Banana') == 3 and count_vowels('') == 0"),
+                          ("totals", "running_total", "running_total([1, 2, 3]) == [1, 3, 6]")) if final else \
+            (("text_util", "reverse_words", "reverse_words('a b c') == 'c b a'"),
+             ("pal", "is_palindrome", "is_palindrome('Level') and not is_palindrome('ab')"))
+        bodies = {"count_vowels": "def count_vowels(s):\n    return sum(c in 'aeiou' for c in s.lower())\n",
+                  "running_total": "def running_total(xs):\n    out, t = [], 0\n    for x in xs:\n        t += x\n"
+                                   "        out.append(t)\n    return out\n",
+                  "reverse_words": "def reverse_words(s):\n    return ' '.join(reversed(s.split()))\n",
+                  "is_palindrome": "def is_palindrome(s):\n    s = s.lower()\n    return s == s[::-1]\n"}
+        tasks = [{"name": f.replace("_", "-"), "title": f"Add {f}() to {m}.py",
+                  "description": f"Implement {f} in {m}.py so that {c}.",
+                  "files": {f"{m}.py": f'"""{m} helpers."""\n'}, "solution": {f"{m}.py": bodies[f]},
+                  "checks": [f'python3 -c "from {m} import {f}; assert {c}"']} for m, f, c in mod]
+        return "```json\n" + json.dumps({"tasks": tasks}) + "\n```"
+
     def _contradiction(self, req: Request) -> str:
         return "VERDICT: UNSURE — the offline simulator does not judge knowledge; a person decides."
 

@@ -135,7 +135,7 @@ Machines code):
 | Relationship kinds with evidence; links of a new agent | SPEC12 §2.2, `.rtf` | done (`network.py`, S12-R-01, S12-R-02) |
 | Agent network view: overview counts, graph with server-side filters, pages and bounded depth | SPEC12 §16, §17 | done (`network.graph`, `static/network.js`, S12-R-07) |
 | Shift rotation (acquisition → verification → analysis → organisation → review) with handovers; agent workload | `.rtf` SPEC-12, ASEAO06 §14 | done (`research_shifts`, S12-R-05, S06-R-05) |
-| Capability gaps, learning plans with practice and hidden final evaluations, certification by the harness only | SPEC13 §5, §6, §8, §9 | done (`training.py`, `evals/python-*.json`, S13-R-01..R-03; exercises are hand-written suites, generated ones open) |
+| Capability gaps, learning plans with practice and hidden final evaluations, certification by the harness only | SPEC13 §5, §6, §8, §9 | done (`training.py`, `evals/python-*.json`, S13-R-01..R-03; hand-written suites and instructor-generated ones the harness verifies, `exercises.py`) |
 | A/B testing of playbook or model changes: experiments with baseline, candidate, sample sizes, review, canary and rollback; self-improvement levels E0-E6 | SPEC13 §10, §11, §12 | done (`experiments.py`, S13-R-04..R-06; workflow templates as `strategy` experiments (S04-R-13), ranking weights as `retrieval` experiments on the retrieval evals and benchmark) |
 | Learning metrics: first-pass success, rework, knowledge reuse, benchmark per playbook version | SPEC13 `.rtf` | done (`training.metrics`, S13-R-07) |
 | Agent behaviour monitoring with deterministic rules | SPEC14 §10 | done (six rules, cost-vs-estimate included, S14-R-03) |

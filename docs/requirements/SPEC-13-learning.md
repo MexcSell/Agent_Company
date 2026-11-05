@@ -60,8 +60,18 @@ evaluation*.
   and vice versa. A final suite's goals have `trial.hide_checks`: one iteration, no quality commands in
   `.claude/specs/*/requirements.md`, no findings in lessons. `Goal.trial.trainee_id` makes the trainee do its
   role's work (a clone when it is busy; the clone's eval evidence shows in `gaps` only after it merges back).
-  Exercises are hand-written (`evals/python-practice.json`,
-  `python-final.json`); generating them is open.
+  Exercises are hand-written (`evals/python-practice.json`, `python-final.json`) or generated (`exercises.py`):
+  an administrator asks for practice or final exercises for a skill (`learn generate <skill> [practice|final]
+  [count]`, `POST /api/learning/suites`, Evolution → Learning plans → *Generate exercises*); the instructor writes
+  them with a reference solution each, and the harness keeps a task only when its text passes `learning.screen`, its
+  commands pass the command policy, at least one check fails on the bare seed and all pass with the solution laid
+  over it (both runs in the L3 sandbox, in a scratch directory under `data/worktrees/`). A final set may not repeat
+  a title or a check of the skill's practice suites. Suites are written to `data/evals/gen-<skill>-<kind>-<time>.json`
+  with what was dropped and why (`generated`), solutions to `data/evals/solutions/`; `evaluation.list_suites` lists
+  them after the repository's own (hand-written ones win a skill, then the newest). A generated practice suite is
+  usable at once; a generated final set only after an administrator approves it (`learn approve`,
+  `POST /api/learning/suites/{name}/approve`; `suites_for` skips and `create_plan` refuses it until then). Nothing
+  generates on its own: generation costs model money like a plan.
 
 ### S13-R-03 Independent evaluation and certification — §9 — **done** (`training.certified`, in `performance.certification`)
 - Certification changes only from eval runs scored by the harness (commands), never from the

@@ -125,9 +125,12 @@ def main(argv: list[str] | None = None) -> None:
     ev.add_argument("--role", default="developer", help="the role --model stands in for")
     le = sub.add_parser("learn", help="capability gaps, learning plans and experiments (SPEC-13)")
     le.add_argument("action", choices=["gaps", "raise", "plans", "plan", "start", "cancel", "experiments", "metrics",
-                                       "retrieval"], help="retrieval: learn the ranking procedure per query class (SE-R-21)")
+                                       "retrieval", "generate", "suites", "approve"],
+                    help="retrieval: learn the ranking procedure per query class (SE-R-21); generate: exercises "
+                         "written by the instructor, verified by the harness (S13-R-02)")
     le.add_argument("args", nargs="*", help="plan: <agent id> <capability> [final suite] [practice suite]; "
-                                            "start/cancel: <plan id>")
+                                            "start/cancel: <plan id>; generate: <skill> [practice|final] [count]; "
+                                            "approve: <generated final suite>")
     sb = sub.add_parser("sbom", help="CycloneDX SBOM of a repository's dependencies at a commit (S08-R-05)")
     sb.add_argument("repo", nargs="?", default=".", help="git repository (default: the current directory)")
     sb.add_argument("--rev", default="HEAD")
@@ -274,6 +277,22 @@ def main(argv: list[str] | None = None) -> None:
             else:  # in the foreground: the CLI waits for the practice and final runs
                 training._spawn = lambda fn: fn()
                 out = training.start_plan(int(a[0]))
+        elif args.action == "generate":
+            from agent_company import exercises
+
+            if not a:
+                raise SystemExit("learn generate <skill> [practice|final] [count]")
+            out = exercises.generate(a[0], a[1] if len(a) > 1 else "practice", int(a[2]) if len(a) > 2 else 3, "cli")
+        elif args.action == "suites":
+            from agent_company import evaluation
+
+            out = evaluation.list_suites()
+        elif args.action == "approve":
+            from agent_company import exercises
+
+            if not a:
+                raise SystemExit("learn approve <generated final suite>")
+            out = exercises.approve(a[0], "cli")
         elif args.action == "experiments":
             out = experiments.list_experiments()
         elif args.action == "retrieval":

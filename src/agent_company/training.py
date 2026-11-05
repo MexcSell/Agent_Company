@@ -194,7 +194,7 @@ def suites_for(skill: str) -> tuple[str, str]:
     sk = _slug(skill)
     practice = final = ""
     for x in evaluation.list_suites():
-        if sk not in {_slug(k) for k in x["skills"]}:
+        if sk not in {_slug(k) for k in x["skills"]} or not x.get("approved", True):
             continue
         if x["kind"] == "final" and not final:
             final = x["name"]
@@ -230,9 +230,13 @@ def create_plan(agent_id: int, capability: str, target_level: int | None = None,
         practice_suite, final_suite = suites_for(cap)
     if not final_suite:
         raise ValueError(f"no final evaluation suite covers '{cap}': add evals/<name>.json with \"kind\": \"final\" "
-                         f"and \"skills\": [\"{cap}\"]")
+                         f"and \"skills\": [\"{cap}\"], or generate one: learn generate {cap} final")
     if _kind(final_suite) != "final":
         raise ValueError(f"'{final_suite}' is not a final evaluation set (kind \"final\")")
+    from agent_company import evaluation
+
+    if not evaluation.usable(evaluation.load_suite(final_suite)):
+        raise ValueError(f"'{final_suite}' is a generated final set an administrator has not approved yet")
     if practice_suite and _kind(practice_suite) != "practice":
         raise ValueError(f"'{practice_suite}' is not a practice suite (kind \"practice\"): exercises and the final "
                          "evaluation must be separate sets")

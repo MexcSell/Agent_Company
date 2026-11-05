@@ -109,11 +109,11 @@ the order is safety and correctness of that pipeline first, then management, the
    S13-R-05 ranking weights as `retrieval` experiments (both retrieval evals and the fixed benchmark per side,
    an administrator applies and rolls back) done 2026-11-05, then ASEAO08 S08-FR-03 story and use-case templates
    with their actors, then SPEC-01 S01-R-06 department KPIs, then a merged goal's `NEXT:` lines as follow-up
-   action items (G-R-01), then the S11-R-04 model judge of knowledge contradictions (`contradiction_judge`).
+   action items (G-R-01), then the S11-R-04 model judge of knowledge contradictions (`contradiction_judge`), then
+   S13-R-02 generated practice and final exercises, verified by the harness (`exercises.py`).
 5. **Still open** (2026-11-05): the gated rooms one at a time
    (G-R-04); L3 for the agent CLIs themselves (they need network and their logins, see the threat model's known
-   gaps). Model-dependent or conditional: S13-R-02 generated practice/final exercises (hand-written suites today),
-   S11 embedding search (only if S11-R-08 shows
+   gaps). Conditional: S11 embedding search (only if S11-R-08 shows
    FTS insufficient), per-room eval suites (G-R-04). Per project via check commands: ASEAO09 §7.7–7.10 load,
    stress, compatibility and accessibility testing.
    Deliberately not taken: S06-FR-04 date ranges and languages (no such data in the knowledge store).

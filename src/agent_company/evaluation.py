@@ -37,10 +37,17 @@ from agent_company.db import EvalRun, Goal, Run, log_event, session
 SUITES_DIR = REPO_ROOT / "evals"
 
 
+def generated_dir() -> Path:
+    """Suites written by the instructor (exercises.py, S13-R-02): data, not part of the repository."""
+    return settings().data_dir / "evals"
+
+
 def load_suite(path: str | Path) -> dict[str, Any]:
     p = Path(path)
     if not p.exists() and (SUITES_DIR / f"{path}.json").exists():
         p = SUITES_DIR / f"{path}.json"
+    elif not p.exists() and (generated_dir() / f"{Path(str(path)).name}.json").exists():
+        p = generated_dir() / f"{Path(str(path)).name}.json"
     data = json.loads(p.read_text())
     if not isinstance(data.get("tasks"), list) or not data["tasks"]:
         raise ValueError("a suite needs a non-empty 'tasks' list")
@@ -51,13 +58,25 @@ def load_suite(path: str | Path) -> dict[str, Any]:
     return data
 
 
+def usable(suite: dict[str, Any]) -> bool:
+    """A generated final set certifies agents only once an administrator approved it."""
+    gen = suite.get("generated")
+    return not gen or suite.get("kind") != "final" or bool(gen.get("approved_by"))
+
+
 def list_suites() -> list[dict[str, Any]]:
+    """The repository's suites by name, then generated ones newest first (so hand-written suites win a skill)."""
     out = []
-    for p in sorted(SUITES_DIR.glob("*.json")):
+    gen = generated_dir()
+    paths = sorted(SUITES_DIR.glob("*.json")) + (sorted(gen.glob("*.json"), reverse=True) if gen.is_dir() else [])
+    for p in paths:
         try:
             s = load_suite(p)
             out.append({"name": s["name"], "file": p.name, "tasks": [t["name"] for t in s["tasks"]],
-                        "kind": s.get("kind", "benchmark"), "skills": list(s.get("skills") or [])})
+                        "kind": s.get("kind", "benchmark"), "skills": list(s.get("skills") or []),
+                        "generated": bool(s.get("generated")), "approved": usable(s),
+                        **({"by": s["generated"].get("by"), "at": s["generated"].get("at"),
+                            "dropped": len(s["generated"].get("dropped") or [])} if s.get("generated") else {})})
         except (ValueError, json.JSONDecodeError):
             continue
     return out
