@@ -253,3 +253,66 @@ def test_mentoring_api_lists_and_takes_feedback_audited():
         assert app.post("/api/mentoring/999/feedback", json={"text": "x"}).status_code == 404
     with session() as s:
         assert s.scalars(select(AuditEvent).where(AuditEvent.action == "mentoring_feedback")).one()
+
+
+def _chain():
+    """A clean network: arch -similar- dev -reviewed_by-> qa -collaborated- research (expired), plus many links of
+    research to fill pages."""
+    arch, dev, qa, res = (agent_of(r) for r in ("architect", "developer", "qa", "research"))
+    with session() as s:
+        for r in s.scalars(select(Relationship)):
+            s.delete(r)
+        s.add(Relationship(a_id=min(arch, dev), b_id=max(arch, dev), kind="similar", weight=0.9, evidence=[]))
+        s.add(Relationship(a_id=dev, b_id=qa, kind="reviewed_by", weight=0.5, evidence=["task:1"]))
+        s.add(Relationship(a_id=min(qa, res), b_id=max(qa, res), kind="collaborated", weight=0.4, evidence=["goal:1"],
+                           status="expired"))
+        s.add(Relationship(a_id=qa, b_id=res, kind="testing_partner", weight=0.3, evidence=["admin:x: y"]))
+    return arch, dev, qa, res
+
+
+def test_network_graph_pages_filters_and_walks_a_bounded_depth():
+    arch, dev, qa, res = _chain()
+    full = network.graph()
+    assert full["total"] == 3 and [e["kind"] for e in full["edges"]] == ["similar", "reviewed_by", "testing_partner"]
+    pages = [network.graph(offset=o, limit=1) for o in range(3)]
+    assert all(p["total"] == 3 for p in pages)
+    assert [p["edges"][0]["id"] for p in pages] == [e["id"] for e in full["edges"]], "pages never overlap"
+    assert {n["id"] for n in pages[0]["nodes"]} == {arch, dev}
+    assert network.graph(include_expired=True)["total"] == 4
+    assert [e["origin"] for e in network.graph(origin_="corrected")["edges"]] == ["corrected"]
+    assert network.graph(kind="reviewed_by")["edges"][0]["directed"] is True
+    with session() as s:
+        dev_room = s.get(Agent, dev).room_key
+    assert network.graph(room="no_such_room")["total"] == 0
+    assert network.graph(room=dev_room)["total"] >= 2, "either end in the room"
+    assert network.graph(limit=10_000)["limit"] == network.MAX_GRAPH_LIMIT
+
+    near = network.graph(agent_id=arch, depth=1)
+    assert near["total"] == 1 and near["edges"][0]["depth"] == 1
+    two = network.graph(agent_id=arch, depth=9)
+    assert two["depth"] == 2 and [e["depth"] for e in two["edges"]] == [1, 2], "qa is two steps away, res three"
+    assert {n["id"]: n["depth"] for n in two["nodes"]} == {arch: 0, dev: 1, qa: 2}
+    assert network.graph(agent_id=dev, skill="no-such-skill")["total"] == 0
+    try:
+        network.graph(kind="friends")
+        raise AssertionError("an unknown kind is refused")
+    except ValueError:
+        pass
+
+
+def test_network_overview_and_api():
+    arch, dev, qa, res = _chain()
+    with session() as s:
+        s.get(Agent, dev).active_goals = [7]
+        s.get(Agent, qa).active_goals = [7]
+    certify(qa)
+    o = network.overview()
+    assert o["links"] == {"corrected": 1, "inferred": 1, "observed": 1} and o["expired_links"] == 1
+    assert o["teams"] == 1 and o["team_sizes"] == [2] and o["certified_capabilities"] == 1
+    assert dev in {x["id"] for x in o["overloaded"]}, "one goal at once and it is busy"
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as c:
+        c.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
+        g = c.get("/api/network/graph", params={"agent_id": arch, "depth": 2}).json()
+        assert g["total"] == 2 and g["agent_id"] == arch
+        assert c.get("/api/network/graph", params={"kind": "nope"}).status_code == 400
+        assert c.get("/api/network/overview").json()["teams"] == 1

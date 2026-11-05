@@ -18,7 +18,7 @@ feature came from.
   state machine, `goal_transitions`); `blackboard.py` (versioned shared goal context, agent messages);
   `network.py` (SPEC-12 relationship kinds with evidence: observed links from finished work,
   complementary specialists and a mentor candidate for new agents, administrator corrections, fair staffing
-  inputs in `registry._rank`) + `mentoring.py` (a mentor per learning plan: reviews practice results, never certifies);
+  inputs in `registry._rank`; `graph`/`overview` for the network view) + `mentoring.py` (a mentor per learning plan: reviews practice results, never certifies);
   `decisions.py` (decision records; human ones block the merge); `projects.py` (projects, command window
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals, uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress;
   blockers and generated items are reconciled from goal state by `sync`); `kgraph.py` (SPEC-11 knowledge graph: `kg_edges` written as side effects, the paged neighbourhood API);
@@ -44,7 +44,8 @@ feature came from.
   (`.claude/specs/<slug>/` artifacts of every goal, the GM's `.claude/` configure step); `hooks.py` (TaskCreated,
   TaskCompleted, TeammateIdle → `data/logs/team-hooks.jsonl`, fail-open);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
-  (Workspace Claude Code panel: a tab per conversation (new ones on the far left), titled by Haiku; other live host sessions only in the sessions window (a tab while one is opened), session history with resume/stop/delete); `api.py`; `static/` (dashboard, plain JS, one file per area; `agents.js` (org chart, Tools & MCP, Skills & plugins, agent card),
+  (Workspace Claude Code panel: a tab per conversation (new ones on the far left), titled by Haiku; other live host sessions only in the sessions window (a tab while one is opened), session history with resume/stop/delete); `api.py`; `static/` (dashboard, plain JS, one file per area; `agents.js` (org chart, Tools & MCP, Skills & plugins, agent card), `network.js` (Agent network: overview counts, paged
+  relationship graph from `network.graph`),
   `models.js`; `knowledge.js` (Knowledge: items, review queue, contradictions, graph explorer); `security.js` (Security: stops, incidents,
   refused commands, alerts); rail order shared by all users via `/api/ui/nav_layout` (Settings → Navigation); buttons with a known
   label become icons (`iconize` in app.js); `index.html` is served with content-hashed static URLs;

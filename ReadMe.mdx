@@ -173,7 +173,7 @@ window, proposals), `checks.py` (secret, syntax and scope checks), `learning.py`
 `evolution.py` (lessons, versioned playbooks, experiments, clone merging),
 `experiments.py` (baseline-vs-candidate experiments, canary, rollback), `training.py`
 (capability gaps, learning plans, learning metrics), `network.py` (relationships between
-agents with their evidence), `mentoring.py` (mentors for learning plans), `kgraph.py`
+agents with their evidence; the paged network view), `mentoring.py` (mentors for learning plans), `kgraph.py`
 (the knowledge graph),
 `performance.py` (defects, certification, metrics), `evaluation.py` (eval harness),
 `research.py` (crawler, knowledge, source kinds, injection flags, reports, rotation),
@@ -329,7 +329,13 @@ models through Ollama (`ollama/<model>` plus `OLLAMA_API_BASE`). The Codex CLI
   similar agents, to the specialists of other roles its peers work with, and to a
   mentor candidate (the most certified agent of its role). Administrators can
   correct a link's weight or expire it, with a reason, on the agent card's
-  Relationships tab (audited).
+  Relationships tab (audited). The **Agent network** page shows the whole network:
+  counts (active agents and links, current teams, certified capabilities, recent
+  handovers, mentorings, agents with no free slot) and a graph of the links,
+  filtered on the server by agent, room, skill, kind and origin, one page of 100
+  links at a time and at most two steps around a chosen agent. Line style and colour
+  show where a link came from (observed, inferred, corrected), width its weight, an
+  arrow a directed kind; the table under the graph lists the same page with evidence.
 - **Mentoring:** a learning plan gets a mentor when the learner has one. The mentor
   reads the practice results and writes advice (what to study, what to practise);
   people can add advice too. It never grades: only the final evaluation certifies.

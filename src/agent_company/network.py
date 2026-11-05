@@ -200,3 +200,115 @@ def correct(agent_id: int, other_id: int, kind: str, actor: str, reason: str, we
         log_event("relationship", f"{names.get(a_id)} {kind} {names.get(b_id)} corrected by {actor}: "
                   f"{reason.strip()[:200]}", agent_id=agent_id, s=s)
         return before, rel_dict(r, names)
+
+
+# --- the network view (S12-R-07): server-side filters, bounded depth, pages ---------------------
+
+MAX_GRAPH_DEPTH, MAX_GRAPH_LIMIT, MAX_GRAPH_EDGES = 2, 200, 5000
+ORIGINS = {"inferred", "observed", "corrected"}
+
+
+def _node(a: Agent, depth: int | None = None) -> dict[str, Any]:
+    skills = dict(a.skills or {})
+    top = max(skills, key=lambda k: (skills[k], k)) if skills else ""
+    return {"id": a.id, "name": a.name, "role": a.role, "room": a.room_key, "lifecycle": a.lifecycle,
+            "enabled": a.enabled, "top_skill": top} | ({"depth": depth} if depth is not None else {})
+
+
+def _matching(s: Session, room: str, skill: str) -> set[int] | None:
+    """Agents in the room that have the skill (None = no filter)."""
+    if not room and not skill:
+        return None
+    q = select(Agent)
+    if room:
+        q = q.where(Agent.room_key == room)
+    term = skill.strip().lower()
+    return {a.id for a in s.scalars(q) if not term or any(term in k.lower() for k in (a.skills or {}))}
+
+
+def graph(agent_id: int | None = None, room: str = "", skill: str = "", kind: str = "", origin_: str = "",
+          include_expired: bool = False, depth: int = 1, offset: int = 0, limit: int = 100) -> dict[str, Any]:
+    """One page of relationship edges and the agents they touch. Without `agent_id`: every link, strongest
+    first, where either end is in `room` and has `skill`. With it: links within `depth` (≤ 2) steps of that agent,
+    nearest first, where the agent reached is in `room` and has `skill`. Filters run on the server; the order is
+    deterministic, so pages never overlap (AR-009, AR-020)."""
+    if kind and kind not in registry.KINDS:
+        raise ValueError(f"kind is one of {', '.join(sorted(registry.KINDS))}")
+    if origin_ and origin_ not in ORIGINS:
+        raise ValueError(f"origin is one of {', '.join(sorted(ORIGINS))}")
+    depth = max(1, min(int(depth), MAX_GRAPH_DEPTH))
+    offset, limit = max(0, int(offset)), max(1, min(int(limit), MAX_GRAPH_LIMIT))
+    with session() as s:
+        match = _matching(s, room, skill)
+        base = select(Relationship)
+        if kind:
+            base = base.where(Relationship.kind == kind)
+        if not include_expired:
+            base = base.where(Relationship.status != "expired")
+        keep = (lambda r: True) if not origin_ else (lambda r: origin(r) == origin_)  # noqa: E731
+        reached: dict[int, int] = {}
+        if agent_id is None:
+            q = base if match is None else base.where(or_(Relationship.a_id.in_(match), Relationship.b_id.in_(match)))
+            edges = [(r, None) for r in s.scalars(q.order_by(Relationship.weight.desc(), Relationship.id)
+                                                  .limit(MAX_GRAPH_EDGES)) if keep(r)]
+        else:
+            if s.get(Agent, agent_id) is None:
+                raise KeyError(f"agent {agent_id}")
+            reached, edges, seen, frontier = {agent_id: 0}, [], set(), {agent_id}
+            for step in range(1, depth + 1):
+                nxt: set[int] = set()
+                for r in s.scalars(base.where(or_(Relationship.a_id.in_(frontier), Relationship.b_id.in_(frontier)))
+                                   .order_by(Relationship.weight.desc(), Relationship.id)):
+                    if r.id in seen or not keep(r):
+                        continue
+                    other = r.b_id if r.a_id in frontier else r.a_id
+                    if other not in reached and match is not None and other not in match:
+                        continue
+                    seen.add(r.id)
+                    edges.append((r, step))
+                    if other not in reached:
+                        reached[other] = step
+                        nxt.add(other)
+                if not nxt or len(edges) >= MAX_GRAPH_EDGES:
+                    break
+                frontier = nxt
+        page = edges[offset:offset + limit]
+        ids = {i for r, _ in page for i in (r.a_id, r.b_id)} | ({agent_id} if agent_id else set())
+        agents = {a.id: a for a in s.scalars(select(Agent).where(Agent.id.in_(ids)))}
+        names = {i: a.name for i, a in agents.items()}
+        nodes = [_node(a, reached.get(a.id) if agent_id else None)
+                 for a in sorted(agents.values(), key=lambda a: (reached.get(a.id, 9), a.id))]
+        return {"agent_id": agent_id, "depth": depth, "total": len(edges), "offset": offset, "limit": limit,
+                "edges": [rel_dict(r, names) | ({"depth": d} if d else {}) for r, d in page], "nodes": nodes}
+
+
+def overview() -> dict[str, Any]:
+    """Network overview counts (SPEC-12 §16.1)."""
+    from datetime import timedelta
+
+    from agent_company.db import Handover, LearningPlan, Mentoring, ResearchShift
+
+    week = now() - timedelta(days=7)
+    with session() as s:
+        agents = s.scalars(select(Agent)).all()
+        active = [a for a in agents if a.enabled and a.lifecycle == "active"]
+        links: dict[str, int] = {o: 0 for o in sorted(ORIGINS)}
+        expired = 0
+        for r in s.scalars(select(Relationship)):
+            if r.status == "expired":
+                expired += 1
+            else:
+                links[origin(r)] += 1
+        teams: dict[int, set[int]] = {}
+        for a in agents:
+            for g in a.active_goals or []:
+                teams.setdefault(int(g), set()).add(a.id)
+        certified = {(p.agent_id, p.capability) for p in s.scalars(
+            select(LearningPlan).where(LearningPlan.status == "passed"))}
+        handovers = len(s.scalars(select(Handover.id).where(Handover.created_at >= week)).all()) + len(
+            [x for x in s.scalars(select(ResearchShift).where(ResearchShift.started_at >= week)) if x.handover])
+        return {"active_agents": len(active), "agents": len(agents), "links": links, "expired_links": expired,
+                "teams": len(teams), "team_sizes": sorted((len(v) for v in teams.values()), reverse=True),
+                "certified_capabilities": len(certified), "handovers_7d": handovers,
+                "mentorings": len(s.scalars(select(Mentoring.id).where(Mentoring.status == "active")).all()),
+                "overloaded": [{"id": a.id, "name": a.name} for a in active if not registry._free(a, None)]}

@@ -29,7 +29,7 @@ specialists, mentors and past collaborators, and that departments keep a shift s
 ## Specific requirements
 
 Status (2026-11-05): S12-R-01 done · S12-R-02 done · S12-R-03 done · S12-R-04 done · S12-R-05 done ·
-S12-R-06 done · S12-R-07 open.
+S12-R-06 done · S12-R-07 done.
 
 ### S12-R-01 Relationship kinds with evidence — §2.2
 - Extend `relationships.kind` beyond `similar|collaborated` to: `reviewed_by`, `mentored_by`,
@@ -129,4 +129,17 @@ S12-R-06 done · S12-R-07 open.
   Relationships tab (`POST /api/agents/{id}/relationships`, audited `relationship_correct`).
 
 ### S12-R-07 Network view — §16 (P2)
-- Agent network view with paging (AR-009, AR-020): `open`.
+- Agent network view with paging (AR-009, AR-020).
+- **Status: done** (`network.graph`, `network.overview`, `GET /api/network/graph|overview`, `static/network.js`;
+  `tests/test_network.py`). Filters run on the server (agent, room, skill or technology, kind, origin, expired);
+  without an agent every link is listed strongest first (either end must match room and skill), with one the
+  links within `depth` ≤ 2 steps of it nearest first (the agent reached must match). Pages are at most 200 links
+  (the view asks for 100) in a deterministic order, so pages never overlap; a walk stops at 5000 links (§17
+  bounded traversal). The view draws one page as an SVG graph (rings by step around the chosen agent, otherwise a
+  circle grouped by specialty = top skill, which places specialist clusters together), with zoom and pan, colour
+  plus line style by origin, width by weight, arrows for directed kinds, evidence in tooltips and a table of the
+  same page; clicking an agent centres on it. Overview (§16.1): active agents, active links by origin, expired
+  links, current teams (goals agents are working on), certified capabilities, handovers in 7 days, active
+  mentorings, agents with no free slot. Not covered from §16: the separate Expertise Explorer, team
+  recommendations and the "underused verified capabilities" count; project history per edge is in the evidence
+  references only.

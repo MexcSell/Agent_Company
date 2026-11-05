@@ -111,6 +111,7 @@ Machines code):
 | Agent mentoring and knowledge transfer | SPEC12 §9 | done (`mentoring.py`: a mentor per learning plan reviews practice, never certifies, S12-R-04) |
 | Collaboration recommendation with bias and reputation-manipulation protection | SPEC12 §11, §18 | done (`registry._rank`: windowed quality, no penalty without evidence, exploration, recorded decisions, S12-R-03; administrator corrections, S12-R-06) |
 | Relationship kinds with evidence; links of a new agent | SPEC12 §2.2, `.rtf` | done (`network.py`, S12-R-01, S12-R-02) |
+| Agent network view: overview counts, graph with server-side filters, pages and bounded depth | SPEC12 §16, §17 | done (`network.graph`, `static/network.js`, S12-R-07) |
 | Shift rotation (acquisition → verification → analysis → organisation → review) with handovers; agent workload | `.rtf` SPEC-12, ASEAO06 §14 | done (`research_shifts`, S12-R-05, S06-R-05) |
 | Capability gaps, learning plans with practice and hidden final evaluations, certification by the harness only | SPEC13 §5, §6, §8, §9 | done (`training.py`, `evals/python-*.json`, S13-R-01..R-03; exercises are hand-written suites, generated ones open) |
 | A/B testing of playbook or model changes: experiments with baseline, candidate, sample sizes, review, canary and rollback; self-improvement levels E0-E6 | SPEC13 §10, §11, §12 | done (`experiments.py`, S13-R-04..R-06; workflow-template and retrieval-weight targets open) |

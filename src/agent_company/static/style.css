@@ -3,6 +3,7 @@
   --muted: #5f6b7a; --accent: #2563eb; --accent-text: #fff; --ok: #15803d; --warn: #b45309;
   --bad: #b91c1c; --info: #0369a1; --shadow: 0 8px 30px rgba(15, 23, 42, .12);
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --net-observed: #2a78d6; --net-inferred: #eb6834; --net-corrected: #1baf7a;  /* network edges (validated set) */
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -10,12 +11,14 @@
     --bg: #0f1115; --panel: #161a20; --panel-2: #1d222a; --border: #2a313b; --text: #e6e9ee;
     --muted: #9aa5b4; --accent: #3b82f6; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --info: #38bdf8;
     --shadow: 0 8px 30px rgba(0, 0, 0, .5); color-scheme: dark;
+    --net-observed: #3987e5; --net-inferred: #d95926; --net-corrected: #199e70;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0f1115; --panel: #161a20; --panel-2: #1d222a; --border: #2a313b; --text: #e6e9ee;
   --muted: #9aa5b4; --accent: #3b82f6; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --info: #38bdf8;
   --shadow: 0 8px 30px rgba(0, 0, 0, .5); color-scheme: dark;
+  --net-observed: #3987e5; --net-inferred: #d95926; --net-corrected: #199e70;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
@@ -449,3 +452,23 @@ body:has(.view.loading) { cursor: progress; }
 .pfile:hover { background: var(--panel-2); }
 .proj-av { color: #db2777; }
 .gm-is { font-size: 12px; padding-bottom: 4px; }
+
+/* Agent network (network.js) */
+.net-svg { width: 100%; height: 560px; background: var(--panel-2); border-radius: 8px; cursor: grab; touch-action: none; display: block; }
+.net-svg.panning { cursor: grabbing; }
+.net-svg .node circle { fill: var(--panel); stroke: var(--muted); stroke-width: 1.5; }
+.net-svg .node.root circle { stroke: var(--text); stroke-width: 2.5; }
+.net-svg .node.off circle { stroke-dasharray: 3 3; }
+.net-svg .node { cursor: pointer; }
+.net-svg .node:hover circle { stroke: var(--accent); }
+.net-svg .node text { fill: var(--text); font-size: 12px; text-anchor: middle; paint-order: stroke; stroke: var(--panel-2); stroke-width: 3px; }
+.net-svg .node text.sub { fill: var(--muted); font-size: 10.5px; }
+svg .net-edge { fill: none; stroke-linecap: round; }
+svg .net-edge.observed { stroke: var(--net-observed); }
+svg .net-edge.inferred { stroke: var(--net-inferred); stroke-dasharray: 7 5; }
+svg .net-edge.corrected { stroke: var(--net-corrected); stroke-dasharray: 1.5 4; }
+svg .net-edge.expired { opacity: .35; }
+.net-svg .hit { stroke: transparent; stroke-width: 12; fill: none; }
+svg .link:hover .net-edge { stroke-width: 4 !important; }
+.net-legend { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12px; align-items: center; }
+.net-legend svg { vertical-align: middle; margin-right: 4px; }

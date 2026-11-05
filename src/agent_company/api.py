@@ -785,6 +785,17 @@ def create_app(start_background: bool = True) -> FastAPI:
         _audit(admin, "agent_lifecycle", out["name"], after={"state": body.state})
         return out
 
+    @app.get("/api/network/graph")
+    def network_graph(agent_id: int | None = None, room: str = "", skill: str = "", kind: str = "", origin: str = "",
+                      include_expired: bool = False, depth: int = 1, offset: int = 0, limit: int = 100,
+                      _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        """One page of the agent network, filtered on the server (SPEC-12 S12-R-07)."""
+        return network.graph(agent_id, room, skill, kind, origin, include_expired, depth, offset, limit)
+
+    @app.get("/api/network/overview")
+    def network_overview(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return network.overview()
+
     @app.get("/api/agents/{agent_id}/relationships")
     def agent_relationships(agent_id: int, _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         return network.of_agent(agent_id)

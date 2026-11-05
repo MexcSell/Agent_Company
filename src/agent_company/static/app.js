@@ -196,7 +196,7 @@ async function boot() {
   connectLive();
 }
 // --- rail: two groups (top, bottom) in the order an administrator set (Settings → Navigation) -----------
-const NAV_DEFAULT = { top: ["dashboard", "projects", "agents", "models", "evolution", "research", "knowledge", "performance"],
+const NAV_DEFAULT = { top: ["dashboard", "projects", "agents", "network", "models", "evolution", "research", "knowledge", "performance"],
   bottom: ["workspace", "files", "machines", "notifications", "security", "audit", "system", "settings", "users"] };
 let navLayout = null, railEditing = false;
 function navGroups() {

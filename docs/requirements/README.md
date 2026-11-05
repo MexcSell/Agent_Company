@@ -72,9 +72,8 @@ the order is safety and correctness of that pipeline first, then management, the
    versions. Step 3 is complete. (S14-R-04 incidents was done in step 1.)
 4. **Later**: SPEC-13 experiments and learning plans (done 2026-11-05: S13-R-01..R-07); SPEC-12 relationship kinds,
    links of new agents, fair staffing, mentoring and corrections (done 2026-11-05: S12-R-01..R-04, R-06); S11-R-07
-   knowledge graph (done 2026-11-05); G-R-05 MCP (done); S12-R-05 shifts with S06-R-05 handovers (done 2026-11-05).
-   Still open: S12-R-07 network view,
-   G-R-06 A2A, then gated rooms one at a time.
+   knowledge graph (done 2026-11-05); G-R-05 MCP (done); S12-R-05 shifts with S06-R-05 handovers and S12-R-07 network view (done 2026-11-05).
+   Still open: G-R-06 A2A, then gated rooms one at a time.
 
 ![Specification dependency map](images/spec01-spec-dependency-map.png)
 
