@@ -36,6 +36,7 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "budget_exhausted_action": (str, "When a goal's budget runs out: 'pause' (wait for an administrator) or 'stop' (fail it)"),
     "escalate_after": (int, "Consecutive iterations the same check may fail before it is escalated to the planner"),
     "candidate_smoke": (bool, "A candidate playbook must pass the smoke suite before it is tried on users' goals"),
+    "approval_blocker_hours": (int, "Hours a goal may wait for approval before it becomes a project blocker (0 = never)"),
 }
 LIMITS: dict[str, tuple[float, float]] = {
     "max_iterations": (1, 10), "max_parallel": (1, 16), "command_timeout": (10, 7200),
@@ -43,6 +44,7 @@ LIMITS: dict[str, tuple[float, float]] = {
     "goal_time_budget": (0, 7 * 86400), "study_interval": (0, 7 * 86400),
     "retry_max_attempts": (1, 10), "retry_base_seconds": (0, 600), "retry_max_seconds": (0, 3600),
     "min_improvement": (0, 100), "max_goal_depth": (1, 10), "escalate_after": (1, 10),
+    "approval_blocker_hours": (0, 720),
 }
 CHOICES: dict[str, set[str]] = {"proposal_policy": {"user", "superiors"}, "executor": {"auto", "offline"},
                                 "transport": {"https", "http"}, "budget_exhausted_action": {"pause", "stop"}}

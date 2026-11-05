@@ -16,7 +16,8 @@ feature came from.
   re-plan, conflict review, escalation, behaviour rules, idempotent merge/push, trace); `workflow.py` (goal
   state machine, `goal_transitions`); `blackboard.py` (versioned shared goal context, agent messages);
   `decisions.py` (decision records; human ones block the merge); `projects.py` (projects, command window,
-  proposals, uploads); `learning.py` (knowledge items: provenance, screening, scoped ranked retrieval)
+  proposals, uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress;
+  blockers and generated items are reconciled from goal state by `sync`); `learning.py` (knowledge items: provenance, screening, scoped ranked retrieval)
   + `evolution.py`; `performance.py` (defects, certification,
   metrics); `evaluation.py` (eval harness); `research.py`; `governance.py` (audit, notifications,
   command policy, emergency stops E0-E5, incidents, behaviour-rule alerts); `prefs.py` (DB settings); `gitsync.py` (push with each user's own GitHub token or SSH key, `data/git-keys/`); `files.py`; `supervisor.py` + `system.py`;

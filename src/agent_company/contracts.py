@@ -73,6 +73,7 @@ class TaskContract(BaseModel):
     requirement_keys: list[str] = Field(default_factory=list)  # requirement IDs it implements (ASEAO08 S08-R-01)
     # tasks of one iteration that recommend on the same topic are compared; a disagreement is reviewed (S04-R-03)
     decision_topic: str = Field(default="", max_length=128)
+    weight: float = Field(default=1.0, ge=0, le=100)  # its share of the goal's progress (ASEAO05 S05-R-05)
 
     @field_validator("input_schema", "output_schema")
     @classmethod

@@ -9,7 +9,7 @@ let selectedProject = Number(store.get("ac.project")) || null;
 let projectChecked = new Set();
 let lastMessageId = 0;
 let pendingUploads = [];
-let projectMode = store.get("ac.project.mode") || "gm";  // gm | orders
+let projectMode = store.get("ac.project.mode") || "gm";  // gm | orders | plan
 let projectFiles = store.get("ac.project.files") === "1";
 const gmPanels = new Map();  // project id -> { el, panel }
 
@@ -135,7 +135,7 @@ async function projectMain(id, incremental, early = null) {
   // administrators' tool (CLAUDE.md); with an API model as GM, or for other users, orders go to the agent loop.
   const cli = ["claude_code", "codex"].includes(d.gm?.kind);
   const gmOk = me.is_admin && cli;
-  const mode = gmOk ? projectMode : "orders";
+  const mode = projectMode === "plan" ? "plan" : gmOk ? projectMode : "orders";
   const main = $("#proj-main");
   const gmKey = `${mode}:${d.gm?.kind}:${d.gm?.model}`;
   if (!incremental || main.dataset.pid !== String(id) || main.dataset.mode !== gmKey) {
@@ -143,7 +143,7 @@ async function projectMain(id, incremental, early = null) {
     main.innerHTML = `<div class="row nowrap proj-head"><div class="grow"><h2 style="margin:0">${esc(d.name)} ${d.protected ? '<span class="pill">protected</span>' : ""}</h2><div class="muted mono ellipsis">${esc(d.path)}${d.github_url ? " · " + esc(d.github_url) : ""}</div></div>
         ${me.is_admin ? ib("edit", "Edit the project", 'id="p-edit"', "sm") + ib("download", "Write the company catalog into this project's .claude/ (agents, rules, skills, commands, hooks, .mcp.json)", 'id="p-config"', "sm") + ib("git", d.github_url ? "Sync to GitHub" : "Set a GitHub URL first", `id="p-sync" ${d.github_url ? "" : "disabled"}`, "sm") + ib("workspace", "Open the folder in the Workspace", 'id="p-wsp"', "sm") : ""}
         ${ib("folder", projectFiles ? "Hide files" : "Show files", 'id="p-files"', `sm ${projectFiles ? "on" : ""}`)}${ib("stop", "Stop the project's running goals", 'id="p-stop"', "sm danger")}</div>
-      <div class="ag-tabs small proj-modes" role="tablist">${gmOk ? `<button role="tab" data-pmode="gm" aria-selected="${mode === "gm"}">${icon("general_manager", 14)} General Manager</button>` : ""}<button role="tab" data-pmode="orders" aria-selected="${mode === "orders"}">${icon("send", 14)} Orders &amp; reports</button>
+      <div class="ag-tabs small proj-modes" role="tablist">${gmOk ? `<button role="tab" data-pmode="gm" aria-selected="${mode === "gm"}">${icon("general_manager", 14)} General Manager</button>` : ""}<button role="tab" data-pmode="orders" aria-selected="${mode === "orders"}">${icon("send", 14)} Orders &amp; reports</button><button role="tab" data-pmode="plan" aria-selected="${mode === "plan"}">${icon("goals", 14)} Plan</button>
         <span class="grow"></span><span class="muted gm-is" title="${esc(d.gm?.reason || "")}">GM: ${esc(d.gm?.model || "–")}${cli ? "" : " · orders go to the agent loop"}</span></div>
       <div id="p-props"></div><div class="proj-body" id="proj-body"></div>`;
     main.querySelectorAll("[data-pmode]").forEach((b) => (b.onclick = () => { projectMode = b.dataset.pmode; store.set("ac.project.mode", projectMode); projectMain(id); }));
@@ -157,6 +157,8 @@ async function projectMain(id, incremental, early = null) {
     if (mode === "gm") {
       const g = gmPanel(d);
       body.replaceChildren(g.el);
+    } else if (mode === "plan") {
+      body.innerHTML = '<div class="plan" id="plan"><p class="muted">Loading…</p></div>';
     } else {
       body.innerHTML = `<div class="msgs" id="msgs"></div>
         <form id="composer" class="composer wc-composer"><div id="att" class="row"></div>
@@ -175,11 +177,102 @@ async function projectMain(id, incremental, early = null) {
     if (fresh.length || !lastMessageId) { messageCache.push(...fresh); lastMessageId = messageCache.length ? messageCache[messageCache.length - 1].id : 0; renderMessages(lastMessageId && incremental); }
     $("#p-running").textContent = `${d.goals.filter((g) => GOAL_ACTIVE.includes(g.status) && g.status !== "paused").length} goal(s) running`;
   }
+  if (mode === "plan" && $("#plan")) await projectPlan(id);
   const pending = d.proposals.filter((p) => p.status === "pending");
   $("#p-props").innerHTML = pending.length ? `<div class="props"><strong>Proposals waiting</strong>${pending.map((p) => `<div class="row"><span class="grow">${esc(p.title)} <span class="muted">${esc(p.agent || "")} · from #${p.goal_id}</span></span>${me.is_admin ? ib("check", "Approve", `data-prop="${p.id}" data-d="approve"`, "sm primary") + ib("x", "Reject", `data-prop="${p.id}" data-d="reject"`, "sm") : ""}</div>`).join("")}</div>` : "";
   $("#p-props").querySelectorAll("[data-prop]").forEach((b) => (b.onclick = async () => { try { await api(`/api/proposals/${b.dataset.prop}/${b.dataset.d}`, { method: "POST" }); projectMain(id, true); } catch (e) { toast(e.message); } }));
   projectRail(d);
   if (projectFiles) projectFilesPanel(d);
+}
+
+// Plan tab (ASEAO05): progress, open blockers and risks, milestones with their criteria, the next action items
+// in the GM's order, and insights agents reported. Administrators edit; everyone who sees the project reads.
+const SEV_PILL = { low: "idle", medium: "pending", high: "failed", critical: "failed" };
+const INSIGHT_NEXT = { recorded: "analyzed", analyzed: "reviewed", reviewed: "accepted", accepted: "implemented", implemented: "evaluated" };
+const day = (iso) => (iso ? iso.slice(0, 10) : "");
+
+async function projectPlan(id) {
+  const box = $("#plan");
+  const d = await api(`/api/projects/${id}/plan`).catch((e) => ({ error: e.message }));
+  if (!box || !box.isConnected) return;
+  if (d.error) { box.innerHTML = `<p class="muted">${esc(d.error)}</p>`; return; }
+  const admin = me.is_admin, pct = Math.round(d.progress.progress * 100);
+  const risk = (r) => `<div class="list-item"><div class="row nowrap"><span class="pill ${SEV_PILL[r.severity]}">${esc(r.severity)}</span><strong class="grow ellipsis">${esc(r.title)}</strong><span class="muted">${r.kind} · ${esc(r.category.replace(/_/g, " "))}${r.automatic ? " · automatic" : ""}${r.probability != null ? ` · p ${Math.round(r.probability * 100)}%` : ""}</span>
+      ${admin && !r.automatic ? (r.status === "open" ? ib("pause", "Mark mitigated", `data-risk="${r.id}" data-st="mitigated"`, "sm") : "") + ib("check", "Resolved", `data-risk="${r.id}" data-st="resolved"`, "sm") : ""}</div>
+    ${r.mitigation || r.description ? `<div class="muted">${esc(r.mitigation || r.description)}</div>` : ""}</div>`;
+  const crit = (m, c, i) => `<div class="row nowrap plan-crit">${c.kind === "manual" && admin && m.status === "open" ? `<input type="checkbox" data-crit="${m.id}" data-i="${i}" ${c.met ? "checked" : ""} style="width:auto" aria-label="Met">` : `<span class="pill ${c.met ? "done" : c.checked_at ? "failed" : ""}">${c.met ? "met" : c.checked_at ? "unmet" : "unchecked"}</span>`}
+      <span class="grow ${c.kind === "command" ? "mono" : ""}" title="${esc(c.detail || "")}">${esc(c.text)}${c.mandatory ? "" : ' <span class="muted">(optional)</span>'}</span></div>`;
+  const ms = (m) => `<div class="list-item"><div class="row nowrap"><strong class="grow ellipsis">${esc(m.name)}</strong>${pill(m.status)}${m.overdue ? '<span class="pill failed">overdue</span>' : ""}<span class="muted">${m.target_date ? day(m.target_date) + " · " : ""}${Math.round(m.progress * 100)}%</span>
+      ${admin && m.status === "open" ? ib("refresh", "Run the command criteria now", `data-ms="${m.id}" data-act="check"`, "sm") + ib("check", "Complete (re-runs the commands)", `data-ms="${m.id}" data-act="complete"`, "sm primary") + ib("x", "Cancel the milestone", `data-ms="${m.id}" data-act="cancel"`, "sm") : ""}</div>
+    ${m.description ? `<div class="muted">${esc(m.description)}</div>` : ""}
+    ${m.deliverables.length ? `<div class="muted">Deliverables: ${m.deliverables.map(esc).join(", ")}</div>` : ""}
+    ${m.goals.length ? `<div class="row">${m.goals.map((g) => `<a href="#" data-goal="${g.id}">#${g.id}</a> ${pill(g.status)}`).join(" ")}</div>` : ""}
+    ${m.criteria.map((c, i) => crit(m, c, i)).join("")}</div>`;
+  const item = (a) => `<div class="list-item"><div class="row nowrap"><span class="muted">${a.rank}.</span><strong class="grow ellipsis" title="${esc(a.description || "")}">${esc(a.title)}</strong><span class="pill">P${a.priority}</span>${a.overdue ? '<span class="pill failed">overdue</span>' : ""}${a.blocked_by.length ? `<span class="pill pending" title="waits for item(s) ${a.blocked_by.join(", ")}">waiting</span>` : ""}
+      <span class="muted">${a.due_date ? "due " + day(a.due_date) : ""}${a.responsible ? " · " + esc(a.responsible) : ""}${a.goal_id ? ` · <a href="#" data-goal="${a.goal_id}">#${a.goal_id}</a>` : ""}</span>
+      ${admin && !a.automatic ? ib("check", "Done", `data-item="${a.id}" data-st="done"`, "sm") + ib("x", "Drop", `data-item="${a.id}" data-st="dropped"`, "sm") : ""}</div></div>`;
+  const ins = (i) => `<div class="list-item"><div class="row nowrap"><strong class="grow ellipsis">${esc(i.title)}</strong>${pill(i.status)}<span class="muted">${esc(i.agent || "")} · confidence ${Math.round(i.confidence * 100)}%${i.goal_id ? ` · <a href="#" data-goal="${i.goal_id}">#${i.goal_id}</a>` : ""}</span>
+      ${admin && INSIGHT_NEXT[i.status] ? ib(INSIGHT_NEXT[i.status] === "accepted" ? "check" : "play", `Mark ${INSIGHT_NEXT[i.status]}`, `data-ins="${i.id}" data-st="${INSIGHT_NEXT[i.status]}"`, "sm") : ""}${admin && ["recorded", "analyzed", "reviewed"].includes(i.status) ? ib("x", "Reject", `data-ins="${i.id}" data-st="rejected"`, "sm") : ""}</div>
+    ${i.description ? `<div class="muted">${esc(i.description)}</div>` : ""}${i.evidence.length ? `<div class="muted">Evidence: ${i.evidence.map(esc).join("; ")}</div>` : ""}</div>`;
+  const section = (title, add, rows, empty) => `<section class="plan-sec"><div class="row nowrap"><h3 class="grow" style="margin:0">${title}</h3>${admin && add ? ib("plus", `Add ${add}`, `data-add="${add}"`, "sm") : ""}</div><div class="list">${rows || `<p class="muted">${empty}</p>`}</div></section>`;
+  const html = `<div class="row nowrap"><strong>Progress</strong><div class="plan-bar grow" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div><span class="muted">${pct}% over ${d.progress.parts} goal(s) and milestone(s)</span></div>
+    ${section("Blockers &amp; risks", "risk", d.risks.map(risk).join(""), "No open blockers or risks.")}
+    ${section("Next", "action item", d.action_items.map(item).join(""), "Nothing waiting.")}
+    ${section("Milestones", "milestone", d.milestones.map(ms).join(""), "No milestones yet.")}
+    ${section("Insights", "", d.insights.map(ins).join(""), "Agents report insights in their task output.")}`;
+  if (box.dataset.html === html) return;  // the 5-s refresh never rebuilds an unchanged plan
+  box.innerHTML = html; box.dataset.html = html;
+  const act = async (fn) => { try { await fn(); box.dataset.html = ""; projectPlan(id); } catch (e) { toast(e.message); } };
+  box.querySelectorAll("[data-goal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); goalModal(Number(a.dataset.goal)); }));
+  box.querySelectorAll("[data-add]").forEach((b) => (b.onclick = () => planForm(id, b.dataset.add, d)));
+  box.querySelectorAll("[data-risk]").forEach((b) => (b.onclick = () => act(() => api(`/api/risks/${b.dataset.risk}`, { method: "PATCH", body: { status: b.dataset.st } }))));
+  box.querySelectorAll("[data-item]").forEach((b) => (b.onclick = () => act(() => api(`/api/action-items/${b.dataset.item}`, { method: "PATCH", body: { status: b.dataset.st } }))));
+  box.querySelectorAll("[data-crit]").forEach((c) => (c.onchange = () => act(() => api(`/api/milestones/${c.dataset.crit}/criteria/${c.dataset.i}`, { method: "POST", body: { met: c.checked } }))));
+  box.querySelectorAll("[data-ms]").forEach((b) => (b.onclick = () => act(() => b.dataset.act === "cancel"
+    ? (confirm("Cancel this milestone?") ? api(`/api/milestones/${b.dataset.ms}`, { method: "PATCH", body: { status: "cancelled" } }) : null)
+    : api(`/api/milestones/${b.dataset.ms}/${b.dataset.act}`, { method: "POST" }).then((m) => toast(b.dataset.act === "check" ? `${Math.round(m.progress * 100)}% met` : "Milestone completed")))));
+  box.querySelectorAll("[data-ins]").forEach((b) => (b.onclick = () => act(() => {
+    const body = { status: b.dataset.st };
+    if (body.status === "accepted") body.as_proposal = confirm("Accepted insights become knowledge items. Also propose it as follow-up work (a proposal waiting for a decision)?");
+    return api(`/api/insights/${b.dataset.ins}/status`, { method: "POST", body });
+  })));
+}
+
+function planForm(id, what, d) {
+  const goals = `<label for="pl-goals">Goals that must be approved (ids, comma-separated)</label><input id="pl-goals" placeholder="12, 15">`;
+  const fields = {
+    milestone: `<label for="pl-title">Name</label><input id="pl-title" required><label for="pl-desc">Description</label><textarea id="pl-desc"></textarea>
+      <label for="pl-date">Target date</label><input id="pl-date" type="date"><label for="pl-deliv">Deliverables (one per line)</label><textarea id="pl-deliv"></textarea>${goals}
+      <label for="pl-cmds">Command criteria (one per line; run on the project's current HEAD)</label><textarea id="pl-cmds" class="mono" placeholder="uv run pytest -q"></textarea>
+      <label for="pl-manual">Manual criteria (one per line; a person ticks them)</label><textarea id="pl-manual"></textarea>`,
+    risk: `<label for="pl-kind">Kind</label><select id="pl-kind"><option>risk</option><option>blocker</option></select><label for="pl-title">Title</label><input id="pl-title" required>
+      <label for="pl-cat">Category</label><select id="pl-cat">${d.categories.map((c) => `<option value="${c}">${c.replace(/_/g, " ")}</option>`).join("")}</select>
+      <label for="pl-sev">Severity</label><select id="pl-sev">${d.severities.map((c) => `<option ${c === "medium" ? "selected" : ""}>${c}</option>`).join("")}</select>
+      <label for="pl-prob">Probability (risks, 0-100 %)</label><input id="pl-prob" type="number" min="0" max="100"><label for="pl-impact">Impact</label><textarea id="pl-impact"></textarea><label for="pl-mit">Mitigation</label><textarea id="pl-mit"></textarea>`,
+    "action item": `<label for="pl-title">Title</label><input id="pl-title" required><label for="pl-desc">Description</label><textarea id="pl-desc"></textarea>
+      <label for="pl-prio">Priority (1 highest - 5)</label><input id="pl-prio" type="number" min="1" max="5" value="3"><label for="pl-date">Due date</label><input id="pl-date" type="date">
+      <label for="pl-deps">Waits for action items (ids, comma-separated)</label><input id="pl-deps"><label for="pl-out">Expected output</label><input id="pl-out">`,
+  };
+  modal(`<h2>${icon("plus", 18)} New ${what}</h2><form id="plf">${fields[what]}<div class="row" style="margin-top:12px"><button class="btn icon primary" title="Create" aria-label="Create">${icon("check", 16)}</button></div></form>`);
+  const v = (sel) => $(sel)?.value.trim() || "";
+  const lines = (sel) => v(sel).split("\n").map((x) => x.trim()).filter(Boolean);
+  const ids = (sel) => v(sel).split(/[\s,]+/).filter(Boolean).map(Number);
+  $("#plf").onsubmit = async (e) => {
+    e.preventDefault();
+    let url, body;
+    if (what === "milestone") {
+      url = `/api/projects/${id}/milestones`;
+      body = { name: v("#pl-title"), description: v("#pl-desc"), target_date: v("#pl-date") || null, deliverables: lines("#pl-deliv"), goal_ids: ids("#pl-goals"),
+        criteria: [...lines("#pl-cmds").map((text) => ({ kind: "command", text })), ...lines("#pl-manual").map((text) => ({ kind: "manual", text }))] };
+    } else if (what === "risk") {
+      url = `/api/projects/${id}/risks`;
+      body = { kind: v("#pl-kind"), title: v("#pl-title"), category: v("#pl-cat"), severity: v("#pl-sev"), impact: v("#pl-impact"), mitigation: v("#pl-mit"), probability: v("#pl-prob") === "" ? null : Number(v("#pl-prob")) / 100 };
+    } else {
+      url = `/api/projects/${id}/action-items`;
+      body = { title: v("#pl-title"), description: v("#pl-desc"), priority: Number(v("#pl-prio") || 3), due_date: v("#pl-date") || null, depends_on: ids("#pl-deps"), expected_output: v("#pl-out") };
+    }
+    try { await api(url, { method: "POST", body }); $("#modal").hidden = true; if ($("#plan")) { $("#plan").dataset.html = ""; projectPlan(id); } } catch (err) { toast(err.message); }
+  };
 }
 
 // Right edge: the agents working on the project, then their organisation (top to bottom).

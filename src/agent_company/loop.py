@@ -528,6 +528,9 @@ def _chat_plan(goal: Goal, iteration: int, plan: list[contracts.TaskContract], s
 
 PROPOSAL_HELP = ("If you notice valuable follow-up work outside this task, add at most two lines at the end: "
                  "PROPOSAL: <short title> :: <why it matters>\n"
+                 "Report a discovery worth keeping (a better approach, a recurring problem) as a fenced ```json block "
+                 '{"insights": [{"title": "...", "description": "...", "evidence": ["..."], '
+                 '"expected_benefit": "...", "confidence": 0.6}]}.\n'
                  "Name problems you found as FINDING: <what> lines and the next steps for this goal as NEXT: <step> lines.")
 
 
@@ -688,6 +691,12 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
 
             raised = extract_proposals(goal.id, agent.id, output) if res.ok else 0
             if res.ok:
+                try:
+                    from agent_company.management import extract_insights
+
+                    extract_insights(goal.id, task_id, agent.id, output)
+                except Exception as e:  # noqa: BLE001 - insights never break the task
+                    log_event("error", f"reading insights failed: {e}", goal_id=goal.id)
                 blackboard.put(goal.id, blackboard.SECTION_OF_ROLE.get(role, "engineering"), contract.key,
                                f"{contract.title} ({'done' if ok else 'failed'})\n{_brief(output, 1500)}",
                                author_agent_id=agent.id, task_id=task_id)
@@ -823,6 +832,12 @@ def run_goal(goal_id: int) -> dict[str, Any]:
             settle_proposals(goal_id)
         except Exception as e:  # noqa: BLE001 - proposals never break the goal
             log_event("error", f"settling proposals failed: {e}", goal_id=goal_id)
+        try:
+            from agent_company import management
+
+            management.sync(_goal(goal_id).project_id)  # blockers and action items follow the goal's outcome
+        except Exception as e:  # noqa: BLE001
+            log_event("error", f"updating blockers failed: {e}", goal_id=goal_id)
         try:
             from agent_company.evolution import retire_goal_clones
 

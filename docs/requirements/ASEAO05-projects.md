@@ -24,11 +24,18 @@ Mapping: project → `Project`; project manager agent → `Project.manager_id` (
 
 ## Specific requirements
 
+Status (2026-11-05): S05-R-01 done · S05-R-02 done · S05-R-03 done · S05-R-04 done · S05-R-05 partial ·
+S05-R-06..R-09 open · S05-R-10 done (SPEC-04).
+
 ### S05-R-01 Milestones — §7 (AT-012)
 - Table `milestones`: `project_id`, name, description, target date, deliverables, required goal
   IDs, acceptance criteria (check commands or manual), owner agent, status, completed_at.
 - A milestone cannot be completed while a mandatory criterion is unmet (commands are re-run).
 - Projects view shows milestones with progress.
+- **Status: done** (`management.py`: `create_milestone`, `check_milestone`, `complete_milestone`,
+  `set_criterion`; Projects → Plan; `tests/test_management.py`). Command criteria run in a throwaway
+  detached worktree of the project's current HEAD under `data/worktrees/` (the sandbox), through the command
+  policy; manual criteria are ticked by an administrator. Required goals must be `approved`.
 
 ### S05-R-02 Risks and blockers — §8 (AT-014)
 - Table `risks`: `project_id`, `goal_id`, kind (`risk|blocker`), category (technical, security,
@@ -37,6 +44,11 @@ Mapping: project → `Project`; project manager agent → `Project.manager_id` (
 - Blockers are created automatically when a goal is paused for budget, waits for approval longer
   than a setting, or a dependency goal failed; they close when the cause is resolved.
 - The GM's `/status` and stand-up list open blockers first.
+- **Status: done** (`management.sync`, `create_risk`, `update_risk`; `projects.status_text`, `standup`).
+  Automatic blockers carry their `cause` (`goal:<id>:budget`, `goal:<id>:approval`,
+  `milestone:<id>:goal:<id>`) and are reconciled after every goal and whenever the plan or `/status` is
+  read; the wait is `approval_blocker_hours` (Settings, default 24, 0 = never). "A dependency goal failed"
+  is read as a goal a milestone requires (goals have no other dependencies).
 
 ### S05-R-03 Insights — §9 (AT-015, AT-016)
 - Agents can report an insight in their output (JSON block `insights`), parsed like proposals.
@@ -45,6 +57,12 @@ Mapping: project → `Project`; project manager agent → `Project.manager_id` (
   (`recorded→analyzed→reviewed→accepted|rejected→implemented→evaluated`), decision, result.
 - Accepted insights become knowledge items (SPEC-11) and may become proposals; originals keep
   their project and source references.
+- **Status: done** (`management.extract_insights`, called beside `extract_proposals`; `advance_insight`).
+  Only fenced ```json blocks holding `{"insights": [...]}` are read, at most three per task. Steps go
+  forward only; `rejected` before acceptance; `implemented`/`evaluated` only after it. An accepted insight
+  is written as a knowledge item directly (kind `semantic`, evidence `INFERENCE`, source `insight:<id>`),
+  screened like lessons and withheld for secret projects, without XP or evolution; `as_proposal` adds a
+  pending proposal on the insight's goal.
 
 ### S05-R-04 Upcoming action items — §10 (AT-017)
 - Table `action_items`: project, title, description, responsible agent, priority, due date,
@@ -52,6 +70,10 @@ Mapping: project → `Project`; project manager agent → `Project.manager_id` (
 - Generated from: open proposals, unresolved defects, open blockers, failed milestone criteria;
   the GM ranks them by dependencies, priority, due date and risk. Shown in the Projects view and
   in `/status`.
+- **Status: done** (`management.ranked_items`; generated items carry `source` = `proposal:`, `defect:`,
+  `risk:`, `criterion:<milestone>:<n>` and close as `done` when the source is settled). The ranking is
+  deterministic (no model call): items waiting for open dependencies last, then in progress, priority, due
+  date, risk (severity of the blocker it resolves or the goal's worst open blocker).
 
 ### S05-R-05 Time and weighted progress — §6 (AT-010, AT-011, AT-013)
 - Per goal: estimated time (planner estimate per task), actual active time (sum of run
@@ -59,6 +81,10 @@ Mapping: project → `Project`; project manager agent → `Project.manager_id` (
 - Project progress = Σ(weight × completion) / Σ weights over the project's goals and milestones;
   task weight from the contract (default 1).
 - Overdue detection for milestones and action items with notifications.
+- **Status: partial** (`management.goal_time`: active = Σ run durations, waiting = queued + awaiting
+  approval, blocked = paused, from `goal_transitions`; `management.progress` with contract `weight`;
+  overdue milestones and action items notify once, on the next sync). Open: the planner's time estimate
+  per task (contracts have no estimate field yet) and showing goal times on the goal page.
 
 ### S05-R-06 Project registration fields and lifecycle — FR-05..09
 - Add to `Project`: `stack` (list), `required_skills` (list), `rooms` (list of room keys),

@@ -79,3 +79,12 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 | P12 | With `candidate_smoke` on (default), each new candidate playbook runs the smoke suite twice (current and candidate playbook: 6 goals with `repeats` 1). On real models this costs model time; it starts only when an agent's success rate falls below 50 % over 6 tasks. The offline simulator fails the smoke suite on purpose, so offline both sides score 0 and the candidate goes on to its live trial. | by design (S13-D-02) |
 | P13 | While a smoke trial runs its candidate side, every eval goal (including one an administrator starts with `eval`) uses that agent's candidate playbook. Run benchmarks when no smoke trial is running (Evolution page). | open (low) |
 | P14 | The "cost > 2× estimate" rule needs an estimate: the order's `estimated_cost_usd` or the planner's. Goals with neither are only limited by `goal_budget_usd`. | by design (S14-R-03) |
+
+## Added 2026-11-05 (project management, step 3)
+
+| # | Problem | Status |
+|---|---------|--------|
+| M1 | Blockers and generated action items are reconciled after every goal and when a project's Plan tab or `/status` is read, not on a timer: a goal that crosses `approval_blocker_hours` while nobody looks shows as a blocker only on the next read. Overdue notifications have the same timing. | by design |
+| M2 | Milestone command criteria run on the project's current HEAD (its checked-out branch), not on a commit recorded with the milestone. | by design |
+| M3 | Only administrators edit milestones, risks, action items and insights; other users with access to the project see the Plan tab read-only. | by decision |
+| M4 | Insights are read only from fenced ```json blocks holding `{"insights": [...]}`; an agent that writes them as bare JSON or prose is not recorded. | by design (S05-R-03) |

@@ -274,7 +274,7 @@ def upload_path(uid: str) -> tuple[Path, str]:
 
 HELP = ("Commands: an order in plain words starts a goal for the General Manager.\n"
         "/standup  every agent on this project reports its status\n"
-        "/status   the project's goals and their state\n"
+        "/status   open blockers, the project's goals and their state, what happens next\n"
         "/stop     cancel the project's running and queued goals\n"
         "/sync     push approved work to the project's GitHub remote\n"
         "/help     this list")
@@ -334,17 +334,23 @@ def command(project_id: int, user: dict[str, Any], content: str, attachment_ids:
 
 
 def status_text(project_id: int) -> str:
+    """Open blockers first, then the latest goals, then what happens next (ASEAO05 S05-R-02, S05-R-04)."""
+    from agent_company.management import status_lines
+
+    blockers, nxt = status_lines(project_id)
     with session() as s:
         goals = s.scalars(select(Goal).where(Goal.project_id == project_id).order_by(Goal.id.desc()).limit(10)).all()
-        if not goals:
-            return "No goals yet."
-        return "\n".join(f"#{g.id} [{g.status}] {g.title} (iteration {g.iteration}/{g.max_iterations})"
-                         for g in goals)
+        lines = [f"#{g.id} [{g.status}] {g.title} (iteration {g.iteration}/{g.max_iterations})" for g in goals]
+    out = (["Open blockers:", *blockers, ""] if blockers else []) + (lines or ["No goals yet."])
+    return "\n".join(out + (["", "Next:", *nxt] if nxt else []))
 
 
 def standup(project_id: int) -> str:
-    """Each agent on the project reports: what it is doing, what it finished, what failed."""
-    lines = ["Stand-up"]
+    """Each agent on the project reports: what it is doing, what it finished, what failed. Open blockers first."""
+    from agent_company.management import status_lines
+
+    blockers, _ = status_lines(project_id, 0)
+    lines = ["Stand-up", *(["Open blockers:", *blockers] if blockers else [])]
     with session() as s:
         for a in members(project_id):
             last = s.scalars(select(Task).join(Goal, Goal.id == Task.goal_id).where(

@@ -32,6 +32,7 @@ from agent_company import (
     learning,
     loop,
     machines,
+    management,
     mcp,
     performance,
     prefs,
@@ -1545,6 +1546,86 @@ def create_app(start_background: bool = True) -> FastAPI:
         out = projects.decide(proposal_id, decision == "approve", admin["name"])
         _audit(admin, f"proposal_{decision}", proposal_id, after={"status": out["status"],
                                                                  "goal": out.get("spawned_goal_id")})
+        return out
+
+    # --- project management: milestones, risks and blockers, insights, action items (ASEAO05) ---
+    @app.get("/api/projects/{project_id}/plan")
+    def project_plan(project_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        projects.get(project_id, user)
+        return management.overview(project_id)
+
+    @app.post("/api/projects/{project_id}/milestones")
+    def milestone_create(project_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                         ) -> dict[str, Any]:
+        fields = dict(body)
+        out = management.create_milestone(project_id, str(fields.pop("name", "")), **fields)
+        _audit(admin, "milestone_create", out["id"], after={"project": project_id, "name": out["name"]})
+        return out
+
+    @app.patch("/api/milestones/{milestone_id}")
+    def milestone_update(milestone_id: int, changes: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                         ) -> dict[str, Any]:
+        out = management.update_milestone(milestone_id, changes)
+        _audit(admin, "milestone_update", milestone_id, after=changes)
+        return out
+
+    @app.post("/api/milestones/{milestone_id}/check")
+    def milestone_check(milestone_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = management.check_milestone(milestone_id)
+        _audit(admin, "milestone_check", milestone_id, after={"progress": out["progress"]})
+        return out
+
+    @app.post("/api/milestones/{milestone_id}/complete")
+    def milestone_complete(milestone_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = management.complete_milestone(milestone_id, admin["name"])
+        _audit(admin, "milestone_complete", milestone_id)
+        return out
+
+    @app.post("/api/milestones/{milestone_id}/criteria/{index}")
+    def milestone_criterion(milestone_id: int, index: int, body: dict[str, Any],
+                            admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = management.set_criterion(milestone_id, index, bool(body.get("met")), admin["name"])
+        _audit(admin, "milestone_criterion", milestone_id, after={"index": index, "met": bool(body.get("met"))})
+        return out
+
+    @app.post("/api/projects/{project_id}/risks")
+    def risk_create(project_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                    ) -> dict[str, Any]:
+        fields = dict(body)
+        out = management.create_risk(project_id, str(fields.pop("title", "")), **fields)
+        _audit(admin, "risk_create", out["id"], after={"project": project_id, "kind": out["kind"], "title": out["title"]})
+        return out
+
+    @app.patch("/api/risks/{risk_id}")
+    def risk_update(risk_id: int, changes: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                    ) -> dict[str, Any]:
+        out = management.update_risk(risk_id, changes)
+        _audit(admin, "risk_update", risk_id, after=changes)
+        return out
+
+    @app.post("/api/projects/{project_id}/action-items")
+    def action_item_create(project_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                           ) -> dict[str, Any]:
+        fields = dict(body)
+        out = management.create_item(project_id, str(fields.pop("title", "")), **fields)
+        _audit(admin, "action_item_create", out["id"], after={"project": project_id, "title": out["title"]})
+        return out
+
+    @app.patch("/api/action-items/{item_id}")
+    def action_item_update(item_id: int, changes: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                           ) -> dict[str, Any]:
+        out = management.update_item(item_id, changes)
+        _audit(admin, "action_item_update", item_id, after=changes)
+        return out
+
+    @app.post("/api/insights/{insight_id}/status")
+    def insight_status(insight_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                       ) -> dict[str, Any]:
+        out = management.advance_insight(insight_id, str(body.get("status", "")), admin["name"],
+                                         str(body.get("decision", "")), str(body.get("result", "")),
+                                         bool(body.get("as_proposal")))
+        _audit(admin, f"insight_{out['status']}", insight_id,
+               after={"knowledge": out["knowledge_id"], "proposal": out["proposal_id"]})
         return out
 
     @app.put("/api/users/{user_id}/permissions")

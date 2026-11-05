@@ -304,6 +304,100 @@ class Proposal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class Milestone(Base):
+    """A project milestone with deliverables, required goals and acceptance criteria (management.py, ASEAO05 §7)."""
+
+    __tablename__ = "milestones"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(256))
+    description: Mapped[str] = mapped_column(Text, default="")
+    target_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deliverables: Mapped[list[Any]] = mapped_column(default=list)
+    goal_ids: Mapped[list[Any]] = mapped_column(default=list)  # goals that must be approved first
+    # [{"kind": "command"|"manual", "text", "mandatory", "met", "detail", "checked_at"}]
+    criteria: Mapped[list[Any]] = mapped_column(default=list)
+    owner_agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    weight: Mapped[float] = mapped_column(Float, default=1.0)
+    status: Mapped[str] = mapped_column(String(16), default="open")  # open|completed|cancelled
+    overdue_notified: Mapped[bool] = mapped_column(Boolean, default=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Risk(Base):
+    """A risk or blocker of a project (management.py, ASEAO05 §8). Automatic ones carry the `cause` that opened
+    them and close when it no longer holds."""
+
+    __tablename__ = "risks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    kind: Mapped[str] = mapped_column(String(8), default="risk")  # risk|blocker
+    title: Mapped[str] = mapped_column(String(256))
+    description: Mapped[str] = mapped_column(Text, default="")
+    category: Mapped[str] = mapped_column(String(24), default="technical")
+    severity: Mapped[str] = mapped_column(String(8), default="medium")  # low|medium|high|critical
+    probability: Mapped[float | None] = mapped_column(Float, nullable=True)  # risks only, 0..1
+    impact: Mapped[str] = mapped_column(Text, default="")
+    mitigation: Mapped[str] = mapped_column(Text, default="")
+    owner_agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(12), default="open")  # open|mitigated|resolved|closed
+    cause: Mapped[str] = mapped_column(String(128), default="", index=True)  # "" = entered by hand
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Insight(Base):
+    """Something an agent discovered that may be worth acting on (management.py, ASEAO05 §9)."""
+
+    __tablename__ = "insights"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    task_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title: Mapped[str] = mapped_column(String(256))
+    description: Mapped[str] = mapped_column(Text, default="")
+    evidence: Mapped[list[Any]] = mapped_column(default=list)
+    sources: Mapped[list[Any]] = mapped_column(default=list)
+    expected_benefit: Mapped[str] = mapped_column(Text, default="")
+    estimated_cost: Mapped[str] = mapped_column(String(128), default="")
+    confidence: Mapped[float] = mapped_column(Float, default=0.5)  # the agent's estimate
+    related_tasks: Mapped[list[Any]] = mapped_column(default=list)
+    status: Mapped[str] = mapped_column(String(12), default="recorded")
+    # recorded|analyzed|reviewed|accepted|rejected|implemented|evaluated
+    decision: Mapped[str] = mapped_column(Text, default="")
+    decided_by: Mapped[str] = mapped_column(String(128), default="")
+    result: Mapped[str] = mapped_column(Text, default="")
+    knowledge_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    proposal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ActionItem(Base):
+    """Upcoming work of a project (management.py, ASEAO05 §10). Generated ones carry the `source` they came from
+    (proposal:, defect:, risk:, criterion:) and close when it is settled."""
+
+    __tablename__ = "action_items"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(256))
+    description: Mapped[str] = mapped_column(Text, default="")
+    responsible_agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    priority: Mapped[int] = mapped_column(Integer, default=3)  # 1 highest .. 5 lowest
+    due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    depends_on: Mapped[list[Any]] = mapped_column(default=list)  # action item ids
+    expected_output: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(12), default="open")  # open|in_progress|done|dropped
+    goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    milestone_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source: Mapped[str] = mapped_column(String(64), default="", index=True)  # "" = entered by hand
+    overdue_notified: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 class Upload(Base):
     __tablename__ = "uploads"
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
