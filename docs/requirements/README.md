@@ -83,7 +83,8 @@ the order is safety and correctness of that pipeline first, then management, the
    SPEC-01 S01-R-01 room editing, S01-R-02 position history and S01-R-04 organisation export done 2026-11-05,
    then S01-R-03 delegation of approval rights and S01-R-05 policy versions.
    S04-R-11 workflow templates per goal kind, strategy versions and team resizing done 2026-11-05.
-5. **Still open** (2026-11-05), in a sensible order: S05-R-05, S05-R-08, S05-R-09; S11-R-03 and S04-R-12 (partial); S14-R-07 L3 isolation and
+   S05-R-05 time estimates per task and goal times on the goal page done 2026-11-05.
+5. **Still open** (2026-11-05), in a sensible order: S05-R-08, S05-R-09; S11-R-03 and S04-R-12 (partial); S14-R-07 L3 isolation and
    S14-R-08 per-call tool logs (partial); then the gated rooms one at a time (G-R-04).
 
 ![Specification dependency map](images/spec01-spec-dependency-map.png)

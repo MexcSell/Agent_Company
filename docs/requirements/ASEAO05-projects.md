@@ -24,7 +24,7 @@ Mapping: project → `Project`; project manager agent → `Project.manager_id` (
 
 ## Specific requirements
 
-Status (2026-11-05): S05-R-01 done · S05-R-02 done · S05-R-03 done · S05-R-04 done · S05-R-05 partial ·
+Status (2026-11-05): S05-R-01 done · S05-R-02 done · S05-R-03 done · S05-R-04 done · S05-R-05 done ·
 S05-R-06 done · S05-R-07 done · S05-R-08, R-09 open · S05-R-10 done (SPEC-04).
 
 ### S05-R-01 Milestones — §7 (AT-012)
@@ -82,10 +82,11 @@ S05-R-06 done · S05-R-07 done · S05-R-08, R-09 open · S05-R-10 done (SPEC-04)
 - Project progress = Σ(weight × completion) / Σ weights over the project's goals and milestones;
   task weight from the contract (default 1).
 - Overdue detection for milestones and action items with notifications.
-- **Status: partial** (`management.goal_time`: active = Σ run durations, waiting = queued + awaiting
-  approval, blocked = paused, from `goal_transitions`; `management.progress` with contract `weight`;
-  overdue milestones and action items notify once, on the next sync). Open: the planner's time estimate
-  per task (contracts have no estimate field yet) and showing goal times on the goal page.
+- **Status: done** (`management.goal_time`: active = Σ run durations, waiting = queued + awaiting
+  approval, blocked = paused, from `goal_transitions`, estimated = Σ the contract field `estimated_minutes` of the
+  latest iteration's tasks, which the planner is asked for (0 = none given); `management.progress` with contract
+  `weight`; overdue milestones and action items notify once, on the next sync). `GET /api/goals/{id}` returns
+  `time` and the goal view shows it under the iteration line; `tests/test_management.py`.
 
 ### S05-R-06 Project registration fields and lifecycle — FR-05..09
 - Add to `Project`: `stack` (list), `required_skills` (list), `rooms` (list of room keys),

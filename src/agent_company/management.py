@@ -710,11 +710,14 @@ def advance_insight(insight_id: int, status: str, actor: str, decision: str = ""
 # --- time and weighted progress (S05-R-05) ------------------------------------------------
 
 def goal_time(goal_id: int) -> dict[str, float]:
-    """Seconds of model/agent runs (active), queued or waiting for approval (waiting) and paused (blocked)."""
+    """Seconds of model/agent runs (active), queued or waiting for approval (waiting) and paused (blocked), and the
+    planner's estimate: Σ `estimated_minutes` of the latest iteration's task contracts (0 = none given)."""
     with session() as s:
         g = s.get(Goal, goal_id)
         if g is None:
             raise KeyError(f"goal {goal_id}")
+        estimated = 60.0 * sum(int((t.contract or {}).get("estimated_minutes", 0) or 0) for t in s.scalars(
+            select(Task).where(Task.goal_id == goal_id, Task.iteration == g.iteration)))
         active = s.scalar(select(func.coalesce(func.sum(Run.duration), 0.0)).where(Run.goal_id == goal_id)) or 0.0
         steps = s.scalars(select(GoalTransition).where(GoalTransition.goal_id == goal_id)
                           .order_by(GoalTransition.id)).all()
@@ -728,7 +731,7 @@ def goal_time(goal_id: int) -> dict[str, float]:
             spans[status] = spans.get(status, 0.0) + max(0.0, (now() - start).total_seconds())
     return {"active": round(float(active), 1),
             "waiting": round(spans.get("queued", 0.0) + spans.get("awaiting_approval", 0.0), 1),
-            "blocked": round(spans.get("paused", 0.0), 1)}
+            "blocked": round(spans.get("paused", 0.0), 1), "estimated": estimated}
 
 
 def progress(project_id: int) -> dict[str, Any]:

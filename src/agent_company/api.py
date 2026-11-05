@@ -1935,6 +1935,7 @@ def create_app(start_background: bool = True) -> FastAPI:
         d["blackboard"] = blackboard.read(goal_id)
         d["budget"] = budgets.summary(goal_id)
         d["team"] = teams.history(goal_id)
+        d["time"] = management.goal_time(goal_id)  # S05-R-05
         return d
 
     # --- knowledge items (SPEC-11): lessons with provenance; people review, agents never do ---

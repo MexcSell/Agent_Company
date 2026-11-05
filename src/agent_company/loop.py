@@ -479,7 +479,8 @@ PLAN_INSTRUCTIONS = """Split the goal into task contracts. Answer with JSON only
 Optional task fields: "in_scope"/"out_of_scope" (path globs; changing an out_of_scope path fails the task),
 "risk_level": "low|medium|high" (high adds a security review), "test_plan": "...",
 "budget": {"cost_usd": 0.5, "turns": 30}, "deadline": seconds, "requirement_keys": ["..."],
-"decision_topic": "..." (tasks that must each recommend on one question; disagreements are reviewed).
+"decision_topic": "..." (tasks that must each recommend on one question; disagreements are reviewed),
+"weight": 1 (its share of the goal's progress), "estimated_minutes": 20 (how long you expect the task to take).
 Optionally add "estimated_cost_usd" (the whole goal's expected model cost) and "decisions": [{"topic": "...", "question": "...", "alternatives": ["..."],
   "criteria": ["what the options are compared on"], "recommendation": "...", "reasoning": "...",
   "evidence": [{"ref": "file, source URL, task or K<id>", "class": "FACT|MEASURED|INFERENCE|HYPOTHESIS|PREDICTION"}],

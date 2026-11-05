@@ -74,6 +74,7 @@ class TaskContract(BaseModel):
     # tasks of one iteration that recommend on the same topic are compared; a disagreement is reviewed (S04-R-03)
     decision_topic: str = Field(default="", max_length=128)
     weight: float = Field(default=1.0, ge=0, le=100)  # its share of the goal's progress (ASEAO05 S05-R-05)
+    estimated_minutes: int = Field(default=0, ge=0, le=7 * 24 * 60)  # the planner's time estimate (0 = none given)
 
     @field_validator("input_schema", "output_schema")
     @classmethod

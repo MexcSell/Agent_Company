@@ -417,6 +417,7 @@ async function goalDetail(id, openIds = new Set()) {
   ].filter(Boolean).join(" · ");
   $("#goal-detail").innerHTML = `<div class="row" style="padding-right:24px"><h2 class="grow" style="margin:0">#${g.id} ${esc(g.title)}</h2>${pill(g.status)}${actions}</div>
     <p class="muted">Iteration ${g.iteration}/${g.max_iterations} · branch <code>${esc(g.branch || "-")}</code> · worktree <code>${esc(g.worktree || "-")}</code>${g.estimated_cost_usd ? ` · estimate ${money(g.estimated_cost_usd)}` : ""}</p>
+    ${g.time ? `<p class="muted" title="S05-R-05: estimate = the planner's estimated_minutes of this iteration's tasks; active = time in agent runs; waiting = queued or awaiting approval; blocked = paused">Time: ${g.time.estimated ? `estimated ${dur(g.time.estimated)} · ` : ""}active ${dur(g.time.active)} · waiting ${dur(g.time.waiting)} · blocked ${dur(g.time.blocked)}</p>` : ""}
     ${budgetLine ? `<p class="muted">Budget: ${budgetLine}${g.parent_goal_id ? ` · shared from goal #${Number(g.parent_goal_id)}` : ""}</p>` : ""}
     ${g.status === "paused" && g.paused_for ? `<p class="muted">${g.paused_for === "cost_overrun" ? "Paused: it cost more than twice its estimate. Resuming accepts the cost so far as the new estimate." : "Paused: its budget is used up. Raise the goal's budget (the settings button above, or Settings for every goal) before resuming."}</p>` : ""}
     ${g.result ? `<pre>${esc(g.result)}</pre>` : ""}

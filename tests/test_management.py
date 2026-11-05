@@ -211,9 +211,25 @@ def test_goal_time_and_progress_after_a_run():
     gid = _goal(p["id"])
     loop.run_goal(gid)
     t = management.goal_time(gid)
-    assert set(t) == {"active", "waiting", "blocked"} and t["blocked"] == 0
+    assert set(t) == {"active", "waiting", "blocked", "estimated"} and t["blocked"] == 0
     prog = management.progress(p["id"])
     assert 0 <= prog["progress"] <= 1
+
+
+def test_goal_time_sums_the_planners_estimates_of_the_latest_iteration():
+    from agent_company import contracts
+    from agent_company.db import Task
+
+    p = _project()
+    gid = _goal(p["id"], "running", iteration=2)
+    with session() as s:
+        for it, key, minutes in ((1, "old", 90), (2, "a", 20), (2, "b", 0), (2, "c", 15)):
+            c = contracts.validate({"key": key, "title": key, "role": "developer", "description": "work",
+                                    "estimated_minutes": minutes})
+            s.add(Task(goal_id=gid, iteration=it, key=key, title=key, role="developer", contract=c.model_dump()))
+    assert management.goal_time(gid)["estimated"] == 35 * 60
+    with pytest.raises(contracts.ContractError):
+        contracts.validate({"key": "x", "title": "x", "role": "qa", "description": "d", "estimated_minutes": -5})
 
 
 def test_plan_api_flow():
