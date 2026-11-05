@@ -622,8 +622,23 @@ ROLE_SYNONYMS = {
 REUSE_COVERAGE = 0.7  # an existing agent covering this share of a task's skills is reused, not recruited
 
 
-def resolve_role(role: str) -> tuple[str, str | None]:
-    """Map a planner role onto the catalog. Returns (role, note)."""
+def trial_room(s: Session, goal_id: int | None) -> str | None:
+    """G-R-04: the gated room an eval goal measures (its trial's `room`). That room's agents may be staffed for
+    this goal although they are disabled; for every other goal they stay off."""
+    if goal_id is None:
+        return None
+    g = s.get(Goal, goal_id)
+    return ((g.trial or {}).get("room") or None) if g is not None and g.origin == "eval" else None
+
+
+def _usable(room: str | None) -> Any:
+    """Enabled, or an agent of the room an eval goal measures (G-R-04)."""
+    return or_(Agent.enabled, Agent.room_key == room) if room else Agent.enabled
+
+
+def resolve_role(role: str, goal_id: int | None = None) -> tuple[str, str | None]:
+    """Map a planner role onto the catalog. Returns (role, note). For a room trial's goal (G-R-04) the measured
+    room's roles resolve to themselves."""
     role = _slug(role)
     if role in ROLE_SYNONYMS and role not in org.ROLES:
         return ROLE_SYNONYMS[role], f"role '{role}' is '{ROLE_SYNONYMS[role]}'"
@@ -632,8 +647,8 @@ def resolve_role(role: str) -> tuple[str, str | None]:
         return role, None
     with session() as s:
         off = organization.disabled_rooms(s)
-        if s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active",
-                                         Agent.room_key.not_in(off))).first():
+        if s.scalars(select(Agent).where(Agent.role == role, _usable(trial_room(s, goal_id)),
+                                         Agent.lifecycle == "active", Agent.room_key.not_in(off))).first():
             return role, None
     fallback = org.FALLBACK_WRITE_ROLE if spec.writes else org.FALLBACK_READ_ROLE
     return fallback, f"role '{role}' is disabled; using '{fallback}'"
@@ -658,7 +673,8 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
     conflict: dict[str, Any] | None = None
     with _staff_lock, session() as s:
         off = organization.disabled_rooms(s)  # S01-R-01: a disabled room's agents are not staffed
-        pool = [a for a in s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active"))
+        usable = _usable(trial_room(s, goal_id))  # G-R-04: a room trial staffs the measured room's agents
+        pool = [a for a in s.scalars(select(Agent).where(Agent.role == role, usable, Agent.lifecycle == "active"))
                 if level(a.autonomy) > 0 and a.room_key not in off]  # G0 observes only (S14-R-02)
         from agent_company import teams
 
@@ -848,7 +864,9 @@ def _clone(s: Session, src: Agent) -> Agent:
                   lifecycle="candidate" if base.lifecycle == "candidate" else "active",
                   superior_id=base.superior_id, parent_id=base.id, goal=base.goal,
                   backstory=base.backstory, skills=dict(base.skills), permissions=list(base.permissions),
-                  autonomy=base.autonomy or "G3", model_pref=base.model_pref, playbook=base.playbook, enabled=True,
+                  # a disabled base is only staffed by a room trial (G-R-04): its clone stays disabled as well
+                  autonomy=base.autonomy or "G3", model_pref=base.model_pref, playbook=base.playbook,
+                  enabled=base.enabled,
                   max_concurrent=base.max_concurrent or 1)
     s.add(clone)
     s.flush()

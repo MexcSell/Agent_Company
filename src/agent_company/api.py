@@ -559,6 +559,7 @@ class EvalBody(BaseModel):
     label: str = Field(pattern=r"^[\w.-]{1,64}$")
     repeats: int = Field(default=1, ge=1, le=10)
     tasks: list[str] = Field(default_factory=list)
+    room: str = Field(default="", pattern=r"^[\w-]{0,64}$")  # G-R-04: staff this gated room's agents (a room trial)
 
 
 class HypothesisBody(BaseModel):
@@ -660,6 +661,7 @@ class DefectPriorityBody(BaseModel):
 
 class LifecycleBody(BaseModel):
     state: str
+    override_gate: bool = False
 
 
 class RelationshipBody(BaseModel):
@@ -1028,12 +1030,13 @@ def create_app(start_background: bool = True) -> FastAPI:
     def _enable_gate(agent_id: int, admin: dict[str, Any], override: bool) -> None:
         cur = registry.agent_detail(agent_id)
         if not cur["enabled"] and performance.gated(cur["role"]):  # G-R-04: gated roles need a reliable pipeline
-            gate = performance.enablement_gate()
+            gate = performance.room_gate(cur["room"])  # and their room measured on its own suite
             if not gate["met"] and not (override and admin["is_admin"]):
-                raise HTTPException(409, "the pipeline is not measured reliable yet: " + "; ".join(gate["reasons"])
-                                    + ". An administrator can override (override_gate).")
+                raise HTTPException(409, f"room {cur['room']} is not measured reliable yet: "
+                                    + "; ".join(gate["reasons"]) + ". An administrator can override (override_gate).")
             if not gate["met"]:
-                _audit(admin, "enablement_gate_override", cur["name"], after={"reasons": gate["reasons"]},
+                _audit(admin, "enablement_gate_override", cur["name"], after={"room": cur["room"],
+                                                                              "reasons": gate["reasons"]},
                        severity="high")
 
     @app.patch("/api/agents/{agent_id}")
@@ -1087,8 +1090,10 @@ def create_app(start_background: bool = True) -> FastAPI:
         return out
 
     @app.get("/api/performance/enablement")
-    def performance_enablement(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-        return performance.enablement_gate()
+    def performance_enablement(room: str = "", _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        if room:  # G-R-04: one gated room's gate
+            return performance.room_gate(room)
+        return performance.enablement_gate() | {"rooms": performance.gated_rooms()}
 
     @app.post("/api/agents")
     def agent_create(body: AgentBody, admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
@@ -1120,6 +1125,8 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.post("/api/agents/{agent_id}/lifecycle")
     def agent_lifecycle(agent_id: int, body: LifecycleBody, admin: dict[str, Any] = Depends(allowed("manage_agents"))
                         ) -> dict[str, Any]:
+        if body.state == "active":  # resuming enables the agent: a gated room's agent needs the gate (G-R-04)
+            _enable_gate(agent_id, admin, body.override_gate)
         out = registry.set_lifecycle(agent_id, body.state, admin["name"])
         _audit(admin, "agent_lifecycle", out["name"], after={"state": body.state})
         return out
@@ -1762,11 +1769,13 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.post("/api/evals/run")
     def eval_run(body: EvalBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         evaluation.load_suite(body.suite)  # validate before starting
-        _audit(admin, "eval_run", body.label, after={"suite": body.suite, "repeats": body.repeats})
+        _audit(admin, "eval_run", body.label, after={"suite": body.suite, "repeats": body.repeats}
+               | ({"room": body.room} if body.room else {}))
 
         def run() -> None:
             try:
-                evaluation.run_suite(body.suite, body.label, body.repeats, body.tasks or None)
+                evaluation.run_suite(body.suite, body.label, body.repeats, body.tasks or None,
+                                     trial={"room": body.room} if body.room else None)
             except Exception as e:  # noqa: BLE001 - reported as an event
                 from agent_company.db import log_event
 

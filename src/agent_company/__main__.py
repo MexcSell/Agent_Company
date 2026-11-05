@@ -123,6 +123,8 @@ def main(argv: list[str] | None = None) -> None:
     ev.add_argument("--compare", nargs=2, metavar=("A", "B"))
     ev.add_argument("--model", help="benchmark this catalog model for --role (S13-R-06); label defaults to model:<name>")
     ev.add_argument("--role", default="developer", help="the role --model stands in for")
+    ev.add_argument("--room", help="a room trial (G-R-04): staff this gated room's agents in the suite's goals")
+    ev.add_argument("--gate", metavar="ROOM", help="show the enablement gate of this gated room (G-R-04) and exit")
     le = sub.add_parser("learn", help="capability gaps, learning plans and experiments (SPEC-13)")
     le.add_argument("action", choices=["gaps", "raise", "plans", "plan", "start", "cancel", "experiments", "metrics",
                                        "retrieval", "generate", "suites", "approve"],
@@ -243,7 +245,16 @@ def main(argv: list[str] | None = None) -> None:
                 a, b = args.compare
                 print(f"  {dim:<12} {x['metric']:<15} {x[a]} (n={x['n'][a]}) -> {x[b]} (n={x['n'][b]})")
             return
-        trial = {"models": {args.role: args.model}} if args.model else None
+        if args.gate:
+            from agent_company import performance
+
+            out = performance.room_gate(args.gate)
+            print(f"room {args.gate}: " + ("met" if out["met"] else "not met"))
+            for r in out["reasons"]:
+                print(f"  - {r}")
+            return
+        trial = ({"models": {args.role: args.model}} if args.model else {}) | ({"room": args.room} if args.room else {})
+        trial = trial or None
         label = args.label or (f"model:{args.model}" if args.model else "")
         if not label:
             raise SystemExit("--label is required to run a suite")

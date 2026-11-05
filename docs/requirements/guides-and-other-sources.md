@@ -77,7 +77,19 @@ time, each with its own eval suite. `eval --compare` before/after must not regre
 gated role through `PATCH /api/agents/{id}` answers 409 with the reasons until the latest smoke label
 passed ≥ 80 % over ≥ 3 repeats per task on real models (simulator runs never count) and no critical
 defect is open; retry rate and cost per accepted goal are reported. An administrator may override with
-`override_gate` (audited, high severity). The per-room eval suites are open.
+`override_gate` (audited, high severity).
+The per-room eval suites are done too (`performance.room_gate`, `GET /api/performance/enablement?room=<key>`,
+`eval --gate <room>`; `tests/test_room_gate.py`). Enabling (or resuming, `POST /api/agents/{id}/lifecycle`) an agent of a
+gated role needs its room's gate: the pipeline gate above; the room's suite `evals/room-<key>.json` (`kind: room`)
+passed ≥ 80 % over ≥ 3 repeats on real models with the room's gated roles doing a task in every run; a smoke label
+run with the room in the pipeline (`eval --suite smoke --room <key>`) that passes no less often than the pipeline's
+label ("`eval --compare` before/after must not regress"); and "one at a time": no other gated room's agent enabled
+or changed since the pipeline's label. A suite runs as a room trial (`Goal.trial.room`): that room's disabled
+agents are planned for and staffed on those eval goals only, their clones stay disabled, and the pipeline's own
+gate never counts a room trial's label. Suites so far: `room-security` (password storage, token comparison and path
+traversal in sensitive files, so each plan gets a security review; `[security]` checks fail insecure work) and
+`room-development` (Frontend: an accessible form; DevOps: a Dockerfile). The other gated rooms show "no eval suite
+for room X" until theirs is written.
 
 ### G-R-05 MCP servers for Claude Code agents — CDAF guide §11, §13; `1.txt`; AWS guide
 - Administrators register MCP servers (name, command/URL, allowed roles, required env var names —

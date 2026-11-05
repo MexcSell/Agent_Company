@@ -291,7 +291,12 @@ Every room in the design exists, and each role has one seeded agent:
 The core pipeline (General Manager, Architect, Developer, QA) and the research
 rooms are enabled. The other roles are registered but disabled until the pipeline
 is reliable; enable them on the Agents page. A plan that asks for a disabled role
-gets the Developer (for write tasks) or QA (for read tasks) instead. Every agent
+gets the Developer (for write tasks) or QA (for read tasks) instead. Enabling one needs
+its room's measured gate (G-R-04): the smoke suite, then the room's own suite
+`evals/room-<room>.json` run as a room trial (`eval --suite room-security`; the room's
+disabled agents work only in those eval goals), a smoke run with the room in the pipeline
+(`eval --suite smoke --room security`) that does not regress, and one room at a time;
+`eval --gate security` shows what is still missing. Every agent
 reports to a superior (the General Manager at the top). Agent names cannot be edited.
 
 Administrators edit rooms on Agents → Rooms: add a room, rename it, place it under a

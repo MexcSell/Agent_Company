@@ -539,11 +539,18 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
         rooms, project_note = _project_context(goal)
         tmpl = dict(goal.strategy or {}) if strategies.enforced(goal) else None  # S04-R-11
         with session() as s:
-            q = select(Agent).where(Agent.enabled)
+            measured = registry.trial_room(s, goal.id)  # G-R-04: a room trial lists the measured room's roles
+            q = select(Agent).where(registry._usable(measured))
             roles = sorted({a.role for a in s.scalars(q.where(Agent.room_key.in_(rooms)) if rooms else q)})
+            room_roles = sorted({a.role for a in s.scalars(select(Agent).where(Agent.room_key == measured,
+                                                                               Agent.enabled.is_(False)))}
+                                if measured else set())
         if tmpl and strategies.ANY not in tmpl.get("roles", []):
             roles = [r for r in roles if r in tmpl["roles"]]
         role_lines = "\n".join(f"- {r}: {ROLES[r].goal if r in ROLES else 'specialist'}" for r in roles)
+        if room_roles:
+            role_lines += (f"\nThis goal measures the {measured} room: give its roles ({', '.join(room_roles)}) the "
+                           "parts of the work they are for.")
         prompt = (f"Goal: {goal.title}\n{goal.description}\n\nIteration {iteration} of {goal.max_iterations}.\n"
                   + project_note
                   + (f"\nThe previous iteration failed the quality gate. Fix these findings:\n{feedback}\n"
@@ -675,7 +682,7 @@ def _cleared_for(goal_id: int, plan: list[contracts.TaskContract]) -> None:
             return
         prefs = {}
         for c in plan:
-            role = registry.resolve_role(c.role)[0]
+            role = registry.resolve_role(c.role, goal_id)[0]
             a = s.scalars(select(Agent).where(Agent.role == role, Agent.parent_id.is_(None)).order_by(Agent.id)).first()
             prefs[role] = a.model_pref if a else None
     for role, pref in prefs.items():
@@ -889,7 +896,7 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                 Task.goal_id == t.goal_id, Task.iteration == t.iteration, Task.key.in_(contract.depends_on)))}
         from agent_company.quality import REVIEW_CHECKLIST, REVIEW_ROLES
 
-        role, note = registry.resolve_role(contract.role)
+        role, note = registry.resolve_role(contract.role, goal.id)
         if note:
             log_event("staff", note, goal_id=goal.id)
         from agent_company.scheduler import set_status

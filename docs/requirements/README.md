@@ -114,10 +114,12 @@ the order is safety and correctness of that pipeline first, then management, the
    S09-R-07 performance, compatibility and accessibility gate stages (`required_test_stages`), then S04-R-09
    daily room budgets over a room and its sub-rooms, then S07-R-03 concluded hypotheses as knowledge items, then
    SPEC-02 FR-18 recovery probes of degraded agents (S03-FR-14 onboarding confirmed as met).
-5. **Still open** (2026-11-06): every requirement that can be implemented under the current rules is done. What
-   remains, and why it is not implemented now:
+5. **Still open** (2026-11-06): every requirement that can be implemented under the current rules is done; on
+   2026-11-06 G-R-04's per-room eval suites were added as well (`performance.room_gate`, room trials,
+   `evals/room-security.json` and `evals/room-development.json`). What remains, and why it is not implemented now:
    - **Gated** (CLAUDE.md: only the core pipeline and the research rooms are enabled until G-R-04's measured
-     enablement gate passes for a room): the further rooms one at a time with their per-room eval suites (G-R-04),
+     enablement gate passes for a room): enabling the further rooms one at a time once each room's gate is met
+     (suites for the rooms other than security and development are still to be written),
      ASEAO07 analytical requests (S07-FR-01..07, 11; S07-FR-12 reproducibility is partial for the same reason),
      S01-FR-07 company objectives per department, S01-FR-11 transactional restructuring, S03-FR-18 workforce
      forecasts, S03-FR-20 restructuring recommendations, the Innovation lab view (SPEC-15).

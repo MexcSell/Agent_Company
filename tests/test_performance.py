@@ -135,8 +135,10 @@ def test_gated_roles_stay_off_until_the_pipeline_is_measured_reliable():
                 s.add(Run(goal_id=950 + rep, model_name="Claude Sonnet 5.5", kind="llm", cost=0.01))
         gate = performance.enablement_gate()
         assert gate["met"] and gate["metrics"]["pass_rate"] == 1.0, gate
-        assert app.patch(f"/api/agents/{sec_id}", json={"enabled": True}).json()["enabled"] is True
         assert app.get("/api/performance/enablement").json()["met"] is True
+        # the pipeline is reliable; the room still needs its own suite (tests/test_room_gate.py)
+        r = app.patch(f"/api/agents/{sec_id}", json={"enabled": True})
+        assert r.status_code == 409 and "no room-security run yet" in r.json()["detail"]
 
 
 def test_an_administrator_can_override_the_gate_and_it_is_audited():

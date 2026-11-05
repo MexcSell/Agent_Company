@@ -10,8 +10,9 @@ A suite is a JSON file:
     ]}
 
 A suite may name its `kind` (`benchmark`, the default; `practice` exercises; or a `final` evaluation set,
-whose checks never reach an agent: SPEC-13 S13-R-02; or `adversarial`, traps run like a final set: S09-R-05) and
-the `skills` it trains or measures.
+whose checks never reach an agent: SPEC-13 S13-R-02; or `adversarial`, traps run like a final set: S09-R-05; or
+`room` with its `room`, the suite a gated room passes before it is enabled: G-R-04) and the `skills` it trains or
+measures.
 
 Each task runs `repeats` times, each time as a fresh goal (origin "eval") in a new
 repository seeded with `files`. A task counts as solved only if every repeat passes.
@@ -157,11 +158,22 @@ def run_suite(suite: str | Path, label: str, repeats: int = 3, only: list[str] |
     gets one iteration: a second one would hand the agents the failed checks as findings. An `adversarial` suite
     (S09-R-05) is run the same way, so a failed trap check never tells the agents what the trap was.
     `budget_usd` (0 = none, ASEAO10 S10-R-02): no further run starts once the label's runs cost that much; the
-    summary then says `stopped_on_budget` (one run may take it over the budget)."""
+    summary then says `stopped_on_budget` (one run may take it over the budget).
+    A `room` suite (G-R-04) or a `room` in `trial` is a room trial: that gated room's disabled agents are staffed for
+    these goals (and only these), so the enablement gate can measure the room before anyone enables it."""
+    from agent_company import performance
+
     data = load_suite(suite)
     tasks = [t for t in data["tasks"] if not only or t["name"] in only]
     final = data.get("kind") in {"final", "adversarial"}
     trial = dict(trial or {}) | ({"hide_checks": True} if final else {})
+    room = data.get("room") if data.get("kind") == "room" else None
+    if room and trial.get("room") not in (None, room):
+        raise ValueError(f"suite {data['name']} measures room {room}, not {trial['room']}")
+    if room:
+        trial["room"] = room
+    if trial.get("room") and trial["room"] not in performance.gated_rooms():
+        raise ValueError(f"{trial['room']} is not a room of a gated role ({', '.join(performance.gated_rooms())})")
     own_limit = final or not trial.get("strategy")  # a strategy side's iteration limit is under test (S04-R-13)
     stopped = False
     for task in tasks:

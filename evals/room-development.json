@@ -1,0 +1,34 @@
+{
+  "name": "room-development",
+  "kind": "room",
+  "room": "development",
+  "skills": ["frontend", "ui_design", "docker", "ci"],
+  "description": "G-R-04: the suite of the development room's gated roles (Frontend / UI-UX Developer, DevOps Engineer), run as a room trial before either is enabled (eval --suite room-development). The core pipeline roles of the room are enabled already; the gate counts only tasks done by the gated roles. Checks are offline: an HTML accessibility check with html.parser and a Dockerfile check of the text.",
+  "tasks": [
+    {
+      "name": "accessible-form",
+      "title": "Make the sign-up form in static/signup.html accessible",
+      "description": "static/signup.html is the sign-up page. Make it accessible (WCAG 2.2 basics): the page states its language, every form control has a visible label tied to it, the logo image has a text alternative, and the submit button has a name. Keep the field names email, name and newsletter. Change only static/signup.html.",
+      "files": {
+        "static/signup.html": "<!doctype html>\n<html>\n<head><meta charset=\"utf-8\"><title>Sign up</title></head>\n<body>\n<img src=\"logo.png\">\n<form action=\"/signup\" method=\"post\">\n  <input type=\"email\" name=\"email\" placeholder=\"Email\">\n  <input type=\"text\" name=\"name\" placeholder=\"Name\">\n  <input type=\"checkbox\" name=\"newsletter\"> Newsletter\n  <button type=\"submit\"><img src=\"go.png\"></button>\n</form>\n</body>\n</html>\n",
+        "checks/check_form.py": "from html.parser import HTMLParser\n\n\nclass P(HTMLParser):\n    def __init__(self):\n        super().__init__()\n        self.lang, self.ids, self.fors, self.inputs, self.imgs = None, set(), set(), [], []\n        self.label_depth, self.wrapped, self.button, self.button_text = 0, set(), 0, ''\n        self.button_named = False\n\n    def handle_starttag(self, tag, attrs):\n        a = dict(attrs)\n        if a.get('id'):\n            self.ids.add(a['id'])\n        if tag == 'html':\n            self.lang = a.get('lang')\n        elif tag == 'label':\n            self.label_depth += 1\n            if a.get('for'):\n                self.fors.add(a['for'])\n        elif tag == 'input' and a.get('type') not in ('hidden', 'submit'):\n            self.inputs.append(a)\n            if self.label_depth:\n                self.wrapped.add(a.get('name'))\n        elif tag == 'img':\n            self.imgs.append(a)\n            if self.button and (a.get('alt') or '').strip():\n                self.button_named = True\n        elif tag == 'button':\n            self.button += 1\n            if (a.get('aria-label') or '').strip():\n                self.button_named = True\n\n    def handle_endtag(self, tag):\n        if tag == 'label':\n            self.label_depth -= 1\n        elif tag == 'button':\n            self.button -= 1\n\n    def handle_data(self, data):\n        if self.button and data.strip():\n            self.button_named = True\n\n\np = P()\np.feed(open('static/signup.html').read())\nassert p.lang, 'the html element has no lang'\nnames = {i.get('name') for i in p.inputs}\nassert {'email', 'name', 'newsletter'} <= names, f'fields missing: {names}'\nfor i in p.inputs:\n    tied = (i.get('id') in p.fors) or (i.get('name') in p.wrapped) or (i.get('aria-labelledby') or '') in p.ids\n    assert tied, f\"input {i.get('name')} has no label tied to it (a placeholder is not a label)\"\nfor img in p.imgs:\n    assert img.get('alt') is not None, f\"img {img.get('src')} has no alt\"\nlogo = [i for i in p.imgs if i.get('src') == 'logo.png']\nassert logo and logo[0]['alt'].strip(), 'the logo needs a text alternative'\nassert p.button_named, 'the submit button has no accessible name'\n"
+      },
+      "checks": ["[accessibility] python3 -m checks.check_form"],
+      "allowed_paths": ["static/signup.html"],
+      "max_iterations": 2
+    },
+    {
+      "name": "dockerfile",
+      "title": "Write a Dockerfile for the app in app.py",
+      "description": "Write a Dockerfile at the repository root that runs app.py (a standard-library HTTP server on port 8000) with Python 3.12. Requirements: a pinned base image tag (not latest), the dependency file requirements.txt copied and installed before the code is copied, the app runs as a non-root user, port 8000 is exposed, a HEALTHCHECK, and CMD in exec (JSON array) form. Change only Dockerfile.",
+      "files": {
+        "app.py": "from http.server import BaseHTTPRequestHandler, HTTPServer\n\n\nclass H(BaseHTTPRequestHandler):\n    def do_GET(self):\n        self.send_response(200)\n        self.end_headers()\n        self.wfile.write(b'ok')\n\n\nif __name__ == '__main__':\n    HTTPServer(('0.0.0.0', 8000), H).serve_forever()\n",
+        "requirements.txt": "\n",
+        "checks/check_dockerfile.py": "import json\nimport re\n\nlines = []\nfor raw in open('Dockerfile').read().replace('\\\\\\n', ' ').splitlines():\n    raw = raw.strip()\n    if raw and not raw.startswith('#'):\n        lines.append(raw)\nins = [(l.split(None, 1)[0].upper(), l.split(None, 1)[1] if ' ' in l else '') for l in lines]\nkinds = [k for k, _ in ins]\nfroms = [v for k, v in ins if k == 'FROM']\nassert froms, 'no FROM'\nimage = froms[-1].split()[0]\nassert image.startswith('python:3.12'), f'base image {image} is not Python 3.12'\nassert ':' in image and not image.endswith(':latest'), 'pin the base image tag'\ncopies = [(n, v) for n, (k, v) in enumerate(ins) if k in ('COPY', 'ADD')]\nreq = [n for n, v in copies if 'requirements.txt' in v]\ncode = [n for n, v in copies if 'requirements.txt' not in v]\ninstall = [n for n, (k, v) in enumerate(ins) if k == 'RUN' and 'pip' in v and 'requirements.txt' in v]\nassert req and install and code, 'copy requirements.txt, install it, then copy the code'\nassert req[0] < install[0] < code[0], 'install the dependencies before the code is copied (layer caching)'\nassert not any(k == 'ADD' and re.search(r'https?://', v) for k, v in ins), 'ADD from a URL'\nusers = [v.strip() for k, v in ins if k == 'USER']\nassert users and users[-1].split(':')[0] not in ('root', '0'), 'run as a non-root user'\nassert any(k == 'EXPOSE' and '8000' in v for k, v in ins), 'expose port 8000'\nassert 'HEALTHCHECK' in kinds, 'add a HEALTHCHECK'\ncmd = [v for k, v in ins if k == 'CMD']\nassert cmd, 'no CMD'\nform = json.loads(cmd[-1])\nassert isinstance(form, list) and any('app.py' in x for x in form), 'CMD in exec form running app.py'\n"
+      },
+      "checks": ["python3 -m checks.check_dockerfile"],
+      "allowed_paths": ["Dockerfile"],
+      "max_iterations": 2
+    }
+  ]
+}

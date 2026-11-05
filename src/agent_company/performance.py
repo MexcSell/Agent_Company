@@ -28,7 +28,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from agent_company.db import Agent, Defect, EvalRun, Event, Goal, Lesson, Relationship, Room, Run, Task, now, session
+from agent_company.db import Agent, AgentVersion, Defect, EvalRun, Event, Goal, Lesson, Relationship, Room, Run, Task, now, session
 
 # --- defects ----------------------------------------------------------------------
 
@@ -436,32 +436,56 @@ def operations(s) -> dict[str, Any]:  # noqa: ANN001
 GATE_SUITE, GATE_PASS_RATE, GATE_REPEATS = "smoke", 0.8, 3
 
 
+def _trial_rooms(s: Any, runs: list[EvalRun]) -> dict[int, str | None]:
+    """goal id -> the room its eval goal measured (G-R-04 room trial), None for an ordinary eval goal."""
+    ids = [r.goal_id for r in runs if r.goal_id]
+    return {gid: ((trial or {}).get("room") or None)
+            for gid, trial in s.execute(select(Goal.id, Goal.trial).where(Goal.id.in_(ids)))} if ids else {}
+
+
+def _latest_label(s: Any, suite: str, room: str | None) -> list[EvalRun]:
+    """The runs of the newest label of `suite` whose goals measured `room` (None: no room trial)."""
+    runs = list(s.scalars(select(EvalRun).where(EvalRun.suite == suite).order_by(EvalRun.id.desc())))
+    rooms = _trial_rooms(s, runs)
+    label = next((r.label for r in runs if rooms.get(r.goal_id) == room), None)
+    return [r for r in runs if r.label == label and rooms.get(r.goal_id) == room] if label else []
+
+
+def _measure(s: Any, runs: list[EvalRun], what: str) -> tuple[dict[str, Any], list[str]]:
+    """Pass rate, repeats per task and executors of one label's runs, with what keeps them from counting."""
+    reasons: list[str] = []
+    per_task: dict[str, int] = defaultdict(int)
+    for r in runs:
+        per_task[r.task] += 1
+    rate = sum(r.passed for r in runs) / len(runs)
+    kinds = {k for (k,) in s.execute(select(Run.kind).where(Run.goal_id.in_([r.goal_id for r in runs if r.goal_id])))}
+    label = runs[0].label
+    metrics = {"label": label, "runs": len(runs), "pass_rate": round(rate, 3), "min_repeats": min(per_task.values()),
+               "executors": sorted(kinds), "last_at": max(r.created_at for r in runs).isoformat()}
+    if min(per_task.values()) < GATE_REPEATS:
+        reasons.append(f"{what} label '{label}' has fewer than {GATE_REPEATS} repeats of some task")
+    if rate < GATE_PASS_RATE:
+        reasons.append(f"{what} label '{label}' passed {rate:.0%}, below {GATE_PASS_RATE:.0%}")
+    if not kinds or kinds <= {"offline"}:
+        reasons.append(f"{what} label '{label}' ran on the offline simulator, not the configured models")
+    return metrics, reasons
+
+
 def enablement_gate() -> dict[str, Any]:
-    """'Pipeline reliable' (CLAUDE.md) as a measurement: the latest smoke-suite label passed at least 80 % over
-    at least 3 repeats per task with real models (not the simulator), and no critical defect is open. Retry
-    rate and cost per accepted goal are reported alongside."""
+    """'Pipeline reliable' (CLAUDE.md) as a measurement: the latest smoke-suite label (not a room trial) passed at
+    least 80 % over at least 3 repeats per task with real models (not the simulator), and no critical defect is
+    open. Retry rate and cost per accepted goal are reported alongside."""
     reasons: list[str] = []
     metrics: dict[str, Any] = {}
     with session() as s:
-        last = s.scalars(select(EvalRun).where(EvalRun.suite == GATE_SUITE).order_by(EvalRun.id.desc())).first()
-        if last is None:
+        runs = _latest_label(s, GATE_SUITE, None)
+        if not runs:
             reasons.append(f"no {GATE_SUITE} suite run yet: python -m agent_company eval --suite {GATE_SUITE} "
                            f"--label <name> --repeats {GATE_REPEATS}")
         else:
-            runs = s.scalars(select(EvalRun).where(EvalRun.label == last.label, EvalRun.suite == GATE_SUITE)).all()
-            per_task: dict[str, int] = defaultdict(int)
-            for r in runs:
-                per_task[r.task] += 1
-            rate = sum(r.passed for r in runs) / len(runs)
-            kinds = {k for (k,) in s.execute(select(Run.kind).where(Run.goal_id.in_([r.goal_id for r in runs if r.goal_id])))}
-            metrics.update(label=last.label, runs=len(runs), pass_rate=round(rate, 3),
-                           min_repeats=min(per_task.values()), executors=sorted(kinds))
-            if min(per_task.values()) < GATE_REPEATS:
-                reasons.append(f"label '{last.label}' has fewer than {GATE_REPEATS} repeats of some task")
-            if rate < GATE_PASS_RATE:
-                reasons.append(f"label '{last.label}' passed {rate:.0%}, below {GATE_PASS_RATE:.0%}")
-            if not kinds or kinds <= {"offline"}:
-                reasons.append(f"label '{last.label}' ran on the offline simulator, not the configured models")
+            m, r = _measure(s, runs, GATE_SUITE)
+            metrics.update(m)
+            reasons += r
         critical = s.scalar(select(func.count()).select_from(Defect).where(
             Defect.severity == "critical", Defect.status.in_(OPEN))) or 0
         if critical:
@@ -472,6 +496,81 @@ def enablement_gate() -> dict[str, Any]:
     return {"met": not reasons, "reasons": reasons, "metrics": metrics,
             "rule": f"{GATE_SUITE} suite ≥ {GATE_PASS_RATE:.0%} over ≥ {GATE_REPEATS} repeats with real models, "
                     "no open critical defect"}
+
+
+def room_suite(room: str) -> str:
+    return f"room-{room}"
+
+
+def gated_rooms() -> list[str]:
+    """The rooms of the gated roles (one eval suite each, `evals/room-<key>.json`)."""
+    from agent_company import org
+
+    return sorted({spec.room for spec in org.ROLES.values() if not spec.enabled})
+
+
+def room_gate(room: str) -> dict[str, Any]:
+    """G-R-04 for one gated room, enabled one at a time: the pipeline gate, then the room's own suite
+    (`room-<key>`, run as a room trial: the room's disabled agents are staffed for those eval goals only) at the
+    same pass rate and repeats, with the room's agents doing work in every run; a smoke label run with the room in
+    the pipeline that does not pass less often than the pipeline's own (`eval --compare` before/after); and no
+    other gated room's agent enabled or changed since the pipeline's label, so each room is measured alone."""
+    from agent_company import evaluation, org
+
+    base = enablement_gate()
+    reasons = list(base["reasons"])
+    out: dict[str, Any] = {"room": room, "pipeline": base["metrics"]}
+    suite = room_suite(room)
+    with session() as s:
+        try:
+            evaluation.load_suite(suite)
+        except (OSError, ValueError):
+            reasons.append(f"no eval suite for room {room}: write evals/{suite}.json (kind room)")
+        else:
+            runs = _latest_label(s, suite, room)
+            if not runs:
+                reasons.append(f"no {suite} run yet: python -m agent_company eval --suite {suite} --label <name> "
+                               f"--repeats {GATE_REPEATS}")
+            else:
+                m, r = _measure(s, runs, suite)
+                reasons += r
+                ids = [x.goal_id for x in runs if x.goal_id]
+                gated_roles = {r for r, spec in org.ROLES.items() if not spec.enabled and spec.room == room}
+                worked = set(s.scalars(select(Task.goal_id).join(Agent, Agent.id == Task.agent_id).where(
+                    Task.goal_id.in_(ids), Agent.room_key == room, Agent.role.in_(gated_roles)))) if ids else set()
+                idle = sum(1 for x in runs if x.goal_id not in worked)
+                m["runs_without_room"] = idle
+                if idle:
+                    reasons.append(f"{suite} label '{m['label']}': the room's gated roles "
+                                   f"({', '.join(sorted(gated_roles))}) did no task in {idle} run(s)")
+                out["suite"] = m
+        after = _latest_label(s, GATE_SUITE, room)
+        if not after:
+            reasons.append(f"no {GATE_SUITE} run with room {room} in the pipeline yet: python -m agent_company eval "
+                           f"--suite {GATE_SUITE} --room {room} --label <name> --repeats {GATE_REPEATS}")
+        else:
+            m, r = _measure(s, after, f"{GATE_SUITE} with {room}")
+            reasons += r
+            before = base["metrics"].get("pass_rate")
+            m["change"] = None if before is None else round(m["pass_rate"] - before, 3)
+            if before is not None and m["pass_rate"] < before:
+                reasons.append(f"{GATE_SUITE} with room {room} passed {m['pass_rate']:.0%}, less than the pipeline's "
+                               f"{before:.0%} (label '{base['metrics']['label']}')")
+            out["with_room"] = m
+        if base["metrics"].get("last_at"):
+            since = max(r.created_at for r in _latest_label(s, GATE_SUITE, None))
+            others = {spec.role for spec in org.ROLES.values() if not spec.enabled}
+            changed = sorted({a.room_key for v, a in s.execute(
+                select(AgentVersion, Agent).join(Agent, Agent.id == AgentVersion.agent_id).where(
+                    Agent.role.in_(others), Agent.room_key != room, Agent.parent_id.is_(None),
+                    AgentVersion.created_at > since)) if (v.snapshot or {}).get("enabled")})
+            if changed:
+                reasons.append(f"room(s) {', '.join(changed)} enabled or changed after the pipeline's label "
+                               f"'{base['metrics']['label']}': measure the pipeline with them first (one room at a time)")
+    return out | {"met": not reasons, "reasons": reasons,
+                  "rule": base["rule"] + f"; then {suite} ≥ {GATE_PASS_RATE:.0%} over ≥ {GATE_REPEATS} repeats with "
+                          f"the room's agents working, {GATE_SUITE} with the room not below the pipeline, one room "
+                          "at a time"}
 
 
 def gated(role: str) -> bool:

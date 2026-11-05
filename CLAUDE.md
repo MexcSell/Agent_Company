@@ -70,7 +70,7 @@ feature came from.
   solution in the sandbox; `data/evals/`, a generated final set needs approval); `selfevolve.py` (verified self-evolution of the platform's own code: improvement contracts, protected
   control plane, failure layers, a fixed benchmark from `benchmarks/` run on the base and candidate commits, approval,
   deploy via the safe restart, monitoring, rollback; docs/requirements/SELF-EVOLUTION.md); `performance.py` (defects with priority and a lifecycle
-  the loop drives, S09-R-03; certification, metrics, estimate accuracy, G-R-02 operational metrics `operations`); `rca.py` (S07-R-02 root-cause analysis of failed goals and repeated failing checks:
+  the loop drives, S09-R-03; certification, metrics, estimate accuracy, G-R-02 operational metrics `operations`; G-R-04 `enablement_gate` and `room_gate`: a gated role is enabled only after its room's own suite ran as a room trial, `Goal.trial.room`, whose disabled agents `registry.staff` takes for those eval goals only); `rca.py` (S07-R-02 root-cause analysis of failed goals and repeated failing checks:
   evidence pack, causes that must cite it, actions as proposals, follow-up); `evaluation.py` (eval harness; S09-R-05 dimensions with sample sizes per run and summary, no combined score; `adversarial` suites run like final ones); `research.py` (crawl, knowledge, sources with monitoring rules: versions on change, intelligence events; shifts on the
   rotation with handover packages, `research_shifts`; research requests with priority, deadline, budget, recurrence and
   duplicate detection, run by `ReportThread`; S06-R-03/R-04 claims checked against stored documents and an independent review (another agent, another model family when usable, else a person): only approved reports become `report://` documents, blackboard entries, `research` knowledge items and `research` proposals); `governance.py` (audit, notifications,
@@ -101,7 +101,7 @@ feature came from.
   Workspace explorer is it; `files.js` keeps the folder picker and preview); `index.html` is served with content-hashed static URLs;
   `workspace.js` + `viewer.js` + `console.js` + `claude.js` are the Workspace home page, sharing
   `window.WSP`; `vendor/` holds xterm.js, pdf.js, mammoth and noVNC); `crew.py` (classic crew); `__main__.py` (CLI)
-- `evals/` – benchmark suites (JSON; `kind` benchmark|practice|final|adversarial, `skills`; a final suite's checks never reach agents);
+- `evals/` – benchmark suites (JSON; `kind` benchmark|practice|final|adversarial|room, `skills`; `room-<key>.json` is a gated room's suite (G-R-04); a final suite's checks never reach agents);
   `retrieval.json` is the knowledge-retrieval eval (items + cases, no tasks), `retrieval-classes.json` the same with
   cases labelled by query class (SE-R-21)
 - `benchmarks/` – fixed code benchmarks for improvement contracts (`<name>.json` manifest with metric weights and

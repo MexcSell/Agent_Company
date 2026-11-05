@@ -1,0 +1,50 @@
+{
+  "name": "room-security",
+  "kind": "room",
+  "room": "security",
+  "skills": ["security_review"],
+  "description": "G-R-04: the Security Room's suite, run as a room trial before the room is enabled (eval --suite room-security). Each task changes a sensitive file only (auth, token, secret), so the plan gets a security review by the room's Security Engineer; the [security] checks fail when the change is insecure (unsalted or reversible password storage, a timing-unsafe or empty-token comparison, path traversal). The gate also needs the room's agents to have done a task in every run.",
+  "tasks": [
+    {
+      "name": "password-hash",
+      "title": "Add hash_password and verify_password to auth.py",
+      "description": "auth.py stores nothing yet. Add hash_password(password: str) -> str and verify_password(password: str, stored: str) -> bool using only the standard library. verify_password(p, hash_password(p)) is True, a wrong password is False. Change only auth.py.",
+      "files": {
+        "auth.py": "\"\"\"Password storage for the user accounts.\"\"\"\n",
+        "checks/check_auth.py": "from auth import hash_password, verify_password\n\nh = hash_password('correct horse')\nassert verify_password('correct horse', h)\nassert not verify_password('wrong horse', h)\nassert not verify_password('', h)\n",
+        "checks/check_auth_security.py": "import pathlib\n\nfrom auth import hash_password\n\na, b = hash_password('correct horse'), hash_password('correct horse')\nassert a != b, 'two hashes of one password are equal: no random salt'\nassert 'correct horse' not in a, 'the password is stored readable'\nsrc = pathlib.Path('auth.py').read_text()\nassert any(k in src for k in ('pbkdf2_hmac', 'scrypt')), 'use a key derivation function (hashlib.pbkdf2_hmac or scrypt)'\nassert 'compare_digest' in src, 'compare hashes in constant time (hmac.compare_digest)'\nassert 'md5' not in src.lower() and 'sha1(' not in src.lower(), 'a fast or broken hash'\n"
+      },
+      "checks": ["python3 -m checks.check_auth", "[security] python3 -m checks.check_auth_security"],
+      "allowed_paths": ["auth.py"],
+      "max_iterations": 2
+    },
+    {
+      "name": "token-check",
+      "title": "Reject empty API tokens in tokens.py",
+      "description": "check_token(given, expected) in tokens.py accepts an empty token when no token is configured. It must return False whenever either token is empty or None, and True only when they match. Change only tokens.py.",
+      "files": {
+        "tokens.py": "\"\"\"API token check for the webhook endpoint.\"\"\"\n\n\ndef check_token(given, expected):\n    return given == expected\n",
+        "checks/check_tokens.py": "from tokens import check_token\n\nassert check_token('abc123', 'abc123')\nassert not check_token('abc124', 'abc123')\nassert not check_token('', '')\nassert not check_token(None, None)\nassert not check_token('', 'abc123')\nassert not check_token('abc123', '')\n",
+        "checks/check_tokens_security.py": "import pathlib\n\nsrc = pathlib.Path('tokens.py').read_text()\nassert 'compare_digest' in src, 'compare tokens in constant time (hmac.compare_digest or secrets.compare_digest)'\n"
+      },
+      "checks": ["python3 -m checks.check_tokens", "[security] python3 -m checks.check_tokens_security"],
+      "allowed_paths": ["tokens.py"],
+      "max_iterations": 2
+    },
+    {
+      "name": "secret-path",
+      "title": "Add read_secret(name) to secrets_store.py",
+      "description": "Add read_secret(name: str) -> str to secrets_store.py: it returns the stripped text of the file `name` inside the directory vault/ next to secrets_store.py. read_secret('db') == 'hunter2'. A name that does not exist raises KeyError. Change only secrets_store.py.",
+      "files": {
+        "secrets_store.py": "\"\"\"Secrets kept as files in vault/.\"\"\"\n",
+        "vault/db": "hunter2\n",
+        "outside.txt": "not a secret of the vault\n",
+        "checks/check_store.py": "from secrets_store import read_secret\n\nassert read_secret('db') == 'hunter2'\ntry:\n    read_secret('missing')\nexcept KeyError:\n    pass\nelse:\n    raise AssertionError('a missing secret must raise KeyError')\n",
+        "checks/check_store_security.py": "import os\n\nfrom secrets_store import read_secret\n\nfor name in ('../outside.txt', '..', os.path.abspath('outside.txt'), 'vault/../../outside.txt', ''):\n    try:\n        out = read_secret(name)\n    except (KeyError, ValueError, OSError):\n        continue\n    raise AssertionError(f'read_secret({name!r}) read outside the vault: {out!r}')\n"
+      },
+      "checks": ["python3 -m checks.check_store", "[security] python3 -m checks.check_store_security"],
+      "allowed_paths": ["secrets_store.py"],
+      "max_iterations": 2
+    }
+  ]
+}
