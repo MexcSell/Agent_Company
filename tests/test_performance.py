@@ -99,3 +99,59 @@ def test_bundled_suite_loads_and_api():
         assert app.get("/api/agents/1").json()["certification"]["skill_family"] == "general_manager"
         assert "smoke" in [s["name"] for s in app.get("/api/evals").json()["suites"]]
         assert app.post("/api/evals/run", json={"suite": "smoke", "label": "bad label!"}).status_code == 422
+
+
+# --- guides G-R-04: measured gate for enabling more roles ----------------------------------------
+
+def test_gated_roles_stay_off_until_the_pipeline_is_measured_reliable():
+    import secrets
+
+    from fastapi.testclient import TestClient
+    from sqlalchemy import select
+
+    from agent_company import performance
+    from agent_company.api import create_app
+    from agent_company.db import Agent, EvalRun, Run, session
+
+    gate = performance.enablement_gate()
+    assert not gate["met"] and "no smoke suite run yet" in gate["reasons"][0]
+    with session() as s:
+        sec = s.scalars(select(Agent).where(Agent.role == "security")).first()
+        assert sec is not None and not sec.enabled and performance.gated("security")
+        sec_id = sec.id
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
+        app.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
+        r = app.patch(f"/api/agents/{sec_id}", json={"enabled": True})
+        assert r.status_code == 409 and "not measured reliable" in r.json()["detail"]
+        # a simulator-only run never counts as reliable
+        with session() as s:
+            for rep in range(3):
+                s.add(EvalRun(label="sim", suite="smoke", task="t", repeat=rep, goal_id=900 + rep, passed=True))
+                s.add(Run(goal_id=900 + rep, model_name="Offline simulator", kind="offline"))
+        assert any("simulator" in x for x in performance.enablement_gate()["reasons"])
+        with session() as s:
+            for rep in range(3):
+                s.add(EvalRun(label="real", suite="smoke", task="t", repeat=rep, goal_id=950 + rep, passed=True))
+                s.add(Run(goal_id=950 + rep, model_name="Claude Sonnet 5.5", kind="llm", cost=0.01))
+        gate = performance.enablement_gate()
+        assert gate["met"] and gate["metrics"]["pass_rate"] == 1.0, gate
+        assert app.patch(f"/api/agents/{sec_id}", json={"enabled": True}).json()["enabled"] is True
+        assert app.get("/api/performance/enablement").json()["met"] is True
+
+
+def test_an_administrator_can_override_the_gate_and_it_is_audited():
+    import secrets
+
+    from fastapi.testclient import TestClient
+    from sqlalchemy import select
+
+    from agent_company.api import create_app
+    from agent_company.db import Agent, session
+
+    with session() as s:
+        sec_id = s.scalars(select(Agent).where(Agent.role == "security")).first().id
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
+        app.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
+        r = app.patch(f"/api/agents/{sec_id}", json={"enabled": True, "override_gate": True})
+        assert r.status_code == 200 and r.json()["enabled"] is True
+        assert "enablement_gate_override" in {x["action"] for x in app.get("/api/audit").json()["records"]}

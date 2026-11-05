@@ -600,10 +600,25 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.patch("/api/agents/{agent_id}")
     def agent_update(agent_id: int, changes: dict[str, Any], admin: dict[str, Any] = Depends(allowed("manage_agents"))
                      ) -> dict[str, Any]:
+        override = bool(changes.pop("override_gate", False))
+        if changes.get("enabled"):
+            cur = registry.agent_detail(agent_id)
+            if not cur["enabled"] and performance.gated(cur["role"]):  # G-R-04: gated roles need a reliable pipeline
+                gate = performance.enablement_gate()
+                if not gate["met"] and not (override and admin["is_admin"]):
+                    raise HTTPException(409, "the pipeline is not measured reliable yet: " + "; ".join(gate["reasons"])
+                                        + ". An administrator can override (override_gate).")
+                if not gate["met"]:
+                    _audit(admin, "enablement_gate_override", cur["name"], after={"reasons": gate["reasons"]},
+                           severity="high")
         out = registry.update_agent(agent_id, changes)
         _audit(admin, "agent_update", out["name"], after=changes)
         agentdefs.sync(agent_id, f"settings changed by {admin['name']}: {', '.join(sorted(changes))}")
         return out
+
+    @app.get("/api/performance/enablement")
+    def performance_enablement(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return performance.enablement_gate()
 
     @app.post("/api/agents")
     def agent_create(body: AgentBody, admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:

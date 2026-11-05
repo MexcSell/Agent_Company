@@ -22,7 +22,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from agent_company.db import Agent, Defect, Goal, Lesson, Relationship, Room, Run, Task, now, session
+from agent_company.db import Agent, Defect, EvalRun, Event, Goal, Lesson, Relationship, Room, Run, Task, now, session
 
 # --- defects ----------------------------------------------------------------------
 
@@ -171,6 +171,60 @@ def _agent_metrics(s, a: Agent, tasks: list[Task], runs: list[Run], goal_passed:
         "collaborators": len(collab),
         "goal_pass_rate": round(sum(goal_passed.get(g, False) for g in goals) / len(goals), 3) if goals else None,
     }
+
+
+# --- measured gate for enabling more roles (guides G-R-04) ------------------------------------------
+
+GATE_SUITE, GATE_PASS_RATE, GATE_REPEATS = "smoke", 0.8, 3
+
+
+def enablement_gate() -> dict[str, Any]:
+    """'Pipeline reliable' (CLAUDE.md) as a measurement: the latest smoke-suite label passed at least 80 % over
+    at least 3 repeats per task with real models (not the simulator), and no critical defect is open. Retry
+    rate and cost per accepted goal are reported alongside."""
+    reasons: list[str] = []
+    metrics: dict[str, Any] = {}
+    with session() as s:
+        last = s.scalars(select(EvalRun).where(EvalRun.suite == GATE_SUITE).order_by(EvalRun.id.desc())).first()
+        if last is None:
+            reasons.append(f"no {GATE_SUITE} suite run yet: python -m agent_company eval --suite {GATE_SUITE} "
+                           f"--label <name> --repeats {GATE_REPEATS}")
+        else:
+            runs = s.scalars(select(EvalRun).where(EvalRun.label == last.label, EvalRun.suite == GATE_SUITE)).all()
+            per_task: dict[str, int] = defaultdict(int)
+            for r in runs:
+                per_task[r.task] += 1
+            rate = sum(r.passed for r in runs) / len(runs)
+            kinds = {k for (k,) in s.execute(select(Run.kind).where(Run.goal_id.in_([r.goal_id for r in runs if r.goal_id])))}
+            metrics.update(label=last.label, runs=len(runs), pass_rate=round(rate, 3),
+                           min_repeats=min(per_task.values()), executors=sorted(kinds))
+            if min(per_task.values()) < GATE_REPEATS:
+                reasons.append(f"label '{last.label}' has fewer than {GATE_REPEATS} repeats of some task")
+            if rate < GATE_PASS_RATE:
+                reasons.append(f"label '{last.label}' passed {rate:.0%}, below {GATE_PASS_RATE:.0%}")
+            if not kinds or kinds <= {"offline"}:
+                reasons.append(f"label '{last.label}' ran on the offline simulator, not the configured models")
+        critical = s.scalar(select(func.count()).select_from(Defect).where(
+            Defect.severity == "critical", Defect.status.in_(["detected", "reopened"]))) or 0
+        if critical:
+            reasons.append(f"{critical} critical defect(s) open")
+        total_runs = s.scalar(select(func.count()).select_from(Run)) or 0
+        retries = s.scalar(select(func.count()).select_from(Event).where(Event.kind == "retry")) or 0
+        accepted = [g.id for g in s.scalars(select(Goal).where(Goal.status == "approved", Goal.origin != "eval"))]
+        cost = s.scalar(select(func.coalesce(func.sum(Run.cost), 0.0)).where(Run.goal_id.in_(accepted))) if accepted else 0.0
+        metrics.update(critical_defects=critical, retry_rate=round(retries / total_runs, 3) if total_runs else 0.0,
+                       accepted_goals=len(accepted), cost_per_accepted_goal=round(cost / len(accepted), 4) if accepted else None)
+    return {"met": not reasons, "reasons": reasons, "metrics": metrics,
+            "rule": f"{GATE_SUITE} suite ≥ {GATE_PASS_RATE:.0%} over ≥ {GATE_REPEATS} repeats with real models, "
+                    "no open critical defect"}
+
+
+def gated(role: str) -> bool:
+    """A registered role that is off until the pipeline is reliable (CLAUDE.md)."""
+    from agent_company import org
+
+    spec = org.ROLES.get(role)
+    return spec is not None and not spec.enabled
 
 
 def report() -> dict[str, Any]:

@@ -52,6 +52,11 @@ goal awaiting approval instead of failing.
 the configured models, no open critical defects, retry rate and cost per accepted goal reported.
 Only then are gated rooms (analysis, innovation, extra engineering/QA teams) enabled, one at a
 time, each with its own eval suite. `eval --compare` before/after must not regress.
+**Status: done** (`performance.enablement_gate`, `GET /api/performance/enablement`): enabling an agent of a
+gated role through `PATCH /api/agents/{id}` answers 409 with the reasons until the latest smoke label
+passed ≥ 80 % over ≥ 3 repeats per task on real models (simulator runs never count) and no critical
+defect is open; retry rate and cost per accepted goal are reported. An administrator may override with
+`override_gate` (audited, high severity). The per-room eval suites are open.
 
 ### G-R-05 MCP servers for Claude Code agents — CDAF guide §11, §13; `1.txt`; AWS guide
 - Administrators register MCP servers (name, command/URL, allowed roles, required env var names —
