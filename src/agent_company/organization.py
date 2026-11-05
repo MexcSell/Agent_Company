@@ -27,14 +27,14 @@ from agent_company.db import Agent, Goal, PositionChange, Relationship, Room, Ta
 from agent_company.workflow import ACTIVE
 
 DIVISIONS = ("management", "development", "learning", "research", "security", "business")
-EDITABLE = {"name", "description", "division", "parent_key", "lead_agent_id", "enabled"}
+EDITABLE = {"name", "description", "division", "parent_key", "lead_agent_id", "enabled", "daily_budget_usd"}
 KEY_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 
 
 def room_dict(r: Room, agents: int = 0) -> dict[str, Any]:
     return {"key": r.key, "name": r.name, "division": r.division, "description": r.description,
             "rotational": r.rotational, "parent": r.parent_key, "lead_agent_id": r.lead_agent_id,
-            "enabled": r.enabled is not False, "agents": agents}
+            "enabled": r.enabled is not False, "agents": agents, "daily_budget_usd": r.daily_budget_usd or 0.0}
 
 
 def disabled_rooms(s: Session) -> set[str]:
@@ -148,6 +148,10 @@ def update_room(key: str, changes: dict[str, Any], actor: str = "system", reason
                 if busy:
                     raise ValueError(f"the room has running goals ({', '.join(f'#{g}' for g in busy)}); "
                                      "disable it when they have ended")
+        if "daily_budget_usd" in changes:
+            changes["daily_budget_usd"] = float(changes["daily_budget_usd"] or 0)
+            if not 0 <= changes["daily_budget_usd"] <= 100_000:
+                raise ValueError("a room's daily budget is $0 (none) to $100,000")
         if "lead_agent_id" in changes:
             record_position(s, f"room:{key}:lead", r.lead_agent_id, changes["lead_agent_id"], actor, reason)
         for k, v in changes.items():

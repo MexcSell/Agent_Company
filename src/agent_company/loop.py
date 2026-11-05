@@ -1650,8 +1650,10 @@ def _out_of_quota(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, A
         row.checkpoint = {**(row.checkpoint or {}), "paused_for": "quota", "paused_why": why,
                           "paused_day": registry.day_start().date().isoformat()}
     log_event("goal", f"waiting for a quota: {why}", goal_id=goal_id)
-    notify(f"Goal #{goal_id} waits for an agent's daily quota"[:256], f"{g.title}\n{why}. It resumes after 00:00 UTC, "
-           "or now if you raise the quota and resume it.", level="warning", source="goal", goal_id=goal_id,
+    room = "daily budget" in why  # a room's budget (S04-R-09) rather than the agent's own quota
+    notify(f"Goal #{goal_id} waits for {'a room' if room else 'an agent'}'s daily {'budget' if room else 'quota'}"[:256],
+           f"{g.title}\n{why}. It resumes after 00:00 UTC, or now if you raise the "
+           f"{'room budget (Agents → Rooms)' if room else 'quota'} and resume it.", level="warning", source="goal", goal_id=goal_id,
            project_id=g.project_id, admin_only=True)
     return {"status": "paused", "iterations": g.iteration, "report": report, "quota": why}
 

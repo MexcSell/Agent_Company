@@ -121,3 +121,38 @@ def test_budget_changes_are_for_administrators_audited_and_children_stay_within_
         assert r["limits"]["tokens"] == 5000 and r["limits"]["agents"] == 2
         assert app.get(f"/api/goals/{parent}").json()["budget"]["remaining"]["cost_usd"] == pytest.approx(0.1)
         assert "goal_budget" in {a["action"] for a in app.get("/api/audit").json()["records"]}
+
+
+def test_a_rooms_daily_budget_covers_its_sub_rooms_and_pauses_the_goals_that_need_them():
+    """S04-R-09 room budgets: company → department room → its rooms; used up, their agents take no work today."""
+    from sqlalchemy import select
+
+    from agent_company import organization, registry, usage
+    from agent_company.db import Agent
+
+    organization.create_room("engineering", "Engineering", "development", actor="test")
+    organization.update_room("development", {"parent_key": "engineering"}, "test")
+    with pytest.raises(ValueError, match="daily budget"):
+        organization.update_room("engineering", {"daily_budget_usd": -1}, "test")
+    organization.update_room("engineering", {"daily_budget_usd": 1.0}, "test")
+    with session() as s:
+        dev = s.scalars(select(Agent).where(Agent.role == "developer", Agent.parent_id.is_(None))).first().id
+        gm = s.scalars(select(Agent).where(Agent.role == "general_manager", Agent.parent_id.is_(None))).first().id
+    usage.record(model_name="Offline simulator", kind="offline", cost=0.7, agent_id=dev)
+    usage.record(model_name="Offline simulator", kind="offline", cost=5.0, agent_id=gm)  # another department
+    eng = next(r for r in registry.list_rooms() if r["key"] == "engineering")
+    assert eng["daily_budget_usd"] == 1.0 and eng["spent_today_usd"] == 0.7
+    assert registry.agent_detail(dev)["quota_reason"] == ""
+    usage.record(model_name="Offline simulator", kind="offline", cost=0.4, agent_id=dev)
+    assert "room Engineering used $1.10 of its $1.00 daily budget" in registry.agent_detail(dev)["quota_reason"]
+    with pytest.raises(registry.QuotaExceeded, match="daily budget"):
+        registry.staff("qa", goal_id=loop.create_goal("check"))  # QA sits in the same department
+    assert registry.agent_detail(gm)["quota_reason"] == ""
+
+    gid = loop.create_goal("Write the worklog", quality_commands=["test -f WORKLOG.md"])
+    out = loop.run_goal(gid)
+    g = loop._goal(gid)
+    assert out["status"] == "paused" and g.checkpoint["paused_for"] == "quota"
+    assert "daily budget" in g.checkpoint["paused_why"]
+    organization.update_room("engineering", {"daily_budget_usd": 0}, "test")  # raised (removed): it may run again
+    assert registry.agent_detail(dev)["quota_reason"] == ""

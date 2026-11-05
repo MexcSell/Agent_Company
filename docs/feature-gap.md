@@ -48,7 +48,7 @@ Status: `done` = implemented in this repository, `skip` = deliberately not taken
 | Syntax checks of changed files (Python, JSON, TOML, shell; JS/Ruby/PHP/Go when installed) | done (`checks.syntax_errors`) |
 | Extract check commands named in the task statement | done (`checks.extract_check_commands`, administrators' goals only) |
 | Model fallback chain on API errors; escalation to a stronger model after failures | done (`router.resolve_chain`, retry model per route) |
-| Cost and time budgets per goal, with a wrap-up warning at 60% | done (`goal_budget_usd`, `goal_time_budget`; per goal also tokens and agents at once, child goals capped by the parent, `budgets.py`, S04-R-09) |
+| Cost and time budgets per goal, with a wrap-up warning at 60% | done (`goal_budget_usd`, `goal_time_budget`; per goal also tokens and agents at once, child goals capped by the parent, `budgets.py`; daily room budgets over a room and its sub-rooms, `Room.daily_budget_usd`, S04-R-09) |
 | Reviewer from a different model family than the driver | done (`avoid_provider` for QA/security tasks) |
 | Eval harness: run benchmark goals N times, pass rate / cost / time / end reason, compare labels | done (`evaluation.py`, `evals/smoke.json`, `eval` CLI, Performance view) |
 | Local OpenAI-compatible model server (llama-server, LM Studio, vLLM) via base URL | done (model `base_url`, `api_key_env`) |

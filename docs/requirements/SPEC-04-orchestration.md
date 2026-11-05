@@ -213,8 +213,14 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
   A running child holds its budget; once it ends only its use counts, so the unused part returns to the parent.
   Increases: `POST /api/goals/{id}/budget` (administrators, audited; a child stays within its parent), the settings
   button in the goal view. Per-task cost, turns and deadline stay in the contract (G-R-01). The time budget counts
-  per run of the loop, so a resumed goal gets a fresh time window. Not done: the room budgets of the diagram
-  (company → research/engineering/QA/security); project budgets (S05-R-06) cap all of a project's goals instead.
+  per run of the loop, so a resumed goal gets a fresh time window. Room budgets of the diagram (company →
+  research/engineering/QA/security): `Room.daily_budget_usd` (Agents → Rooms → edit; 0 = none) covers what the
+  agents of the room and of every room below it (`parent_key`) spend per UTC day (`registry.room_spent_today`).
+  `registry.over_quota` checks the agent's own quota, then each room on the way to the top
+  (`room_over_budget`); a used-up room budget works like a used-up agent quota (S02-R-03): its agents are not
+  staffed or cloned, a goal that needs them pauses (`paused_for: quota`) and goes back to the queue after 00:00 UTC,
+  or when an administrator raises the budget and resumes it. Project budgets (S05-R-06) cap all of a project's
+  goals beside it.
 
 ### S04-R-10 Agent-to-agent messages — §9.2, §9.3
 - Message contract: `sender_agent_id`, `recipient_agent_id` or `channel`, `goal_id`, `task_id`,

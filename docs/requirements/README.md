@@ -111,7 +111,8 @@ the order is safety and correctness of that pipeline first, then management, the
    with their actors, then SPEC-01 S01-R-06 department KPIs, then a merged goal's `NEXT:` lines as follow-up
    action items (G-R-01), then the S11-R-04 model judge of knowledge contradictions (`contradiction_judge`), then
    S13-R-02 generated practice and final exercises, verified by the harness (`exercises.py`), then ASEAO09
-   S09-R-07 performance, compatibility and accessibility gate stages (`required_test_stages`).
+   S09-R-07 performance, compatibility and accessibility gate stages (`required_test_stages`), then S04-R-09
+   daily room budgets over a room and its sub-rooms.
 5. **Still open** (2026-11-05): the gated rooms one at a time
    (G-R-04); L3 for the agent CLIs themselves (they need network and their logins, see the threat model's known
    gaps). Conditional: S11 embedding search (only if S11-R-08 shows

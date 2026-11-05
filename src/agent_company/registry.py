@@ -68,13 +68,47 @@ def spent_today(s: Session, a: Agent) -> float:
         Run.agent_id.in_(ids), Run.started_at >= day_start().replace(tzinfo=None))) or 0.0)
 
 
+def room_spent_today(s: Session, key: str, parents: dict[str, str | None] | None = None) -> float:
+    """What the agents of a room and of every room below it spent since 00:00 UTC (SPEC-04 S04-R-09)."""
+    from agent_company.db import Run
+
+    parents = parents if parents is not None else dict(s.execute(select(Room.key, Room.parent_key)).all())
+    tree, grew = {key}, True
+    while grew:
+        more = {k for k, p in parents.items() if p in tree and k not in tree}
+        tree |= more
+        grew = bool(more)
+    return float(s.scalar(select(func.coalesce(func.sum(Run.cost), 0.0)).join(Agent, Agent.id == Run.agent_id).where(
+        Agent.room_key.in_(tree), Run.started_at >= day_start().replace(tzinfo=None))) or 0.0)
+
+
+def room_over_budget(s: Session, room_key: str | None) -> str:
+    """The first room on the way from `room_key` to the top whose daily budget its subtree has used up."""
+    rooms = {r.key: r for r in s.scalars(select(Room))}
+    parents = {k: r.parent_key for k, r in rooms.items()}
+    seen: set[str] = set()
+    key = room_key
+    while key and key in rooms and key not in seen:
+        seen.add(key)
+        r = rooms[key]
+        if (r.daily_budget_usd or 0) > 0:
+            spent = room_spent_today(s, key, parents)
+            if spent >= r.daily_budget_usd:
+                return f"room {r.name} used ${spent:.2f} of its ${r.daily_budget_usd:.2f} daily budget"
+        key = r.parent_key
+    return ""
+
+
 def over_quota(s: Session, a: Agent) -> str:
+    """Why the agent may not take work today: its own (and its clones') quota, or the budget of its room or a room
+    above it."""
     base, _ = _family(s, a)
     quota = base.daily_cost_quota_usd or 0.0
-    if quota <= 0:
-        return ""
-    spent = spent_today(s, a)
-    return f"{base.name} used ${spent:.2f} of its ${quota:.2f} daily quota" if spent >= quota else ""
+    if quota > 0:
+        spent = spent_today(s, a)
+        if spent >= quota:
+            return f"{base.name} used ${spent:.2f} of its ${quota:.2f} daily quota"
+    return room_over_budget(s, a.room_key)
 
 
 def _other_projects(s: Session, agents: list[Agent], goal: Goal | None) -> dict[int, list[int]]:
@@ -814,7 +848,10 @@ def list_rooms() -> list[dict[str, Any]]:
     with session() as s:
         rooms = s.scalars(select(Room).order_by(Room.id)).all()
         counts = dict(s.execute(select(Agent.room_key, func.count()).group_by(Agent.room_key)).all())
-        return [organization.room_dict(r, counts.get(r.key, 0)) for r in rooms]
+        parents = {r.key: r.parent_key for r in rooms}
+        return [organization.room_dict(r, counts.get(r.key, 0))
+                | ({"spent_today_usd": round(room_spent_today(s, r.key, parents), 4)} if r.daily_budget_usd else {})
+                for r in rooms]
 
 
 EDITABLE = {"enabled", "model_pref", "skills", "playbook", "superior_id", "goal", "permissions", "autonomy", "plugins",

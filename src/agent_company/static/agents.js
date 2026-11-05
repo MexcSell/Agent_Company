@@ -108,12 +108,13 @@ async function roomsModal(edit) {
     <label>Lead</label><select id="rm-lead"><option value="">nobody</option>${leads.map((a) => `<option value="${a.id}" ${r?.lead_agent_id === a.id ? "selected" : ""}>${esc(a.name)}</option>`).join("")}</select>
     ${r ? '<label>Reason (kept in the position history when the lead changes)</label><input id="rm-reason">' : ""}
     <label>Description</label><input id="rm-desc" value="${esc(r?.description || "")}">
+    <label title="Covers the room's agents and those of its sub-rooms; when used up, they take no work until 00:00 UTC and goals that need them wait">Daily budget, $ (0 = none)${r?.spent_today_usd != null ? ` · $${r.spent_today_usd.toFixed(2)} used today` : ""}</label><input id="rm-budget" type="number" min="0" step="0.01" value="${r?.daily_budget_usd || 0}">
     ${r ? `<label class="row" style="margin-top:8px"><input type="checkbox" id="rm-on" style="width:auto" ${r.enabled ? "checked" : ""}> Enabled (a disabled room's agents are not staffed; refused while its agents work on a goal)</label>` : ""}
     <div class="row" style="margin-top:12px"><button class="btn primary">Save</button><button type="button" class="btn" id="rm-cancel">Cancel</button></div></form>`;
   modal(`<div class="row"><h2 class="grow">${icon("sitemap", 18)} Rooms</h2>${ib("plus", "New room", 'id="rm-new"')}
       <a class="btn" href="/api/org/export?format=json" download="organisation.json">JSON</a><a class="btn" href="/api/org/export?format=csv&table=agents" download>Agents CSV</a><a class="btn" href="/api/org/export?format=csv&table=rooms" download>Rooms CSV</a></div>
     ${edit !== undefined ? form(byKey.get(edit)) : ""}
-    <table><tr><th>Room</th><th>Within</th><th>Lead</th><th class="num">Agents</th><th></th><th></th></tr>${rooms.map((r) => `<tr><td>${esc(r.name)}</td><td class="muted">${esc(path(r))}</td><td>${esc(names.get(r.lead_agent_id) || "")}</td><td class="num">${r.agents}</td><td>${r.enabled ? "" : '<span class="pill failed">disabled</span>'}</td><td>${ib("edit", "Edit", `data-rk="${esc(r.key)}"`)}</td></tr>`).join("")}</table>
+    <table><tr><th>Room</th><th>Within</th><th>Lead</th><th class="num">Agents</th><th></th><th></th></tr>${rooms.map((r) => `<tr><td>${esc(r.name)}</td><td class="muted">${esc(path(r))}</td><td>${esc(names.get(r.lead_agent_id) || "")}</td><td class="num">${r.agents}</td><td>${r.enabled ? "" : '<span class="pill failed">disabled</span>'}${r.daily_budget_usd ? ` <span class="muted" title="Spent today of the daily budget (with its sub-rooms)">$${(r.spent_today_usd || 0).toFixed(2)} / $${r.daily_budget_usd.toFixed(2)}</span>` : ""}</td><td>${ib("edit", "Edit", `data-rk="${esc(r.key)}"`)}</td></tr>`).join("")}</table>
     <h3>Position history</h3>${hist.length ? `<table><tr><th>Position</th><th>From</th><th>To</th><th>Reason</th><th>By</th><th>When</th></tr>${hist.map((h) => `<tr><td>${esc(h.position)}</td><td>${esc(h.previous_agent || "")}</td><td>${esc(h.new_agent || "")}</td><td>${esc(h.reason)}</td><td class="muted">${esc(h.actor)}</td><td class="muted">${esc(h.effective_at.slice(0, 16).replace("T", " "))}</td></tr>`).join("")}</table>` : '<p class="muted">No lead or General Manager changes yet.</p>'}`);
   $("#rm-new").onclick = () => roomsModal(null);
   document.querySelectorAll("[data-rk]").forEach((b) => (b.onclick = () => roomsModal(b.dataset.rk)));
@@ -121,10 +122,10 @@ async function roomsModal(edit) {
   $("#rm-cancel").onclick = () => roomsModal();
   $("#rm-f").onsubmit = async (e) => {
     e.preventDefault();
-    const r = byKey.get(edit), body = { name: $("#rm-name").value, division: $("#rm-div").value, description: $("#rm-desc").value, parent_key: $("#rm-parent").value || null, lead_agent_id: Number($("#rm-lead").value) || null };
+    const r = byKey.get(edit), body = { name: $("#rm-name").value, division: $("#rm-div").value, description: $("#rm-desc").value, parent_key: $("#rm-parent").value || null, lead_agent_id: Number($("#rm-lead").value) || null, daily_budget_usd: +$("#rm-budget").value || 0 };
     try {
       if (r) {
-        const cur = { name: r.name, division: r.division, description: r.description, parent_key: r.parent, lead_agent_id: r.lead_agent_id };
+        const cur = { name: r.name, division: r.division, description: r.description, parent_key: r.parent, lead_agent_id: r.lead_agent_id, daily_budget_usd: r.daily_budget_usd || 0 };
         const changes = Object.fromEntries(Object.entries(body).filter(([k, v]) => v !== cur[k]));
         if ($("#rm-on").checked !== r.enabled) changes.enabled = $("#rm-on").checked;
         if ("lead_agent_id" in changes) changes.reason = $("#rm-reason").value;

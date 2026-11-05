@@ -53,6 +53,8 @@ class Room(Base):
     parent_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)  # a disabled room's agents are never staffed
     lead_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
+    # SPEC-04 S04-R-09: what the room's agents and those of its sub-rooms may spend per UTC day; 0 = no limit
+    daily_budget_usd: Mapped[float] = mapped_column(Float, default=0.0)
 
 
 class PositionChange(Base):
