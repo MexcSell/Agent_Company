@@ -22,8 +22,8 @@ from typing import Any
 
 from sqlalchemy import select
 
-from agent_company import (blackboard, budgets, contracts, decisions, executors, learning, network, quality, registry,
-                           requirements, research, router, specs, usage, worktrees)
+from agent_company import (blackboard, budgets, contracts, decisions, executors, learning, network, quality,
+                           recruitment, registry, requirements, research, router, specs, usage, worktrees)
 from agent_company.config import settings
 from agent_company.db import Agent, Event, Goal, Task, log_event, session
 from agent_company.org import ROLES
@@ -810,6 +810,12 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
         except registry.QuotaExceeded as e:  # S02-R-03: the task waits; the goal pauses after the iteration
             set_status(task_id, "skipped", output=f"{QUOTA_SKIP}{e}")
             return False
+        except recruitment.RecruitmentPending as e:  # SPEC-03 S03-R-05: the goal pauses until a person decides
+            set_status(task_id, "skipped", output=f"{RECRUIT_SKIP}{e}")
+            return False
+        except recruitment.RecruitmentRefused as e:  # the planner re-plans with the roles the company has
+            set_status(task_id, "failed", output=f"ERROR: {e}")
+            return False
         writes = contract.writes and "write" in (agent.permissions or []) and executors.level(agent.autonomy) >= 2
 
         set_status(task_id, "running", agent_id=agent.id, role=role)
@@ -1191,12 +1197,19 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                 if reviews:
                     run_dag(reviews, worker, goal.worktree, lambda: cancelled(goal_id), max_agents=agents)
                     _decide_conflicts(goal_id, iteration, reviews)
+            if not _halted(goal_id):
+                checks = _probation_reviews(goal_id, iteration)  # SPEC-03 S03-R-04
+                if checks:
+                    run_dag(checks, worker, goal.worktree, lambda: cancelled(goal_id), max_agents=agents)
             halted = _halted(goal_id)
             if halted:
                 return {"status": halted}
             quota = _quota_skipped(goal_id, iteration)
             if quota:  # an agent it needs is out of quota: the iteration is incomplete, do not judge it
                 return _out_of_quota(goal_id, quota, report)
+            waiting = _skipped_with(goal_id, iteration, RECRUIT_SKIP)
+            if waiting:  # a recruit it needs waits for approval: the iteration is incomplete, do not judge it
+                return _out_for_recruitment(goal_id, waiting, report)
             if _budget_skipped(goal_id, iteration):  # the iteration is incomplete: do not judge it
                 try:
                     _budget_note(_goal(goal_id), started)
@@ -1396,12 +1409,62 @@ BUDGET_SKIP = "skipped (budget): "
 QUOTA_SKIP = "skipped (quota): "
 
 
+RECRUIT_SKIP = "skipped (recruitment): "
+
+
 def _quota_skipped(goal_id: int, iteration: int) -> str:
+    return _skipped_with(goal_id, iteration, QUOTA_SKIP)
+
+
+def _skipped_with(goal_id: int, iteration: int, prefix: str) -> str:
     with session() as s:
         for t in s.scalars(select(Task).where(Task.goal_id == goal_id, Task.iteration == iteration)):
-            if t.status == "skipped" and (t.output or "").startswith(QUOTA_SKIP):
-                return t.output[len(QUOTA_SKIP):]
+            if t.status == "skipped" and (t.output or "").startswith(prefix):
+                return t.output[len(prefix):]
     return ""
+
+
+def _out_for_recruitment(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, Any]:
+    """A recruit the goal needs waits for an administrator (SPEC-03 S03-R-05): the goal pauses and resumes when the
+    recruitment is approved or rejected (recruitment.approve/reject). Benchmark runs end instead."""
+    g = _goal(goal_id)
+    if g.origin == "eval":
+        _update_goal(goal_id, status="failed", result=f"Stopped: {why}.")
+        return {"status": "failed", "iterations": g.iteration, "report": report, "recruitment": why}
+    _update_goal(goal_id, status="paused", reason=f"recruitment: {why}"[:500])
+    with session() as s:
+        row = s.get(Goal, goal_id)
+        row.checkpoint = {**(row.checkpoint or {}), "paused_for": "recruitment", "paused_why": why}
+    log_event("goal", f"waiting for a recruitment: {why}", goal_id=goal_id)
+    return {"status": "paused", "iterations": g.iteration, "report": report, "recruitment": why}
+
+
+def _probation_reviews(goal_id: int, iteration: int) -> list[int]:
+    """A probationer's writing task is never the only check on its change (SPEC-03 S03-R-04): when no review task of
+    this iteration exists, one QA review is added (reviews avoid the writer's provider). Returns its id."""
+    from agent_company.quality import REVIEW_CHECKLIST, REVIEW_ROLES
+
+    probation = recruitment.probation_tasks(goal_id, iteration)
+    if not probation:
+        return []
+    with session() as s:
+        tasks = list(s.scalars(select(Task).where(Task.goal_id == goal_id, Task.iteration == iteration)))
+        reviewed = any(t.role in REVIEW_ROLES and not recruitment.on_probation(s, t.agent_id) for t in tasks)
+        keys = {t.key for t in tasks}
+    if "probation-review" in keys:  # scheduled before a restart: it ran in the resumed iteration's DAG
+        return []
+    if reviewed:
+        return []
+    listing = "\n".join(f"- task '{p['key']}' (#{p['id']}): {p['title']}" for p in probation)
+    plan = [contracts.TaskContract(
+        key="probation-review", title="Review the work of an agent on probation", role="qa", priority=0,
+        skills=["review"], depends_on=[p["key"] for p in probation], inputs={"tasks": [p["id"] for p in probation]},
+        description=(f"These tasks were done by a recently recruited agent still on probation:\n{listing}\n\n"
+                     "Review its change in the working directory against the goal and the tasks' acceptance "
+                     "conditions.\n\n" + REVIEW_CHECKLIST),
+        acceptance=[contracts.Condition(type="regex", pattern=r"VERDICT:\s*\**\s*(PASS|FAIL)")])]
+    log_event("staff", f"probation review scheduled for {', '.join(p['key'] for p in probation)}", goal_id=goal_id)
+    return _persist(goal_id, iteration, plan)
 
 
 def _out_of_quota(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, Any]:

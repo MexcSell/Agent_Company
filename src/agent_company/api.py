@@ -46,6 +46,7 @@ from agent_company import (
     performance,
     prefs,
     projects,
+    recruitment,
     registry,
     requirements,
     research,
@@ -584,6 +585,16 @@ class TopicBody(BaseModel):
     name: str
     description: str = ""
     agent_ids: list[int] = Field(default_factory=list)
+
+
+class RecruitDecisionBody(BaseModel):
+    grant: bool = True  # also give the shell/network permissions held back for a new role
+    reason: str = ""
+    status: str = "rejected"  # rejected | cancelled (a person suspends the recruitment)
+
+
+class RecruitReviseBody(BaseModel):
+    changes: dict[str, Any]
 
 
 class IdsBody(BaseModel):
@@ -1811,6 +1822,69 @@ def create_app(start_background: bool = True) -> FastAPI:
             seen = _visible_project_ids(s, user)
         return [d for d in decisions.list_decisions(goal_id, status)
                 if seen is None or d["project_id"] is None or d["project_id"] in seen]
+
+    # --- recruitment (SPEC-03): records, approval, probation, capability gaps ---
+    def _recruit_call(fn: Any, *args: Any, **kw: Any) -> dict[str, Any]:
+        try:
+            return fn(*args, **kw)
+        except KeyError as e:
+            raise HTTPException(404, f"recruitment {args[0] if args else ''}") from e
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+
+    def _recruit_admin(user: dict[str, Any], action: str, recruitment_id: int) -> None:
+        """Only administrators decide recruitments; a refused attempt is audited (SPEC-03 AT-011)."""
+        if not user["is_admin"]:
+            _audit(user, f"{action}_denied", recruitment_id, severity="warning")
+            raise HTTPException(403, "administrators only")
+
+    @app.get("/api/recruitments")
+    def recruitments(status: str = "", goal_id: int | None = None, _: dict[str, Any] = Depends(current_user)
+                     ) -> list[dict[str, Any]]:
+        return recruitment.list_recruitments(status, goal_id)
+
+    @app.get("/api/recruitments/{recruitment_id}")
+    def recruitment_detail(recruitment_id: int, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return _recruit_call(recruitment.get, recruitment_id)
+
+    @app.post("/api/recruitments/{recruitment_id}/approve")
+    def recruitment_approve(recruitment_id: int, body: RecruitDecisionBody,
+                            user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        _recruit_admin(user, "recruitment_approve", recruitment_id)
+        out = _recruit_call(recruitment.approve, recruitment_id, f"user:{user['name']}", grant=body.grant)
+        _audit(user, "recruitment_approve", recruitment_id,
+               after={"agent_id": out["agent_id"], "grant": body.grant, "resumed": out["resumed"]})
+        return out
+
+    @app.post("/api/recruitments/{recruitment_id}/reject")
+    def recruitment_reject(recruitment_id: int, body: RecruitDecisionBody,
+                           user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        _recruit_admin(user, "recruitment_reject", recruitment_id)
+        out = _recruit_call(recruitment.reject, recruitment_id, f"user:{user['name']}", body.reason, body.status)
+        _audit(user, "recruitment_reject", recruitment_id, after={"status": out["status"], "reason": body.reason})
+        return out
+
+    @app.post("/api/recruitments/{recruitment_id}/revise")
+    def recruitment_revise(recruitment_id: int, body: RecruitReviseBody,
+                           user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        _recruit_admin(user, "recruitment_revise", recruitment_id)
+        out = _recruit_call(recruitment.revise, recruitment_id, body.changes, f"user:{user['name']}")
+        _audit(user, "recruitment_revise", recruitment_id, after={"version": out["jd_version"]})
+        return out
+
+    @app.get("/api/recruitment/effectiveness")
+    def recruitment_effectiveness(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return recruitment.effectiveness()
+
+    @app.get("/api/capability_gap")
+    def capability_gap(skills: str, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        wanted = [registry._slug(x) for x in skills.split(",") if x.strip()]
+        return recruitment.capability_gap({k: 1.0 for k in wanted})
+
+    @app.get("/api/projects/{project_id}/capability_gap")
+    def project_capability_gap(project_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        projects.get(project_id, user)
+        return recruitment.project_gap(project_id)
 
     # --- requirements and traceability (ASEAO08 S08-R-01) ---
     def _requirement_seen(requirement_id: int, user: dict[str, Any]) -> dict[str, Any]:

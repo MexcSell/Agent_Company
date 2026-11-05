@@ -150,6 +150,12 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
         permits = list(goal.permits or [])
         ordered_by = goal.created_by
         rows = [(t.key, t.title, t.role, t.status, t.output, dict(t.gate or {})) for t in tasks]
+        from agent_company.recruitment import on_probation
+
+        # SPEC-03 S03-R-04: a probationer's change needs a passing review by an agent not on probation
+        probation = [t.key for t in tasks if t.writes and t.status == "done" and on_probation(s, t.agent_id)]
+        reviewers = {t.key for t in tasks if t.role in REVIEW_ROLES and t.status == "done"
+                     and not on_probation(s, t.agent_id)}
 
     results: list[dict[str, Any]] = []
     feedback: list[str] = []
@@ -170,6 +176,16 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
                                 + ("\n".join(f"- {f}" for f in findings) if findings else output[-1500:]))
             else:
                 results.append({"check": f"review {key}", "passed": True, "detail": why, "stage": "review"})
+
+    if probation:
+        passing = [c for c in results if c["check"] in {f"review {k}" for k in reviewers} and c["passed"]]
+        results.append({"check": "probation review", "passed": bool(passing), "stage": "review",
+                        "detail": (f"{', '.join(probation)} by an agent on probation; reviewed by "
+                                   f"{', '.join(c['check'][7:] for c in passing)}") if passing else
+                                  f"{', '.join(probation)} by an agent on probation has no passing review"})
+        if not passing:
+            feedback.append(f"Tasks {', '.join(probation)} were done by an agent on probation and need a passing "
+                            "QA review.")
 
     from agent_company.gitsync import identity_for
 

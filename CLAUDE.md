@@ -7,7 +7,9 @@ feature came from.
 ## Layout
 
 - `src/agent_company/` – one module per service:
-  `registry.py` + `org.py` (agents, rooms; configuration versions with rollback, health: degraded/inactive), `scheduler.py`, `router.py` (models, routes, fallback,
+  `registry.py` + `org.py` (agents, rooms; configuration versions with rollback, health: degraded/inactive),
+  `recruitment.py` (SPEC-03: capability gaps from verified proficiency, recruitment records with job descriptions,
+  approval policy `recruit_requires_approval` that pauses the goal, probation with reviewed tasks), `scheduler.py`, `router.py` (models, routes, fallback,
   provider catalogs, classification clearance per model), `contracts.py` (task contracts with scope, risk, budget, deadline; output lines),
   `executors.py` (tracked subprocesses: `terminate` for stops; `gate`, the tool gateway every run passes: permissions and
   `Agent.autonomy` G0-G4 decide writes, Bash and MCP tools, the isolation level L0-L2 is recorded on the `Run`), `worktrees.py`,

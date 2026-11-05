@@ -41,6 +41,8 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "approval_blocker_hours": (int, "Hours a goal may wait for approval before it becomes a project blocker (0 = never)"),
     "inactive_days": (int, "Days without work after which an agent is listed for retirement review"),
     "explore_rate": (float, "Share of non-critical tasks given to a new agent that has too little evidence yet (0-1)"),
+    "recruit_requires_approval": (str, "Recruitments that wait for an administrator: 'never', 'permanent_only' (a new "
+                                       "agent) or 'always' (also a clone made for a role nobody holds)"),
     "improvement_min_score": (float, "Percent a code-improvement candidate's weighted benchmark score must beat the baseline by"),
     "improvement_max_regression": (int, "Percent any single benchmark metric of a candidate may get worse before it is rejected"),
     "improvement_auto_rollback": (bool, "Revert a deployed code improvement automatically when the safe restart refuses it"),
@@ -59,7 +61,8 @@ LIMITS: dict[str, tuple[float, float]] = {
     "shift_seconds": (0, 7 * 86400),
 }
 CHOICES: dict[str, set[str]] = {"proposal_policy": {"user", "superiors"}, "executor": {"auto", "offline"},
-                                "transport": {"https", "http"}, "budget_exhausted_action": {"pause", "stop"}}
+                                "transport": {"https", "http"}, "budget_exhausted_action": {"pause", "stop"},
+                                "recruit_requires_approval": {"never", "permanent_only", "always"}}
 
 
 def _coerce(key: str, value: Any) -> Any:

@@ -86,6 +86,9 @@ class Agent(Base):
     health: Mapped[str] = mapped_column(String(16), default="ok")  # ok|degraded (S02-R-02)
     health_reason: Mapped[str] = mapped_column(Text, default="")
     health_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # runs before: ignored
+    # SPEC-03 S03-R-04: a recruit's first tasks are always reviewed; 0 = not (or no longer) on probation
+    probation_tasks_left: Mapped[int] = mapped_column(Integer, default=0)
+    probation_failures: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -745,6 +748,36 @@ class Hypothesis(Base):
     note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class Recruitment(Base):
+    """A recruitment request (SPEC-03 S03-R-03): a task needed a role nobody holds. The job description (versioned in
+    `history`), the capability gap, the decision reuse|clone|recruit with its reason, the approval (S03-R-05) and the
+    agent it produced. pending -> approved | rejected | cancelled. recruitment.py."""
+
+    __tablename__ = "recruitments"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    task_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    requested_role: Mapped[str] = mapped_column(String(64), index=True)
+    required_skills: Mapped[list[Any]] = mapped_column(default=list)  # skills nobody holds enough of (gap > 0)
+    preferred_skills: Mapped[list[Any]] = mapped_column(default=list)  # skills of the task the workforce has
+    job_description: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    jd_version: Mapped[int] = mapped_column(Integer, default=1)
+    history: Mapped[list[Any]] = mapped_column(default=list)  # earlier job descriptions [{version, job_description, ...}]
+    template: Mapped[str] = mapped_column(String(64), default="")  # the org.ROLES template it was built from
+    gap: Mapped[dict[str, Any]] = mapped_column(default=dict)  # S03-R-01 per skill: required, available, gap
+    decision: Mapped[str] = mapped_column(String(16), default="recruit")  # reuse|clone|recruit
+    reason: Mapped[str] = mapped_column(Text, default="")
+    lifecycle: Mapped[str] = mapped_column(String(16), default="permanent")  # temporary|permanent
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    pending_permissions: Mapped[list[Any]] = mapped_column(default=list)  # shell/network for a new role (S03-R-05)
+    agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    evaluation_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    decided_by: Mapped[str] = mapped_column(String(128), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Requirement(Base):

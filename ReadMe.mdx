@@ -20,8 +20,11 @@ tools, and a controlled orchestration system.
 3. **Plan**: the General Manager splits the goal into task contracts: role,
    skills, dependencies, priority and acceptance conditions.
 4. **Staff**: each task gets the best idle agent of that role. A busy agent is
-   cloned; a role nobody has is recruited as a new specialist and linked to the
-   most similar agents so it starts from their experience.
+   cloned; a role nobody has becomes a recruitment request: an agent covering the
+   skills is reused, or a new specialist is recruited from a job description and
+   linked to the most similar agents so it starts from their experience. Setting
+   `recruit_requires_approval` makes recruits wait for an administrator; a
+   recruit's first 3 tasks are reviewed by QA, and 2 failures retire it.
 5. **Execute**: the scheduler runs the task graph in parallel where it can, in
    an isolated git worktree on its own branch.
 6. **Quality gate**: every contract is checked, reviewer verdicts are read and the
@@ -201,6 +204,7 @@ sends it to a person and holds the merge until an administrator decides.
 | Service | Module | What it does |
 | --- | --- | --- |
 | Agent Registry | `registry.py`, `org.py` | Rooms, roles, skills, permissions, model preference, status, hierarchy, similarity links, staffing (reuse, clone, recruit) |
+| Recruitment | `recruitment.py` | Capability gaps, recruitment records with job descriptions, approval policy, probation, recruitment effectiveness |
 | Task Scheduler | `scheduler.py` | Persisted tasks, priorities, dependency DAG, process-wide concurrency limit, one writer per worktree |
 | Model Router | `router.py` | Model catalog, role routes, availability (keys, CLIs, limits), OpenRouter catalog |
 | Contract Engine | `contracts.py` | Task input/output JSON schemas and acceptance conditions; plan validation (unique keys, known dependencies, no cycles) |

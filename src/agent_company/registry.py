@@ -551,24 +551,34 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
         elif s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active")).first():
             # an administrator set them to autonomy G0: a clone or a recruit would walk around that decision
             raise RuntimeError(f"every {role} agent is at autonomy G0 (observe only); an administrator raises it")
-        else:
+        else:  # nobody holds the role: a recruitment request (SPEC-03 S03-R-03), approved by policy or a person
+            from agent_company import recruitment
+
             found = _covering(s, skills, writes)
             if found is not None:  # discovery before recruitment (SPEC-03 S03-R-02): no duplicate specialist
                 base, share = found
                 if over_quota(s, base):
                     raise QuotaExceeded(f"{over_quota(s, base)}; it covers {', '.join(skills)} (resets at 00:00 UTC)")
-                agent = base if _free(base, goal_id) and base.health != "degraded" else _clone(s, base)
-                action = "reused" if agent is base else "cloned"
+                reuse = _free(base, goal_id) and base.health != "degraded"
                 why = f"{base.role} {base.name} covers {share:.0%} of {', '.join(skills)}: no new '{role}' recruited"
+                rec = recruitment.open_request(s, role, skills, writes, goal_id, task_id,
+                                               "reuse" if reuse else "clone", why)
+                agent = base if reuse else _clone(s, base)
+                action = "reused" if agent is base else "cloned"
             else:
-                agent = _recruit(s, role, skills, writes)
+                rec = recruitment.open_request(s, role, skills, writes, goal_id, task_id, "recruit",
+                                               f"no active agent covers {REUSE_COVERAGE:.0%} of "
+                                               f"{', '.join(skills) or role}")
+                agent = _recruit(s, rec)
+                recruitment.on_recruited(s, rec, agent)
                 action = "recruited"
+            why = f"{why} (recruitment #{rec.id})".strip()
         agent.active_goals = [*(agent.active_goals or []), goal_id or 0]
         agent.status = "busy"
         agent.last_active_at = now()
         names = dict(s.execute(select(Agent.id, Agent.name).where(Agent.id.in_(list(ranks)))).all()) if ranks else {}
         decision = {"action": action, "agent_id": agent.id, "agent": agent.name, "explored": explored, "why": why,
-                    "skills": skills, "critical": critical,
+                    "skills": skills, "critical": critical, "gap": _gap(s, skills) if task_id is not None else {},
                     "candidates": [{"id": i, "name": names.get(i), **p} for i, p in
                                    sorted(ranks.items(), key=lambda x: -x[1]["score"])[:6]]}
         if task_id is not None:
@@ -654,28 +664,40 @@ def _link_new(s: Session, agent: Agent, skills: list[str]) -> None:
     network.link_on_creation(s, agent, skills)
 
 
-def _recruit(s: Session, role: str, skills: list[str], writes: bool | None) -> Agent:
-    title = role.replace("_", " ").title() + " Specialist"
-    perms = ["read", "write", "shell"] if writes else ["read"]
-    gm = s.scalars(select(Agent).where(Agent.role == "general_manager")).first()
-    lead = s.scalars(select(Agent).where(Agent.role == ("architect" if writes else "research"))).first()
+def _gap(s: Session, skills: list[str]) -> dict[str, Any]:
+    """The workforce's capability gap on the task's skills, one unit each (SPEC-03 S03-R-01), for the record."""
+    from agent_company import recruitment
+
+    if not skills:
+        return {}
+    return {k: {x: v[x] for x in ("required", "available", "gap")}
+            for k, v in recruitment.capability_gap({k: 1.0 for k in skills}, s).items()}
+
+
+def _recruit(s: Session, rec: Any) -> Agent:
+    """A new specialist from a recruitment record's job description (SPEC-03 S03-R-03). It starts on probation
+    (S03-R-04) at G2, with no more permissions than its role template (S03-R-05)."""
+    from agent_company import recruitment
+
+    role = rec.requested_role
+    jd = rec.job_description or {}
+    title = jd.get("title") or role.replace("_", " ").title() + " Specialist"
+    skills = list(jd.get("expertise") or [])
     name, n = title, 1
     while s.scalars(select(Agent).where(Agent.name == name)).first():
         n += 1
         name = f"{title} #{n}"
-    agent = Agent(name=name, role=role, title=title,
-                  room_key="development" if writes else "information_collection",
-                  superior_id=(lead or gm).id if (lead or gm) else None,
-                  goal=f"Handle {role.replace('_', ' ')} work to a high standard",
-                  backstory=f"You are a newly recruited {title.lower()}. Draw on the experience "
-                            "of related agents shown in your context.",
-                  skills={k: 5 for k in skills} or {role: 5}, permissions=perms, enabled=True,
-                  autonomy="G2")  # a new, unproven specialist gets no MCP tools until an administrator raises it
+    fields = recruitment.recruit_fields(rec)
+    agent = Agent(name=name, role=role, title=title, room_key=fields["room_key"], superior_id=fields["superior_id"],
+                  goal=fields["goal"], backstory=fields["backstory"],
+                  skills={k: 5 for k in skills} or {role: 5}, permissions=fields["permissions"], enabled=True,
+                  autonomy="G2",  # a new, unproven specialist gets no MCP tools until an administrator raises it
+                  probation_tasks_left=recruitment.PROBATION_TASKS)
     s.add(agent)
     s.flush()
     _link_similar(s, agent, threshold=0.05)  # a recruit always learns from its closest peers
     _link_new(s, agent, skills)
-    record_version(s, agent, "system", f"recruited for {role}")
+    record_version(s, agent, "system", f"recruited for {role} (recruitment #{rec.id})")
     return agent
 
 

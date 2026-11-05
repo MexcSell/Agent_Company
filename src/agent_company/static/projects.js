@@ -237,8 +237,8 @@ const day = (iso) => (iso ? iso.slice(0, 10) : "");
 
 async function projectPlan(id) {
   const box = $("#plan");
-  const [d, tr] = await Promise.all([api(`/api/projects/${id}/plan`).catch((e) => ({ error: e.message })),
-    api(`/api/projects/${id}/traceability`).catch(() => null)]);
+  const [d, tr, gap] = await Promise.all([api(`/api/projects/${id}/plan`).catch((e) => ({ error: e.message })),
+    api(`/api/projects/${id}/traceability`).catch(() => null), api(`/api/projects/${id}/capability_gap`).catch(() => null)]);
   if (!box || !box.isConnected) return;
   if (d.error) { box.innerHTML = `<p class="muted">${esc(d.error)}</p>`; return; }
   d.requirement_kinds = ["functional", "non_functional", "story", "use_case"];
@@ -270,12 +270,16 @@ async function projectPlan(id) {
       <span class="muted">${tr.counts.total} · ${tr.counts.implemented} implemented · ${tr.counts.tested} tested · ${tr.counts.merged} merged${tr.counts.conflicts ? ` · ${tr.counts.conflicts} in conflict` : ""}</span>
       ${admin ? ib("plus", "Add requirement", 'data-add="requirement"', "sm") + ib("download", "Import docs/requirements of the project", "data-req-import", "sm") : ""}</summary>
       <div class="list">${tr.requirements.map(req).join("") || '<p class="muted">No requirements yet. Goals name them by key (REQ-001) in their text.</p>'}</div></details></section>` : "";
+  // Capability gap (SPEC-03 S03-R-01): available = sum of skill level/5 x free capacity x verification (a recruit's
+  // uncertified skill counts half); required = the project's required skills and its open tasks needing each skill
+  const caps = gap && gap.skills.length ? `<section class="plan-sec"><div class="row nowrap"><h3 class="grow" style="margin:0">Capability gap</h3><span class="muted">${gap.missing.length ? `${gap.missing.length} skill(s) short` : "covered"} · planning estimates</span></div>
+      <div class="list">${gap.skills.map((r) => `<div class="row nowrap"><span class="grow">${esc(r.skill.replace(/_/g, " "))}</span><span class="muted" title="${esc(r.agents.map((a) => `${a.name}: ${a.p} × ${a.c} × ${a.v}`).join("\n"))}">${r.available}/${r.required}</span><span class="pill ${r.gap > 0 ? "failed" : "done"}">${r.gap > 0 ? `${r.gap} more needed` : "covered"}</span></div>`).join("")}</div></section>` : "";
   const section = (title, add, rows, empty) => `<section class="plan-sec"><div class="row nowrap"><h3 class="grow" style="margin:0">${title}</h3>${admin && add ? ib("plus", `Add ${add}`, `data-add="${add}"`, "sm") : ""}</div><div class="list">${rows || `<p class="muted">${empty}</p>`}</div></section>`;
   const html = `<div class="row nowrap"><strong>Progress</strong><div class="plan-bar grow" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div><span class="muted">${pct}% over ${d.progress.parts} goal(s) and milestone(s)</span></div>
     ${section("Blockers &amp; risks", "risk", d.risks.map(risk).join(""), "No open blockers or risks.")}
     ${section("Next", "action item", d.action_items.map(item).join(""), "Nothing waiting.")}
     ${section("Milestones", "milestone", d.milestones.map(ms).join(""), "No milestones yet.")}
-    ${section("Insights", "", d.insights.map(ins).join(""), "Agents report insights in their task output.")}${reqs}`;
+    ${section("Insights", "", d.insights.map(ins).join(""), "Agents report insights in their task output.")}${reqs}${caps}`;
   if (box.dataset.html === html) return;  // the 5-s refresh never rebuilds an unchanged plan
   box.innerHTML = html; box.dataset.html = html;
   const act = async (fn) => { try { await fn(); box.dataset.html = ""; projectPlan(id); } catch (e) { toast(e.message); } };

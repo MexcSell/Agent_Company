@@ -77,7 +77,8 @@ COMPONENTS: dict[str, dict[str, Any]] = {
     "dashboard": {"label": "Dashboard", "paths": [f"{PKG}/static/*"], "improves": "views and interaction"},
     # the protected control plane (§12): permissions, versioning, evaluation, approval, deployment, rollback
     "security": {"label": "Security and permissions", "protected": True,
-                 "paths": [f"{PKG}/auth.py", f"{PKG}/governance.py", f"{PKG}/transport.py", f"{PKG}/api.py"]},
+                 "paths": [f"{PKG}/auth.py", f"{PKG}/governance.py", f"{PKG}/transport.py", f"{PKG}/api.py",
+                           f"{PKG}/recruitment.py"]},
     "evaluation": {"label": "Evaluation and quality gate", "protected": True,
                    "paths": [f"{PKG}/quality.py", f"{PKG}/checks.py", f"{PKG}/evaluation.py",
                              f"{PKG}/selfevolve.py", "benchmarks/*", "evals/*"]},

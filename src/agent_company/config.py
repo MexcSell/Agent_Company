@@ -73,6 +73,9 @@ class Settings:
     inactive_days: int = 30
     # Share of non-critical staffing decisions that try a new agent without enough evidence yet (SPEC-12 S12-R-03).
     explore_rate: float = 0.1
+    # Which recruitments wait for an administrator (SPEC-03 S03-R-05): never | permanent_only (a new agent) | always
+    # (also a clone made for a role nobody holds).
+    recruit_requires_approval: str = "never"
     # Verified self-evolution (selfevolve.py): a candidate is accepted when its weighted benchmark score beats the
     # baseline by this many percent and no metric is worse by more than `improvement_max_regression` percent.
     improvement_min_score: float = 2.0
@@ -136,6 +139,7 @@ def load_settings() -> Settings:
         approval_blocker_hours=_int("APPROVAL_BLOCKER_HOURS", 24),
         inactive_days=_int("INACTIVE_DAYS", 30),
         explore_rate=float(os.environ.get("EXPLORE_RATE") or 0.1),
+        recruit_requires_approval=(os.environ.get("RECRUIT_REQUIRES_APPROVAL") or "never").lower(),
         improvement_min_score=float(os.environ.get("IMPROVEMENT_MIN_SCORE") or 2),
         improvement_max_regression=_int("IMPROVEMENT_MAX_REGRESSION", 25),
         improvement_auto_rollback=_bool("IMPROVEMENT_AUTO_ROLLBACK", True),

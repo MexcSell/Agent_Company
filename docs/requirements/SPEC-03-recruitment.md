@@ -8,10 +8,10 @@ resource budget and a lifecycle policy. Creating an agent means configuring an i
 training a model. `1.txt`: *when assigning a task, a specialized agent is created, and
 relationships are established with agents with similar roles to refer to their experience.*
 
-Today (`registry.staff`): idle agent of the same role → else clone the best of that role → else
-`_recruit` a new specialist (generic description, self-assigned skill level 5, linked to similar
-agents). Matching is by **role name only**, so a planner naming `backend_dev` instead of
-`developer` creates a duplicate specialist.
+Today (`registry.staff`, 2026-11-05): idle agent of the same role → else clone the best of that role → else,
+for a role nobody holds, a recruitment request (`recruitment.py`, table `recruitments`): reuse or clone an
+agent covering ≥ 70 % of the skills, or recruit a new specialist from a job description, approved by policy or
+by an administrator, then on probation. Planner role names are normalised first (S03-R-02).
 
 ![Recruitment flow](images/spec03-recruitment-flow.png)
 
@@ -35,31 +35,31 @@ registration.*
 
 | ID | Requirement | Pri | Status |
 | --- | --- | --- | --- |
-| S03-FR-01 | Detect missing workforce capabilities | P0 | partial: missing role only → S03-R-01 |
+| S03-FR-01 | Detect missing workforce capabilities | P0 | done: `recruitment.capability_gap`, per project and per staffing decision (S03-R-01) |
 | S03-FR-02 | Search existing agents for candidates | P0 | done: any active agent covering ≥ 70 % of the skills (S03-R-02) |
-| S03-FR-03 | Create recruitment requests | P0 | open → S03-R-03 |
-| S03-FR-04 | Generate job descriptions | P0 | partial: generic text → S03-R-03 |
-| S03-FR-05 | Required and preferred skills | P0 | partial → S03-R-03 |
-| S03-FR-06 | Select agent templates | P0 | partial: `org.ROLES` → S03-R-03 |
+| S03-FR-03 | Create recruitment requests | P0 | done (`recruitment.open_request`) |
+| S03-FR-04 | Generate job descriptions | P0 | done: from the role template and the task contract (S03-R-03) |
+| S03-FR-05 | Required and preferred skills | P0 | done: required = skills with a gap, preferred = skills the workforce has |
+| S03-FR-06 | Select agent templates | P0 | done: the role's `org.ROLES` entry, else the developer/QA template (`Recruitment.template`) |
 | S03-FR-07 | Generate candidate profiles | P0 | done (implicit in `_recruit`) |
-| S03-FR-08 | Evaluate candidate capabilities | P0 | open → S03-R-04 |
-| S03-FR-09 | Run candidate test assignments | P0 | open → S03-R-04 |
-| S03-FR-10 | Record evaluation evidence | P0 | open → S03-R-04 |
-| S03-FR-11 | Approve or reject candidates | P0 | open → S03-R-05 |
+| S03-FR-08 | Evaluate candidate capabilities | P0 | partial: probation with reviewed tasks; qualification run open → S03-R-04 |
+| S03-FR-09 | Run candidate test assignments | P0 | open → S03-R-04 (`qualify_recruits`) |
+| S03-FR-10 | Record evaluation evidence | P0 | done: probation passes and failures per recruit, reviews on the gate |
+| S03-FR-11 | Approve or reject candidates | P0 | done (`recruitment.approve`/`reject`, Evolution → Recruitment) |
 | S03-FR-12 | Register approved candidates | P0 | done |
 | S03-FR-13 | Assign room and position | P0 | done (`room_key`, `superior_id`) |
 | S03-FR-14 | Onboarding | P0 | partial: similar-agent links → SPEC-12 S12-R-02 |
-| S03-FR-15 | Probation periods | P1 | open → S03-R-04 |
+| S03-FR-15 | Probation periods | P1 | done (`Agent.probation_tasks_left`) |
 | S03-FR-16 | Temporary agents | P0 | done (clones retired after the goal) |
 | S03-FR-17 | Permanent recruitment | P1 | done (`create_agent`) |
 | S03-FR-18 | Forecast workforce requirements | P1 | gated |
-| S03-FR-19 | Track recruitment costs | P1 | open → S03-R-03 |
+| S03-FR-19 | Track recruitment costs | P1 | partial: `Recruitment.evaluation_cost_usd` stays 0 until the qualification run exists |
 | S03-FR-20 | Recommend restructuring | P2 | gated |
 | S03-FR-21 | Detect duplicate or redundant agents | P1 | done (`registry.duplicates`, Evolution page) |
-| S03-FR-22 | Track recruitment effectiveness | P1 | open → S03-R-04 |
-| S03-FR-23 | Recruitment cancellation | P0 | n/a while recruitment is immediate |
+| S03-FR-22 | Track recruitment effectiveness | P1 | done (`recruitment.effectiveness`, Performance) |
+| S03-FR-23 | Recruitment cancellation | P0 | done: a pending record can be rejected or cancelled |
 | S03-FR-24 | Preserve recruitment history | P0 | done (agents retained, `events`) |
-| S03-FR-25 | Human approval policies | P0 | open → S03-R-05 |
+| S03-FR-25 | Human approval policies | P0 | done (`recruit_requires_approval`, S03-R-05) |
 
 ## Specific requirements
 
@@ -69,6 +69,13 @@ registration.*
   `V = 0.5` until certified (SPEC-13 S13-R-03); certified skills count `V = 1`.
 - Used by `staff` to decide reuse vs clone vs recruit, and shown per project
   (see the example below).
+- **Status: done** (`recruitment.capability_gap`). P = skill level / 5, at most 1 (one proficient agent is one
+  unit; a recruit claims 5 for each skill of its task); C = the free share of the agent's concurrent slots (0 when
+  paused, disabled, degraded or at G0); V = 0.5 for a recruit's skill until a final evaluation certifies it, else 1
+  (levels set by an administrator or grown from verified outcomes). Only original agents count, not clones. Per
+  project (`/api/projects/{id}/capability_gap`, Projects → Plan): R_s = the number of the project's unfinished tasks
+  needing s, at least 1 for each required skill. Each staffing decision records the gap on its task's skills
+  (one unit each); the reuse/clone/recruit choice itself stays the S03-R-02 coverage rule.
 
 ![Capability gap example](images/spec03-capability-gap-example.png)
 
@@ -93,6 +100,10 @@ registration.*
   evaluation criteria, budget, lifecycle `temporary|permanent`), template used, decision
   (`reuse|clone|recruit`) with reason, resulting agent, cost of evaluation.
 - The recruit's `goal`/`backstory` come from the job description, not a generic sentence.
+- **Status: done** (`recruitment.py`, `recruitments`). One record per goal and role (parallel tasks and later
+  iterations share it); also for a reuse or clone of a covering agent. The job description is built from the role
+  template and the task contract without a model call (staffing holds a lock); a pending one can be revised, each
+  version kept in `history` (AT-005). Evaluation cost stays 0 until the qualification run exists.
 
 ### S03-R-04 Qualification and probation — §9, §10
 - Probation is a flag on an `active` agent (`Agent.probation_tasks_left`, default 3 for recruits),
@@ -105,6 +116,13 @@ registration.*
 - When an eval suite matches the role (e.g. `smoke` for writers), a quick qualification run can
   be required before first use (setting `qualify_recruits`, default off — costs money).
 - Recruitment effectiveness = pass rate of recruits during probation, shown in Performance.
+- **Status: partial.** Done: recruits start with 3 probation tasks; a clone of a probationer counts for its
+  original; the loop adds a QA review (`probation-review`, avoiding the writer's provider) when the iteration has
+  none, and the gate fails a probationer's change without a passing review by an agent not on probation (check
+  `probation review`). A verified pass counts down; a failure counts only when the recruit's own task failed (not
+  when another task failed the gate); 2 retire it, its lessons stay. Effectiveness in Performance. Open: the
+  `qualify_recruits` run, because eval suites staff by role (`registry._trainee` only substitutes a trainee within
+  its own role), so a recruit of a new role cannot be measured on `smoke` yet.
 
 Spec acceptance tests (§18) this covers: AT-001 gap report (S03-R-01), AT-002 reuse recommended
 and AT-017 duplicate warning (S03-R-02), AT-005 versioned job description (S03-R-03),
@@ -119,3 +137,11 @@ recruitment record).
   notifications; until approved the goal waits (blocker, SPEC-05 S05-R-02).
 - Recruits never get more permissions than the role template; `network`/`shell` for a new role
   needs administrator approval.
+- **Status: done.** `never` (default) approves every record by policy; `permanent_only` holds a new agent (a clone
+  is temporary and goes through); `always` also holds a clone made for a role nobody holds. A held task is skipped
+  and the goal pauses (`paused_for = "recruitment"`, a staffing blocker on its project, an admin notification);
+  approving registers the agent once (approving again changes nothing, AT-020) and resumes the goal; rejecting or
+  cancelling resumes it and the task fails with the refusal, so the planner re-plans. Only administrators decide; a
+  refused attempt is audited (`recruitment_approve_denied`, AT-011). A recruit of a role outside the catalog gets
+  the template's permissions without `shell`/`network`; approval grants them (`grant`), also after a policy approval.
+  Benchmark goals fail instead of waiting.

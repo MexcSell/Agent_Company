@@ -291,6 +291,9 @@ def learn(agent_id: int, goal_id: int | None, lesson: str, success: bool, skills
 
     if not is_eval:  # benchmark runs (and smoke trials) measure; they do not steer evolution
         after_task(agent_id, success)
+        from agent_company import recruitment
+
+        recruitment.after_task(agent_id, task_id, success)  # probation of a recruit (SPEC-03 S03-R-04)
     from agent_company import agentdefs
 
     try:  # the definition file carries the (possibly new) playbook: learning changes the agent's body
