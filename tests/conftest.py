@@ -26,6 +26,10 @@ def env(tmp_path, monkeypatch):
     from agent_company import loop
 
     monkeypatch.setattr(loop, "_sleep", lambda seconds: None)  # retry backoff never waits in tests
+    from agent_company import evolution
+
+    evolution._smoking.clear()  # smoke trials never start in the background; tests call smoke_trial themselves
+    monkeypatch.setattr(evolution, "_spawn", lambda fn: None)
     from agent_company import api
     from agent_company.api import bootstrap
 

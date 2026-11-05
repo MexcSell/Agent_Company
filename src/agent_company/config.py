@@ -59,6 +59,12 @@ class Settings:
     # many percentage points (S13-D-01); a tie keeps the current version.
     min_improvement: int = 10
     max_goal_depth: int = 3  # generations of proposal goals below a person's order (S04-R-08)
+    # What an exhausted goal budget does (S04-R-09): "pause" waits for an administrator, "stop" fails the goal.
+    budget_exhausted_action: str = "pause"
+    # The same check failing in this many consecutive iterations escalates to the planner (S04-R-06, S04-R-07).
+    escalate_after: int = 2
+    # A candidate playbook must pass the smoke suite before it is tried on users' goals (S13-D-02).
+    candidate_smoke: bool = True
 
     @property
     def worktrees_dir(self) -> Path:
@@ -104,6 +110,9 @@ def load_settings() -> Settings:
         retry_max_seconds=float(os.environ.get("RETRY_MAX_SECONDS") or 60),
         min_improvement=_int("MIN_IMPROVEMENT", 10),
         max_goal_depth=_int("MAX_GOAL_DEPTH", 3),
+        budget_exhausted_action=(os.environ.get("BUDGET_EXHAUSTED_ACTION") or "pause").lower(),
+        escalate_after=_int("ESCALATE_AFTER", 2),
+        candidate_smoke=_bool("CANDIDATE_SMOKE", True),
     )
 
 

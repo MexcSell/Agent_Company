@@ -250,9 +250,13 @@ class ClaudeCodeExecutor(Executor):
             cmd += ["--permission-mode", "acceptEdits"]
         if self.choice.model_id:
             cmd += ["--model", self.choice.model_id]
+        if int(req.data.get("max_turns") or 0) > 0:  # the task contract's turn budget (G-R-01)
+            cmd += ["--max-turns", str(int(req.data["max_turns"]))]
         resume = req.data.get("resume")
         if resume and re.fullmatch(r"[0-9a-fA-F-]{8,64}", resume):
             cmd += ["--resume", resume]  # continue this agent's earlier session on the same goal
+        elif self.choice.session_id:  # a model pinned to a session: start from its context, never change it
+            cmd += ["--resume", self.choice.session_id, "--fork-session"]
         mcp_file = None
         servers, mcp_tools = req.data.get("mcp") or ({}, [])
         if servers.get("mcpServers"):  # the agent's granted servers from Tools & MCP, allowed tools only

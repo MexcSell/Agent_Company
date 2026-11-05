@@ -45,6 +45,11 @@ class Condition(BaseModel):
         return v
 
 
+class TaskBudget(BaseModel):
+    cost_usd: float = Field(default=0.0, ge=0)  # 0 = no limit; a run that costs more fails the task
+    turns: int = Field(default=0, ge=0)  # agent turns for CLI executors (0 = their default)
+
+
 class TaskContract(BaseModel):
     key: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,64}$")
     title: str = Field(min_length=1, max_length=256)
@@ -58,6 +63,16 @@ class TaskContract(BaseModel):
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
     acceptance: list[Condition] = Field(default_factory=lambda: [Condition(type="min_length", value=20)])
+    # Task contract minimum fields (guides G-R-01); all optional so older plans stay valid.
+    in_scope: list[str] = Field(default_factory=list)  # paths/areas the task works on (told to the agent)
+    out_of_scope: list[str] = Field(default_factory=list)  # path globs it must not change: a change fails the task
+    risk_level: Literal["low", "medium", "high"] = "medium"  # high adds a security review (ASEAO09 S09-R-02)
+    test_plan: str = ""
+    budget: TaskBudget = Field(default_factory=lambda: TaskBudget())
+    deadline: int = Field(default=0, ge=0)  # seconds the run may take (0 = the command timeout)
+    requirement_keys: list[str] = Field(default_factory=list)  # requirement IDs it implements (ASEAO08 S08-R-01)
+    # tasks of one iteration that recommend on the same topic are compared; a disagreement is reviewed (S04-R-03)
+    decision_topic: str = Field(default="", max_length=128)
 
     @field_validator("input_schema", "output_schema")
     @classmethod
@@ -202,3 +217,45 @@ def run_command(cmd: str, workdir: Path, timeout: int,
         return False, f"`{cmd}` timed out after {timeout}s"
     tail = (proc.stdout + proc.stderr)[-1500:]
     return proc.returncode == 0, f"`{cmd}` exit {proc.returncode}\n{tail}".strip()
+
+
+def _matches(path: str, pattern: str) -> bool:
+    import fnmatch
+
+    return fnmatch.fnmatch(path, pattern) or path.startswith(pattern.rstrip("*").rstrip("/") + "/")
+
+
+def limits(contract: TaskContract, changed: list[str], cost: float | None) -> list[dict[str, Any]]:
+    """The contract's limits, checked after the run like acceptance conditions (G-R-01): files changed
+    inside `out_of_scope`, and a run costing more than the task's budget."""
+    out = []
+    if contract.out_of_scope:
+        bad = sorted(p for p in changed if any(_matches(p, pat) for pat in contract.out_of_scope))
+        out.append({"condition": {"type": "out_of_scope", "paths": contract.out_of_scope}, "passed": not bad,
+                    "detail": ("changed out-of-scope file(s): " + ", ".join(bad)) if bad else ""})
+    if contract.budget.cost_usd > 0 and cost is not None:
+        over = cost > contract.budget.cost_usd
+        out.append({"condition": {"type": "budget", "cost_usd": contract.budget.cost_usd}, "passed": not over,
+                    "detail": f"the run cost ${cost:.4f} (task budget ${contract.budget.cost_usd:.4f})" if over else ""})
+    return out
+
+
+_FINDING_LINE = re.compile(r"(?im)^[\s*-]*FINDING:\s*(.+?)\s*$")
+_NEXT_LINE = re.compile(r"(?im)^[\s*-]*NEXT(?:[ _]ACTION)?:\s*(.+?)\s*$")
+_RECOMMENDATION_LINE = re.compile(r"(?im)^[\s*-]*RECOMMENDATION:\s*(.+?)\s*$")
+
+
+def findings(output: str, limit: int = 20) -> list[str]:
+    """`FINDING:` lines of a task's output (G-R-01; reviewers use the same format, quality.merge_findings)."""
+    return _FINDING_LINE.findall(output or "")[:limit]
+
+
+def next_actions(output: str, limit: int = 10) -> list[str]:
+    """`NEXT:` (or `NEXT ACTION:`) lines of a task's output: follow-up work it names (G-R-01)."""
+    return _NEXT_LINE.findall(output or "")[:limit]
+
+
+def recommendation(output: str) -> str:
+    """The last `RECOMMENDATION:` line of a task's output, for comparing tasks on one topic (S04-R-03)."""
+    found = _RECOMMENDATION_LINE.findall(output or "")
+    return found[-1][:500] if found else ""

@@ -4,6 +4,9 @@
   curate    every few new lessons, the playbook is rebuilt from them as a new version
   diagnose  an agent whose recent success rate is low gets a failure-aware candidate
             playbook (warnings first) instead of a direct change
+  smoke     with `candidate_smoke` on, the candidate first runs the smoke suite against the current
+            playbook, off the goal loop; it reaches users' goals only if it passes at least as many
+            runs (S13-D-02), else it is rolled back
   evaluate  the candidate runs for EVAL_WINDOW tasks; it is promoted to a new version
             only if its success rate beats the baseline by `min_improvement` points
             (a tie keeps the current version), else rolled back
@@ -17,13 +20,27 @@ any version can be restored.
 
 from __future__ import annotations
 
+import threading
+import time
+from collections.abc import Callable
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from agent_company.config import settings
-from agent_company.db import Agent, EvolutionEvent, Lesson, PlaybookVersion, Task, log_event, now, session
+from agent_company.db import (Agent, EvolutionEvent, Goal, Lesson, PlaybookVersion, Task, log_event, now,
+                              session)
+
+SMOKE_SUITE = "smoke"
+_smoke_lock = threading.Lock()  # one smoke trial at a time: eval goals pick the side under test from the trial
+_smoking: set[int] = set()  # agents whose smoke trial is queued or running
+_smoking_lock = threading.Lock()
+
+
+def _spawn(fn: Callable[[], Any]) -> None:  # tests replace it
+    threading.Thread(target=fn, daemon=True, name="smoke-trial").start()
+
 
 EVAL_WINDOW = 3
 DIAGNOSE_WINDOW = 6
@@ -67,20 +84,31 @@ def _new_version(s: Session, a: Agent, playbook: str, reason: str) -> None:
 
 
 def success_rate(s: Session, agent_id: int, n: int) -> tuple[float, int]:
-    """Share of the agent's last n task outcomes (lessons) that passed the quality gate."""
+    """Share of the agent's last n task outcomes (lessons) on real work that passed the quality gate; benchmark
+    runs are measured by the eval harness, not here."""
+    evals = select(Goal.id).where(Goal.origin == "eval")
     rows = s.scalars(select(Lesson.outcome).where(Lesson.agent_id == agent_id,
-                                                  Lesson.outcome.in_(["success", "failure"]))
+                                                  Lesson.outcome.in_(["success", "failure"]),
+                                                  or_(Lesson.goal_id.is_(None), Lesson.goal_id.not_in(evals)))
                      .order_by(Lesson.id.desc()).limit(n)).all()
     return (sum(r == "success" for r in rows) / len(rows) if rows else 1.0), len(rows)
 
 
 def after_task(agent_id: int, success: bool) -> None:
     """Called after each lesson is recorded (learning.learn)."""
+    _after_task(agent_id, success)
+    start_smoke(agent_id)
+
+
+def _after_task(agent_id: int, success: bool) -> None:
     with session() as s:
         a = s.get(Agent, agent_id)
         if a is None:
             return
         exp = dict(a.experiment or {})
+        if exp and _stage(exp) == "smoke":  # users' goals still run the current playbook: nothing to count
+            _flag_unreliable(s, a)
+            return
         if exp:
             exp["outcomes"] = [*exp.get("outcomes", []), success]
             if len(exp["outcomes"]) >= EVAL_WINDOW:
@@ -141,11 +169,82 @@ def _flag_unreliable(s: Session, a: Agent) -> None:
               agent_id=a.id, s=s, rule="failure_rate")
 
 
-def active_playbook(a: Agent) -> tuple[str, bool]:
-    """(playbook text, is_trial) for prompts."""
-    if a.experiment and a.experiment.get("playbook"):
-        return a.experiment["playbook"], True
+def _stage(exp: dict[str, Any]) -> str:
+    return exp.get("stage") or "live"  # trials started before the smoke stage existed are live
+
+
+def active_playbook(a: Agent, eval_run: bool = False) -> tuple[str, bool]:
+    """(playbook text, is_trial) for prompts. A candidate still in its smoke stage is used only by eval goals,
+    and only while the smoke trial runs its candidate side."""
+    exp = a.experiment or {}
+    if exp.get("playbook") and (_stage(exp) == "live" or (eval_run and exp.get("smoke_side") == "candidate")):
+        return exp["playbook"], True
     return a.playbook or "", False
+
+
+def start_smoke(agent_id: int) -> bool:
+    """Start the smoke trial of the agent's candidate in the background, unless it has none or one runs."""
+    with session() as s:
+        a = s.get(Agent, agent_id)
+        pending = a is not None and bool(a.experiment) and _stage(a.experiment) == "smoke"
+    with _smoking_lock:
+        if not pending or agent_id in _smoking:
+            return False
+        _smoking.add(agent_id)
+    _spawn(lambda: smoke_trial(agent_id))
+    return True
+
+
+def _set_side(agent_id: int, side: str) -> bool:
+    with session() as s:
+        a = s.get(Agent, agent_id)
+        if a is None or not a.experiment or _stage(a.experiment) != "smoke":
+            return False  # the trial ended meanwhile (restored, rolled back)
+        a.experiment = {**a.experiment, "smoke_side": side}
+        return True
+
+
+def smoke_trial(agent_id: int, repeats: int = 1) -> dict[str, float]:
+    """Run the smoke suite with the current playbook, then with the candidate (S13-D-02, S13-R-05: same suite, same
+    repeats). The candidate goes on to the live trial if it passes at least as many runs, else it is rolled back."""
+    from agent_company import evaluation
+
+    results: dict[str, float] = {}
+    try:
+        with _smoke_lock:
+            for side in ("baseline", "candidate"):
+                if not _set_side(agent_id, side):
+                    return {}
+                label = f"smoke-agent{agent_id}-{side}-{int(time.time() * 1000)}"
+                results[side] = evaluation.run_suite(SMOKE_SUITE, label, repeats=repeats)["pass_rate"]
+        with session() as s:
+            a = s.get(Agent, agent_id)
+            exp = dict(a.experiment or {}) if a else {}
+            if not exp or _stage(exp) != "smoke":
+                return {}
+            passed = results["candidate"] >= results["baseline"]
+            _event(s, "smoke", a.id, f"{a.name}: candidate {results['candidate']:.0%} vs current "
+                   f"{results['baseline']:.0%} on the {SMOKE_SUITE} suite", passed=passed, **results)
+            if passed:
+                exp.pop("smoke_side", None)
+                a.experiment = {**exp, "stage": "live", "smoke": results}
+                _event(s, "experiment", a.id, f"{a.name}: trying the failure-aware playbook for {EVAL_WINDOW} tasks")
+            else:
+                a.experiment = {}
+                _event(s, "rollback", a.id, f"{a.name}: candidate rolled back after the {SMOKE_SUITE} suite, "
+                       f"v{a.playbook_version} kept")
+        return results
+    except Exception as e:  # noqa: BLE001 - a broken suite must not leave a candidate waiting forever
+        log_event("error", f"smoke trial of agent {agent_id} failed: {type(e).__name__}: {e}", agent_id=agent_id)
+        with session() as s:
+            a = s.get(Agent, agent_id)
+            if a is not None and a.experiment and _stage(a.experiment) == "smoke":
+                a.experiment = {}
+                _event(s, "rollback", a.id, f"{a.name}: candidate rolled back, the smoke trial failed: {e}"[:500])
+        return {}
+    finally:
+        with _smoking_lock:
+            _smoking.discard(agent_id)
 
 
 def restore(agent_id: int, version: int) -> dict[str, Any]:
@@ -194,9 +293,11 @@ def _diagnose(s: Session, a: Agent) -> bool:
             return True
     candidate = curate(s, a.id, failures_first=True)
     if candidate and candidate != a.playbook:
-        a.experiment = {"playbook": candidate, "baseline": rate, "outcomes": []}
+        smoke = settings().candidate_smoke
+        a.experiment = {"playbook": candidate, "baseline": rate, "outcomes": [], "stage": "smoke" if smoke else "live"}
         _event(s, "diagnose", a.id, f"{a.name}: success rate {rate:.0%} over the last {n} tasks")
-        _event(s, "experiment", a.id, f"{a.name}: trying a failure-aware playbook for {EVAL_WINDOW} tasks")
+        _event(s, "experiment", a.id, f"{a.name}: failure-aware playbook first runs the {SMOKE_SUITE} suite" if smoke
+               else f"{a.name}: trying a failure-aware playbook for {EVAL_WINDOW} tasks")
     return True
 
 
@@ -215,6 +316,9 @@ def cycle() -> int:
             had = bool(a.experiment)
             _diagnose(s, a)
             started += bool(a.experiment) and not had
+        waiting = [a.id for a in s.scalars(select(Agent)) if a.experiment and _stage(a.experiment) == "smoke"]
+    for agent_id in waiting:  # new candidates, and smoke trials a restart cut off
+        start_smoke(agent_id)
     return started
 
 

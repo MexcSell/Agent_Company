@@ -32,6 +32,14 @@ Add to `contracts.TaskContract` (all optional, defaulted, so existing plans stay
 `test_plan` (text), `budget` (cost/turns), `deadline`, `requirement_keys` (ASEAO08 S08-R-01).
 Task outputs gain `findings` and `next_actions` (parsed like proposals) that feed action items
 (ASEAO05 S05-R-04).
+- **Status: done** (`contracts.TaskContract`, `contracts.limits`, `loop._contract_note`,
+  `loop._with_security_reviews`). Changing an `out_of_scope` path fails the task and counts as a scope
+  violation for the repeated-scope rule; a high-risk task gets a `security` review after it (QA while
+  the Security Room is disabled); `budget.cost_usd` fails a run that costs more, `budget.turns` becomes
+  Claude Code's `--max-turns`, `deadline` caps the run's timeout; `test_plan`, `in_scope` and
+  `requirement_keys` go into the prompt. `FINDING:` and `NEXT:` lines are stored on the task's gate and
+  shown in the trace and the goal view; turning them into action items is ASEAO05 S05-R-04 (open). Also
+  `decision_topic` for S04-R-03.
 
 ### G-R-02 Operational metrics — Designing guide §10, Subscription guide §7
 Performance view adds: acceptance-test pass rate, escaped defects (defects reopened after

@@ -4,8 +4,9 @@
 // conversation's folder (the explorer's, when it starts) with every tool allowed; follow-ups
 // resume the same session. Images can be pasted, dropped or attached; every answer has a copy button.
 // Tabs: one per conversation of this panel, each with its own draft and a short title Claude
-// writes from the first prompt (+ opens another and keeps the others), then every other live
-// Claude Code session on the host (VS Code, terminal, SDK) with its conversation; an ended one
+// writes from the first prompt (+ opens another on the far left and keeps the others). Other
+// Claude Code sessions on the host (VS Code, terminal, SDK) get no tab of their own: they stay in
+// the sessions window, and one opened from there has a tab while it is selected; an ended one
 // can be continued in place. A conversation still working after a server restart is followed
 // live in its own tab, never shown twice. The drawer answers /status, /tasks and /agents (typed
 // in the prompt box or opened with the header button) for the selected tab: model, context,
@@ -171,7 +172,7 @@ window.WSP = window.WSP || {};
     }
     if (!C.convs.length) C.convs.push(newConv());
     const last = store.get(K + ".tab") || "";
-    C.tab = conv(last) ? last : C.convs[C.convs.length - 1].id;
+    C.tab = conv(last) ? last : C.convs[0].id;
     saveConvs();
     renderTabs(); renderCwd(); renderBusy(); renderLog();
     pollSessions().then(showTab);
@@ -199,12 +200,12 @@ window.WSP = window.WSP || {};
     else if (!c.title && c.runs.length) wantTitle(c, c.runs[0]);
     saveConvs(); renderTabs(); renderBusy();
   }
-  // The current conversation when it is still empty, else a new tab.
+  // The current conversation when it is still empty, else a new tab on the far left.
   function blankConv() {
     const c = cur();
     if (c && !c.session && !c.runs.length) return c;
     const n = newConv();
-    C.convs.push(n); saveConvs();
+    C.convs.unshift(n); saveConvs();
     return n;
   }
 
@@ -330,7 +331,7 @@ window.WSP = window.WSP || {};
     if (d) c.runs.push(transcriptRun(sid, C.view.events, d.partial_history, c.title));
     C.drafts[c.id] = draft(sid); delete C.drafts[sid];
     if (C.closed.delete(sid)) saveClosed();
-    C.convs.push(c); C.tab = c.id; store.set(K + ".tab", c.id); saveConvs();
+    C.convs.unshift(c); C.tab = c.id; store.set(K + ".tab", c.id); saveConvs();
     C.view = { sid: "", events: [], next: 0, d: null }; C.following = "";
     renderTabs(); renderCwd();
     return c;
@@ -504,7 +505,7 @@ window.WSP = window.WSP || {};
   // The selected tab's session: a conversation's own, else the session tab's.
   const viewSid = () => { const c = cur(); return c ? c.session : C.tab; };
   const sessionRun = () => ({ id: "session", events: C.view.events, status: C.view.d?.status === "busy" ? "running" : "done" });
-  // Sessions that get a tab of their own: every live one no conversation of this panel holds.
+  // Sessions that can be opened in a tab of their own: every live one no conversation of this panel holds.
   const others = () => (opt.workspace ? C.sessions.filter((s) => !convOfSid(s.session_id)) : []);  // host sessions: Workspace only
   const transcriptRun = (sid, events, partial, title) => ({ id: `resume-${sid}`, transcript: true, session_id: sid, title: title || "", prompt: "", events, status: "done", partial });
 
@@ -636,7 +637,7 @@ window.WSP = window.WSP || {};
       catch (e) { return toast(e.message); }
       C.hist.items = C.hist.items.filter((x) => x.session_id !== sid); C.hist.total = Math.max(0, C.hist.total - 1);
       if (C.closed.delete(sid)) saveClosed();
-      if (c) dropConv(c); else if (C.tab === sid) selectTab(C.convs[C.convs.length - 1].id);
+      if (c) dropConv(c); else if (C.tab === sid) selectTab(C.convs[0].id);
       renderHist();
       return;
     }
@@ -668,7 +669,7 @@ window.WSP = window.WSP || {};
   function renderTabs() {
     const box = C.el?.querySelector("#wc-tabs");
     if (!box) return;
-    const list = others().filter((s) => !C.closed.has(s.session_id));
+    const list = others().filter((s) => s.session_id === C.tab);  // only the host session being viewed
     if (!cur() && C.tab && !list.some((s) => s.session_id === C.tab)) list.push({ ...(C.names[C.tab] || { name: C.tab.slice(0, 8) }), session_id: C.tab, status: "ended" });
     const tab = (id, label, status, extra, title) => `<div role="tab" tabindex="0" data-tab="${esc(id)}" aria-selected="${C.tab === id}" class="wc-tab${C.tab === id ? " on" : ""}${status === "ended" ? " ended" : ""}" title="${esc(title)}"><span class="wc-dot${status === "busy" ? " busy" : status === "ended" ? " off" : ""}"></span><span class="wc-tab-name">${esc(label)}</span>${extra ? `<span class="wc-tab-kind">${esc(extra)}</span>` : ""}<button type="button" class="wtab-x" data-close="${esc(id)}" title="Close tab${conv(id) ? "" : " (the session keeps running)"}" aria-label="Close ${esc(label)}">×</button></div>`;
     box.innerHTML = C.convs.map((c) => tab(c.id, convTitle(c), busy(c) ? "busy" : "idle", provOf(c) === "claude" ? "" : PROV[provOf(c)].label, `${convTitle(c)}\n${c.cwd || ROOT() || ""}${busy(c) ? "\nWorking" : ""}${c.session ? `\nsession ${c.session.slice(0, 8)}` : ""}`)).join("")
@@ -679,7 +680,7 @@ window.WSP = window.WSP || {};
     C.convs = C.convs.filter((x) => x !== c); delete C.drafts[c.id]; dropLog(c.id);
     if (!C.convs.length) C.convs.push(newConv());
     saveConvs();
-    if (C.tab === c.id) selectTab(C.convs[C.convs.length - 1].id); else renderTabs();
+    if (C.tab === c.id) selectTab(C.convs[0].id); else renderTabs();
   }
   // Closing a conversation drops it from the panel (its transcript stays in the history); closing a
   // session tab only hides it here: the session itself (VS Code, terminal, SDK) keeps running.
@@ -693,7 +694,7 @@ window.WSP = window.WSP || {};
       return dropConv(c);
     }
     C.closed.add(id); saveClosed(); dropLog(id);
-    if (C.tab === id) selectTab(C.convs[C.convs.length - 1].id); else renderTabs();
+    if (C.tab === id) selectTab(C.convs[0].id); else renderTabs();
   }
   function selectTab(id) {
     if (id === C.tab) return;

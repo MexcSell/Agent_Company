@@ -211,6 +211,7 @@ class ModelEntry(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     base_url: Mapped[str] = mapped_column(String(512), default="")  # OpenAI-compatible server (llama-server, LM Studio)
     api_key_env: Mapped[str] = mapped_column(String(64), default="")  # env var holding this model's key
+    session_id: Mapped[str] = mapped_column(String(64), default="")  # claude_code: every run forks this session
 
 
 class Route(Base):
@@ -248,6 +249,8 @@ class Goal(Base):
     # what a restart needs to resume the current iteration without re-running finished tasks (S04-R-05)
     checkpoint: Mapped[dict[str, Any]] = mapped_column(default=dict)
     permits: Mapped[list[Any]] = mapped_column(default=list)  # change boundaries lifted: dependencies, config
+    # the cost the order or the planner expected; spending twice that pauses the goal (S14-R-03). 0 = none
+    estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 

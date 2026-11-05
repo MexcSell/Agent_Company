@@ -24,6 +24,7 @@ detail an implementer works from.
 | [SPEC-14-security.md](SPEC-14-security.md) | SPEC14.docx, ASEAO_SPEC-14_Enterprise_Security_Governance.pdf |
 | [SPEC-15-dashboard.md](SPEC-15-dashboard.md) | master specification (.rtf) only |
 | [guides-and-other-sources.md](guides-and-other-sources.md) | 1.txt, guides, AgentForge website spec, AWS frameworks guide, 2.pdf |
+| [WORKSPACE.md](WORKSPACE.md) | the code of 2026-11-05 (no document): the Workspace and File Manager, specified so they can be set up again on another computer; IDs `WS-R-nn` |
 | [images/SOURCES.md](images/SOURCES.md) | which images were kept, which were not, and their sources |
 
 The master specification (`I am trying to download documents related to this.rtf`) gives one
@@ -56,13 +57,14 @@ The `.rtf` roadmap builds organisation first; this repository already has the co
 the order is safety and correctness of that pipeline first, then management, then expansion.
 
 1. **Safety and correctness now**: done 2026-11-05 — S14-R-01, S14-R-04, S12-D-01, S13-D-01,
-   S08-R-03, S08-R-04. Still partial: S04-R-05 (worktree reconcile), S04-R-06 (deadline cap,
-   re-plan, budget pause), S14-R-03 (cost rule). Open: S13-D-02 (smoke suite before a live trial).
+   S08-R-03, S08-R-04, S04-R-05 (worktree reconcile), S04-R-06 (deadline cap, re-plan, budget
+   pause, escalation of a repeatedly failing check), S14-R-03 (cost rule), S13-D-02 (smoke suite
+   before a live trial).
 2. **Pipeline quality**: done 2026-11-05 — S04-R-01 blackboard, S04-R-02 decision records,
    S04-R-04 workflow states, S04-R-10 messages, S11-R-01, S11-R-05; partial S11-R-03, S04-R-12.
    S03-R-02 duplicate prevention and G-R-03 failure-mode tests done as well.
-   S09-R-01 staged gates and G-R-04 measured enablement gate done too. Left: G-R-01 contract
-   fields, S04-R-03 conflict review.
+   S09-R-01 staged gates and G-R-04 measured enablement gate done too, then G-R-01 contract fields
+   and S04-R-03 conflict review. Step 2 is complete.
 3. **Management**: ASEAO05 milestones, risks/blockers, insights, action items, topics; SPEC-02
    versions and health; S06-R-02 source monitoring; S14-R-04 incidents; S14-R-05 classification;
    SPEC-15 views.

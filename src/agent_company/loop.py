@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import queue
 import random
@@ -35,7 +36,7 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                 attachments: list[dict[str, Any]] | None = None, origin: str = "user",
                 parent_goal_id: int | None = None, allowed_paths: list[str] | None = None,
                 protect_tests: bool = False, extract_checks: bool = False,
-                permits: list[str] | None = None) -> int:
+                permits: list[str] | None = None, estimated_cost_usd: float = 0.0) -> int:
     """Create a goal. `extract_checks` (only for trusted authors) adds the test/lint commands
     the description names in backticks when no quality commands are given."""
     from agent_company.checks import extract_check_commands
@@ -65,7 +66,8 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                  max_iterations=max_iterations or settings().max_iterations, created_by=created_by,
                  project_id=project_id, attachments=list(attachments or []), origin=origin,
                  parent_goal_id=parent_goal_id, allowed_paths=[p.strip() for p in allowed_paths or [] if p.strip()],
-                 protect_tests=protect_tests, permits=sorted(set(permits or [])))
+                 protect_tests=protect_tests, permits=sorted(set(permits or [])),
+                 estimated_cost_usd=max(0.0, float(estimated_cost_usd or 0)))
         s.add(g)
         s.flush()
         gid = g.id
@@ -142,6 +144,13 @@ class BudgetExhausted(RuntimeError):
     pass
 
 
+class CostOverrun(BudgetExhausted):
+    """The goal cost more than COST_OVERRUN times its estimate: always a pause, never a failure (S14-R-03)."""
+
+
+COST_OVERRUN = 2.0
+
+
 TRANSIENT = re.compile(r"(?i)(\b(429|50[0-4]|529)\b|rate.?limit|overloaded|timed? ?out|timeout|temporar"
                        r"|connection (reset|refused|error|aborted)|network is unreachable|service unavailable"
                        r"|APIConnectionError|ECONNRESET)")
@@ -168,10 +177,12 @@ def _stopped_result(why: str) -> tuple[executors.Result, router.Choice]:
 
 def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | None = None,
              goal_id: int | None = None, escalate: bool = False,
-             avoid_provider: str | None = None) -> tuple[executors.Result, router.Choice]:
+             avoid_provider: str | None = None, timeout: int | None = None,
+             deadline: float | None = None) -> tuple[executors.Result, router.Choice]:
     """Run the request on the role's best model. Transient errors are retried with backoff; then the next
     model in the chain is tried. Nothing starts while an emergency stop covers the agent, its room, its
-    goal's project or the executor (S14-R-01)."""
+    goal's project or the executor (S14-R-01). `timeout` caps one run (the task's deadline); `deadline` is
+    the goal's (time.monotonic()): a retry that would wait past it is not made (S04-R-06)."""
     from agent_company.governance import stopped, stops
 
     project_id = None
@@ -205,11 +216,12 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
             req.data["mcp"] = ({}, [])
     res, choice = None, chain[0]
     attempts = max(1, settings().retry_max_attempts)
+    run_timeout = min(timeout, settings().command_timeout) if timeout else settings().command_timeout
     for choice in chain[:MAX_FALLBACKS]:
         fresh_session_tried = False
         attempt = 0
         while True:
-            res = executors.for_choice(choice, settings().command_timeout).run(req)
+            res = executors.for_choice(choice, run_timeout).run(req)
             usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
                          output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
                          error=res.error, task_id=task_id, agent_id=agent.id, purpose=purpose, goal_id=goal_id)
@@ -223,6 +235,10 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
                 return res, choice  # a refusal or a stop: no retry, no other model
             if transient(res.error) and attempt + 1 < attempts:
                 delay = backoff(attempt)
+                if deadline is not None and time.monotonic() + delay >= deadline:
+                    log_event("retry", f"{choice.name}: no retry, the goal's time budget ends before it",
+                              goal_id=goal_id, agent_id=agent.id)
+                    return res, choice
                 attempt += 1
                 log_event("retry", f"{choice.name}: transient error, retry {attempt} in {delay:.1f}s",
                           goal_id=goal_id, agent_id=agent.id, delay=delay)
@@ -243,14 +259,22 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
     return res, choice
 
 
+def _deadline(started: float) -> float | None:
+    """When the goal's time budget ends (time.monotonic()), or None without one."""
+    return started + settings().goal_time_budget if settings().goal_time_budget > 0 else None
+
+
 def _budget_note(goal: Goal, started: float) -> str:
     """Raise when the goal is over its budget; return a wrap-up note once 60% is used (as in bit)."""
-    import time
-
     cfg = settings()
     shares = []
+    with session() as s:  # the planner may have set the estimate after `goal` was loaded
+        row = s.get(Goal, goal.id)
+        estimate = (row.estimated_cost_usd or 0.0) if row else 0.0
+    spent = usage.goal_spend(goal.id) if cfg.goal_budget_usd > 0 or estimate > 0 else 0.0
+    if estimate > 0 and spent > COST_OVERRUN * estimate:  # behaviour rule (S14-R-03)
+        raise CostOverrun(f"spent ${spent:.2f}, more than {COST_OVERRUN:g}× the estimate of ${estimate:.2f}")
     if cfg.goal_budget_usd > 0:
-        spent = usage.goal_spend(goal.id)
         if spent >= cfg.goal_budget_usd:
             raise BudgetExhausted(f"cost budget of ${cfg.goal_budget_usd:.2f} used (${spent:.2f})")
         shares.append(("cost", spent / cfg.goal_budget_usd))
@@ -348,7 +372,11 @@ PLAN_INSTRUCTIONS = """Split the goal into task contracts. Answer with JSON only
   "acceptance": [{"type": "file_exists", "path": "..."} | {"type": "command", "run": "..."} |
                  {"type": "contains", "value": "..."} | {"type": "regex", "pattern": "..."} |
                  {"type": "min_length", "value": 100}]}]}
-Optionally add "decisions": [{"topic": "...", "alternatives": ["..."], "recommendation": "...",
+Optional task fields: "in_scope"/"out_of_scope" (path globs; changing an out_of_scope path fails the task),
+"risk_level": "low|medium|high" (high adds a security review), "test_plan": "...",
+"budget": {"cost_usd": 0.5, "turns": 30}, "deadline": seconds, "requirement_keys": ["..."],
+"decision_topic": "..." (tasks that must each recommend on one question; disagreements are reviewed).
+Optionally add "estimated_cost_usd" (the whole goal's expected model cost) and "decisions": [{"topic": "...", "alternatives": ["..."], "recommendation": "...",
   "reasoning": "...", "assumptions": ["..."], "confidence": 0-1, "category": "operational|technical|
   organizational|financial|critical", "requires_human_approval": true|false}] for significant choices
 (technology, architecture, anything costly or hard to undo); critical ones always wait for a person.
@@ -373,30 +401,75 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                   + (learning.experience_context(gm.id, goal_id=goal.id, query=f"{goal.title} {goal.description}")
                      + "\n\n")
                   + PLAN_INSTRUCTIONS)
-        req = executors.Request(purpose="plan", role="general_manager", system=_system_for(gm), prompt=prompt,
-                                workdir=Path(goal.worktree), data={"goal": goal.title, "feedback": feedback})
-        res, choice = _execute(gm, req, "plan", goal_id=goal.id)
-        try:
-            data = contracts.extract_json(res.text)
-            tasks = data["tasks"] if isinstance(data, dict) else data
-            plan = contracts.validate_plan(tasks)
-            summary = data.get("summary", "") if isinstance(data, dict) else ""
-            _board_plan(goal, iteration, plan, summary, gm.id)
-            if isinstance(data, dict) and data.get("decisions"):
-                decisions.from_plan(goal.id, data["decisions"], gm.id)
-            log_event("plan", f"{gm.name} planned {len(plan)} task(s) with {choice.name}: {summary}"[:500],
-                      goal_id=goal.id, agent_id=gm.id)
-            _chat_plan(goal, iteration, plan, summary, gm.id)
-            return plan, gm.id
-        except (ValueError, KeyError, TypeError) as e:
-            log_event("plan", f"plan from {choice.name} was invalid ({e}); using the standard plan",
-                      goal_id=goal.id, agent_id=gm.id)
-            plan = contracts.validate_plan(executors.standard_plan(goal.title)["tasks"])
-            _board_plan(goal, iteration, plan, "standard plan", gm.id)
-            _chat_plan(goal, iteration, plan, "standard plan (the model's plan was invalid)", gm.id)
-            return plan, gm.id
+        for attempt in range(2):  # an invalid contract goes back to the planner once (S04-R-06)
+            req = executors.Request(purpose="plan", role="general_manager", system=_system_for(gm), prompt=prompt,
+                                    workdir=Path(goal.worktree), data={"goal": goal.title, "feedback": feedback})
+            res, choice = _execute(gm, req, "plan", goal_id=goal.id)
+            try:
+                data = contracts.extract_json(res.text)
+                tasks = data["tasks"] if isinstance(data, dict) else data
+                plan = _with_security_reviews(contracts.validate_plan(tasks))
+                break
+            except (ValueError, KeyError, TypeError) as e:
+                if attempt == 0 and res.ok:
+                    log_event("plan", f"plan from {choice.name} was invalid ({e}); asking for a corrected one",
+                              goal_id=goal.id, agent_id=gm.id)
+                    prompt += (f"\n\nYour previous answer was not a valid plan: {str(e)[:1500]}\n"
+                               "Answer again with corrected JSON only.")
+                    continue
+                log_event("plan", f"plan from {choice.name} was invalid ({e}); using the standard plan",
+                          goal_id=goal.id, agent_id=gm.id)
+                plan = contracts.validate_plan(executors.standard_plan(goal.title)["tasks"])
+                _board_plan(goal, iteration, plan, "standard plan", gm.id)
+                _chat_plan(goal, iteration, plan, "standard plan (the model's plan was invalid)", gm.id)
+                return plan, gm.id
+        summary = data.get("summary", "") if isinstance(data, dict) else ""
+        _board_plan(goal, iteration, plan, summary, gm.id)
+        if isinstance(data, dict) and data.get("decisions"):
+            decisions.from_plan(goal.id, data["decisions"], gm.id)
+        if isinstance(data, dict):
+            _set_estimate(goal.id, data.get("estimated_cost_usd"))
+        log_event("plan", f"{gm.name} planned {len(plan)} task(s) with {choice.name}: {summary}"[:500],
+                  goal_id=goal.id, agent_id=gm.id)
+        _chat_plan(goal, iteration, plan, summary, gm.id)
+        return plan, gm.id
     finally:
         registry.release(gm.id)
+
+
+def _with_security_reviews(plan: list[contracts.TaskContract]) -> list[contracts.TaskContract]:
+    """A high-risk task gets a security review after it, unless the plan already has one (ASEAO09 S09-R-02).
+    Until the Security Room is enabled, registry.resolve_role gives the review to QA."""
+    out = list(plan)
+    keys = {c.key for c in plan}
+    for c in plan:
+        if c.risk_level != "high" or any(o.role == "security" and c.key in o.depends_on for o in plan):
+            continue
+        key = f"{c.key}-security"[:64]
+        if key in keys:
+            continue
+        keys.add(key)
+        out.append(contracts.TaskContract(
+            key=key, title=f"Security review of '{c.title}'"[:256], role="security", depends_on=[c.key],
+            skills=["security_review"], priority=min(9, c.priority + 1),
+            description=(f"Review the change made by task '{c.key}' for security: secrets, injection, unsafe file "
+                         "and network access, authentication and permission changes. Verify the logic first."),
+            acceptance=[contracts.Condition(type="regex", pattern="VERDICT: (PASS|FAIL)")]))
+    return out
+
+
+def _set_estimate(goal_id: int, value: Any) -> None:
+    """The planner's cost estimate, unless the order already gave one (S14-R-03)."""
+    try:
+        estimate = float(value or 0)
+    except (TypeError, ValueError):
+        return
+    if estimate <= 0:
+        return
+    with session() as s:
+        g = s.get(Goal, goal_id)
+        if g is not None and not g.estimated_cost_usd:
+            g.estimated_cost_usd = estimate
 
 
 def _board_plan(goal: Goal, iteration: int, plan: list[contracts.TaskContract], summary: str, gm_id: int) -> None:
@@ -454,7 +527,81 @@ def _chat_plan(goal: Goal, iteration: int, plan: list[contracts.TaskContract], s
 
 
 PROPOSAL_HELP = ("If you notice valuable follow-up work outside this task, add at most two lines at the end: "
-                 "PROPOSAL: <short title> :: <why it matters>")
+                 "PROPOSAL: <short title> :: <why it matters>\n"
+                 "Name problems you found as FINDING: <what> lines and the next steps for this goal as NEXT: <step> lines.")
+
+
+def _contract_note(contract: contracts.TaskContract) -> str:
+    """The contract's scope, test plan, limits and decision topic, for the prompt (G-R-01)."""
+    lines = []
+    if contract.in_scope:
+        lines.append("Work on: " + ", ".join(contract.in_scope))
+    if contract.out_of_scope:
+        lines.append("Do not change (a change fails the task): " + ", ".join(contract.out_of_scope))
+    if contract.test_plan:
+        lines.append(f"Test plan: {contract.test_plan}")
+    if contract.requirement_keys:
+        lines.append("Requirements this task implements: " + ", ".join(contract.requirement_keys))
+    if contract.risk_level == "high":
+        lines.append("Risk: high. A security review follows this task.")
+    if contract.budget.cost_usd:
+        lines.append(f"Budget: at most ${contract.budget.cost_usd:.2f} of model cost.")
+    if contract.decision_topic:
+        lines.append(f"Decision topic: {contract.decision_topic}. End with one line "
+                     "RECOMMENDATION: <what you recommend>; other tasks answer the same topic and are compared.")
+    return ("\n".join(lines) + "\n\n") if lines else ""
+
+
+def _plan_commit(goal: Goal, iteration: int) -> str:
+    """Commit the planning step's files (the GM's .claude/ configuration, the spec artifacts), so the first
+    task's checkpoint holds only that task's changes. Returns HEAD: the iteration's first checkpoint."""
+    from agent_company.gitsync import identity_for
+
+    try:
+        worktrees.commit_all(goal.worktree, f"Goal {goal.id} iteration {iteration}: plan",
+                             author=identity_for(goal.created_by))
+    except worktrees.WorktreeError as e:
+        log_event("error", f"plan checkpoint: {e}", goal_id=goal.id)
+    return worktrees.git(goal.worktree, "rev-parse", "HEAD")
+
+
+def _checkpoint(goal_id: int, iteration: int, key: str) -> tuple[str, list[str]]:
+    """Commit what a writing task changed and record the commit as the goal's checkpoint (S04-R-05).
+    Returns (commit, files changed since the previous checkpoint): the task's own changes, also when the
+    agent committed some of them itself."""
+    from agent_company.gitsync import identity_for
+
+    g = _goal(goal_id)
+    wt = Path(g.worktree)
+    before = (g.checkpoint or {}).get("commit") or worktrees.git(wt, "rev-parse", "HEAD")
+    try:
+        worktrees.commit_all(wt, f"Goal {goal_id} iteration {iteration}: {key}", author=identity_for(g.created_by))
+        head = worktrees.git(wt, "rev-parse", "HEAD")
+        changed = [p for p in worktrees.git(wt, "diff", "--name-only", before, head).splitlines() if p]
+    except worktrees.WorktreeError as e:  # a broken checkpoint must not lose the task's result
+        log_event("error", f"checkpoint after task {key}: {e}", goal_id=goal_id)
+        return "", []
+    with session() as s:
+        row = s.get(Goal, goal_id)
+        row.checkpoint = {**(row.checkpoint or {}), "commit": head}
+    return head, changed
+
+
+def _reconcile(goal_id: int) -> None:
+    """After a restart: put the worktree back to the last checkpoint commit, so the rerun of a task that was
+    cut off mid-write does not start on top of its partial edits (S04-R-05)."""
+    g = _goal(goal_id)
+    commit = (g.checkpoint or {}).get("commit")
+    if not commit or not g.worktree:
+        return
+    try:
+        dropped = worktrees.reset_to(g.worktree, commit)
+    except worktrees.WorktreeError as e:  # fail open: the rerun then starts on the worktree as it is
+        log_event("error", f"could not reset the worktree to checkpoint {commit[:10]}: {e}", goal_id=goal_id)
+        return
+    if dropped:
+        log_event("iteration", f"worktree reset to checkpoint {commit[:10]}; dropped unfinished edits: "
+                  + ", ".join(dropped[:20]), goal_id=goal_id, dropped=dropped[:100], commit=commit)
 
 
 # --- task execution -------------------------------------------------------------
@@ -483,13 +630,14 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             try:
                 budget = _budget_note(goal, started)
             except BudgetExhausted as e:
-                set_status(task_id, "skipped", output=f"skipped: {e}")
+                set_status(task_id, "skipped", output=f"{BUDGET_SKIP}{e}")
                 return False
             dep_text = "\n\n".join(f"### Output of '{k}'\n{v[-OUTPUT_CAP:]}" for k, v in deps.items())
             accept = "\n".join(f"- {json.dumps(c.model_dump(exclude_none=True))}" for c in contract.acceptance)
             prompt = (f"Overall goal: {goal.title}\n{goal.description}\n\n## Your task: {contract.title}\n"
                       f"{contract.description}\n\nInputs: {json.dumps(contract.inputs)}\n\n"
                       f"Acceptance conditions (checked automatically):\n{accept}\n\n"
+                      + _contract_note(contract)
                       + (f"{dep_text}\n\n" if dep_text else "")
                       + (f"Research notes:\n{notes}\n\n" if notes else "")
                       + (f"Findings from the last failed attempt:\n{feedback}\n\n" if feedback else "")
@@ -506,11 +654,16 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             req = executors.Request(purpose="task", role=role, system=_system_for(agent), prompt=prompt,
                                     workdir=Path(goal.worktree), writes=writes,
                                     data={"title": contract.title, "description": contract.description,
-                                          "feedback": feedback, "resume": _resumable_session(goal.id, agent.id)})
+                                          "feedback": feedback, "resume": _resumable_session(goal.id, agent.id),
+                                          "max_turns": contract.budget.turns})
             avoid = _developer_provider(goal.id, goal.iteration) if role in REVIEW_ROLES else None
             res, choice = _execute(agent, req, "task", task_id=task_id, goal_id=goal.id,
-                                   escalate=goal.iteration >= 2, avoid_provider=avoid)
+                                   escalate=goal.iteration >= 2, avoid_provider=avoid,
+                                   timeout=contract.deadline or None, deadline=_deadline(started))
             output = res.text if res.ok else f"{res.text}\n\nERROR: {res.error}"
+            # a finished writing task is committed, so a restart can drop a later task's partial edits (S04-R-05);
+            # the scheduler's write lock is held here, so the commit holds this task's changes only
+            commit, changed = _checkpoint(goal.id, goal.iteration, contract.key) if contract.writes else ("", [])
             if "WorktreeError" in (res.error or ""):  # rule: writing outside the goal's worktree (S14-R-03)
                 from agent_company.governance import open_incident
 
@@ -522,9 +675,13 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             # the planner wrote the acceptance commands: a refusal counts against it
             acceptance = contracts.check(contract, output, Path(goal.worktree), settings().command_timeout,
                                          on_refused=lambda cmd, why: on_command_refused(goal.id, planner_id, cmd, why))
+            acceptance += contracts.limits(contract, changed or res.files, usage.task_spend(task_id))
             ok = res.ok and all(c["passed"] for c in acceptance)
             set_status(task_id, "done" if ok else "failed", output=output[-50_000:], model_name=choice.name,
-                       gate={"acceptance": acceptance, "files": res.files}, session_id=res.session_id)
+                       gate={"acceptance": acceptance, "files": changed or res.files, "commit": commit,
+                             "findings": contracts.findings(output), "next_actions": contracts.next_actions(output),
+                             "recommendation": contracts.recommendation(output) if contract.decision_topic else ""},
+                       session_id=res.session_id)
             log_event("task", f"{agent.name} {'finished' if ok else 'failed'} '{contract.title}' "
                               f"with {choice.name}", goal_id=goal.id, agent_id=agent.id)
             from agent_company.projects import extract_proposals, post_for_goal
@@ -717,6 +874,8 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
         resume = cp.get("iteration") == first and cp.get("planned")
         if resume and cp.get("evaluated") and not cp.get("passed"):  # that iteration was judged: go on
             first, feedback, resume = first + 1, cp.get("feedback", ""), False
+        elif cp.get("iteration") == first - 1 and cp.get("evaluated") and not cp.get("passed"):
+            feedback = cp.get("feedback", "")  # paused before the next iteration was planned
         for iteration in range(first, goal.max_iterations + 1):
             halted = _halted(goal_id)
             if halted:
@@ -726,10 +885,11 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
             try:
                 _budget_note(goal, started)
             except BudgetExhausted as e:
-                return _out_of_budget(goal_id, str(e), report)
+                return _out_of_budget(goal_id, str(e), report, overrun=isinstance(e, CostOverrun))
             if resume:  # S04-R-05: a restart continues the planned iteration; finished tasks are not re-run
                 notes, feedback, planner_id = cp.get("notes", ""), cp.get("feedback", ""), cp.get("planner_id")
                 ids = _requeue_unfinished(goal_id, iteration)
+                _reconcile(goal_id)
                 log_event("iteration", f"iteration {iteration} resumed after a restart", goal_id=goal_id)
                 resume = False
             else:
@@ -742,23 +902,37 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                     _configure(goal)
                 plan, planner_id = _plan(goal, iteration, feedback, notes)
                 ids = _persist(goal_id, iteration, plan)
-                _update_goal(goal_id, checkpoint={"iteration": iteration, "planned": True, "notes": notes,
-                                                  "feedback": feedback, "planner_id": planner_id})
                 _spec_step(specs.write_plan, goal, iteration, plan)
+                _update_goal(goal_id, checkpoint={"iteration": iteration, "planned": True, "notes": notes,
+                                                  "feedback": feedback, "planner_id": planner_id,
+                                                  "commit": _plan_commit(goal, iteration)})
             from agent_company.scheduler import run_dag
 
             _update_goal(goal_id, status="running", reason=f"iteration {iteration}: {len(ids)} task(s)")
-            run_dag(ids, _make_worker(goal, notes, feedback, started, planner_id), goal.worktree,
-                    lambda: cancelled(goal_id))
+            worker = _make_worker(goal, notes, feedback, started, planner_id)
+            run_dag(ids, worker, goal.worktree, lambda: cancelled(goal_id))
+            if not _halted(goal_id):
+                reviews = _review_conflicts(goal_id, iteration)  # S04-R-03
+                if reviews:
+                    run_dag(reviews, worker, goal.worktree, lambda: cancelled(goal_id))
+                    _decide_conflicts(goal_id, iteration, reviews)
             halted = _halted(goal_id)
             if halted:
                 return {"status": halted}
+            if _budget_skipped(goal_id, iteration):  # the iteration is incomplete: do not judge it
+                try:
+                    _budget_note(_goal(goal_id), started)
+                except BudgetExhausted as e:
+                    return _out_of_budget(goal_id, str(e), report, overrun=isinstance(e, CostOverrun))
             _spec_step(specs.write_outputs, goal, iteration, None)
             report = quality.evaluate(goal_id, iteration)
             _spec_step(specs.write_decision, goal, iteration, report)
             _record_history(goal_id, iteration, report)
+            if not report["passed"] and iteration < goal.max_iterations:
+                report["feedback"] += _escalate_repeated(goal_id, iteration)
             _update_goal(goal_id, checkpoint={"iteration": iteration, "planned": True, "evaluated": True,
-                                              "passed": report["passed"], "feedback": report["feedback"]})
+                                              "passed": report["passed"], "feedback": report["feedback"],
+                                              "commit": report.get("head")})
             from agent_company.performance import track_defects
 
             track_defects(goal_id, iteration, report["checks"])
@@ -807,22 +981,131 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
         raise
 
 
+def _norm_recommendation(text: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", text.lower()).split())
+
+
+def _review_conflicts(goal_id: int, iteration: int) -> list[int]:
+    """Tasks of this iteration that recommend differently on one decision topic get one review task (S04-R-03):
+    a disagreement is never settled by taking the last answer. Returns the review tasks' ids."""
+    with session() as s:
+        tasks = list(s.scalars(select(Task).where(Task.goal_id == goal_id, Task.iteration == iteration)))
+        s.expunge_all()
+    keys = {t.key for t in tasks}
+    topics: dict[str, list[Task]] = {}
+    for t in tasks:
+        topic = str((t.contract or {}).get("decision_topic") or "").strip()
+        if t.status == "done" and topic and (t.gate or {}).get("recommendation"):
+            topics.setdefault(topic, []).append(t)
+    plan = []
+    for topic, group in topics.items():
+        if len({_norm_recommendation(t.gate["recommendation"]) for t in group}) < 2:
+            continue
+        key = ("conflict-" + re.sub(r"[^a-z0-9_.-]+", "-", topic.lower()).strip("-"))[:64]
+        if key in keys:  # already scheduled before a restart
+            continue
+        keys.add(key)
+        listing = "\n".join(f"- task '{t.key}' (#{t.id}): {t.gate['recommendation']}" for t in group)
+        criteria = "\n".join(f"- {t.key}: {json.dumps((t.contract or {}).get('acceptance', []))}" for t in group)
+        plan.append(contracts.TaskContract(
+            key=key, title=f"Resolve the disagreement on '{topic}'"[:256], role="qa", priority=0, skills=["review"],
+            depends_on=[t.key for t in group], inputs={"topic": topic, "tasks": [t.id for t in group]},
+            description=(f"Tasks of this iteration recommend differently on '{topic}':\n{listing}\n\n"
+                         f"Their acceptance conditions:\n{criteria}\n\nCompare the recommendations against the goal "
+                         "and these conditions, using the tasks' outputs below. Choose one (or a combination) and say "
+                         "why the others fall short. Write the lines DECISION: <the chosen recommendation>, "
+                         "CONFIDENCE: <0-1> and CATEGORY: operational|technical|organizational|financial|critical "
+                         "(financial or critical when a wrong choice is costly or hard to undo). If the work of this "
+                         "iteration followed a recommendation you did not choose, end with VERDICT: FAIL and a "
+                         "FINDING naming what must change."),
+            acceptance=[contracts.Condition(type="regex", pattern=r"(?im)^\W*DECISION:\s*\S")]))
+        log_event("decision", f"tasks {', '.join(t.key for t in group)} disagree on '{topic}'; review scheduled",
+                  goal_id=goal_id, topic=topic, tasks=[t.id for t in group])
+    # reviews scheduled before a restart ran in the resumed iteration's DAG: they still need their decision
+    earlier = [t.id for t in tasks if t.key.startswith("conflict-") and (t.contract or {}).get("inputs", {}).get("topic")]
+    return earlier + (_persist(goal_id, iteration, plan) if plan else [])
+
+
+def _decide_conflicts(goal_id: int, iteration: int, review_ids: list[int]) -> None:
+    """One decision record per finished conflict review, citing every task that took part (S04-R-03, S04-R-02).
+    Financial and critical conflicts wait for a person (S04-R-07)."""
+    def line(name: str, text: str) -> str:
+        found = re.findall(rf"(?im)^\W*{name}:\s*(.+?)\s*$", text)
+        return found[-1] if found else ""
+
+    with session() as s:
+        reviews = [(t.id, t.status, t.output or "", dict(t.contract or {}), t.agent_id)
+                   for t in s.scalars(select(Task).where(Task.id.in_(review_ids)))]
+    for tid, status, output, contract, agent_id in reviews:
+        inputs = contract.get("inputs") or {}
+        if status != "done" or not line("DECISION", output):
+            continue
+        with session() as s:
+            recs = [(t.id, t.key, (t.gate or {}).get("recommendation", ""))
+                    for t in s.scalars(select(Task).where(Task.id.in_(inputs.get("tasks") or [])))]
+        category = line("CATEGORY", output).lower().strip("* ")
+        try:
+            confidence = float(line("CONFIDENCE", output) or 0.5)
+        except ValueError:
+            confidence = 0.5
+
+        evidence = ([{"type": "task", "id": i, "key": k, "recommendation": r} for i, k, r in recs]
+                    + [{"type": "review", "id": tid}])
+        record = functools.partial(
+            decisions.record, goal_id, str(inputs.get("topic", "")), line("DECISION", output),
+            alternatives=[r[2] for r in recs], reasoning=_brief(output, 2000), confidence=confidence,
+            category=category, evidence=evidence, requires_human_approval=category in {"financial", "critical"},
+            agent_id=agent_id)
+        _once(f"goal:{goal_id}:{iteration}:conflict:{tid}", lambda record=record: record()["id"])
+
+
 def _record_history(goal_id: int, iteration: int, report: dict[str, Any]) -> None:
     failed = {c["check"] for c in report.get("checks", []) if not c["passed"]}
     with session() as s:
         g = s.get(Goal, goal_id)
+        out_of_scope = any(not c["passed"] and c["condition"].get("type") == "out_of_scope"
+                           for t in s.scalars(select(Task).where(Task.goal_id == goal_id, Task.iteration == iteration))
+                           for c in (t.gate or {}).get("acceptance", []))
         g.history = [*(h for h in g.history or [] if h.get("iteration") != iteration),
                      {"iteration": iteration, "commit": report.get("head"), "score": report.get("score", 0.0),
-                      "passed": report["passed"], "scope_failed": "scope" in failed,
+                      "passed": report["passed"], "scope_failed": "scope" in failed or out_of_scope,
+                      "failed_checks": sorted(failed),
                       "stages": {r["stage"]: r["status"] for r in report.get("stages", [])}}]
 
 
+def _escalate_repeated(goal_id: int, iteration: int) -> str:
+    """The same check failing in `escalate_after` consecutive iterations goes back to the planner as an
+    escalation (S04-R-06, level 2 of S04-R-07): an `escalation` event and a note asking for another approach."""
+    n = settings().escalate_after
+    hist = {h["iteration"]: set(h.get("failed_checks") or []) for h in _goal(goal_id).history or []}
+    if iteration < n or any(i not in hist for i in range(iteration - n + 1, iteration + 1)):
+        return ""
+    repeated = sorted(set.intersection(*(hist[i] for i in range(iteration - n + 1, iteration + 1))))
+    if not repeated:
+        return ""
+    log_event("escalation", f"failing in {n} iterations in a row: {', '.join(repeated)}; escalated to the planner "
+              "(level 2)", goal_id=goal_id, level=2, checks=repeated)
+    return (f"\n\nEscalation: {', '.join(repeated)} failed in the last {n} iterations in a row. Repeating the same "
+            "approach will not fix it: re-plan with a different approach, or split the failing part into smaller "
+            "tasks with their own checks.")
+
+
+BUDGET_SKIP = "skipped (budget): "
+
+
+def _budget_skipped(goal_id: int, iteration: int) -> bool:
+    with session() as s:
+        return any(t.status == "skipped" and (t.output or "").startswith(BUDGET_SKIP)
+                   for t in s.scalars(select(Task).where(Task.goal_id == goal_id, Task.iteration == iteration)))
+
+
 def _requeue_unfinished(goal_id: int, iteration: int) -> list[int]:
-    """After a restart: tasks that were running go back to the queue; finished ones keep their result."""
+    """After a restart or a resume: tasks that were running or never ran go back to the queue; finished ones keep
+    their result."""
     with session() as s:
         tasks = list(s.scalars(select(Task).where(Task.goal_id == goal_id, Task.iteration == iteration)))
         for t in tasks:
-            if t.status == "running":
+            if t.status in {"running", "skipped"}:
                 t.status, t.started_at = "queued", None
         return [t.id for t in tasks]
 
@@ -882,8 +1165,26 @@ def _keep_best(goal_id: int) -> str:
     return msg
 
 
-def _out_of_budget(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, Any]:
+def _out_of_budget(goal_id: int, why: str, report: dict[str, Any], overrun: bool = False) -> dict[str, Any]:
+    """An exhausted budget pauses the goal for an administrator, or fails it with `budget_exhausted_action`
+    = stop (S04-R-09). Spending twice the estimate always pauses (S14-R-03)."""
+    from agent_company.governance import notify
+
     g = _goal(goal_id)
+    # nobody resumes a benchmark run: it ends, and the eval harness reports it as out of budget
+    if g.origin != "eval" and (overrun or settings().budget_exhausted_action == "pause"):
+        _update_goal(goal_id, status="paused", reason=f"{'cost overrun' if overrun else 'budget'}: {why}")
+        with session() as s:
+            row = s.get(Goal, goal_id)
+            row.checkpoint = {**(row.checkpoint or {}), "paused_for": "cost_overrun" if overrun else "budget",
+                              "paused_why": why}
+        log_event("goal", f"paused: {why}", goal_id=goal_id)
+        if g.origin != "eval":
+            notify(f"Goal #{goal_id} paused: {'it cost more than planned' if overrun else 'budget used up'}"[:256],
+                   f"{g.title}\n{why}. Resume it once the budget is raised"
+                   + (" (resuming accepts the cost so far as the new estimate)." if overrun else "."),
+                   level="warning", source="goal", goal_id=goal_id, project_id=g.project_id, admin_only=True)
+        return {"status": "paused", "iterations": g.iteration, "report": report, "budget": why}
     kept = _keep_best(goal_id)
     _update_goal(goal_id, status="failed",
                  result=f"Stopped: {why}.\n" + (_summary(goal_id, g.iteration, report) if report else "") + kept)
@@ -1019,11 +1320,27 @@ def pause(goal_id: int, actor: str = "system", reason: str = "paused") -> None:
 
 
 def resume(goal_id: int, actor: str = "system") -> None:
-    """Resume a paused goal: it is queued again and continues from its checkpoint (S04-R-05)."""
+    """Resume a paused goal: it is queued again and continues from its checkpoint (S04-R-05). A goal paused for
+    its budget is checked again first; one paused for a cost overrun takes its cost so far as the new estimate."""
     from agent_company import workflow
 
-    if _goal(goal_id).status != "paused":
+    g = _goal(goal_id)
+    if g.status != "paused":
         raise ValueError("only a paused goal can be resumed")
+    paused_for = (g.checkpoint or {}).get("paused_for")
+    if paused_for == "cost_overrun":
+        spent = usage.goal_spend(goal_id)
+        with session() as s:
+            s.get(Goal, goal_id).estimated_cost_usd = spent
+        log_event("goal", f"{actor} accepted the cost so far (${spent:.2f}) as the new estimate", goal_id=goal_id)
+    if paused_for:
+        try:
+            _budget_note(_goal(goal_id), time.monotonic())
+        except BudgetExhausted as e:
+            raise ValueError(f"still over budget ({e}); raise the goal budget first") from e
+        with session() as s:
+            row = s.get(Goal, goal_id)
+            row.checkpoint = {k: v for k, v in (row.checkpoint or {}).items() if k not in {"paused_for", "paused_why"}}
     workflow.transition(goal_id, "queued", "resumed", actor)
     log_event("goal", f"goal resumed by {actor}", goal_id=goal_id)
     enqueue(goal_id)
@@ -1044,7 +1361,10 @@ def trace(goal_id: int) -> dict[str, Any]:
                   "agent": names.get(t.agent_id), "agent_id": t.agent_id, "model": t.model_name, "status": t.status,
                   "started_at": t.started_at.isoformat() if t.started_at else None,
                   "finished_at": t.finished_at.isoformat() if t.finished_at else None,
-                  "acceptance": (t.gate or {}).get("acceptance", []), "files": (t.gate or {}).get("files", [])}
+                  "acceptance": (t.gate or {}).get("acceptance", []), "files": (t.gate or {}).get("files", []),
+                  "commit": (t.gate or {}).get("commit", ""), "findings": (t.gate or {}).get("findings", []),
+                  "next_actions": (t.gate or {}).get("next_actions", []),
+                  "recommendation": (t.gate or {}).get("recommendation", "")}
                  for t in s.scalars(select(Task).where(Task.goal_id == goal_id).order_by(Task.id))]
         runs = [{"id": r.id, "task_id": r.task_id, "agent": names.get(r.agent_id), "agent_id": r.agent_id,
                  "model": r.model_name, "executor": r.kind, "purpose": r.purpose, "ok": r.ok,

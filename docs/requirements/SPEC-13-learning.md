@@ -23,11 +23,17 @@ evaluation*.
   and uncertainty. Fix: promote only if the candidate is strictly better by at least
   `min_improvement` (setting, default 10 points) **and** the benchmark suite (`eval`) does not
   regress; ties keep the current version.
-  **Partly fixed:** the `min_improvement` rule and "ties keep" are in (`evolution.after_task`); the
-  benchmark-suite check belongs to S13-D-02 and is open.
+  **Fixed:** the `min_improvement` rule and "ties keep" are in (`evolution.after_task`); the
+  benchmark-suite check is S13-D-02.
 - **S13-D-02** Candidate playbooks are tried directly on users' goals. §10.2 wants a sandbox/eval
   run first. Fix: run the candidate on the smoke suite before the live trial (S13-R-05).
-  **Open.**
+  **Fixed** (`candidate_smoke`, on by default): a new candidate starts in a `smoke` stage, in which
+  users' goals keep the current playbook and their outcomes do not count. A background run
+  (`evolution.smoke_trial`, one at a time, restarted by `cycle()` after a restart) runs the smoke suite
+  with the current playbook, then with the candidate; only eval goals see the candidate, and only on
+  its side. Passing at least as many runs moves it to the live trial (where `min_improvement` decides);
+  fewer rolls it back. Eval goals no longer steer evolution: their lessons start no trials and do not
+  count in `success_rate`. The full S13-R-05 (experiments table, canary) is still open.
 
 ## Specific requirements
 

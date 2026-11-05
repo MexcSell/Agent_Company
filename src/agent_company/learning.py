@@ -105,7 +105,8 @@ def experience_context(agent_id: int, limit: int = 8, goal_id: int | None = None
             return ""
         from agent_company.evolution import active_playbook
 
-        playbook, trial = active_playbook(agent)
+        g = s.get(Goal, goal_id) if goal_id else None
+        playbook, trial = active_playbook(agent, eval_run=bool(g and g.origin == "eval"))
     parts = []
     if playbook.strip():
         parts.append(f"Your playbook{' (trial version)' if trial else ''}:\n" + playbook.strip())
@@ -126,6 +127,7 @@ def learn(agent_id: int, goal_id: int | None, lesson: str, success: bool, skills
         if a is None:
             return
         g = s.get(Goal, goal_id) if goal_id else None
+        is_eval = bool(g and g.origin == "eval")
         project = s.get(Project, g.project_id) if g and g.project_id else None
         classification = (project.classification if project else None) or "internal"
         status, reason = screen(text)
@@ -156,7 +158,8 @@ def learn(agent_id: int, goal_id: int | None, lesson: str, success: bool, skills
             a.tasks_failed += 1
     from agent_company.evolution import after_task
 
-    after_task(agent_id, success)
+    if not is_eval:  # benchmark runs (and smoke trials) measure; they do not steer evolution
+        after_task(agent_id, success)
     from agent_company import agentdefs
 
     try:  # the definition file carries the (possibly new) playbook: learning changes the agent's body

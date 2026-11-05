@@ -179,6 +179,49 @@ def test_restart_after_a_finished_task_does_not_run_it_again(monkeypatch):
         assert len(s.scalars(select(Task).where(Task.goal_id == gid)).all()) == 3
 
 
+def test_a_restart_drops_the_partial_edits_of_a_task_cut_off_mid_write(monkeypatch):
+    """The worktree is reconciled with the last checkpoint commit: a finished writing task keeps its work, the
+    edits of the one cut off are dropped before it runs again."""
+    plan = executors.standard_plan("x")
+    plan["tasks"].insert(2, {"key": "extra", "title": "Extend the worklog", "role": "developer", "writes": True,
+                             "description": "Add a section to WORKLOG.md", "depends_on": ["build"],
+                             "acceptance": [{"type": "file_exists", "path": "WORKLOG.md"}]})
+    plan["tasks"][-1]["depends_on"] = ["extra"]
+    monkeypatch.setattr(executors, "standard_plan", lambda goal: plan)
+    calls, seen = [], {}
+    real = executors.OfflineExecutor._task
+
+    def task(self, req):
+        calls.append(req.data.get("title"))
+        if req.data.get("title") == "Extend the worklog":
+            seen["partial_before_rerun"] = (req.workdir / "PARTIAL.txt").exists()
+            if calls.count("Extend the worklog") == 1:
+                (req.workdir / "PARTIAL.txt").write_text("half an edit\n")
+                (req.workdir / "WORKLOG.md").write_text("clobbered mid-write\n")
+                raise SystemExit("the process dies mid-write")
+        return real(self, req)
+
+    monkeypatch.setattr(executors.OfflineExecutor, "_task", task)
+    gid = loop.create_goal("Reconcile", quality_commands=["test -f WORKLOG.md"])
+    with pytest.raises(SystemExit):
+        loop.run_goal(gid)
+    with session() as s:
+        g = s.get(Goal, gid)
+        build = s.scalars(select(Task).where(Task.goal_id == gid, Task.key == "build")).one()
+        assert build.status == "done" and build.gate["commit"] == g.checkpoint["commit"]
+        assert build.gate["files"] == ["WORKLOG.md"], "the files the task changed, from its checkpoint commit"
+        g.status = "queued"
+    out = loop.run_goal(gid)
+    assert out["status"] == "awaiting_approval"
+    assert seen["partial_before_rerun"] is False, "the rerun starts from the checkpoint, not the partial edits"
+    assert calls.count("Implement the specification") == 1, "the finished writing task is not run again"
+    wt = loop._goal(gid).worktree
+    assert "clobbered" not in (__import__("pathlib").Path(wt) / "WORKLOG.md").read_text()
+    with session() as s:
+        assert any("dropped unfinished edits: PARTIAL.txt, WORKLOG.md" in e.message
+                   for e in s.scalars(select(Event).where(Event.goal_id == gid)))
+
+
 def test_a_merge_is_not_repeated():
     gid = loop.create_goal("Merge once", quality_commands=["test -f WORKLOG.md"])
     loop.run_goal(gid)
@@ -213,6 +256,38 @@ def test_transient_errors_are_retried_with_growing_delays(monkeypatch):
     res, choice = loop._execute(gm, plan_request(), "plan")
     assert res.ok and calls == ["Claude Sonnet 5.5"] * 3 and delays == [2.0, 4.0]
     assert loop.backoff(10) == 60.0, "capped at retry_max_seconds"
+
+
+def test_a_retry_that_would_wait_past_the_goal_deadline_is_not_made(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    calls, delays = [], []
+
+    class Flaky(executors.Executor):
+        kind = "llm"
+
+        def _run(self, req):
+            calls.append(self.choice.name)
+            raise RuntimeError("503 service unavailable")
+
+    monkeypatch.setitem(executors.EXECUTORS, "llm", Flaky)
+    monkeypatch.setattr(loop, "_sleep", delays.append)
+    monkeypatch.setattr(loop.random, "uniform", lambda a, b: 0)
+    router.set_route("general_manager", "Claude Sonnet 5.5")
+    gm = registry.staff("general_manager")
+    gm.model_pref = "Claude Sonnet 5.5"
+    res, _ = loop._execute(gm, plan_request(), "plan", deadline=time.monotonic() + 3)
+    assert not res.ok and calls == ["Claude Sonnet 5.5"] * 2 and delays == [2.0], \
+        "the 2 s retry fits before the deadline, the 4 s one does not"
+
+
+def test_the_task_deadline_caps_the_run_timeout(monkeypatch):
+    seen = []
+    real = executors.for_choice
+    monkeypatch.setattr(executors, "for_choice", lambda choice, timeout: (seen.append(timeout), real(choice, timeout))[1])
+    gm = registry.staff("general_manager")
+    loop._execute(gm, plan_request(), "plan", timeout=30)
+    loop._execute(gm, plan_request(), "plan", timeout=10 ** 6)
+    assert seen == [30, 600], "a task deadline shortens a run; it never extends the command timeout"
 
 
 def test_policy_refusals_are_not_retried(monkeypatch):

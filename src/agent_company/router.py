@@ -88,6 +88,7 @@ class Choice:
     reason: str
     base_url: str = ""
     api_key_env: str = ""
+    session_id: str = ""
 
     @property
     def provider(self) -> str:
@@ -101,7 +102,7 @@ def model_dict(m: ModelEntry) -> dict[str, Any]:
             "input_cost": m.input_cost, "output_cost": m.output_cost,
             "daily_token_limit": m.daily_token_limit, "weekly_token_limit": m.weekly_token_limit,
             "enabled": m.enabled, "builtin": m.builtin, "notes": m.notes, "base_url": m.base_url,
-            "api_key_env": m.api_key_env, "available": ok, "unavailable_reason": why}
+            "api_key_env": m.api_key_env, "session_id": m.session_id, "available": ok, "unavailable_reason": why}
 
 
 def seed() -> None:
@@ -178,6 +179,8 @@ def available(m: ModelEntry) -> tuple[bool, str]:
             return False, "set ENABLE_CLAUDE_CODE=1 to let agents run Claude Code"
         if not shutil.which("claude"):
             return False, "`claude` CLI not found on PATH"
+        if m.session_id and not claude_session_file(m.session_id):
+            return False, f"Claude Code session {m.session_id[:8]} not found on this host"
     elif m.kind == "codex":
         if not settings().enable_codex:
             return False, "set ENABLE_CODEX=1 to let agents run Codex"
@@ -201,14 +204,28 @@ def available(m: ModelEntry) -> tuple[bool, str]:
     return True, ""
 
 
+SESSION_RE = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+
+
+def claude_session_file(session_id: str) -> str:
+    """The transcript of a Claude Code session on this host (any project folder), or ''."""
+    import re
+    from pathlib import Path
+
+    if not re.fullmatch(SESSION_RE, session_id):
+        return ""
+    root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+    return next((str(p) for p in root.glob(f"*/{session_id}.jsonl")), "")
+
+
 def _choice(m: ModelEntry, reason: str) -> Choice:
     return Choice(name=m.name, kind=m.kind, model_id=m.model_id, reason=reason, base_url=m.base_url or "",
-                  api_key_env=m.api_key_env or "")
+                  api_key_env=m.api_key_env or "", session_id=m.session_id or "")
 
 
 def _choice_from_dict(m: dict[str, Any]) -> Choice:
     return Choice(name=m["name"], kind=m["kind"], model_id=m["model_id"], reason="", base_url=m.get("base_url") or "",
-                  api_key_env=m.get("api_key_env") or "")
+                  api_key_env=m.get("api_key_env") or "", session_id=m.get("session_id") or "")
 
 
 def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = False,
@@ -296,7 +313,7 @@ def set_route(role: str, model_name: str, escalation: str | None = None) -> None
 
 
 MODEL_FIELDS = {"name", "kind", "model_id", "input_cost", "output_cost", "daily_token_limit",
-                "weekly_token_limit", "enabled", "notes", "base_url", "api_key_env"}
+                "weekly_token_limit", "enabled", "notes", "base_url", "api_key_env", "session_id"}
 
 
 def add_model(data: dict[str, Any]) -> dict[str, Any]:
@@ -340,6 +357,9 @@ def _check_endpoint(data: dict[str, Any]) -> None:
     env = data.get("api_key_env") or ""
     if env and not re.match(r"^[A-Z][A-Z0-9_]{1,63}$", env):
         raise ValueError("api_key_env must be an environment variable name such as LOCAL_LLM_KEY")
+    sid = data.get("session_id") or ""
+    if sid and not re.fullmatch(SESSION_RE, sid):
+        raise ValueError("session_id must be a Claude Code session id such as 3067d536-a81c-492b-9302-1b000247bdea")
 
 
 def test_model(model_id: int) -> dict[str, Any]:

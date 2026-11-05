@@ -98,6 +98,19 @@ def commit_all(path: Path | str, message: str, author: dict[str, str] | None = N
     return git(path, "rev-parse", "HEAD")
 
 
+def reset_to(path: Path | str, commit: str) -> list[str]:
+    """Put the worktree back to `commit`: uncommitted edits and new files go; generated files, attachments and
+    git-ignored files stay. Returns the source paths that were dirty."""
+    path = ensure_sandboxed(path)
+    excludes = [f":(exclude,glob)**/{g}" for g in GENERATED] + [f":(exclude,glob)**/{g}/**" for g in GENERATED]
+    changed = git(path, "diff", "HEAD", "--name-only", "--", ".", *excludes).splitlines()
+    new = git(path, "ls-files", "--others", "--exclude-standard", "--", ".", *excludes).splitlines()
+    dirty = sorted({p for p in changed + new if p})
+    git(path, "reset", "-q", "--hard", commit)
+    git(path, "clean", "-fdq", *(x for g in GENERATED for x in ("-e", g)))
+    return dirty
+
+
 def diff_stat(path: Path | str, base: str) -> str:
     return git(ensure_sandboxed(path), "diff", "--stat", f"{base}...HEAD", check=False)
 

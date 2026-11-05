@@ -44,6 +44,11 @@ def goal_spend(goal_id: int) -> float:
         return float(s.scalar(select(func.coalesce(func.sum(Run.cost), 0.0)).where(Run.goal_id == goal_id)) or 0.0)
 
 
+def task_spend(task_id: int) -> float:
+    with session() as s:
+        return float(s.scalar(select(func.coalesce(func.sum(Run.cost), 0.0)).where(Run.task_id == task_id)) or 0.0)
+
+
 def tokens_since(model_name: str, since: datetime) -> int:
     with session() as s:
         total = s.scalar(select(func.coalesce(func.sum(Run.input_tokens + Run.output_tokens), 0))

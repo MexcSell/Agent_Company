@@ -84,10 +84,11 @@ Machines code):
 | Capability-gap calculation, recruitment records and job descriptions | SPEC03 §5, §7, §8 | open → S03-R-01, S03-R-03 |
 | Blackboard: shared context per goal, with versioning; agent-to-agent messages on it | SPEC04 §9-10 | done (`blackboard.py`, S04-R-01, S04-R-10) |
 | Decision records (approval blocks the merge) | SPEC04 §12.2 | done (`decisions.py`, S04-R-02) |
-| Conflict resolution between agents' results | SPEC04 §12.1 | open → S04-R-03 |
+| Conflict resolution between agents' results | SPEC04 §12.1 | done (`loop._review_conflicts`, S04-R-03) |
 | Goal workflow states with a transition log; pause/resume | SPEC04 §13.1 | done (`workflow.py`, S04-R-04) |
-| Durable recovery: resume interrupted goals after a restart; merge/push never repeated | SPEC04 §13.2 | partial (`Goal.checkpoint`, `operations`; worktree reconcile open) → S04-R-05 |
-| Retry policy and escalation levels for failed tasks | SPEC04 §14 | partial (transient retry with backoff, no retry of refusals; escalation level by category) → S04-R-06, S04-R-07 |
+| Durable recovery: resume interrupted goals after a restart; merge/push never repeated | SPEC04 §13.2 | done (`Goal.checkpoint`, `operations`, checkpoint commits and worktree reconcile, S04-R-05) |
+| Retry policy and escalation levels for failed tasks | SPEC04 §14 | done / partial (retry by failure type, budget pause, re-plan, repeated-check escalation, S04-R-06; routing to escalation levels 3-4 open → S04-R-07) |
+| Task contract fields: scope, risk, test plan, budget, deadline, requirement keys; findings and next actions | Designing guide §3 | done (`contracts.TaskContract`, G-R-01) |
 | Execution trace per goal | SPEC04 FR-30, SPEC14 | partial (`/api/goals/{id}/trace`; tool calls open) → S04-R-12 |
 | Goal-chain depth limit for proposals | SPEC04 §9.4 | done (`max_goal_depth`, S04-R-08 partial) |
 | Milestones, blockers and risks, insights, upcoming action items per project | ASEAO05 §7-10 | open → S05-R-01..R-04 |
@@ -108,8 +109,8 @@ Machines code):
 | Agent mentoring and knowledge transfer | SPEC12 §9 | open → S12-R-04 |
 | Collaboration recommendation with bias and reputation-manipulation protection | SPEC12 §11, §18 | open → S12-R-03, S12-R-06 |
 | Autonomous learning planner and training-exercise generator | SPEC13 §6, §8 | open → S13-R-01, S13-R-02 |
-| A/B testing of playbook or model changes | SPEC13 §10.4 | open → S13-R-05 (promotion now needs a clear improvement, S13-D-01) |
-| Agent behaviour monitoring with deterministic rules | SPEC14 §10 | partial (five rules; cost-vs-estimate open) → S14-R-03 |
+| A/B testing of playbook or model changes | SPEC13 §10.4 | partial (a candidate must pass the smoke suite against the current playbook before its live trial, S13-D-02; promotion needs a clear improvement, S13-D-01) → S13-R-05 |
+| Agent behaviour monitoring with deterministic rules | SPEC14 §10 | done (six rules, cost-vs-estimate included, S14-R-03) |
 | Security incident records and response | SPEC14 §11 | done (`incidents`, Audit view, S14-R-04) |
 | Emergency shutdown with levels E0-E5 (executor, agent, goal, project, room, company), CLI and top-bar control | SPEC14 §12 | done (`governance.stop`, `python -m agent_company stop`, S14-R-01) |
 | Autonomy levels and action classification | SPEC14 §13 | partial (agents cannot approve authority-raising proposals; autonomy levels open) → S14-R-02 |

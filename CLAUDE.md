@@ -8,10 +8,12 @@ feature came from.
 
 - `src/agent_company/` – one module per service:
   `registry.py` + `org.py` (agents, rooms), `scheduler.py`, `router.py` (models, routes, fallback,
-  provider catalogs), `contracts.py`, `executors.py` (tracked subprocesses: `terminate` for stops), `worktrees.py`,
+  provider catalogs), `contracts.py` (task contracts with scope, risk, budget, deadline; output lines),
+  `executors.py` (tracked subprocesses: `terminate` for stops), `worktrees.py`,
   `quality.py` + `checks.py` (gate: contracts, review verdicts with logic verification, secrets, syntax, scope,
-  change boundaries, baseline), `usage.py`; `loop.py` (circular goal loop, budgets, best-iteration rollback,
-  handovers, checkpoint resume, retry policy, behaviour rules, idempotent merge/push, trace); `workflow.py` (goal
+  change boundaries, baseline), `usage.py`; `loop.py` (circular goal loop, budgets that pause, best-iteration
+  rollback, handovers, checkpoint commits per writing task + worktree reconcile on resume, retry policy,
+  re-plan, conflict review, escalation, behaviour rules, idempotent merge/push, trace); `workflow.py` (goal
   state machine, `goal_transitions`); `blackboard.py` (versioned shared goal context, agent messages);
   `decisions.py` (decision records; human ones block the merge); `projects.py` (projects, command window,
   proposals, uploads); `learning.py` (knowledge items: provenance, screening, scoped ranked retrieval)
@@ -29,7 +31,7 @@ feature came from.
   (`.claude/specs/<slug>/` artifacts of every goal, the GM's `.claude/` configure step); `hooks.py` (TaskCreated,
   TaskCompleted, TeammateIdle → `data/logs/team-hooks.jsonl`, fail-open);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
-  (Workspace Claude Code panel: a tab per conversation, titled by Haiku; live host sessions, session history with resume/stop/delete); `api.py`; `static/` (dashboard, plain JS, one file per area; `agents.js` (org chart, Tools & MCP, Skills & plugins, agent card),
+  (Workspace Claude Code panel: a tab per conversation (new ones on the far left), titled by Haiku; other live host sessions only in the sessions window (a tab while one is opened), session history with resume/stop/delete); `api.py`; `static/` (dashboard, plain JS, one file per area; `agents.js` (org chart, Tools & MCP, Skills & plugins, agent card),
   `models.js`; rail order shared by all users via `/api/ui/nav_layout` (Settings → Navigation); buttons with a known
   label become icons (`iconize` in app.js); `index.html` is served with content-hashed static URLs;
   `workspace.js` + `viewer.js` + `console.js` + `claude.js` are the Workspace home page, sharing

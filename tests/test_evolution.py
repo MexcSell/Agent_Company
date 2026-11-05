@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from agent_company import evolution, executors, learning, loop, registry
+from agent_company import evolution, executors, learning, loop, prefs, registry
 from agent_company.api import create_app
 from agent_company.db import Agent, Lesson, session
 
@@ -31,6 +31,7 @@ def test_playbook_versions_are_curated_and_restorable():
 
 
 def test_low_success_starts_an_experiment_then_promotes_or_rolls_back():
+    prefs.set_value("candidate_smoke", False)  # the live trial on its own; the smoke stage is tested below
     aid = dev_id()
     learning.learn(aid, None, "Initial lesson.", True, [])
     for i in range(4):
@@ -49,7 +50,80 @@ def test_low_success_starts_an_experiment_then_promotes_or_rolls_back():
     assert {"diagnose", "experiment", "evaluate", "promote"} <= set(stages)
 
 
+def start_candidate(aid):
+    learning.learn(aid, None, "Initial lesson.", True, [])
+    for i in range(4):
+        learning.learn(aid, None, f"Broke the build {i}.", False, [])
+    with session() as s:
+        return s.get(Agent, aid).experiment
+
+
+def fake_suite(monkeypatch, aid, rates):
+    """evaluation.run_suite that records which playbook eval goals of the agent see on each side."""
+    from agent_company import evaluation
+
+    seen = []
+
+    def run_suite(suite, label, repeats=3, only=None):
+        with session() as s:
+            a = s.get(Agent, aid)
+            seen.append((label.split("-")[2], evolution.active_playbook(a, eval_run=True),
+                         evolution.active_playbook(a)))
+        return {"pass_rate": rates[label.split("-")[2]]}
+
+    monkeypatch.setattr(evaluation, "run_suite", run_suite)
+    return seen
+
+
+def test_a_candidate_reaches_users_goals_only_after_the_smoke_suite(monkeypatch):
+    """S13-D-02: the candidate runs the smoke suite against the current playbook before the live trial."""
+    spawned = []
+    monkeypatch.setattr(evolution, "_spawn", spawned.append)
+    aid = dev_id()
+    exp = start_candidate(aid)
+    assert exp["stage"] == "smoke" and len(spawned) == 1
+    assert "(trial version)" not in learning.experience_context(aid), "users' goals keep the current playbook"
+    learning.learn(aid, None, "A live outcome during the smoke stage.", True, [])
+    with session() as s:
+        assert s.get(Agent, aid).experiment["outcomes"] == [], "live outcomes do not count for the candidate"
+    assert evolution.start_smoke(aid) is False, "one smoke trial per candidate"
+    seen = fake_suite(monkeypatch, aid, {"baseline": 0.0, "candidate": 0.67})
+    spawned[0]()
+    (b_side, b_eval, b_live), (c_side, c_eval, c_live) = seen
+    assert (b_side, b_eval[1], b_live[1]) == ("baseline", False, False)
+    assert (c_side, c_eval, c_live[1]) == ("candidate", (exp["playbook"], True), False), \
+        "only eval goals see the candidate, and only on its side"
+    with session() as s:
+        exp = s.get(Agent, aid).experiment
+        assert exp["stage"] == "live" and exp["smoke"] == {"baseline": 0.0, "candidate": 0.67}
+    assert "(trial version)" in learning.experience_context(aid)
+    assert "smoke" in [e["stage"] for e in evolution.overview()["events"]]
+
+
+def test_a_candidate_worse_on_the_smoke_suite_is_rolled_back(monkeypatch):
+    aid = dev_id()
+    before = start_candidate(aid)
+    assert before["stage"] == "smoke"
+    fake_suite(monkeypatch, aid, {"baseline": 1.0, "candidate": 0.33})
+    assert evolution.smoke_trial(aid) == {"baseline": 1.0, "candidate": 0.33}
+    with session() as s:
+        assert s.get(Agent, aid).experiment == {}
+    assert evolution.overview()["events"][0]["stage"] == "rollback"
+
+
+def test_eval_goals_do_not_steer_evolution():
+    aid = dev_id()
+    gid = loop.create_goal("Benchmark", origin="eval")
+    learning.learn(aid, None, "Initial lesson.", True, [])
+    for i in range(6):
+        learning.learn(aid, gid, f"Benchmark failure {i}.", False, [])
+    with session() as s:
+        assert evolution.success_rate(s, aid, 6) == (1.0, 1)
+        assert s.get(Agent, aid).experiment == {}
+
+
 def test_failed_trial_is_rolled_back_with_a_cooldown():
+    prefs.set_value("candidate_smoke", False)
     aid = dev_id()
     learning.learn(aid, None, "Initial lesson.", True, [])
     before = None

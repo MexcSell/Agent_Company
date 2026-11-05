@@ -68,3 +68,38 @@ def test_extract_json_variants():
     assert contracts.extract_json("```json\n[1, 2]\n```") == [1, 2]
     with pytest.raises(ValueError):
         contracts.extract_json("no json")
+
+
+# --- G-R-01 task contract minimum fields -------------------------------------------------------------
+
+def test_minimum_fields_are_optional_and_validated():
+    c = contracts.validate(base())
+    assert (c.in_scope, c.out_of_scope, c.risk_level, c.test_plan, c.deadline, c.requirement_keys,
+            c.decision_topic) == ([], [], "medium", "", 0, [], "")
+    assert c.budget.cost_usd == 0 and c.budget.turns == 0
+    c = contracts.validate(base(out_of_scope=["tests/*"], risk_level="high", budget={"cost_usd": 0.5, "turns": 20},
+                                deadline=300, requirement_keys=["S08-FR-02"], decision_topic="database"))
+    assert c.budget.turns == 20 and c.deadline == 300
+    for bad in ({"risk_level": "extreme"}, {"deadline": -1}, {"budget": {"cost_usd": -1}}):
+        with pytest.raises(ContractError):
+            contracts.validate(base(**bad))
+
+
+def test_limits_fail_out_of_scope_changes_and_runs_over_budget():
+    c = contracts.validate(base(out_of_scope=["tests/*", "docs"], budget={"cost_usd": 0.1}))
+    rows = contracts.limits(c, ["src/a.py", "tests/test_a.py", "docs/x/y.md"], cost=0.25)
+    scope, budget = rows
+    assert not scope["passed"] and "tests/test_a.py" in scope["detail"] and "docs/x/y.md" in scope["detail"]
+    assert "src/a.py" not in scope["detail"]
+    assert not budget["passed"] and "$0.2500" in budget["detail"]
+    assert all(r["passed"] for r in contracts.limits(c, ["src/a.py"], cost=0.05))
+    assert contracts.limits(contracts.validate(base()), ["anything"], cost=9.0) == [], "no limits, no rows"
+
+
+def test_findings_next_actions_and_recommendation_lines():
+    out = ("Done.\nFINDING: a.py:3 | breaks on empty input | guard it\n- NEXT: add a regression test\n"
+           "NEXT ACTION: update the docs\nRECOMMENDATION: PostgreSQL\nRECOMMENDATION: SQLite\n")
+    assert contracts.findings(out) == ["a.py:3 | breaks on empty input | guard it"]
+    assert contracts.next_actions(out) == ["add a regression test", "update the docs"]
+    assert contracts.recommendation(out) == "SQLite", "the last recommendation counts"
+    assert contracts.recommendation("none here") == ""

@@ -28,12 +28,12 @@ orchestrator → `loop.py`; scheduler → `scheduler.run_dag`; team → agents s
 | S04-FR-13 | Maintain shared task context | P0 | done (S04-R-01, `blackboard.py`) |
 | S04-FR-14 | Track task and team progress | P0 | done (`Task.status`, `/api/stream`) |
 | S04-FR-15 | Aggregate agent results | P0 | done (`loop._summary`) |
-| S04-FR-16 | Resolve conflicting outputs | P1 | open → S04-R-03 |
+| S04-FR-16 | Resolve conflicting outputs | P1 | done (S04-R-03, `loop._review_conflicts`) |
 | S04-FR-17 | Verify task completion | P0 | done (`contracts.check`, `quality.evaluate`) |
-| S04-FR-18 | Retry failed tasks | P0 | partial: transient-error retry with backoff, fresh-session restart, no retry of refusals (`loop._execute`); the rest of S04-R-06 open |
+| S04-FR-18 | Retry failed tasks | P0 | done (S04-R-06): retries by failure type, capped by the goal deadline (`loop._execute`) |
 | S04-FR-19 | Handle timeouts and cancellations | P0 | done (`loop.cancel`, command timeouts, `goal_time_budget`) |
 | S04-FR-20 | Recover interrupted workflows | P1 | done: a restart resumes the planned iteration without re-running finished tasks (S04-R-05) |
-| S04-FR-21 | Enforce execution budgets | P0 | partial: cost and time only → S04-R-09 |
+| S04-FR-21 | Enforce execution budgets | P0 | partial: goal cost and time (pause or stop), per-task cost, turns and deadline (G-R-01); tokens, active agents and child-goal caps → S04-R-09 |
 | S04-FR-22 | Support human approval checkpoints | P0 | done (merge approval) |
 | S04-FR-23 | Record orchestration decisions | P0 | done (S04-R-02 `decisions.py`, S04-R-04 `goal_transitions`) |
 | S04-FR-24 | Support strategy selection | P1 | open → S04-R-11 |
@@ -46,8 +46,8 @@ orchestrator → `loop.py`; scheduler → `scheduler.run_dag`; team → agents s
 
 ## Specific requirements
 
-Status (2026-11-05): S04-R-01 done · S04-R-02 done · S04-R-03 open · S04-R-04 done · S04-R-05 partial ·
-S04-R-06 partial · S04-R-07 partial · S04-R-08 partial · S04-R-09 open · S04-R-10 done · S04-R-11 open ·
+Status (2026-11-05): S04-R-01 done · S04-R-02 done · S04-R-03 done · S04-R-04 done · S04-R-05 done ·
+S04-R-06 done · S04-R-07 partial · S04-R-08 partial · S04-R-09 partial · S04-R-10 done · S04-R-11 open ·
 S04-R-12 partial. Details under each item.
 
 ### S04-R-01 Blackboard (shared, versioned goal context) — §10
@@ -90,7 +90,14 @@ S04-R-12 partial. Details under each item.
   conflicts escalate (S04-R-07).
 - Acceptance: two task outputs with different recommendations on one topic → one review task and
   one decision record citing both task IDs.
-- **Status: open.**
+- **Status: done** (`loop._review_conflicts`, `_decide_conflicts`; `tests/test_orchestration.py`). Tasks
+  end with a `RECOMMENDATION:` line when their contract has a `decision_topic`; recommendations that
+  differ after normalising case and punctuation get one QA review (`conflict-<topic>`, depending on the
+  tasks, so their outputs are in its prompt; `avoid_provider` as for other reviews). Its `DECISION`,
+  `CONFIDENCE` and `CATEGORY` lines become a decision record whose evidence cites every task;
+  `financial` and `critical` ones need a person and block the merge. The review runs after the
+  iteration's other tasks; if the work followed the recommendation it rejects, it fails the gate
+  (`VERDICT: FAIL`), so the next iteration corrects it.
 
 ### S04-R-04 Goal workflow state machine — §13.1
 
@@ -121,10 +128,13 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
 - Resumption re-checks budget and permissions first; history is preserved.
 - Acceptance: stop the process after task A of iteration 2 finished → restart → A is not
   executed again and the goal finishes; a merge interrupted after completion is not repeated.
-- **Status: partial.** Done: `Goal.checkpoint`, resume without re-running finished tasks, idempotency
-  keys for merge and push (`operations`), status written only after the gate result. Open: the worktree
-  is not reconciled with the last recorded commit (a task cut off mid-write leaves its partial edits,
-  and the rerun works on top of them).
+- **Status: done.** `Goal.checkpoint`, resume without re-running finished tasks, idempotency keys for
+  merge and push (`operations`), status written only after the gate result. Worktree reconcile: the plan
+  step and every finished writing task are committed on the goal branch (`loop._plan_commit`,
+  `_checkpoint`; the scheduler's write lock makes a commit hold that task's changes only) and the commit
+  is the checkpoint; after a restart the worktree is reset to it (`loop._reconcile`,
+  `worktrees.reset_to`), so a task cut off mid-write reruns without its partial edits. Generated files,
+  attachments and git-ignored files stay. Resumption re-checks the budget first.
 
 ### S04-R-06 Failure-specific retry policy — §14, §14.1
 
@@ -144,11 +154,14 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
   `retry_max_seconds` (60). Every retry has a cap and respects the goal deadline.
 - Acceptance: a fake executor raising a transient error twice then succeeding is retried with
   growing delays; a blocked command is not retried.
-- **Status: partial.** Done: transient errors (backoff with jitter, then the next model), executor
-  crash on a resumed session (once, fresh), blocked command (no retry), secret/scope (goal stopped,
-  incident). Open: the retry cap does not consider the goal deadline; invalid contract → re-plan;
-  missing capability → recruit; budget exhaustion still fails the goal instead of pausing it
-  (S04-R-09); same check failing in N iterations → escalate.
+- **Status: done.** Transient errors (backoff with jitter, then the next model; a retry that would
+  wait past the goal's time budget is not made), executor crash on a resumed session (once, fresh),
+  blocked command (no retry), secret/scope (goal stopped, incident). Invalid contract: the planner gets
+  the validation error and one more try before the standard plan. Missing capability: staffing searches
+  the workforce, then recruits (`registry.staff`, `_covering`, `_recruit`). Conflicting outputs: S04-R-03.
+  Budget exhausted: the goal pauses and administrators are notified (`budget_exhausted_action`, S04-R-09).
+  The same check failing in `escalate_after` (2) consecutive iterations is an `escalation` event (level 2)
+  and a note to the planner to change approach.
 
 ### S04-R-07 Escalation levels — §14.2
 - Levels: 1 assigned agent (retry), 2 goal GM (re-plan), 3 room manager, 4 executive GM of the
@@ -181,6 +194,11 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
   need an administrator and are audited; unused budget returns to the parent.
 - Exhaustion pauses or stops according to a setting (`budget_exhausted_action`: `pause|stop`).
 - Acceptance: a child goal requesting more than the parent's remainder is capped.
+- **Status: partial.** Done: `budget_exhausted_action` (default `pause`; an iteration cut short is not
+  judged, its unrun tasks run after the resume, and resuming refuses while the goal is still over
+  budget); per-task cost, turns and deadline in the contract (G-R-01). Open: token and active-agent
+  dimensions, per-goal budgets with child-goal caps and returns. The time budget counts per run of the
+  loop, so a resumed goal gets a fresh time window.
 - **Status: open.**
 
 ### S04-R-10 Agent-to-agent messages — §9.2, §9.3
@@ -218,7 +236,7 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
 | AT-012, AT-013 | parallel and dependent execution | done (`scheduler.run_dag`) |
 | AT-014, AT-015 | message delivery recorded; unauthorized context denied | done (S04-R-10, S04-R-01) |
 | AT-016..018 | result stored; failed review → revision; passed → verified | done (gate, iterations); states S04-R-04 |
-| AT-019, AT-028 | budget exceeded / exhausted → policy action, pause or stop | S04-R-09, S04-R-06 |
+| AT-019, AT-028 | budget exceeded / exhausted → policy action, pause or stop | done (`budget_exhausted_action`, S04-R-06) |
 | AT-020 | cancel → pending work cancelled safely | done (`loop.cancel`) |
 | AT-021, AT-027 | worker crash / orchestrator restart → resume from durable state | done (S04-R-05) |
 | AT-022 | database unavailable → no false completion | done (status written only after the gate result is stored) |

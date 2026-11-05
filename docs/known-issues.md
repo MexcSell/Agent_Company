@@ -63,7 +63,19 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 | P1 | Pausing a goal takes effect at the next step boundary: tasks already started finish first (an emergency stop, by contrast, ends their processes). | by design |
 | P2 | The executor output limit (5 M characters) cuts the output after the run has ended; it does not stop a run while it produces output. The timeout does stop it. | open (low) |
 | P3 | Under E5, goals created during the stop stay queued; the queue's watcher offers them again every 5 s and they are held until the stop is lifted. | by design |
-| P4 | A restart resumes the planned iteration but does not reset the worktree to the last recorded commit: a task cut off mid-write leaves its partial edits, and its rerun starts on top of them. | open (S04-R-05) |
+| P4 | A restart resumes the planned iteration but does not reset the worktree to the last recorded commit: a task cut off mid-write leaves its partial edits, and its rerun starts on top of them. | fixed (checkpoint commits, `loop._reconcile`) |
 | P5 | Reviews must now contain a "Logic verification" section and an approving OUTCOME; a model that answers with a bare `VERDICT: PASS` fails the gate until it follows the checklist in its prompt. | by design (S08-R-03) |
 | P6 | Proposals mentioning permissions, budgets, routes, settings, security, audit, credentials and similar words are left to a person even under the `superiors` policy; the word list is deliberately broad. | by design (S14-R-02) |
 | P7 | Acceptance commands are written by the planner, so three commands refused by the policy in one goal pause the planner, normally the company's General Manager (E1). Until an administrator lifts that stop (System → Narrower stops, or `python -m agent_company stop --lift --level E1 --scope <id>`), every new goal fails at planning with "every general_manager agent is paused". | by design (S14-R-03) |
+
+## Added 2026-11-05 (step 1 and 2 leftovers)
+
+| # | Problem | Status |
+|---|---------|--------|
+| P8 | A goal whose budget runs out is now **paused**, not failed (`budget_exhausted_action`, Settings; set it to `stop` for the old behaviour). It stays paused until an administrator raises the budget and resumes it; resuming while still over budget is refused. | by design (S04-R-09) |
+| P9 | The time budget counts per run of the loop: a resumed goal (after a pause or a restart) gets a fresh time window. | open (low; per-goal budgets are S04-R-09) |
+| P10 | The goal branch now has one commit per finished writing task plus one for the plan (`Goal N iteration M: <task>`), as well as the gate's. The merge into the base branch is still one merge commit. | by design (S04-R-05) |
+| P11 | A conflict review (S04-R-03) runs after the iteration's other tasks, so the implementation may already follow the rejected recommendation; the review then fails the gate and the next iteration corrects it, at the cost of one more iteration. | by design |
+| P12 | With `candidate_smoke` on (default), each new candidate playbook runs the smoke suite twice (current and candidate playbook: 6 goals with `repeats` 1). On real models this costs model time; it starts only when an agent's success rate falls below 50 % over 6 tasks. The offline simulator fails the smoke suite on purpose, so offline both sides score 0 and the candidate goes on to its live trial. | by design (S13-D-02) |
+| P13 | While a smoke trial runs its candidate side, every eval goal (including one an administrator starts with `eval`) uses that agent's candidate playbook. Run benchmarks when no smoke trial is running (Evolution page). | open (low) |
+| P14 | The "cost > 2× estimate" rule needs an estimate: the order's `estimated_cost_usd` or the planner's. Goals with neither are only limited by `goal_budget_usd`. | by design (S14-R-03) |

@@ -118,7 +118,127 @@ def test_keeps_the_best_iteration(monkeypatch):
     assert worktrees.git(g.worktree, "rev-parse", "HEAD") == g.history[0]["commit"]
 
 
+def pricey(monkeypatch, cost=0.01):
+    """Pretend every model call costs `cost`."""
+    real = usage.record
+
+    def record(**kw):
+        kw["cost"] = cost
+        return real(**kw)
+
+    monkeypatch.setattr(usage, "record", record)
+
+
+def test_an_exhausted_budget_pauses_the_goal_and_resume_checks_it_again(monkeypatch):
+    from agent_company.db import Goal, Task
+
+    monkeypatch.setattr(loop, "enqueue", lambda gid: None)
+    prefs.set_value("goal_budget_usd", 0.01)
+    pricey(monkeypatch)
+    gid = loop.create_goal("Budgeted", quality_commands=["test -f WORKLOG.md"])
+    out = loop.run_goal(gid)
+    assert out["status"] == "paused" and "cost budget" in out["budget"]
+    with session() as s:
+        g = s.get(Goal, gid)
+        assert g.status == "paused" and g.checkpoint["paused_for"] == "budget"
+        assert not g.history, "an iteration cut short by the budget is not judged"
+        assert any(t.output.startswith(loop.BUDGET_SKIP) for t in s.scalars(select(Task).where(Task.goal_id == gid)))
+    with pytest.raises(ValueError, match="still over budget"):
+        loop.resume(gid, actor="user:admin")
+    prefs.set_value("goal_budget_usd", 100.0)
+    loop.resume(gid, actor="user:admin")
+    out = loop.run_goal(gid)
+    assert out["status"] == "awaiting_approval" and out["iterations"] == 1
+    with session() as s:
+        assert {t.status for t in s.scalars(select(Task).where(Task.goal_id == gid))} == {"done"}
+        assert "paused_for" not in s.get(Goal, gid).checkpoint
+
+
+def test_a_benchmark_run_over_budget_ends_instead_of_pausing(monkeypatch):
+    from agent_company import evaluation
+
+    prefs.set_value("goal_budget_usd", 0.01)
+    pricey(monkeypatch)
+    gid = loop.create_goal("Benchmark", quality_commands=["test -f WORKLOG.md"], origin="eval")
+    assert loop.run_goal(gid)["status"] == "failed", "nobody resumes an eval goal"
+    assert evaluation._end_reason(loop._goal(gid)) == "out_of_budget"
+
+
+def test_a_missing_checkpoint_commit_does_not_fail_the_resume():
+    from agent_company.db import Event, Goal
+
+    gid = loop.create_goal("Fail open", quality_commands=["test -f WORKLOG.md"])
+    loop.run_goal(gid)
+    with session() as s:
+        g = s.get(Goal, gid)
+        g.checkpoint = {**g.checkpoint, "commit": "0" * 40}
+    loop._reconcile(gid)
+    with session() as s:
+        assert any("could not reset the worktree" in e.message
+                   for e in s.scalars(select(Event).where(Event.goal_id == gid)))
+
+
+def test_spending_twice_the_estimate_pauses_the_goal(monkeypatch):
+    """S14-R-03: cost of one goal > 2x its estimate → pause; resuming accepts the cost so far."""
+    from agent_company.db import Goal
+
+    monkeypatch.setattr(loop, "enqueue", lambda gid: None)
+    pricey(monkeypatch)
+    gid = loop.create_goal("Estimated", quality_commands=["test -f WORKLOG.md"], estimated_cost_usd=0.01)
+    out = loop.run_goal(gid)
+    assert out["status"] == "paused" and "estimate" in out["budget"]
+    with session() as s:
+        assert s.get(Goal, gid).checkpoint["paused_for"] == "cost_overrun"
+    spent = usage.goal_spend(gid)
+    loop.resume(gid, actor="user:admin")
+    with session() as s:
+        assert s.get(Goal, gid).estimated_cost_usd == pytest.approx(spent)
+    assert loop.run_goal(gid)["status"] == "awaiting_approval"
+
+
+def test_the_api_takes_an_estimate_and_refuses_to_resume_a_goal_still_over_budget(monkeypatch):
+    import secrets
+
+    from fastapi.testclient import TestClient
+
+    from agent_company.api import create_app
+
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
+        app.app.state.queue = type("Q", (), {"submit": lambda self, gid: None})()
+        app.post("/api/auth/register", json={"name": "luca", "device_secret": secrets.token_urlsafe(32)})
+        gid = app.post("/api/goals", json={"title": "Estimated order", "estimated_cost_usd": 0.5}).json()["id"]
+        assert app.get(f"/api/goals/{gid}").json()["estimated_cost_usd"] == 0.5
+        prefs.set_value("goal_budget_usd", 0.01)
+        pricey(monkeypatch)
+        assert loop.run_goal(gid)["status"] == "paused"
+        assert app.get(f"/api/goals/{gid}").json()["paused_for"] == "budget"
+        r = app.post(f"/api/goals/{gid}/resume")
+        assert r.status_code == 400 and "still over budget" in r.json()["detail"]
+        assert app.put("/api/settings/budget_exhausted_action", json={"value": "never"}).status_code == 400
+
+
+def test_the_planner_sets_the_estimate_unless_the_order_did(monkeypatch):
+    from agent_company.db import Goal
+
+    real = executors.OfflineExecutor._plan
+
+    def plan(self, req):
+        import json
+
+        return json.dumps({**json.loads(real(self, req)), "estimated_cost_usd": 3.5})
+
+    monkeypatch.setattr(executors.OfflineExecutor, "_plan", plan)
+    planned = loop.create_goal("Planner estimate", quality_commands=["test -f WORKLOG.md"])
+    ordered = loop.create_goal("Ordered estimate", quality_commands=["test -f WORKLOG.md"], estimated_cost_usd=1.0)
+    loop.run_goal(planned)
+    loop.run_goal(ordered)
+    with session() as s:
+        assert s.get(Goal, planned).estimated_cost_usd == 3.5
+        assert s.get(Goal, ordered).estimated_cost_usd == 1.0
+
+
 def test_cost_budget_stops_the_goal():
+    prefs.set_value("budget_exhausted_action", "stop")
     prefs.set_value("goal_budget_usd", 0.01)
     gid = loop.create_goal("Expensive", quality_commands=["false"], max_iterations=3)
     real = usage.record
@@ -255,6 +375,31 @@ def test_claude_code_runs_resume_the_agents_session(monkeypatch, env):
     ex.run(executors.Request(purpose="task", role="developer", system="s", prompt="p", workdir=wt,
                              data={"resume": "x; rm -rf /"}))
     assert "--resume" not in calls[2], "only real session ids are passed on"
+    pinned = executors.ClaudeCodeExecutor(router.Choice("Pinned", "claude_code", "", "test",
+                                                        session_id="3067d536-a81c-492b-9302-1b000247bdea"))
+    pinned.run(executors.Request(purpose="task", role="developer", system="s", prompt="p", workdir=wt))
+    assert calls[3][calls[3].index("--resume") + 1].startswith("3067d536") and "--fork-session" in calls[3]
+    pinned.run(executors.Request(purpose="task", role="developer", system="s", prompt="p", workdir=wt,
+                                 data={"resume": first.session_id}))
+    assert calls[4][calls[4].index("--resume") + 1] == first.session_id and "--fork-session" not in calls[4]
+
+
+def test_claude_code_model_pinned_to_a_session(monkeypatch, tmp_path):
+    from agent_company.config import settings
+
+    monkeypatch.setattr(settings(), "enable_claude_code", True)
+    monkeypatch.setattr(router.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    sid = "3067d536-a81c-492b-9302-1b000247bdea"
+    with pytest.raises(ValueError):
+        router.add_model({"name": "Bad", "kind": "claude_code", "session_id": "x; rm -rf /"})
+    m = router.add_model({"name": "Pinned", "kind": "claude_code", "model_id": "claude-opus-5-5", "session_id": sid})
+    assert m["session_id"] == sid and m["available"] is False and "not found" in m["unavailable_reason"]
+    (tmp_path / "projects" / "-home-x").mkdir(parents=True)
+    (tmp_path / "projects" / "-home-x" / f"{sid}.jsonl").write_text("{}\n")
+    m = next(x for x in router.list_models() if x["name"] == "Pinned")
+    assert m["available"] is True
+    assert router.resolve("developer", "Pinned").session_id == sid
 
 
 def test_resumable_session_lookup():

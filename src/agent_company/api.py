@@ -161,6 +161,7 @@ class GoalBody(BaseModel):
     allowed_paths: list[str] = Field(default_factory=list)
     protect_tests: bool = False
     permits: list[str] = Field(default_factory=list)  # change boundaries lifted (admins): dependencies, config
+    estimated_cost_usd: float = Field(default=0.0, ge=0, le=10_000)  # twice this pauses the goal (S14-R-03)
 
 
 class CrawlBody(BaseModel):
@@ -1200,7 +1201,8 @@ def create_app(start_background: bool = True) -> FastAPI:
             gid = loop.create_goal(body.title, body.description, body.repo_path, body.urls,
                                    body.quality_commands, body.max_iterations, created_by=user["id"],
                                    allowed_paths=body.allowed_paths, protect_tests=body.protect_tests,
-                                   extract_checks=user["is_admin"], permits=body.permits)
+                                   extract_checks=user["is_admin"], permits=body.permits,
+                                   estimated_cost_usd=body.estimated_cost_usd)
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
         if body.repo_path or body.quality_commands or body.permits:
@@ -1914,6 +1916,8 @@ def _goal_dict(g: Goal) -> dict[str, Any]:
             "quality_commands": g.quality_commands, "result": g.result, "project_id": g.project_id,
             "origin": g.origin, "parent_goal_id": g.parent_goal_id, "allowed_paths": g.allowed_paths,
             "protect_tests": g.protect_tests, "permits": g.permits or [], "baseline": g.baseline, "history": g.history,
+            "estimated_cost_usd": g.estimated_cost_usd or 0.0,
+            "paused_for": (g.checkpoint or {}).get("paused_for", ""),
             "created_at": g.created_at.isoformat(), "updated_at": g.updated_at.isoformat()}
 
 
