@@ -26,7 +26,7 @@ path (a listener, a crawler target, an outbound call) is added, and add its row 
 | --- | --- | --- |
 | Browser → API | requests with a session cookie | device sign-in, sealed cookie (`api.py`, `transport.py`), permissions (`auth.py`), first admin only from localhost |
 | A2A client → API | JSON-RPC with a bearer token | `a2a.authenticate` (only the token's SHA-256 is stored); tasks become `origin="a2a"` goals that always wait for approval |
-| Web → knowledge | crawled pages | `research._is_public_host` (no private addresses, also after redirects), robots, `injection_flags`, `classify_source` |
+| Web → knowledge | crawled pages; the URLs of research requests, fetched again on each run of a recurring one (`research.ReportThread`) | `research._is_public_host` (no private addresses, also after redirects), robots, `injection_flags`, `classify_source`; a recurring request stops when its budget is used, waits under an E3/E4/E5 stop, and an overlapping request is answered by the existing one instead of fetching again |
 | Model → worktree | model output, CLI tool calls | the tool gateway (`executors.gate`), `worktrees.ensure_sandboxed`, `write_files`, `governance.check_command`, the quality gate |
 | Worktree → project checkout | merge | independent review, `loop.approve` (a person), `checks.*` at the gate |
 | Server → model provider | prompts | classification clearance per model (`router.cleared`, `learning.goal_level`) |

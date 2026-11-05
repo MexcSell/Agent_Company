@@ -11,12 +11,12 @@ and carries out its duties in a rotational manner.*
 | --- | --- | --- |
 | S06-FR-01 | Humans and agents create research requests | done (`research.request_report`; agents via goal research step) |
 | S06-FR-02 | Clear research objective | done (`ResearchReport.question`) |
-| S06-FR-03 | One-time and recurring research | partial: one-time reports; recurring monitoring of sources done (S06-R-02); recurring report requests open |
-| S06-FR-04 | Subject areas, keywords, date ranges, languages, source preferences | open → S06-R-01 |
-| S06-FR-05 | Budget and deadline | open → S06-R-01 |
-| S06-FR-06 | Detect duplicate or overlapping requests | open → S06-R-01 |
-| S06-FR-07 | Priority levels | open → S06-R-01 |
-| S06-FR-08 | Link to projects, tasks, objectives | open → S06-R-01 |
+| S06-FR-03 | One-time and recurring research | done: one-time and recurring reports (`recurring`, `research.ReportThread`, S06-R-01); recurring monitoring of sources (S06-R-02) |
+| S06-FR-04 | Subject areas, keywords, date ranges, languages, source preferences | partial (S06-R-01): keywords and source preferences; date ranges and languages not taken (the knowledge store has no publication date or language to filter on) |
+| S06-FR-05 | Budget and deadline | done (S06-R-01) |
+| S06-FR-06 | Detect duplicate or overlapping requests | done (S06-R-01, `research.find_overlap`) |
+| S06-FR-07 | Priority levels | done (S06-R-01) |
+| S06-FR-08 | Link to projects, tasks, objectives | done (S06-R-01: `project_id`, `goal_id`; the report lands on the goal's blackboard) |
 
 ## Already met
 Provenance and source kinds (`research.classify_source`), injection flags kept out of prompts
@@ -32,6 +32,18 @@ registered sources (`rotation_tick`), robots.txt and public-host checks (`_robot
   (cron-like interval or empty).
 - Before creating, search open/recent requests by normalised question + keywords; on overlap
   return the existing request instead (AT-007 analogue for requests).
+- **Status: done** (`ResearchReport` columns, `research.submit`, `find_overlap`, `due_reports`, `run_due_reports`,
+  `ReportThread`; `POST/GET /api/research/requests`; Research → Ask the research room → More options;
+  `tests/test_research_requests.py`). Overlap: an open, recurring, or less than `RECENT_DAYS` (7) old request with
+  the same normalised question or at least `OVERLAP` (0.6, Jaccard) of the question's and keywords' terms; failed
+  and expired ones do not count. A duplicate returns `{"id": <existing>, "duplicate": true}` and is not run.
+  Source preferences put the preferred kinds (`classify_source`) first in the material and tell the model.
+  Priority and deadline order the queue of `ReportThread` (every 60 s, one request, skipped under an E4 stop of the
+  research room, E3 of its project, or E5); a request past its deadline is `expired`, not run. Budget: the model
+  cost over all runs; a recurring request stops when it is used. Recurring: `hourly|daily|weekly|monthly`; the
+  latest report replaces the request's `report://` document. A request linked to a goal writes its report to that
+  goal's `research` blackboard section. Two runners never run one request at once (a conditional claim); requests
+  cut off by a restart are queued again. Not taken: date ranges and languages (no such data on documents).
 
 ### S06-R-02 Change detection and monitoring rules — §13 (AT-016..018)
 - `Document`: add `content_hash`, `version`, `fetched_at`; refetch stores a new version only when

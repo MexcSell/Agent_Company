@@ -705,6 +705,18 @@ class ResearchReport(Base):
     sources: Mapped[list[Any]] = mapped_column(default=list)
     agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
     requested_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # the request's scope and terms (ASEAO06 S06-R-01)
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # its report goes on the blackboard
+    keywords: Mapped[list[Any]] = mapped_column(default=list)
+    source_preferences: Mapped[str] = mapped_column(String(16), default="any")  # official|academic|open_source|any
+    priority: Mapped[str] = mapped_column(String(16), default="normal")  # low|normal|high|critical
+    budget_usd: Mapped[float] = mapped_column(Float, default=0.0)  # model cost over all its runs; 0 = no limit
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # not run after it
+    recurring: Mapped[str] = mapped_column(String(16), default="")  # hourly|daily|weekly|monthly, empty = once
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    runs: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

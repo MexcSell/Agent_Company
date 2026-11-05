@@ -80,6 +80,9 @@ def reset_after_restart() -> None:
         for a in s.scalars(select(Agent)):
             if a.active_goals:
                 a.active_goals = []
+        # a research request cut off by the restart runs again (ReportThread picks queued ones up)
+        for r in s.scalars(select(research.ResearchReport).where(research.ResearchReport.status == "running")):
+            r.status = "queued"
 
 
 # --- auth dependencies --------------------------------------------------------------
@@ -211,6 +214,15 @@ class ShiftReplaceBody(BaseModel):
 class ResearchBody(BaseModel):
     question: str = Field(min_length=5, max_length=2000)
     urls: list[str] = Field(default_factory=list, max_length=10)
+    # ASEAO06 S06-R-01
+    project_id: int | None = None
+    goal_id: int | None = None
+    keywords: list[str] = Field(default_factory=list, max_length=20)
+    source_preferences: str = "any"
+    priority: str = "normal"
+    budget_usd: float = 0.0
+    deadline: str | None = None
+    recurring: str = ""
 
 
 class SettingBody(BaseModel):
@@ -560,6 +572,8 @@ def create_app(start_background: bool = True) -> FastAPI:
                 app.state.rotation.start()
             app.state.study = agentdefs.StudyThread()
             app.state.study.start()
+            app.state.reports = research.ReportThread()
+            app.state.reports.start()
             app.state.selfevolve = selfevolve.Monitor()
             app.state.selfevolve.start()
             threading.Thread(target=lambda: agentdefs.sync_all("registered"), daemon=True).start()
@@ -568,6 +582,8 @@ def create_app(start_background: bool = True) -> FastAPI:
             app.state.rotation.stop.set()
         if getattr(app.state, "study", None):
             app.state.study.stop.set()
+        if getattr(app.state, "reports", None):
+            app.state.reports.stop.set()
         if getattr(app.state, "selfevolve", None):
             app.state.selfevolve.stop.set()
         terminal.close_all()
@@ -1844,7 +1860,22 @@ def create_app(start_background: bool = True) -> FastAPI:
 
     @app.post("/api/research/requests")
     def research_request(body: ResearchBody, user: dict[str, Any] = Depends(allowed("run"))) -> dict[str, Any]:
-        rid = research.request_report(body.question, body.urls, user["id"])
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+            g = s.get(Goal, body.goal_id) if body.goal_id is not None else None
+            pid = body.project_id if body.project_id is not None else (g.project_id if g else None)
+        if seen is not None and pid is not None and pid not in seen:
+            raise HTTPException(404, "no such project")
+        try:
+            out = research.submit(body.question, body.urls, user["id"], project_id=body.project_id,
+                                  goal_id=body.goal_id, keywords=body.keywords,
+                                  source_preferences=body.source_preferences, priority=body.priority,
+                                  budget_usd=body.budget_usd, deadline=body.deadline, recurring=body.recurring)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        if out["duplicate"]:  # an open or recent request asks the same: that one answers it
+            return out
+        rid = out["id"]
 
         def run() -> None:
             try:
@@ -1853,11 +1884,15 @@ def create_app(start_background: bool = True) -> FastAPI:
                 pass
 
         threading.Thread(target=run, daemon=True, name=f"report-{rid}").start()
-        return {"id": rid}
+        return out
 
     @app.get("/api/research/requests")
-    def research_reports(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
-        return research.list_reports()
+    def research_reports(project_id: int | None = None, goal_id: int | None = None,
+                         user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        rows = research.list_reports(project_id=project_id, goal_id=goal_id)
+        return [r for r in rows if seen is None or r["project_id"] is None or r["project_id"] in seen]
 
     @app.get("/api/research/search")
     def search(q: str, limit: int = 10, _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
