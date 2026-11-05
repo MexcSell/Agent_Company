@@ -23,7 +23,7 @@ window.WSP = window.WSP || {};
   const C = { el: null, convs: [], tab: "", drafts: {}, open: new Set(), history: [], hpos: -1, model: store.get(K + ".model") || "default", effort: store.get(K + ".effort") || "default",
     sessions: [], names: {}, view: { sid: "", events: [], next: 0, d: null }, info: "", cli: null, dtimer: 0, following: "",
     closed: new Set(), hist: { open: false, tab: "running", q: "", items: [], total: 0, at: 0, timer: 0 },
-    logs: new Map(), provider: opt.provider || store.get(K + ".provider") || "claude", models: {}, usage: { d: null, at: 0, busy: false, err: "" } };
+    logs: new Map(), provider: opt.provider || store.get(K + ".provider") || "claude", models: {}, usage: { d: null, at: 0, busy: false, err: "" }, act: { d: null, at: 0, busy: false, err: "" } };
   try { C.closed = new Set(JSON.parse(store.get(K + ".closed") || "[]")); } catch { /* ignore */ }
   const ENTRY = { "claude-vscode": "VS Code", cli: "Terminal", "sdk-cli": "SDK", "sdk-ts": "SDK", "sdk-py": "SDK", "claude-desktop": "Desktop", "claude-jetbrains": "JetBrains" };
   const PLACEHOLDER = opt.projectId ? "Tell the General Manager what you want…  Enter sends · Shift+Enter new line · paste or drop images"
@@ -136,6 +136,10 @@ window.WSP = window.WSP || {};
     el.querySelector("#wc-info-btn").onclick = () => openInfo(C.info ? "" : "status");
     el.querySelector("#wc-info-close").onclick = () => openInfo("");
     el.querySelectorAll("[data-info]").forEach((b) => (b.onclick = () => openInfo(b.dataset.info)));
+    el.querySelector("#wc-info-body").addEventListener("click", (e) => {
+      const sid = e.target.closest("[data-open]")?.dataset.open, c = convOfSid(sid);
+      if (c) selectTab(c.id); else if (others().some((s) => s.session_id === sid)) selectTab(sid);
+    });
     const tabs = el.querySelector("#wc-tabs");
     tabs.addEventListener("click", (e) => {
       const x = e.target.closest("[data-close]");
@@ -830,11 +834,73 @@ window.WSP = window.WSP || {};
         <td title="Cost at API prices${w.unpriced_tokens ? `; ${fmt.format(w.unpriced_tokens)} tokens of models without a price are not counted` : ""}"><b>${money2(w.cost)}</b>${w.unpriced_tokens ? "+" : ""}</td>
         <td title="Resets ${esc(new Date(at).toLocaleString())}">resets ${esc(when)} <span class="muted">· in ${left(rest)}</span></td></tr>`;
     };
-    return head + `<table class="wc-usage"><tbody>${row("Today", U.d.daily)}${row("This week", U.d.weekly)}</tbody></table>
+    return head + planLimits(U.d.plan, now) + `<table class="wc-usage"><tbody>${row("Today", U.d.daily)}${row("This week", U.d.weekly)}</tbody></table>
       <p class="muted wc-usage-note">Cost at the API prices in Models (cache reads 0.1×, cache writes 1.25–2× input): a Claude subscription is not billed per token. Day from 00:00 UTC, week from Monday 00:00 UTC. Hover a row for the breakdown.</p>`;
   }
+  // A circular meter: how much of a plan limit is used; the colour follows Claude's own severity, the label says it too.
+  const SEV = { warning: "near the limit", critical: "at the limit", exceeded: "limit reached" };
+  const ring = (pct, sev) => {
+    const v = Math.max(0, Math.min(100, pct)), r = 15, len = 2 * Math.PI * r;
+    return `<svg class="wc-ring ${SEV[sev] ? esc(sev) : "normal"}" viewBox="0 0 36 36" aria-hidden="true"><circle class="trk" cx="18" cy="18" r="${r}"/>`
+      + (v > 0 ? `<circle class="val" cx="18" cy="18" r="${r}" stroke-dasharray="${(len * v / 100).toFixed(2)} ${len.toFixed(2)}" transform="rotate(-90 18 18)"/>` : "")
+      + `<text x="18" y="18">${Math.round(v)}%</text></svg>`;
+  };
+  // The Claude plan's limits, as Claude Code's /usage shows them: the 5-hour session and the week.
+  function planLimits(p, now) {
+    if (!p) return "";
+    if (!p.available) return `<p class="muted wc-usage-note">Plan limits: ${esc(p.reason || "unavailable")}.</p>`;
+    const card = (l) => {
+      const at = Date.parse(l.resets_at), pct = Math.round(l.percent);
+      const when = at ? new Date(at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "";
+      return `<div class="wc-limit" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${esc(l.label)}: ${pct}% used" title="${esc(l.label)}: ${pct}% of the plan's limit used${at ? `\nResets ${esc(new Date(at).toLocaleString())}` : ""}">
+        ${ring(l.percent, l.severity)}<div><b>${esc(l.label)}</b><div><b>${pct}%</b> <span class="muted">used</span>${SEV[l.severity] ? ` <span class="wc-badge ${esc(l.severity)}">${SEV[l.severity]}</span>` : ""}</div>
+        ${at ? `<div class="muted">resets ${esc(when)} · in ${left(Math.max(0, (at - now) / 1000))}</div>` : ""}</div></div>`;
+    };
+    return `<div class="wc-limits">${p.limits.map(card).join("")}</div>`;
+  }
+
+  // Every live Claude Code session on the host, for /agents and /tasks; read again every 4 s while one is open.
+  function hostActivity() {
+    const A = C.act;
+    if (!A.busy && Date.now() - A.at > 4000) {
+      A.busy = true;
+      const cwd = cur()?.cwd || C.view.d?.cwd || ROOT() || "";
+      api(`/api/workspace/claude-activity${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`).then((d) => { A.d = d; A.err = ""; }).catch((e) => { A.err = e.message; })
+        .finally(() => { A.busy = false; A.at = Date.now(); renderInfo(); });
+    }
+    return A.d;
+  }
+  const hostRow = (r, extra) => {
+    const sid = r.session_id, here = sid === viewSid(), c = convOfSid(sid), openable = !here && (c || others().some((s) => s.session_id === sid));
+    return `<li class="wc-host${openable ? " link" : ""}"${openable ? ` data-open="${esc(sid)}" title="Open this session"` : ""}><span class="wc-dot${r.status === "busy" ? " busy" : ""}"></span><div>
+      <div><b>${esc(c ? convTitle(c) : r.title || sid.slice(0, 8))}</b>${here ? ' <span class="wc-badge">this tab</span>' : ""}${r.entrypoint ? ` <span class="wc-badge">${esc(ENTRY[r.entrypoint] || r.entrypoint)}</span>` : ""} <span class="muted">${r.status === "busy" ? "working" : esc(r.status)}</span></div>
+      <div class="muted"><span class="mono">${esc(r.cwd)}</span>${extra ? ` · ${extra}` : ""}</div></div></li>`;
+  };
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many || `${one}s`}`;
+  function hostAgents() {
+    const A = hostActivity();
+    if (!A) return `<h4>Claude Code on this host</h4><p class="muted">${C.act.err ? esc(C.act.err) : '<span class="spin"></span> Looking…'}</p>`;
+    const rows = [...A.sessions].sort((a, b) => (b.status === "busy") - (a.status === "busy"));
+    return `<h4>Claude Code on this host <span class="muted">${plural(rows.length, "session")} · ${A.busy} working · ${plural(A.agents_running, "subagent")} running</span></h4>`
+      + (rows.length ? `<ul class="wc-list">${rows.map((r) => hostRow(r, [r.agents ? `${plural(r.agents, "subagent")}${r.agents_running.length ? `, ${r.agents_running.length} running` : ""}` : "", ...r.agents_running.map((a) => `<span class="spin"></span> ${esc(a.description || a.type)}`)].filter(Boolean).join(" · "))).join("")}</ul>`
+        : '<p class="muted">No Claude Code session is running on this host.</p>');
+  }
+  function hostTasks() {
+    const A = hostActivity();
+    if (!A) return `<h4>Elsewhere on this host</h4><p class="muted">${C.act.err ? esc(C.act.err) : '<span class="spin"></span> Looking…'}</p>`;
+    const rows = A.sessions.filter((r) => r.session_id !== viewSid() && (r.tasks_running.length || r.agents_running.length || r.todos_open));
+    const head = `<h4>Elsewhere on this host <span class="muted">${plural(A.sessions.length, "Claude Code session")} · ${plural(A.tasks_running, "background task")} running</span></h4>`;
+    if (!rows.length) return head + '<p class="muted">No other session runs background work or has open todos.</p>';
+    return head + `<ul class="wc-list">${rows.map((r) => hostRow(r, [
+      ...r.tasks_running.map((t) => `<span class="spin"></span> ${esc(t.description || firstLine(t.command, 60))}`),
+      r.agents_running.length ? plural(r.agents_running.length, "subagent") + " running" : "",
+      r.todos_open ? plural(r.todos_open, "open todo") : ""].filter(Boolean).join(" · "))).join("")}</ul>`;
+  }
+  // No transcript in this tab yet: loading, or no session at all.
+  const noSession = () => (viewSid() && !C.view.missing ? '<p class="muted"><span class="spin"></span> Reading the session…</p>'
+    : `<p class="muted">${cur() ? "This conversation has no session yet: its first prompt starts one." : "No transcript was found for this session."}</p>`);
   function infoTasks(d) {
-    if (!d) return '<p class="muted">No session yet.</p>';
+    if (!d) return noSession() + hostTasks();
     const tasks = [...d.tasks].reverse(), bgAgents = d.agents.filter((a) => a.background).reverse();
     const out = [];
     if (tasks.length || bgAgents.length) {
@@ -842,18 +908,27 @@ window.WSP = window.WSP || {};
     }
     if (d.todos.length) out.push(`<h4>Todo list <span class="muted">${d.todos.filter((t) => t.status === "completed").length}/${d.todos.length} done</span></h4><ul class="cc-todos">${d.todos.map((t) => `<li class="${esc(t.status)}"><span>${t.status === "completed" ? "✓" : t.status === "in_progress" ? "◐" : "○"}</span>${esc(t.content)}</li>`).join("")}</ul>`);
     if (d.task_list.length) out.push(`<h4>Tasks</h4><ul class="cc-todos">${d.task_list.map((t) => `<li class="${esc(t.status)}"><span>${t.status === "completed" ? "✓" : t.status === "in_progress" ? "◐" : "○"}</span>#${esc(t.id)} ${esc(t.subject)}</li>`).join("")}</ul>`);
-    return out.join("") || '<p class="muted">No background tasks or todos in this session.</p>';
+    return (out.join("") || '<p class="muted">No background tasks or todos in this session.</p>') + hostTasks();
   }
   function infoAgents(d) {
-    if (!d) return '<p class="muted">No session yet.</p>';
+    if (!d) {  // still the agents defined for this folder and the types Claude Code offers
+      const A = C.act.d, out = [noSession(), hostAgents()];
+      if (A?.configured_agents.length) out.push(customAgents(A.configured_agents));
+      if (A?.agent_types.length) out.push(agentTypes(A.agent_types));
+      return out.join("");
+    }
     const order = { running: 0 };
     const agents = [...d.agents].reverse().sort((a, b) => (order[a.status] ?? 1) - (order[b.status] ?? 1));
     const out = [`<h4>Subagents <span class="muted">${agents.filter((a) => a.status === "running").length} running · ${agents.length} in view</span></h4>`
       + (agents.length ? `<ul class="wc-list">${agents.map((a) => `<li>${state(a.status)}<div><div><b>${esc(a.description || a.type)}</b> <span class="wc-badge">${esc(a.type)}</span>${a.background ? ' <span class="wc-badge">background</span>' : ""}</div><div class="muted">${esc(a.status)}${a.model ? ` · <span class="mono">${esc(a.model)}</span>` : ""}${a.tokens ? ` · ${fmtK(a.tokens)} tokens` : ""}${a.tools ? ` · ${a.tools} tool calls` : ""} · ${a.ended ? `took ${dur(a.ended - a.started)}` : `started ${since(a.started)} ago`}</div></div></li>`).join("")}</ul>` : '<p class="muted">No subagents started in this session.</p>')];
-    if (d.configured_agents.length) out.push(`<h4>Custom agents</h4><ul class="wc-list">${d.configured_agents.map((a) => `<li><span class="cc-st muted">◆</span><div><div><b>${esc(a.name)}</b>${a.model ? ` <span class="wc-badge">${esc(a.model)}</span>` : ""}</div><div class="muted">${esc(a.description)}</div></div></li>`).join("")}</ul>`);
-    if (d.agent_types.length) out.push(`<h4>Available agent types</h4><div class="wc-chips">${d.agent_types.map((t) => `<span class="wc-badge">${esc(t)}</span>`).join("")}</div>`);
+    out.push(hostAgents());
+    if (d.configured_agents.length) out.push(customAgents(d.configured_agents));
+    const types = d.agent_types.length ? d.agent_types : C.act.d?.agent_types || [];
+    if (types.length) out.push(agentTypes(types));
     return out.join("");
   }
+  const customAgents = (list) => `<h4>Custom agents</h4><ul class="wc-list">${list.map((a) => `<li><span class="cc-st muted">◆</span><div><div><b>${esc(a.name)}</b>${a.model ? ` <span class="wc-badge">${esc(a.model)}</span>` : ""}</div><div class="muted">${esc(a.description)}</div></div></li>`).join("")}</ul>`;
+  const agentTypes = (types) => `<h4>Available agent types</h4><div class="wc-chips">${types.map((t) => `<span class="wc-badge">${esc(t)}</span>`).join("")}</div>`;
   function renderInfo() {
     if (!C.info || !C.el) return;
     const body = C.el.querySelector("#wc-info-body");

@@ -1012,10 +1012,15 @@ def create_app(start_background: bool = True) -> FastAPI:
         workspace.warm_usage()
         return workspace.available()
 
-    # /status: tokens and cost today and this week, every Claude Code session on the host.
+    # /status: tokens and cost today and this week, every Claude Code session on the host, and the plan's limits.
     @app.get("/api/workspace/claude-usage")
     def claude_usage(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
-        return workspace.claude_usage()
+        return workspace.claude_usage() | {"plan": workspace.claude_limits()}
+
+    # /agents and /tasks: what runs in every live Claude Code session on the host.
+    @app.get("/api/workspace/claude-activity")
+    def claude_activity(cwd: str = "", _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return workspace.host_activity(cwd)
 
     @app.post("/api/workspace/claude")
     def claude_start(body: ClaudeBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:

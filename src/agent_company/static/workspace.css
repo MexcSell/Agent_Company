@@ -447,3 +447,20 @@ table.csv .c4 { color: var(--t-kw); } table.csv .c5 { color: var(--t-num); } tab
 .wc-usage td { padding: 3px 10px 3px 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .wc-usage td:last-child { white-space: normal; padding-right: 0; }
 .wc-usage-note { font-size: 11.5px; margin: 6px 0 0; }
+/* the plan's limits: a ring per window, colour by Claude's severity (also spelt out in a badge) */
+.wc-limits { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 2px 0 10px; }
+.wc-limit { display: flex; align-items: center; gap: 9px; font-size: 12.5px; line-height: 1.35; font-variant-numeric: tabular-nums; }
+.wc-ring { width: 44px; height: 44px; flex: none; --ring: var(--accent); }
+.wc-ring.warning { --ring: var(--warn); }
+.wc-ring.critical, .wc-ring.exceeded { --ring: var(--bad); }
+.wc-ring circle { fill: none; stroke-width: 3.5; }
+.wc-ring .trk { stroke: color-mix(in srgb, var(--muted) 22%, transparent); }
+.wc-ring .val { stroke: var(--ring); stroke-linecap: round; transition: stroke-dasharray .4s ease; }
+.wc-ring text { fill: var(--text); font-size: 9.5px; font-weight: 600; text-anchor: middle; dominant-baseline: central; }
+.wc-badge.warning { background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.wc-badge.critical, .wc-badge.exceeded { background: color-mix(in srgb, var(--bad) 16%, transparent); }
+@media (prefers-reduced-motion: reduce) { .wc-ring .val { transition: none; } }
+/* /agents, /tasks: the host's other Claude Code sessions */
+.wc-list > li.wc-host > .wc-dot { margin-top: 5px; }
+.wc-host.link { cursor: pointer; border-radius: 4px; }
+.wc-host.link:hover { background: var(--hover); }

@@ -552,3 +552,76 @@ def test_claude_usage_counts_today_and_this_week_once_per_message(admin):
         f.write(line("m5", now, output_tokens=50))
     assert admin.get("/api/workspace/claude-usage").json()["daily"]["output_tokens"] == day["output_tokens"] + 50
     assert member_of(admin).get("/api/workspace/claude-usage").status_code == 403
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="needs /proc")
+def test_subagents_and_tasks_beyond_the_transcript_read_and_the_host_overview(admin, tmp_path):
+    home, folder = _claude_host(tmp_path, _line(type="user", message={"content": "go"}),
+                                _assistant({"type": "tool_use", "id": "t9", "name": "Bash", "input": {"command": "sleep 9",
+                                                                                                   "run_in_background": True}}),
+                                _result("t9", "running", {"backgroundTaskId": "bg9"}))
+    # A subagent started before the part of a long transcript that is read: known from its meta file only.
+    sub = folder / SID / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-a7.meta.json").write_text(json.dumps({"agentType": "web-fetch", "description": "Read a page",
+                                                        "toolUseId": "toolu_old", "finished": True}))
+    (sub / "agent-a7.jsonl").write_text(_line(type="user", message={"content": "fetch"}) + "\n")
+    (sub / "agent-a8.meta.json").write_text(json.dumps({"agentType": "Explore", "toolUseId": "toolu_new", "finished": False}))
+    # Claude Code's own task list (TaskCreate / TaskUpdate) lives in ~/.claude/tasks/<session>/.
+    (home / "tasks" / SID).mkdir(parents=True)
+    for n, status in ((1, "completed"), (2, "in_progress"), (10, "deleted")):
+        (home / "tasks" / SID / f"{n}.json").write_text(json.dumps({"id": str(n), "subject": f"step {n}", "status": status}))
+    d = admin.get(f"/api/workspace/claude-sessions/{SID}").json()
+    agents = {a["id"]: a for a in d["agents"]}
+    assert agents["toolu_old"]["type"] == "web-fetch" and agents["toolu_old"]["status"] == "completed"
+    assert agents["toolu_old"]["agent_id"] == "a7" and agents["toolu_old"]["started"] > 0
+    assert agents["toolu_new"]["status"] == "running"
+    assert d["task_list"] == [{"id": "1", "subject": "step 1", "status": "completed"},
+                              {"id": "2", "subject": "step 2", "status": "in_progress"}]
+    # /agents and /tasks without a session in the tab: every live session on the host.
+    (tmp_path / "proj" / ".claude" / "agents").mkdir(parents=True)
+    (tmp_path / "proj" / ".claude" / "agents" / "qa.md").write_text("---\nname: qa\ndescription: Tests\n---\n")
+    h = admin.get("/api/workspace/claude-activity", params={"cwd": str(tmp_path / "proj")}).json()
+    assert [r["session_id"] for r in h["sessions"]] == [SID] and h["busy"] == 1
+    assert h["agents_running"] == 1 and h["tasks_running"] == 1 and h["sessions"][0]["agents"] == 2
+    assert h["sessions"][0]["todos_open"] == 1 and h["configured_agents"][0]["name"] == "qa"
+    assert member_of(admin).get("/api/workspace/claude-activity").status_code == 403
+
+
+def test_plan_limits_from_the_claude_sign_in(admin, monkeypatch):
+    workspace._limits_cache.update(key=None, at=0.0, out=None)
+    assert admin.get("/api/workspace/claude-usage").json()["plan"] == {
+        "available": False, "reason": "Claude Code is not signed in with a Claude account", "limits": []}
+    creds = Path(os.environ["CLAUDE_CONFIG_DIR"]) / ".credentials.json"
+    creds.parent.mkdir(parents=True, exist_ok=True)
+    creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "tok", "subscriptionType": "pro",
+                                                   "expiresAt": (time.time() + 3600) * 1000}}))
+    calls = []
+
+    def fake(token):
+        calls.append(token)
+        return {"five_hour": {"utilization": 25.0, "resets_at": "2026-11-05T05:49:59+00:00"},
+                "limits": [{"kind": "session", "percent": 25, "severity": "normal", "resets_at": "2026-11-05T05:49:59+00:00"},
+                           {"kind": "weekly_all", "percent": 91, "severity": "warning", "resets_at": "2026-11-07T18:00:00+00:00"},
+                           {"kind": "weekly_scoped", "percent": 2, "scope": {"model": {"display_name": "Fable"}}},
+                           {"kind": "odd", "percent": None}]}
+
+    monkeypatch.setattr(workspace, "_oauth_usage", fake)
+    p = admin.get("/api/workspace/claude-usage").json()["plan"]
+    assert p["available"] and p["plan"] == "pro" and calls == ["tok"]
+    assert [(x["label"], x["percent"], x["severity"]) for x in p["limits"]] == [
+        ("Session (5 h)", 25.0, "normal"), ("This week", 91.0, "warning"), ("This week · Fable", 2.0, "normal")]
+    assert "tok" not in json.dumps(p)  # the token never reaches the browser
+    admin.get("/api/workspace/claude-usage")
+    assert calls == ["tok"]  # read once a minute
+    # The older answer shape; a refused sign-in says so.
+    assert [x["label"] for x in workspace._parse_limits({"five_hour": {"utilization": 3}, "seven_day": {"utilization": 9}})] == [
+        "Session (5 h)", "This week"]
+
+    def refused(token):
+        raise workspace.urllib.error.HTTPError(workspace.USAGE_URL, 401, "no", {}, None)
+
+    monkeypatch.setattr(workspace, "_oauth_usage", refused)
+    workspace._limits_cache.update(key=None)
+    p = workspace.claude_limits()
+    assert not p["available"] and "sign in again" in p["reason"]

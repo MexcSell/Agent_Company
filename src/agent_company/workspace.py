@@ -36,6 +36,8 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
@@ -748,6 +750,37 @@ def _agent_files(folder: Path) -> list[dict[str, str]]:
     return out
 
 
+def _agent_from_meta(folder: Path, tid: str, m: dict[str, Any]) -> dict[str, Any]:
+    """A subagent known only from its meta file (subagents/agent-<id>.meta.json next to its transcript)."""
+    meta: Path = m["_file"]
+    agent_id = meta.name.removeprefix("agent-").removesuffix(".meta.json")
+    started = ended = 0.0
+    try:
+        ended = meta.stat().st_mtime if m.get("finished") else 0.0
+        with (folder / f"agent-{agent_id}.jsonl").open("rb") as f:
+            started = _ts((json.loads(f.readline() or b"{}") or {}).get("timestamp"))
+    except (OSError, ValueError, AttributeError):
+        pass
+    return {"id": tid, "type": str(m.get("agentType") or "general-purpose"), "description": str(m.get("description") or ""),
+            "status": "completed" if m.get("finished") else "running",
+            "background": m.get("requestShape") == "background", "model": "", "started": started or ended,
+            "ended": ended, "tokens": 0, "tools": 0, "agent_id": agent_id}
+
+
+def _task_files(session_id: str) -> list[dict[str, str]]:
+    """Claude Code's own task list of a session (TaskCreate / TaskUpdate): ~/.claude/tasks/<session>/<n>.json."""
+    out = []
+    for f in (claude_home() / "tasks" / session_id).glob("*.json"):
+        try:
+            t = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(t, dict) and t.get("status") != "deleted":
+            out.append({"id": str(t.get("id") or f.stem), "subject": str(t.get("subject") or "")[:300],
+                        "status": str(t.get("status") or "pending")})
+    return sorted(out, key=lambda t: (len(t["id"]), t["id"]))[:200]
+
+
 def session_status(session_id: str, after: int = 0) -> dict[str, Any]:
     """What `/status`, `/tasks` and `/agents` would show for one session, plus its new conversation events."""
     if not _SESSION_RE.fullmatch(session_id or ""):
@@ -780,11 +813,15 @@ def session_status(session_id: str, after: int = 0) -> dict[str, Any]:
             except (OSError, ValueError):
                 continue
             if isinstance(m, dict) and m.get("toolUseId"):
-                metas[str(m["toolUseId"])] = m
+                metas[str(m["toolUseId"])] = m | {"_file": f}
         for a in agents:
-            m = metas.get(a["id"])
+            m = metas.pop(a["id"], None)
             if m and m.get("finished") and a["status"] == "running":
                 a["status"] = "completed"
+        # Started before the part of a long transcript that was read: only the meta file tells of them.
+        agents = sorted((_agent_from_meta(tr.path.parent / session_id / "subagents", tid, m) for tid, m in metas.items()),
+                        key=lambda a: a["started"]) + agents
+        snap["task_list"] = _task_files(session_id) or snap["task_list"]
     if live is None:  # the process is gone: what was still running did not report back
         for item in agents + tasks:
             if item["status"] == "running":
@@ -804,6 +841,100 @@ def session_status(session_id: str, after: int = 0) -> dict[str, Any]:
         "entrypoint": (live or {}).get("entrypoint") or snap["entrypoint"],
         "current": current, "agents": agents, "tasks": tasks, "configured_agents": configured,
     }
+
+
+def host_activity(cwd: str = "") -> dict[str, Any]:
+    """Every live Claude Code session on this host and what runs in it: the overview under /agents and /tasks."""
+    rows, agent_types = [], []
+    for s in sessions():
+        try:
+            d = session_status(s["session_id"], after=1 << 62)  # no events: only the state
+        except (KeyError, ValueError):
+            continue
+        agent_types = agent_types or d["agent_types"]
+        run = [a for a in d["agents"] if a["status"] == "running"]
+        bg = [t for t in d["tasks"] if t["status"] == "running"]
+        rows.append({"session_id": s["session_id"], "title": d["title"] or s.get("title") or s.get("name") or "",
+                     "cwd": d["cwd"], "status": s["status"], "entrypoint": d["entrypoint"],
+                     "agents": len(d["agents"]), "agents_running": run, "tasks_running": bg,
+                     "todos_open": sum(t["status"] != "completed" for t in d["todos"] + d["task_list"])})
+    configured = _agent_files(claude_home()) + (_agent_files(Path(cwd) / ".claude") if cwd and Path(cwd).is_absolute() else [])
+    return {"sessions": rows, "busy": sum(r["status"] == "busy" for r in rows),
+            "agents_running": sum(len(r["agents_running"]) for r in rows),
+            "tasks_running": sum(len(r["tasks_running"]) for r in rows),
+            "agent_types": agent_types, "configured_agents": configured}
+
+
+USAGE_URL = "https://api.anthropic.com/api/oauth/usage"  # what Claude Code's own /usage reads
+LIMITS_TTL = 60.0
+_limits_cache: dict[str, Any] = {"key": None, "at": 0.0, "out": None}
+_LIMIT_LABELS = {"session": "Session (5 h)", "weekly_all": "This week"}
+
+
+def _oauth_usage(token: str) -> dict[str, Any]:
+    req = urllib.request.Request(USAGE_URL, headers={"Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20",
+                                                     "User-Agent": "agent-company"})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        return json.loads(r.read())
+
+
+def _parse_limits(d: dict[str, Any]) -> list[dict[str, Any]]:
+    out = []
+    for x in d.get("limits") or []:
+        if not isinstance(x, dict) or not isinstance(x.get("percent"), int | float):
+            continue
+        kind = str(x.get("kind") or "")
+        scope = x.get("scope") if isinstance(x.get("scope"), dict) else {}
+        model = (scope.get("model") or {}).get("display_name") if isinstance(scope.get("model"), dict) else None
+        label = _LIMIT_LABELS.get(kind) or (f"This week · {model}" if model else kind.replace("_", " ").capitalize())
+        out.append({"kind": kind, "label": label, "percent": float(x["percent"]),
+                    "severity": str(x.get("severity") or "normal"), "resets_at": str(x.get("resets_at") or "")})
+    if not out:  # the older answer: one object per window
+        for key, kind, label in (("five_hour", "session", "Session (5 h)"), ("seven_day", "weekly_all", "This week"),
+                                 ("seven_day_opus", "weekly_scoped", "This week · Opus"),
+                                 ("seven_day_sonnet", "weekly_scoped", "This week · Sonnet")):
+            w = d.get(key)
+            if isinstance(w, dict) and isinstance(w.get("utilization"), int | float):
+                out.append({"kind": kind, "label": label, "percent": float(w["utilization"]), "severity": "normal",
+                            "resets_at": str(w.get("resets_at") or "")})
+    return out
+
+
+def claude_limits() -> dict[str, Any]:
+    """How much of the Claude plan's limits is used (5-hour session, week), as Claude Code's /usage shows it.
+
+    Read with the host's Claude Code sign-in (~/.claude/.credentials.json); the token never leaves the server.
+    An API-key login has no plan limits."""
+    path = claude_home() / ".credentials.json"
+    try:
+        st = path.stat()
+        oauth = json.loads(path.read_text()).get("claudeAiOauth") or {}
+    except (OSError, ValueError, AttributeError):
+        return {"available": False, "reason": "Claude Code is not signed in with a Claude account", "limits": []}
+    key = (str(path), st.st_mtime_ns)
+    c = _limits_cache
+    if c["key"] == key and time.time() - c["at"] < LIMITS_TTL:
+        return c["out"]
+    token, plan = str(oauth.get("accessToken") or ""), str(oauth.get("subscriptionType") or "")
+    out: dict[str, Any] = {"available": False, "plan": plan, "limits": [], "reason": ""}
+    if not token:
+        out["reason"] = "Claude Code is not signed in with a Claude account"
+    elif oauth.get("expiresAt") and float(oauth["expiresAt"]) / 1000 < time.time():
+        out["reason"] = "Claude Code's sign-in has expired: it renews it on its next run"
+    else:
+        try:
+            out["limits"] = _parse_limits(_oauth_usage(token))
+            out["available"] = bool(out["limits"])
+            out["reason"] = "" if out["limits"] else "this plan reports no usage limits"
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and c["key"] == key and c["out"] and c["out"]["available"]:
+                return c["out"]  # rate limited: keep the last answer
+            out["reason"] = "Claude Code's sign-in was refused: sign in again" if e.code in {401, 403} else f"limits unavailable (HTTP {e.code})"
+        except (OSError, ValueError) as e:
+            out["reason"] = f"limits unavailable ({type(e).__name__})"
+    out["at"] = time.time()
+    c.update(key=key, at=time.time(), out=out)
+    return out
 
 
 def stop_session(session_id: str) -> dict[str, Any]:
