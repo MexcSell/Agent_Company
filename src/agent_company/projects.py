@@ -4,7 +4,13 @@ A project is a git repository the company works on, with an optional GitHub URL,
 default quality commands and a General Manager. Its command window is a
 conversation: an order becomes a goal for that project's GM, who plans it and
 reports back in the same thread (plan, task results, gate result). Slash
-commands: /standup, /stop, /status, /sync, /help.
+commands: /standup, /stop, /status, /summary, /sync, /help.
+
+Topics (ASEAO05 S05-R-07) are conversation lanes of the command window: `general` always exists, others
+are opened by anyone who may give orders. An order's goal carries its topic, so the goal's reports land
+in that lane and goals of one topic run in order (G-R-07, `loop.lane_ahead`). Administrators assign agents
+to a topic; its stand-up then reports them. `DECISION: <subject> :: <choice>` lines a person writes, and the
+decisions a `/summary` finds, become decision records (SPEC-04 S04-R-02) instead of staying in chat.
 
 The platform project (this repository) is registered as protected: it cannot be
 deleted and only administrators see it, so agents can develop the platform itself.
@@ -16,6 +22,7 @@ proposal becomes a new goal; one goal may spawn at most `max_proposal_goals`.
 
 from __future__ import annotations
 
+import json
 import mimetypes
 import re
 import uuid
@@ -26,7 +33,7 @@ from sqlalchemy import func, select
 
 from agent_company import worktrees
 from agent_company.config import REPO_ROOT, settings
-from agent_company.db import Agent, Goal, Message, Project, Proposal, Task, Upload, log_event, session
+from agent_company.db import Agent, Goal, Message, Project, Proposal, Task, Topic, Upload, log_event, now, session
 from agent_company.workflow import ACTIVE, set_status
 
 NAME_RE = re.compile(r"^[\w][\w .-]{0,127}$")
@@ -183,6 +190,7 @@ def delete(project_ids: list[int]) -> list[int]:
             for g in s.scalars(select(Goal).where(Goal.project_id == pid, Goal.status.in_(ACTIVE))):
                 set_status(s, g, "cancelled", "project deleted")
             s.query(Message).filter(Message.project_id == pid).delete()
+            s.query(Topic).filter(Topic.project_id == pid).delete()
             s.delete(p)
             done.append(pid)
     return done
@@ -192,44 +200,56 @@ def delete(project_ids: list[int]) -> list[int]:
 
 def post(project_id: int, content: str, author_type: str = "system", kind: str = "chat", goal_id: int | None = None,
          agent_id: int | None = None, user_id: int | None = None, attachments: list[Any] | None = None,
-         **meta: Any) -> int:
+         topic: str = "general", **meta: Any) -> int:
     with session() as s:
         m = Message(project_id=project_id, content=content[:20000], author_type=author_type, kind=kind,
-                    goal_id=goal_id, agent_id=agent_id, user_id=user_id, attachments=attachments or [], meta=meta)
+                    goal_id=goal_id, agent_id=agent_id, user_id=user_id, attachments=attachments or [], meta=meta,
+                    topic=topic or GENERAL)
         s.add(m)
         s.flush()
         return m.id
 
 
-def messages(project_id: int, after: int = 0, limit: int = 300) -> list[dict[str, Any]]:
+def messages(project_id: int, after: int = 0, limit: int = 300, topic: str = "", q: str = "") -> list[dict[str, Any]]:
+    """A project's messages, oldest first: all of them, one topic's, or those containing `q` (any case)."""
     with session() as s:
         names = dict(s.execute(select(Agent.id, Agent.name)).all())
-        rows = s.scalars(select(Message).where(Message.project_id == project_id, Message.id > after)
-                         .order_by(Message.id.desc()).limit(limit)).all()
+        query = select(Message).where(Message.project_id == project_id, Message.id > after)
+        if topic:
+            query = query.where(Message.topic == topic)
+        if q.strip():
+            query = query.where(Message.content.icontains(q.strip(), autoescape=True))
+        rows = s.scalars(query.order_by(Message.id.desc()).limit(limit)).all()
         return [{"id": m.id, "author_type": m.author_type, "agent": names.get(m.agent_id), "agent_id": m.agent_id,
                  "user_id": m.user_id, "kind": m.kind, "content": m.content, "goal_id": m.goal_id,
-                 "attachments": m.attachments, "meta": m.meta, "at": m.created_at.isoformat()}
+                 "topic": m.topic or GENERAL, "attachments": m.attachments, "meta": m.meta,
+                 "at": m.created_at.isoformat()}
                 for m in reversed(rows)]
 
 
 def post_for_goal(goal_id: int, content: str, kind: str = "chat", agent_id: int | None = None, **meta: Any) -> None:
+    """Report on a goal in its project's command window, in the topic the order came from."""
     with session() as s:
         g = s.get(Goal, goal_id)
-        pid = g.project_id if g else None
+        pid, topic = (g.project_id, g.topic or GENERAL) if g else (None, GENERAL)
     if pid:
-        post(pid, content, "agent" if agent_id else "system", kind, goal_id=goal_id, agent_id=agent_id, **meta)
+        post(pid, content, "agent" if agent_id else "system", kind, goal_id=goal_id, agent_id=agent_id, topic=topic,
+             **meta)
 
 
-def members(project_id: int) -> list[dict[str, Any]]:
-    """Agents that worked on the project's goals, busy ones first."""
+def members(project_id: int, only: list[int] | None = None) -> list[dict[str, Any]]:
+    """Agents that worked on the project's goals (or exactly `only`, a topic's agents), busy ones first."""
     from agent_company.registry import agent_dict
 
     with session() as s:
-        ids = set(s.scalars(select(Task.agent_id).join(Goal, Goal.id == Task.goal_id)
-                            .where(Goal.project_id == project_id, Task.agent_id.is_not(None))))
-        p = s.get(Project, project_id)
-        if p and p.manager_id:
-            ids.add(p.manager_id)
+        if only is not None:
+            ids = set(only)
+        else:
+            ids = set(s.scalars(select(Task.agent_id).join(Goal, Goal.id == Task.goal_id)
+                                .where(Goal.project_id == project_id, Task.agent_id.is_not(None))))
+            p = s.get(Project, project_id)
+            if p and p.manager_id:
+                ids.add(p.manager_id)
         running = dict(s.execute(select(Task.agent_id, Task.title).join(Goal, Goal.id == Task.goal_id)
                                  .where(Goal.project_id == project_id, Task.status == "running")).all())
         agents = s.scalars(select(Agent).where(Agent.id.in_(ids))).all()
@@ -270,19 +290,241 @@ def upload_path(uid: str) -> tuple[Path, str]:
         return Path(u.path), u.content_type
 
 
+# --- topics (S05-R-07) ---------------------------------------------------------------
+
+GENERAL = "general"
+TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9 _.-]{0,63}$")
+DECISION_RE = re.compile(r"^\s*DECISION:\s*(.+?)\s*::\s*(.+?)(?:\s*::\s*(.+?))?\s*$", re.M)
+SUMMARY_CHARS = 12000  # the newest messages that fit go to the summary
+
+
+def topic_name(name: str) -> str:
+    n = " ".join((name or "").strip().lower().split()) or GENERAL
+    if not TOPIC_RE.match(n):
+        raise ValueError("topic names are 1-64 lowercase letters, digits, spaces, dots, dashes or underscores")
+    return n
+
+
+def _topic_row(s, project_id: int, name: str, create: bool = False) -> Topic | None:  # noqa: ANN001
+    t = s.scalars(select(Topic).where(Topic.project_id == project_id, Topic.name == name)).first()
+    if t is None and create and name == GENERAL:  # general exists implicitly; its row is made when needed
+        t = Topic(project_id=project_id, name=GENERAL)
+        s.add(t)
+        s.flush()
+    return t
+
+
+def topic_dict(t: Topic | None, project_id: int, name: str, names: dict[int, str], counts: dict[str, Any]
+               ) -> dict[str, Any]:
+    c = counts.get(name, (0, None))
+    ids = list(t.agent_ids or []) if t else []
+    return {"id": t.id if t else None, "project_id": project_id, "name": name, "description": t.description if t else "",
+            "agent_ids": ids, "agents": [names[i] for i in ids if i in names], "messages": c[0],
+            "last_at": c[1].isoformat() if c[1] else None, "summary": t.summary if t else "",
+            "summary_at": t.summary_at.isoformat() if t and t.summary_at else None,
+            "archived": bool(t.archived) if t else False}
+
+
+def topics(project_id: int) -> list[dict[str, Any]]:
+    """`general` first, then open topics by name, then archived ones; with message counts."""
+    with session() as s:
+        names = dict(s.execute(select(Agent.id, Agent.name)).all())
+        counts = {k or GENERAL: (n, at) for k, n, at in s.execute(
+            select(Message.topic, func.count(), func.max(Message.created_at))
+            .where(Message.project_id == project_id).group_by(Message.topic))}
+        rows = {t.name: t for t in s.scalars(select(Topic).where(Topic.project_id == project_id))}
+        out = [topic_dict(rows.get(GENERAL), project_id, GENERAL, names, counts)]
+        for t in sorted((t for n, t in rows.items() if n != GENERAL), key=lambda t: (t.archived, t.name)):
+            out.append(topic_dict(t, project_id, t.name, names, counts))
+        return out
+
+
+def _check_agents(s, agent_ids: Any) -> list[int]:  # noqa: ANN001
+    ids = [int(i) for i in agent_ids or []]
+    known = set(s.scalars(select(Agent.id).where(Agent.id.in_(ids or [-1]))))
+    missing = [i for i in ids if i not in known]
+    if missing:
+        raise ValueError(f"unknown agent(s): {', '.join(map(str, missing))}")
+    return list(dict.fromkeys(ids))
+
+
+def create_topic(project_id: int, name: str, description: str = "", agent_ids: list[int] | None = None,
+                 created_by: int | None = None) -> dict[str, Any]:
+    name = topic_name(name)
+    if name == GENERAL:
+        raise ValueError("the general topic always exists")
+    with session() as s:
+        if s.get(Project, project_id) is None:
+            raise KeyError(project_id)
+        if _topic_row(s, project_id, name):
+            raise ValueError(f"topic '{name}' exists")
+        s.add(Topic(project_id=project_id, name=name, description=(description or "").strip()[:2000],
+                    agent_ids=_check_agents(s, agent_ids), created_by=created_by))
+    post(project_id, f"Topic '{name}' opened." + (f" {description.strip()}" if description.strip() else ""),
+         topic=name)
+    return next(t for t in topics(project_id) if t["name"] == name)
+
+
+def update_topic(project_id: int, name: str, changes: dict[str, Any]) -> dict[str, Any]:
+    """Administrators: description, assigned agents, archived (archived topics take no new messages)."""
+    bad = set(changes) - {"description", "agent_ids", "archived"}
+    if bad:
+        raise ValueError(f"not editable: {', '.join(sorted(bad))}")
+    name = topic_name(name)
+    if name == GENERAL and changes.get("archived"):
+        raise ValueError("the general topic cannot be archived")
+    with session() as s:
+        t = _topic_row(s, project_id, name, create=True)
+        if t is None:
+            raise KeyError(name)
+        if "agent_ids" in changes:
+            t.agent_ids = _check_agents(s, changes["agent_ids"])
+        if "description" in changes:
+            t.description = str(changes["description"] or "").strip()[:2000]
+        if "archived" in changes:
+            t.archived = bool(changes["archived"])
+    return next(x for x in topics(project_id) if x["name"] == name)
+
+
+def _open_topic(project_id: int, name: str) -> str:
+    name = topic_name(name)
+    if name == GENERAL:
+        return name
+    with session() as s:
+        t = _topic_row(s, project_id, name)
+        if t is None:
+            raise ValueError(f"no topic '{name}' in this project")
+        if t.archived:
+            raise ValueError(f"topic '{name}' is archived")
+    return name
+
+
+def _known_decision(project_id: int, subject: str, choice: str) -> bool:
+    from agent_company.db import Decision
+
+    with session() as s:
+        return s.scalars(select(Decision.id).where(
+            Decision.project_id == project_id, func.lower(Decision.topic) == subject.lower()[:256],
+            func.lower(Decision.recommendation) == choice.lower()[:4000])).first() is not None
+
+
+def record_decision_lines(project_id: int, topic: str, content: str, message_id: int, author: str
+                          ) -> list[dict[str, Any]]:
+    """`DECISION: <subject> :: <choice> [:: <why>]` lines a person wrote in the command window."""
+    from agent_company import decisions
+
+    out = []
+    for subject, choice, why in DECISION_RE.findall(content or "")[:10]:
+        if _known_decision(project_id, subject, choice):
+            continue
+        out.append(decisions.record(None, subject, choice, reasoning=why, project_id=project_id,
+                                    evidence=[f"message #{message_id} by {author} in topic '{topic}'"]))
+    return out
+
+
+def summary_draft(project_id: int, topic: str) -> tuple[str, str]:
+    """(an extractive summary, the transcript a model summarises): goals with their state, decisions recorded,
+    and the newest messages that fit in SUMMARY_CHARS."""
+    rows = messages(project_id, topic=topic, limit=400)
+    lines: list[str] = []
+    used = 0
+    for m in reversed(rows):
+        who = m["meta"].get("author") if m["author_type"] == "user" else m["agent"] or "System"
+        line = f"[{m['at'][:16]}] {who} ({m['kind']}): {m['content']}"
+        if used + len(line) > SUMMARY_CHARS:
+            break
+        lines.append(line)
+        used += len(line)
+    transcript = "\n".join(reversed(lines))
+    with session() as s:
+        goals = s.scalars(select(Goal).where(Goal.project_id == project_id, Goal.topic == topic)
+                          .order_by(Goal.id.desc()).limit(10)).all()
+        goal_lines = [f"- #{g.id} [{g.status}] {g.title}" for g in goals]
+    from agent_company import decisions
+
+    found = [d for d in decisions.list_decisions(project_id=project_id, limit=400)
+             if any(f"in topic '{topic}'" in str(e) for e in d["evidence"])
+             or (d["goal_id"] and d["goal_id"] in {g.id for g in goals})][:10]
+    out = [f"Summary of topic '{topic}': {len(rows)} message(s)"
+           + (f" since {rows[0]['at'][:10]}" if rows else "") + "."]
+    if goal_lines:
+        out += ["Goals:", *goal_lines]
+    if found:
+        out += ["Decisions:", *[f"- #{d['id']} {d['topic']}: {d['recommendation'][:200]} ({d['status']})"
+                                for d in found]]
+    last = [r for r in rows if r["kind"] in ("command", "result", "error")][-5:]
+    if last:
+        out += ["Latest:", *[f"- {r['content'].splitlines()[0][:160]}" for r in last if r["content"]]]
+    return "\n".join(out), transcript
+
+
+def summarize(project_id: int, topic: str) -> str:
+    """The GM's summary of a topic (its model; the extractive draft when no model answers). Decisions the model
+    lists in a fenced ```json {"decisions": [...]}``` block become decision records; the summary is kept on the
+    topic."""
+    from agent_company import decisions, executors, router
+    from agent_company.management import _FENCED
+
+    draft, transcript = summary_draft(project_id, topic)
+    with session() as s:
+        p = s.get(Project, project_id)
+        gm = s.get(Agent, p.manager_id) if p and p.manager_id else None
+        gm_name, gm_pref, gm_id = (gm.name, gm.model_pref, gm.id) if gm else ("General Manager", None, None)
+    text, recorded = draft, []
+    if transcript:
+        req = executors.Request(
+            purpose="summary", role="general_manager", system=f"You are {gm_name}, the General Manager.",
+            prompt=(f"Summarise the project conversation '{topic}' below for someone who has not read it: what "
+                    "was asked, what was done, what is open and who is waiting on whom. At most 15 lines.\n"
+                    "If the conversation settles decisions that are not yet listed under 'Decisions' in the draft, "
+                    "add a fenced ```json block {\"decisions\": [{\"topic\", \"recommendation\", \"reasoning\", "
+                    "\"alternatives\", \"confidence\", \"category\"}]} after the summary.\n\n"
+                    f"Draft:\n{draft}\n\nConversation:\n{transcript}"),
+            data={"draft": draft})
+        try:
+            res = executors.for_choice(router.resolve("general_manager", gm_pref), settings().command_timeout).run(req)
+        except Exception as e:  # noqa: BLE001 - the draft still answers
+            res = executors.Result(text="", ok=False, error=str(e))
+        if res.ok and res.text.strip():
+            text = res.text.strip()
+            items = []
+            for block in _FENCED.findall(text):
+                try:
+                    data = json.loads(block)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(data, dict) and isinstance(data.get("decisions"), list):
+                    items += [it for it in data["decisions"] if isinstance(it, dict)
+                              and not _known_decision(project_id, str(it.get("topic", "")),
+                                                      str(it.get("recommendation", "")))]
+            text = _FENCED.sub("", text).strip() or draft
+            for it in items[:10]:
+                it["evidence"] = [*(it.get("evidence") or [])][:5] + [f"summary of topic '{topic}'"]
+            recorded = decisions.from_plan(None, items[:10], gm_id, project_id)
+    if recorded:
+        text += "\n\nRecorded as decisions: " + ", ".join(f"#{d['id']} {d['topic']}" for d in recorded)
+    with session() as s:
+        t = _topic_row(s, project_id, topic, create=True)
+        if t is not None:
+            t.summary, t.summary_at = text[:20000], now()
+    return text
+
+
 # --- commands ---------------------------------------------------------------------
 
-HELP = ("Commands: an order in plain words starts a goal for the General Manager.\n"
-        "/standup  every agent on this project reports its status\n"
-        "/status   open blockers, the project's goals and their state, what happens next\n"
-        "/stop     cancel the project's running and queued goals\n"
+HELP = ("Commands: an order in plain words starts a goal for the General Manager, in the topic it is sent in.\n"
+        "DECISION: <subject> :: <choice> [:: <why>]  record a decision (no goal is started)\n"
+        "/standup  every agent on this project (or assigned to this topic) reports its status\n"
+        "/status   open blockers, the goals (of this topic) and their state, what happens next\n"
+        "/summary  the General Manager summarises this topic and records the decisions it finds\n"
+        "/stop     cancel the project's running and queued goals (every topic)\n"
         "/sync     push approved work to the project's GitHub remote\n"
         "/help     this list")
 
 
-def command(project_id: int, user: dict[str, Any], content: str, attachment_ids: list[str] | None = None
-            ) -> dict[str, Any]:
-    """Handle one command-window entry. Returns {"message_id", "goal_id"?}."""
+def command(project_id: int, user: dict[str, Any], content: str, attachment_ids: list[str] | None = None,
+            topic: str = GENERAL) -> dict[str, Any]:
+    """Handle one command-window entry in a topic. Returns {"message_id", "goal_id"?, "decisions"?}."""
     from agent_company import loop
     from agent_company.auth import can
 
@@ -293,15 +535,23 @@ def command(project_id: int, user: dict[str, Any], content: str, attachment_ids:
     files = uploads(attachment_ids or [])
     if not content and not files:
         raise ValueError("empty command")
+    topic = _open_topic(p.id, topic)
     mid = post(p.id, content, "user", "command", user_id=user["id"],
                attachments=[{k: f[k] for k in ("id", "name", "content_type", "size")} for f in files],
-               author=user["name"])
+               topic=topic, author=user["name"])
     slash = content.split()[0].lower() if content.startswith("/") else ""
+
+    def reply(text: str, kind: str = "chat", **kw: Any) -> None:
+        post(p.id, text, kind=kind, topic=topic, **kw)
+
     if slash == "/help":
-        post(p.id, HELP)
+        reply(HELP)
         return {"message_id": mid}
     if slash == "/status":
-        post(p.id, status_text(p.id), kind="result")
+        reply(status_text(p.id, topic), "result")
+        return {"message_id": mid}
+    if slash == "/summary":
+        reply(summarize(p.id, topic), "result", agent_id=p.manager_id, author_type="agent" if p.manager_id else "system")
         return {"message_id": mid}
     if slash == "/stop":
         with session() as s:
@@ -309,50 +559,68 @@ def command(project_id: int, user: dict[str, Any], content: str, attachment_ids:
                                                               Goal.status.in_(ACTIVE)))]
         for gid in ids:
             loop.cancel(gid)
-        post(p.id, f"Stopped {len(ids)} goal(s)." if ids else "Nothing is running.", kind="result")
+        reply(f"Stopped {len(ids)} goal(s)." if ids else "Nothing is running.", "result")
         return {"message_id": mid}
     if slash == "/standup":
-        post(p.id, standup(p.id), "agent", kind="standup", agent_id=p.manager_id)
+        reply(standup(p.id, topic), "standup", author_type="agent", agent_id=p.manager_id)
         return {"message_id": mid}
     if slash == "/sync":
         from agent_company import gitsync
 
-        post(p.id, gitsync.sync_project(p.id, user), kind="result")
+        reply(gitsync.sync_project(p.id, user), "result")
         return {"message_id": mid}
     if slash:
-        post(p.id, f"Unknown command {slash}.\n\n{HELP}", kind="error")
+        reply(f"Unknown command {slash}.\n\n{HELP}", "error")
         return {"message_id": mid}
+    found = record_decision_lines(p.id, topic, content, mid, user["name"])
+    rest = DECISION_RE.sub("", content).strip()
+    if DECISION_RE.search(content):
+        reply(("Recorded: " + ", ".join(f"decision #{d['id']} {d['topic']}" for d in found)) if found
+              else "Those decisions are already recorded.", "result")
+        if not rest and not files:  # only decisions: no goal
+            return {"message_id": mid, "decisions": [d["id"] for d in found]}
     title = content.splitlines()[0][:200] if content else f"Look at {files[0]['name']}"
     if len(title) < 3:
         title = f"Order: {title}"
     gid = loop.create_goal(title, content or title, repo_path=p.path, quality_commands=list(p.quality_commands),
                            created_by=user["id"], project_id=p.id, attachments=files,
-                           extract_checks=user["is_admin"])
-    post(p.id, f"Order received as goal #{gid}. Planning now.", "agent", goal_id=gid, agent_id=p.manager_id)
+                           extract_checks=user["is_admin"], topic=topic)
+    ahead = loop.lane_ahead(gid)
+    reply(f"Order received as goal #{gid}. " + (f"It starts when goal #{ahead} of this topic is done."
+                                               if ahead else "Planning now."),
+          author_type="agent", goal_id=gid, agent_id=p.manager_id)
     loop.enqueue(gid)
     return {"message_id": mid, "goal_id": gid}
 
 
-def status_text(project_id: int) -> str:
-    """Open blockers first, then the latest goals, then what happens next (ASEAO05 S05-R-02, S05-R-04)."""
+def status_text(project_id: int, topic: str = GENERAL) -> str:
+    """Open blockers first, then the latest goals (of the topic, unless it is general), then what happens next
+    (ASEAO05 S05-R-02, S05-R-04)."""
     from agent_company.management import status_lines
 
     blockers, nxt = status_lines(project_id)
     with session() as s:
-        goals = s.scalars(select(Goal).where(Goal.project_id == project_id).order_by(Goal.id.desc()).limit(10)).all()
+        q = select(Goal).where(Goal.project_id == project_id)
+        if topic != GENERAL:
+            q = q.where(Goal.topic == topic)
+        goals = s.scalars(q.order_by(Goal.id.desc()).limit(10)).all()
         lines = [f"#{g.id} [{g.status}] {g.title} (iteration {g.iteration}/{g.max_iterations})" for g in goals]
     out = (["Open blockers:", *blockers, ""] if blockers else []) + (lines or ["No goals yet."])
     return "\n".join(out + (["", "Next:", *nxt] if nxt else []))
 
 
-def standup(project_id: int) -> str:
-    """Each agent on the project reports: what it is doing, what it finished, what failed. Open blockers first."""
+def standup(project_id: int, topic: str = GENERAL) -> str:
+    """Each agent on the project (or assigned to the topic, when it has agents) reports: what it is doing, what it
+    finished, what failed. Open blockers first."""
     from agent_company.management import status_lines
 
     blockers, _ = status_lines(project_id, 0)
-    lines = ["Stand-up", *(["Open blockers:", *blockers] if blockers else [])]
     with session() as s:
-        for a in members(project_id):
+        t = _topic_row(s, project_id, topic)
+        only = list(t.agent_ids) if t is not None and t.agent_ids else None
+    lines = ["Stand-up" + (f" ({topic})" if only else ""), *(["Open blockers:", *blockers] if blockers else [])]
+    with session() as s:
+        for a in members(project_id, only):
             last = s.scalars(select(Task).join(Goal, Goal.id == Task.goal_id).where(
                 Goal.project_id == project_id, Task.agent_id == a["id"]).order_by(Task.id.desc())).first()
             doing = f"working on '{a['current_task']}'" if a["current_task"] else "idle"
@@ -470,18 +738,19 @@ def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = Tr
             spawn = {"title": p.title, "description": p.description or p.title,
                      "repo": origin.repo_path if origin else "",
                      "checks": list(origin.quality_commands) if origin else [], "project_id": p.project_id,
-                     "parent": origin.id if origin else None, "created_by": origin.created_by if origin else None}
+                     "parent": origin.id if origin else None, "created_by": origin.created_by if origin else None,
+                     "topic": origin.topic if origin else GENERAL}
         out = proposal_dict(p, dict(s.execute(select(Agent.id, Agent.name)).all()))
     if spawn is not None:
         gid = loop.create_goal(spawn["title"], spawn["description"], spawn["repo"], quality_commands=spawn["checks"],
                                created_by=spawn["created_by"], project_id=spawn["project_id"], origin="proposal",
-                               parent_goal_id=spawn["parent"])
+                               parent_goal_id=spawn["parent"], topic=spawn["topic"])
         with session() as s:
             s.get(Proposal, proposal_id).spawned_goal_id = gid
         out["spawned_goal_id"] = gid
         if spawn["project_id"]:
             post(spawn["project_id"], f"Proposal approved by {decided_by}: '{out['title']}' is now goal #{gid}.",
-                 kind="proposal", goal_id=gid)
+                 kind="proposal", goal_id=gid, topic=spawn["topic"])
         loop.enqueue(gid)
     elif out["project_id"]:
         post(out["project_id"], f"Proposal '{out['title']}' rejected by {out['decided_by']}.", kind="proposal")

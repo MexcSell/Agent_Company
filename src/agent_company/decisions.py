@@ -34,8 +34,9 @@ def _row(d: Decision) -> dict[str, Any]:
 def record(goal_id: int | None, topic: str, recommendation: str, alternatives: list[Any] | None = None,
            reasoning: str = "", evidence: list[Any] | None = None, assumptions: list[Any] | None = None,
            confidence: float = 0.5, category: str = "technical", requires_human_approval: bool = False,
-           agent_id: int | None = None) -> dict[str, Any]:
-    """Store a decision. Ones that need no person are approved at once (approver 'auto'); the rest wait."""
+           agent_id: int | None = None, project_id: int | None = None) -> dict[str, Any]:
+    """Store a decision. Ones that need no person are approved at once (approver 'auto'); the rest wait.
+    `project_id` is for decisions taken outside a goal (a project topic's summary, S05-R-07)."""
     from agent_company.governance import notify
 
     category = category if category in CATEGORIES else "technical"
@@ -43,7 +44,7 @@ def record(goal_id: int | None, topic: str, recommendation: str, alternatives: l
     level = 5 if human else LEVEL_BY_CATEGORY[category]
     with session() as s:
         g = s.get(Goal, goal_id) if goal_id else None
-        d = Decision(goal_id=goal_id, project_id=g.project_id if g else None, topic=str(topic)[:256],
+        d = Decision(goal_id=goal_id, project_id=g.project_id if g else project_id, topic=str(topic)[:256],
                      alternatives=list(alternatives or [])[:10], recommendation=str(recommendation)[:4000],
                      reasoning=str(reasoning)[:4000], evidence=list(evidence or [])[:20],
                      assumptions=list(assumptions or [])[:20], confidence=max(0.0, min(1.0, float(confidence or 0))),
@@ -85,18 +86,23 @@ def blocking(goal_id: int) -> list[dict[str, Any]]:
                 if d.status != "approved"]
 
 
-def list_decisions(goal_id: int | None = None, status: str = "", limit: int = 200) -> list[dict[str, Any]]:
+def list_decisions(goal_id: int | None = None, status: str = "", limit: int = 200,
+                   project_id: int | None = None) -> list[dict[str, Any]]:
     with session() as s:
         q = select(Decision)
         if goal_id is not None:
             q = q.where(Decision.goal_id == goal_id)
+        if project_id is not None:
+            q = q.where(Decision.project_id == project_id)
         if status:
             q = q.where(Decision.status == status)
         return [_row(d) for d in s.scalars(q.order_by(Decision.id.desc()).limit(limit))]
 
 
-def from_plan(goal_id: int, items: Any, agent_id: int | None) -> list[dict[str, Any]]:
-    """Decisions a planner put in its JSON plan (`"decisions": [...]`); malformed items are skipped."""
+def from_plan(goal_id: int | None, items: Any, agent_id: int | None, project_id: int | None = None
+              ) -> list[dict[str, Any]]:
+    """Decisions a planner put in its JSON plan (`"decisions": [...]`), or a topic summary found; malformed items
+    are skipped."""
     out = []
     for it in items if isinstance(items, list) else []:
         if not isinstance(it, dict) or not it.get("topic") or not it.get("recommendation"):
@@ -107,5 +113,5 @@ def from_plan(goal_id: int, items: Any, agent_id: int | None) -> list[dict[str, 
             conf = 0.5
         out.append(record(goal_id, it["topic"], it["recommendation"], it.get("alternatives"), it.get("reasoning", ""),
                           it.get("evidence"), it.get("assumptions"), conf, str(it.get("category", "technical")),
-                          bool(it.get("requires_human_approval")), agent_id))
+                          bool(it.get("requires_human_approval")), agent_id, project_id))
     return out

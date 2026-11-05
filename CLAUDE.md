@@ -13,10 +13,11 @@ feature came from.
   `quality.py` + `checks.py` (gate: contracts, review verdicts with logic verification, secrets, syntax, scope,
   change boundaries, baseline), `usage.py`; `loop.py` (circular goal loop, budgets that pause, best-iteration
   rollback, handovers, checkpoint commits per writing task + worktree reconcile on resume, retry policy,
-  re-plan, conflict review, escalation, behaviour rules, idempotent merge/push, trace); `workflow.py` (goal
+  re-plan, conflict review, escalation, behaviour rules, idempotent merge/push, trace; goals of one project topic
+  run in order, `lane_ahead`); `workflow.py` (goal
   state machine, `goal_transitions`); `blackboard.py` (versioned shared goal context, agent messages);
-  `decisions.py` (decision records; human ones block the merge); `projects.py` (projects, command window,
-  proposals, uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress;
+  `decisions.py` (decision records; human ones block the merge); `projects.py` (projects, command window
+  with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals, uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress;
   blockers and generated items are reconciled from goal state by `sync`); `learning.py` (knowledge items: provenance, screening, scoped ranked retrieval)
   + `evolution.py`; `performance.py` (defects, certification,
   metrics); `evaluation.py` (eval harness); `research.py`; `governance.py` (audit, notifications,

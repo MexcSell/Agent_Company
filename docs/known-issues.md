@@ -88,3 +88,13 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 | M2 | Milestone command criteria run on the project's current HEAD (its checked-out branch), not on a commit recorded with the milestone. | by design |
 | M3 | Only administrators edit milestones, risks, action items and insights; other users with access to the project see the Plan tab read-only. | by decision |
 | M4 | Insights are read only from fenced ```json blocks holding `{"insights": [...]}`; an agent that writes them as bare JSON or prose is not recorded. | by design (S05-R-03) |
+
+## Added 2026-11-05 (topics)
+
+| # | Problem | Status |
+|---|---------|--------|
+| T1 | `/summary` runs the GM's model once (Claude Code by default, so the server's Claude subscription). Offline it returns the extractive draft only and finds no new decisions. | by design (S05-R-07) |
+| T2 | Goals of one topic run one after another (G-R-07). A goal stuck in `queued` in a topic (for example held by an E5 stop) holds every later goal of that topic; paused goals and goals waiting for approval do not. | by design |
+| T3 | `/stop` cancels the project's goals in every topic, whichever topic it is sent in; `/status` in a topic other than `general` lists only that topic's goals, blockers are project-wide. | by design |
+| T4 | Databases made before topics get the `topic` column (all old messages and goals in `general`) but not its index; filtering is by project first, so this only matters for very long histories. | open (low) |
+| T5 | Assigning agents to a topic changes who reports in its `/standup`, not who is staffed on its goals. | open (staffing by topic is not specified) |

@@ -251,6 +251,8 @@ class Goal(Base):
     permits: Mapped[list[Any]] = mapped_column(default=list)  # change boundaries lifted: dependencies, config
     # the cost the order or the planner expected; spending twice that pauses the goal (S14-R-03). 0 = none
     estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    # the project's conversation lane the order came from; its reports go there and its goals run in order
+    topic: Mapped[str] = mapped_column(String(64), default="general")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
@@ -282,10 +284,28 @@ class Message(Base):
     user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"), nullable=True)
     kind: Mapped[str] = mapped_column(String(16), default="chat")  # chat|command|plan|result|proposal|standup|error
+    topic: Mapped[str] = mapped_column(String(64), default="general", index=True)  # conversation lane (S05-R-07)
     content: Mapped[str] = mapped_column(Text, default="")
     attachments: Mapped[list[Any]] = mapped_column(default=list)
     meta: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
+class Topic(Base):
+    """A conversation lane of a project's command window (ASEAO05 S05-R-07). `general` exists implicitly."""
+
+    __tablename__ = "topics"
+    __table_args__ = (UniqueConstraint("project_id", "name"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    description: Mapped[str] = mapped_column(Text, default="")
+    agent_ids: Mapped[list[Any]] = mapped_column(default=list)  # agents assigned to the lane
+    summary: Mapped[str] = mapped_column(Text, default="")  # the latest /summary
+    summary_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class Proposal(Base):

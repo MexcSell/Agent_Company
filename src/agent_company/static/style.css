@@ -118,6 +118,10 @@ details summary { cursor: pointer; }
 .msg-head .icon-btn:hover { opacity: 1; }
 .msg-body { white-space: pre-wrap; word-break: break-word; margin-top: 2px; }
 .thumb { max-height: 120px; max-width: 200px; border-radius: 6px; border: 1px solid var(--border); margin-top: 6px; }
+.topic-bar { gap: 8px; align-items: flex-end; } .topic-bar .ag-tabs.small { margin: 0 0 6px; }
+.topic-search { max-width: 220px; margin-bottom: 6px; }
+.topic-summary { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; margin-bottom: 6px; }
+.topic-summary .msg-body { max-height: 30vh; overflow: auto; margin-top: 6px; }
 .composer { border-top: 1px solid var(--border); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .composer textarea { min-height: 64px; }
 .props { border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border)); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }

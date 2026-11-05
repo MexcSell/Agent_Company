@@ -371,6 +371,9 @@ class OfflineExecutor(Executor):
     def _test(self, req: Request) -> str:
         return "OK"
 
+    def _summary(self, req: Request) -> str:
+        return req.data.get("draft", "")
+
     def _lesson(self, req: Request) -> str:
         outcome = req.data.get("outcome", "success")
         title = req.data.get("title", "task")

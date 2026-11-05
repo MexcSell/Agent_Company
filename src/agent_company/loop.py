@@ -36,7 +36,7 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                 attachments: list[dict[str, Any]] | None = None, origin: str = "user",
                 parent_goal_id: int | None = None, allowed_paths: list[str] | None = None,
                 protect_tests: bool = False, extract_checks: bool = False,
-                permits: list[str] | None = None, estimated_cost_usd: float = 0.0) -> int:
+                permits: list[str] | None = None, estimated_cost_usd: float = 0.0, topic: str = "general") -> int:
     """Create a goal. `extract_checks` (only for trusted authors) adds the test/lint commands
     the description names in backticks when no quality commands are given."""
     from agent_company.checks import extract_check_commands
@@ -67,12 +67,27 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                  project_id=project_id, attachments=list(attachments or []), origin=origin,
                  parent_goal_id=parent_goal_id, allowed_paths=[p.strip() for p in allowed_paths or [] if p.strip()],
                  protect_tests=protect_tests, permits=sorted(set(permits or [])),
-                 estimated_cost_usd=max(0.0, float(estimated_cost_usd or 0)))
+                 estimated_cost_usd=max(0.0, float(estimated_cost_usd or 0)), topic=topic or "general")
         s.add(g)
         s.flush()
         gid = g.id
     log_event("goal", f"goal created: {title}", goal_id=gid)
     return gid
+
+
+def lane_ahead(goal_id: int) -> int | None:
+    """The earlier goal of the same project topic that is still queued or being worked on, if any (G-R-07):
+    goals of one topic run in order, different topics run side by side. Paused goals and goals waiting for
+    approval do not hold their topic."""
+    from agent_company.workflow import WORKING
+
+    with session() as s:
+        g = s.get(Goal, goal_id)
+        if g is None or g.project_id is None:
+            return None
+        return s.scalars(select(Goal.id).where(Goal.project_id == g.project_id, Goal.topic == (g.topic or "general"),
+                                               Goal.id < g.id, Goal.status.in_(["queued", *WORKING]))
+                         .order_by(Goal.id)).first()
 
 
 _queue: GoalQueue | None = None
@@ -1453,6 +1468,9 @@ class GoalQueue:
         while True:
             gid = self.q.get()
             if emergency():  # E5: accepted but not run; the watcher hands it out again once the stop is lifted
+                self.seen.discard(gid)
+                continue
+            if lane_ahead(gid) is not None:  # an earlier goal of its topic first; the watcher offers it again
                 self.seen.discard(gid)
                 continue
             try:

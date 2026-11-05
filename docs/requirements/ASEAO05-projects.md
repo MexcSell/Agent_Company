@@ -25,7 +25,7 @@ Mapping: project → `Project`; project manager agent → `Project.manager_id` (
 ## Specific requirements
 
 Status (2026-11-05): S05-R-01 done · S05-R-02 done · S05-R-03 done · S05-R-04 done · S05-R-05 partial ·
-S05-R-06..R-09 open · S05-R-10 done (SPEC-04).
+S05-R-06 open · S05-R-07 done · S05-R-08, R-09 open · S05-R-10 done (SPEC-04).
 
 ### S05-R-01 Milestones — §7 (AT-012)
 - Table `milestones`: `project_id`, name, description, target date, deliverables, required goal
@@ -98,6 +98,19 @@ S05-R-06..R-09 open · S05-R-10 done (SPEC-04).
 - `Message.topic` (default `general`); the command window shows topic tabs; agents assigned to a
   topic; search within a project's messages; a summary of long topics on request (`/summary`).
 - Decisions found in topics are stored as decision records (SPEC-04 S04-R-02), not left in chat.
+- Acceptance: an order sent in a topic is answered and reported (plan, results) only in that topic; a
+  `DECISION:` line and a decision a summary finds are decision records of the project, recorded once.
+- **Status: done** (`Message.topic`, `Goal.topic`, table `topics`; `projects.topics`, `create_topic`,
+  `update_topic`, `summarize`, `record_decision_lines`; `GET/POST /api/projects/{id}/topics`,
+  `PATCH …/topics/{name}`, `GET …/messages?topic=&q=`; Projects → Orders & reports: a tab per topic, search
+  over every topic, topic settings; `tests/test_topics.py`). `general` always exists. Anyone who may give
+  orders opens topics; administrators assign agents (a topic's `/standup` reports them), edit and archive
+  (archived topics take no new messages). A goal keeps its order's topic, as do goals spawned from its
+  proposals. Decisions: `DECISION: <subject> :: <choice> [:: <why>]` lines a person writes (a message of
+  only such lines starts no goal), and the ones the GM's model lists in a fenced ```json
+  `{"decisions": [...]}` block of a `/summary`; agents' own decisions still come from plans and conflict
+  reviews. `/summary` uses the GM's model on the newest 12 000 characters of the topic, with an extractive
+  draft (goals, decisions, latest results) that the offline simulator returns as is; it is kept on the topic.
 
 ### S05-R-08 Task status chain — `.rtf` SPEC-05
 - Extend `Task.status` to `created|planned|assigned|in_progress|review|approved|completed` plus

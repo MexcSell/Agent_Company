@@ -413,6 +413,13 @@ class ProjectBody(BaseModel):
 class CommandBody(BaseModel):
     content: str = ""
     attachments: list[str] = Field(default_factory=list)
+    topic: str = "general"
+
+
+class TopicBody(BaseModel):
+    name: str
+    description: str = ""
+    agent_ids: list[int] = Field(default_factory=list)
 
 
 class IdsBody(BaseModel):
@@ -1508,15 +1515,41 @@ def create_app(start_background: bool = True) -> FastAPI:
                                                          if x["project_id"] == p.id][:30]}
 
     @app.get("/api/projects/{project_id}/messages")
-    def project_messages(project_id: int, after: int = 0, user: dict[str, Any] = Depends(current_user)
-                         ) -> list[dict[str, Any]]:
+    def project_messages(project_id: int, after: int = 0, topic: str = "", q: str = "",
+                         user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         projects.get(project_id, user)
-        return projects.messages(project_id, after)
+        return projects.messages(project_id, after, limit=100 if q.strip() else 300, topic=topic, q=q)
 
     @app.post("/api/projects/{project_id}/command")
     def project_command(project_id: int, body: CommandBody, user: dict[str, Any] = Depends(current_user)
                         ) -> dict[str, Any]:
-        return projects.command(project_id, user, body.content, body.attachments)
+        return projects.command(project_id, user, body.content, body.attachments, body.topic)
+
+    # --- topics: conversation lanes of the command window (ASEAO05 S05-R-07) ---
+    @app.get("/api/projects/{project_id}/topics")
+    def project_topics(project_id: int, user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        projects.get(project_id, user)
+        return projects.topics(project_id)
+
+    @app.post("/api/projects/{project_id}/topics")
+    def topic_create(project_id: int, body: TopicBody, user: dict[str, Any] = Depends(current_user)
+                     ) -> dict[str, Any]:
+        projects.get(project_id, user)
+        if not auth.can(user, "run"):
+            raise HTTPException(403, "you can read this project but not open topics in it")
+        if body.agent_ids and not user["is_admin"]:
+            raise HTTPException(403, "only administrators assign agents to a topic")
+        out = projects.create_topic(project_id, body.name, body.description, body.agent_ids, user["id"])
+        _audit(user, "topic_create", project_id, after={"topic": out["name"], "agents": out["agent_ids"]})
+        return out
+
+    @app.patch("/api/projects/{project_id}/topics/{name}")
+    def topic_update(project_id: int, name: str, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                     ) -> dict[str, Any]:
+        projects.get(project_id, admin)
+        out = projects.update_topic(project_id, name, body)
+        _audit(admin, "topic_update", project_id, after={"topic": out["name"], **{k: out[k] for k in body if k in out}})
+        return out
 
     @app.post("/api/projects/{project_id}/sync")
     def project_sync(project_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:

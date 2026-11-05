@@ -4,6 +4,8 @@
 // for administrators; the Orders window, where an order becomes a goal for the agent loop, for everyone),
 // and the agents on the right: who works on it and their organisation, top to bottom. Files opens a file
 // panel beside them. The GM panels are kept per project, so switching projects never reloads them.
+// The Orders window has topics (ASEAO05 S05-R-07): conversation lanes, one tab each; an order's goal reports in
+// the lane it was sent from. The search box looks through every topic of the project.
 
 let selectedProject = Number(store.get("ac.project")) || null;
 let projectChecked = new Set();
@@ -12,6 +14,9 @@ let pendingUploads = [];
 let projectMode = store.get("ac.project.mode") || "gm";  // gm | orders | plan
 let projectFiles = store.get("ac.project.files") === "1";
 const gmPanels = new Map();  // project id -> { el, panel }
+let projectSearch = "";
+let projectTopics = [];
+const topicOf = (id) => store.get(`ac.project.topic.${id}`) || "general";
 
 async function viewProjects(quiet) {
   // The selected project's details load alongside the list: one round trip instead of two.
@@ -93,7 +98,7 @@ const KIND_LABEL = { command: "", plan: "Plan", result: "Result", error: "Proble
 function messageHtml(m, count) {
   const who = m.author_type === "user" ? esc(m.meta?.author || "You") : m.agent ? esc(m.agent) : "System";
   const files = (m.attachments || []).map((a) => a.content_type.startsWith("image/") ? `<a href="/api/uploads/${a.id}" target="_blank" rel="noopener"><img src="/api/uploads/${a.id}" alt="${esc(a.name)}" class="thumb"></a>` : `<a href="/api/uploads/${a.id}" target="_blank" rel="noopener">${esc(a.name)}</a>`).join(" ");
-  return `<div class="msg by-${m.author_type} ${m.kind}" data-mid="${m.id}"><div class="msg-head row nowrap"><strong>${who}</strong>${KIND_LABEL[m.kind] ? ` <span class="pill ${m.kind === "error" ? "failed" : m.kind === "result" ? "done" : "info"}">${KIND_LABEL[m.kind]}</span>` : ""}${m.goal_id ? ` <a href="#" data-goal="${m.goal_id}" class="muted">#${m.goal_id}</a>` : ""}${count > 1 ? ` <span class="pill" title="identical messages collapsed">×${count}</span>` : ""}<span class="muted grow" style="text-align:right">${ago(m.at)}</span><button class="icon-btn" data-copy="${m.id}" title="Copy" aria-label="Copy message">${icon("copy", 14)}</button></div>
+  return `<div class="msg by-${m.author_type} ${m.kind}" data-mid="${m.id}"><div class="msg-head row nowrap"><strong>${who}</strong>${KIND_LABEL[m.kind] ? ` <span class="pill ${m.kind === "error" ? "failed" : m.kind === "result" ? "done" : "info"}">${KIND_LABEL[m.kind]}</span>` : ""}${m.goal_id ? ` <a href="#" data-goal="${m.goal_id}" class="muted">#${m.goal_id}</a>` : ""}${projectSearch && m.topic ? ` <span class="pill">${esc(m.topic)}</span>` : ""}${count > 1 ? ` <span class="pill" title="identical messages collapsed">×${count}</span>` : ""}<span class="muted grow" style="text-align:right">${ago(m.at)}</span><button class="icon-btn" data-copy="${m.id}" title="Copy" aria-label="Copy message">${icon("copy", 14)}</button></div>
     <div class="msg-body">${esc(m.content)}</div>${files ? `<div class="row">${files}</div>` : ""}</div>`;
 }
 
@@ -109,7 +114,7 @@ function renderMessages(append) {
   const box = $("#msgs");
   if (!box) return;
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-  box.innerHTML = groups.map((g) => messageHtml(g.m, g.n)).join("") || '<p class="muted">No messages yet. Give the General Manager an order below.</p>';
+  box.innerHTML = groups.map((g) => messageHtml(g.m, g.n)).join("") || (projectSearch ? '<p class="muted">No message in this project contains that.</p>' : '<p class="muted">No messages yet. Give the General Manager an order below.</p>');
   if (atBottom || !append) box.scrollTop = box.scrollHeight;
   box.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = () => { const m = messageCache.find((x) => x.id === Number(b.dataset.copy)); navigator.clipboard?.writeText(m.content).then(() => toast("Copied"), () => toast("Copy failed")); }));
   box.querySelectorAll("[data-goal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); goalModal(Number(a.dataset.goal)); }));
@@ -154,18 +159,24 @@ async function projectMain(id, incremental, early = null) {
     $("#p-wsp") && ($("#p-wsp").onclick = async () => { show("workspace"); await new Promise((r) => setTimeout(r, 300)); WSP.openRoot?.(d.path).catch((e) => toast(e.message)); });
     $("#p-config") && ($("#p-config").onclick = async () => { if (!confirm(`Write the catalog into ${d.path}/.claude/ (existing files with the same names are replaced)?`)) return; try { const r = await api(`/api/projects/${id}/claude-config`, { method: "POST" }); toast(`${r.written.length} file(s) written`); } catch (e) { toast(e.message); } });
     const body = $("#proj-body");
+    const resetMessages = () => { messageCache = []; lastMessageId = 0; };
     if (mode === "gm") {
       const g = gmPanel(d);
       body.replaceChildren(g.el);
     } else if (mode === "plan") {
       body.innerHTML = '<div class="plan" id="plan"><p class="muted">Loading…</p></div>';
     } else {
-      body.innerHTML = `<div class="msgs" id="msgs"></div>
+      body.innerHTML = `<div class="row nowrap topic-bar"><div class="ag-tabs small grow" role="tablist" id="topics"></div>
+          <input type="search" id="p-search" class="topic-search" placeholder="Search all topics" aria-label="Search this project's messages" value="${esc(projectSearch)}"></div>
+        <details class="topic-summary" id="topic-summary" hidden><summary class="muted"></summary><div class="msg-body"></div></details>
+        <div class="msgs" id="msgs"></div>
         <form id="composer" class="composer wc-composer"><div id="att" class="row"></div>
-          <div class="wc-inrow"><textarea id="cmd" rows="3" placeholder="Order for the General Manager, or /standup, /status, /stop, /sync, /help. Enter sends, Shift+Enter adds a line. Paste images to attach."></textarea>
+          <div class="wc-inrow"><textarea id="cmd" rows="3" placeholder="Order for the General Manager, a DECISION: subject :: choice line, or /standup, /status, /summary, /stop, /sync, /help. Enter sends, Shift+Enter adds a line. Paste images to attach."></textarea>
           <div class="wc-side"><label class="icon-btn sm wc-attach" for="file" title="Attach images or files" aria-label="Attach">${icon("attach", 16)}</label><button class="wc-send" title="Send (Enter)" aria-label="Send">${icon("send", 16)}</button></div></div>
           <input type="file" id="file" multiple hidden accept="image/*,text/*,.json,.yaml,.yml,.md,.pdf"><span class="muted" id="p-running"></span></form>`;
-      messageCache = []; lastMessageId = 0; pendingUploads = [];
+      resetMessages(); pendingUploads = [];
+      let searchTimer = 0;
+      $("#p-search").oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { projectSearch = $("#p-search").value.trim(); resetMessages(); projectMain(id, true); }, 300); };
       $("#composer").onsubmit = (e) => { e.preventDefault(); sendCommand(id); };
       $("#cmd").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendCommand(id); } };
       $("#cmd").onpaste = (e) => { const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); files.forEach(uploadFile); } };
@@ -173,8 +184,14 @@ async function projectMain(id, incremental, early = null) {
     }
   }
   if (mode === "orders" && $("#msgs")) {
-    const fresh = await api(`/api/projects/${id}/messages?after=${lastMessageId}`);
-    if (fresh.length || !lastMessageId) { messageCache.push(...fresh); lastMessageId = messageCache.length ? messageCache[messageCache.length - 1].id : 0; renderMessages(lastMessageId && incremental); }
+    projectTopics = await api(`/api/projects/${id}/topics`);
+    if (!projectTopics.some((t) => t.name === topicOf(id) && (!t.archived || me.is_admin))) { store.set(`ac.project.topic.${id}`, "general"); messageCache = []; lastMessageId = 0; }
+    renderTopics(id);
+    const topic = topicOf(id);
+    const qs = projectSearch ? `q=${encodeURIComponent(projectSearch)}` : `after=${lastMessageId}&topic=${encodeURIComponent(topic)}`;
+    const fresh = await api(`/api/projects/${id}/messages?${qs}`);
+    if (projectSearch) { messageCache = fresh; renderMessages(false); }
+    else if (fresh.length || !lastMessageId) { messageCache.push(...fresh); lastMessageId = messageCache.length ? messageCache[messageCache.length - 1].id : 0; renderMessages(lastMessageId && incremental); }
     $("#p-running").textContent = `${d.goals.filter((g) => GOAL_ACTIVE.includes(g.status) && g.status !== "paused").length} goal(s) running`;
   }
   if (mode === "plan" && $("#plan")) await projectPlan(id);
@@ -322,11 +339,57 @@ function renderAttachments() {
   $("#att").querySelectorAll("[data-rm]").forEach((b) => (b.onclick = () => { pendingUploads.splice(Number(b.dataset.rm), 1); renderAttachments(); }));
 }
 
+// Topic tabs (archived ones only for administrators, who can restore them), "+" to open one, the gear for
+// an administrator's topic settings.
+function renderTopics(id) {
+  const cur = topicOf(id), bar = $("#topics");
+  if (!bar) return;
+  bar.innerHTML = projectTopics.filter((t) => !t.archived || me.is_admin).map((t) => `<button role="tab" data-topic="${esc(t.name)}" aria-selected="${!projectSearch && t.name === cur}" title="${esc(t.description || t.name)}${t.agents.length ? " · " + esc(t.agents.join(", ")) : ""}">${esc(t.name)}${t.messages ? ` <span class="muted">${t.messages}</span>` : ""}${t.archived ? ' <span class="muted">(archived)</span>' : ""}</button>`).join("")
+    + (me.is_admin || me.permissions?.run ? ib("plus", "Open a topic", 'id="t-new"', "sm") : "")
+    + (me.is_admin ? ib("settings", "Topic settings: description, assigned agents, archive", 'id="t-edit"', "sm") : "");
+  bar.querySelectorAll("[data-topic]").forEach((b) => (b.onclick = () => {
+    store.set(`ac.project.topic.${id}`, b.dataset.topic); projectSearch = ""; $("#p-search").value = "";
+    messageCache = []; lastMessageId = 0; projectMain(id, true);
+  }));
+  $("#t-new") && ($("#t-new").onclick = () => topicForm(id));
+  $("#t-edit") && ($("#t-edit").onclick = () => topicForm(id, projectTopics.find((t) => t.name === cur)));
+  const t = projectTopics.find((x) => x.name === cur), box = $("#topic-summary");
+  box.hidden = !t?.summary || !!projectSearch;
+  if (t?.summary) { box.querySelector("summary").textContent = `Summary ${ago(t.summary_at)} (/summary renews it)`; box.querySelector(".msg-body").textContent = t.summary; }
+}
+
+async function topicForm(id, t = null) {
+  const agents = me.is_admin ? (await api("/api/agents")).filter((a) => a.enabled) : [];
+  const chosen = new Set(t?.agent_ids || []);
+  modal(`<h2>${icon("send", 18)} ${t ? `Topic '${esc(t.name)}'` : "Open a topic"}</h2><form id="tf">
+    ${t ? "" : '<label for="tf-name">Name (lowercase letters, digits, spaces, dots, dashes)</label><input id="tf-name" required maxlength="64" placeholder="front end">'}
+    <label for="tf-desc">What it is about</label><textarea id="tf-desc">${esc(t?.description || "")}</textarea>
+    ${me.is_admin ? `<label>Assigned agents (they report in this topic's /standup)</label><div class="list" style="max-height:220px;overflow:auto">${agents.map((a) => `<label class="row nowrap"><input type="checkbox" data-agent="${a.id}" ${chosen.has(a.id) ? "checked" : ""} style="width:auto"> ${esc(a.name)} <span class="muted">${esc(a.role)}</span></label>`).join("")}</div>` : ""}
+    ${t && t.name !== "general" ? `<label class="row nowrap"><input type="checkbox" id="tf-arch" ${t.archived ? "checked" : ""} style="width:auto"> Archived (takes no new messages)</label>` : ""}
+    <div class="row" style="margin-top:12px"><button class="btn icon primary" title="Save" aria-label="Save">${icon(t ? "save" : "check", 16)}</button></div></form>`);
+  $("#tf").onsubmit = async (e) => {
+    e.preventDefault();
+    const agent_ids = [...document.querySelectorAll("#tf [data-agent]:checked")].map((c) => Number(c.dataset.agent));
+    try {
+      if (t) {
+        const body = { description: $("#tf-desc").value, agent_ids };
+        if ($("#tf-arch")) body.archived = $("#tf-arch").checked;
+        await api(`/api/projects/${id}/topics/${encodeURIComponent(t.name)}`, { method: "PATCH", body });
+        if (body.archived) store.set(`ac.project.topic.${id}`, "general");
+      } else {
+        const r = await api(`/api/projects/${id}/topics`, { method: "POST", body: { name: $("#tf-name").value, description: $("#tf-desc").value, ...(me.is_admin ? { agent_ids } : {}) } });
+        store.set(`ac.project.topic.${id}`, r.name);
+      }
+      $("#modal").hidden = true; messageCache = []; lastMessageId = 0; projectMain(id, true);
+    } catch (err) { toast(err.message); }
+  };
+}
+
 async function sendCommand(id, text) {
   const content = text ?? $("#cmd")?.value.trim();
   if (!content && !pendingUploads.length) return;
   try {
-    await api(`/api/projects/${id}/command`, { method: "POST", body: { content, attachments: pendingUploads.map((u) => u.id) } });
+    await api(`/api/projects/${id}/command`, { method: "POST", body: { content, attachments: pendingUploads.map((u) => u.id), topic: projectMode === "orders" ? topicOf(id) : "general" } });
     if (text === undefined) { $("#cmd").value = ""; pendingUploads = []; renderAttachments(); }
     else toast(`${text} sent`);
     projectMain(id, true); updateBadges();

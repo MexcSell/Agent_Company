@@ -86,6 +86,10 @@ defect is open; retry rate and cost per accepted goal are reported. An administr
 ### G-R-07 Topics run in order — AgentForge website spec (orchestration)
 - Goals in the same project topic (ASEAO05 S05-R-07) run in sequence; different topics run
   concurrently.
+- **Status: done** (`loop.lane_ahead`, `GoalQueue._loop`; `tests/test_topics.py`): a goal waits while an
+  earlier goal of its project topic is queued, planning, running or recovering; the queue's watcher offers it
+  again every 5 s. Paused goals and goals waiting for approval do not hold the topic. Goals without a project
+  (evals, the CLI) and goals run directly (`run_goal`) are not held.
 
 ### G-R-08 File leases between concurrent goals — AgentForge website spec, step 3
 - Goals of the same project run in separate worktrees, so conflicts surface only at merge. Each
