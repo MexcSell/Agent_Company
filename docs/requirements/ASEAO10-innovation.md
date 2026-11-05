@@ -26,6 +26,8 @@ existing, minimal innovation path (`projects.extract_proposals`).
   superiors`) always leaves it to a person — and a complete case becomes a **project**, not a goal: the case is its
   description, the requirements draft its first `draft` requirement (S08-R-01, source `proposal:<id>`). The goal-chain
   guards (`max_proposal_goals`, depth) limit spawned goals and do not apply. Follow-up proposals are unchanged.
+  Not covered: proposals from approved research reports (`research._proposals`) know only `PROPOSAL:`; a
+  `PROPOSAL[product]:` line there is neither a product proposal nor removed from the published report.
 
 ### S10-R-02 Experiments are SPEC-13 experiments — §10–§12
 - Innovation experiments use the `experiments` table from SPEC-13 S13-R-05 (baseline, candidate,

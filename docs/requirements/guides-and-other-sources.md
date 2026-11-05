@@ -138,7 +138,8 @@ defect is open; retry rate and cost per accepted goal are reported. An administr
   one by one); goals waiting for approval, paused or ended hold no lease, so a person's queue never blocks work. The
   merge half is met by G-R-03's behaviour instead of a new `revision_required` state: a conflicting merge is rolled
   back, the repository is left unchanged, an automatic merge leaves the goal `awaiting_approval` and `approve`
-  answers 400 until the branch is resolved.
+  answers 400 until the branch is resolved. Paths a workflow template gives a goal count as declared
+  (`strategies.py`: a `docs` goal gets `docs/*`, `*.md`, …), so `docs` goals of one project run one at a time.
 
 ### G-R-09 Mission digest — AgentForge website spec, step 5
 - After a goal, the GM posts one digest in the command window: tasks passed/total, duration,
