@@ -294,3 +294,35 @@ def test_a_quota_paused_goal_over_its_budget_waits_for_a_person_instead():
     assert loop.resume_after_quota() == []
     with session() as s:
         assert len(s.scalars(select(Event).where(Event.goal_id == gid)).all()) == before, "not retried every 5 s"
+
+
+def test_at014_an_unauthorized_launch_is_denied_and_audited():
+    from agent_company import auth, projects
+    from agent_company.db import AuditEvent, Goal, User
+
+    admin_secret, member_secret = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+    auth.register("admin", admin_secret)
+    auth.register("member", member_secret)
+    auth.admin_action(1, 2, "approve")
+    p = projects.create("Launch")
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
+        with session() as s:
+            s.get(User, 1).device_hash = auth._hash(admin_secret)
+            s.get(User, 2).device_hash = auth._hash(member_secret)
+        member = TestClient(app.app)
+        assert member.post("/api/auth/device", json={"device_secret": member_secret}).status_code == 200
+        assert app.post("/api/auth/device", json={"device_secret": admin_secret}).status_code == 200
+        assert app.put("/api/users/2/permissions", json={"projects": [p["id"]], "run": False}).status_code == 200
+        assert member.post("/api/goals", json={"title": "anything"}).status_code == 403
+        assert member.post(f"/api/projects/{p['id']}/command", json={"content": "build it"}).status_code == 403
+        assert member.post("/api/research/requests", json={"question": "what is new?"}).status_code == 403
+        assert member.get("/api/audit").status_code == 403, "reading an admin page is refused but not a launch"
+        app.put("/api/users/2/permissions", json={"run": True})
+        assert member.post("/api/goals", json={"title": "xyz", "repo_path": "/tmp"}).status_code == 403
+    with session() as s:
+        assert s.query(Goal).count() == 0, "nothing was launched"
+        rows = s.scalars(select(AuditEvent).where(AuditEvent.action.like("%_denied"))).all()
+        assert [(r.actor, r.action, r.severity) for r in rows] == [
+            ("user:member", "goal_create_denied", "warning"), ("user:member", "project_command_denied", "warning"),
+            ("user:member", "research_request_denied", "warning"), ("user:member", "goal_create_denied", "warning")]
+    assert governance.verify_audit()["ok"]

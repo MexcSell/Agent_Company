@@ -91,7 +91,12 @@ Provisioning/Starting/Stopping collapse into a run's start and end.
 ### S02-R-04 Spec acceptance tests (§15) still to cover
 Tests to add to `tests/` (the rest are met by existing behaviour or tests):
 AT-014 unauthorized launch → denied and audited.
-Done in `tests/test_agent_versions.py`: AT-004, AT-008, AT-013 (repeated executor errors; agents have no
+- **Status: done.** Every action that starts agent work audits its refusal with severity `warning`:
+  `POST /api/goals` (`goal_create_denied`, also when a non-administrator sets a repository, quality commands or
+  permits), an order in a project's command window (`project_command_denied`) and `POST /api/research/requests`
+  (`research_request_denied`), through `api.allowed(perm, launch=…)`. Other 403s (an admin page opened by a member)
+  are not audited: a member's dashboard meets them constantly and they would bury real findings.
+Done in `tests/test_agent_versions.py`: AT-014, AT-004, AT-008, AT-013 (repeated executor errors; agents have no
 heartbeat, they run per task), AT-016, AT-019 (paused, then resumed the next day), AT-023.
 
 ### S02-R-03 Per-agent concurrency and quotas — FR-24

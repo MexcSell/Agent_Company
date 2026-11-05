@@ -102,7 +102,7 @@ the order is safety and correctness of that pipeline first, then management, the
    The S08-R-05 SBOM (CycloneDX of every merged commit) done 2026-11-05.
    SE-R-21 the retrieval procedure per query class, learned on a labelled class eval and guarded by recall@5,
    done 2026-11-05.
-   G-R-09 the mission digest after a goal done 2026-11-05.
+   G-R-09 the mission digest after a goal done 2026-11-05, then SPEC-02 AT-014 (a refused launch is audited).
 5. **Still open** (2026-11-05): the gated rooms one at a time
    (G-R-04); L3 for the agent CLIs themselves (they need network and their logins, see the threat model's known
    gaps).

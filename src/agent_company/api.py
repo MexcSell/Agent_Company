@@ -144,10 +144,14 @@ def goal_approver(goal_id: int, user: dict[str, Any] = Depends(current_user)) ->
     return {**user, "delegated": True}
 
 
-def allowed(perm: str):  # noqa: ANN201
-    """Dependency: administrators, or users granted `perm` (Users page → Permissions)."""
+def allowed(perm: str, launch: str = ""):  # noqa: ANN201
+    """Dependency: administrators, or users granted `perm` (Users page → Permissions). `launch` names an action that
+    starts agent work: a refused one is audited (SPEC-02 AT-014). Other refusals are not, the dashboard of a user
+    without a permission meets them all the time."""
     def check(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         if not auth.can(user, perm):
+            if launch:
+                _audit(user, f"{launch}_denied", "", after={"needs": perm}, severity="warning")
             raise HTTPException(403, f"needs the '{perm}' permission")
         return user
 
@@ -1929,9 +1933,10 @@ def create_app(start_background: bool = True) -> FastAPI:
                     if seen is None or g.project_id is None or g.project_id in seen]
 
     @app.post("/api/goals")
-    def goal_create(body: GoalBody, request: Request, user: dict[str, Any] = Depends(allowed("run"))
+    def goal_create(body: GoalBody, request: Request, user: dict[str, Any] = Depends(allowed("run", "goal_create"))
                     ) -> dict[str, Any]:
         if (body.repo_path or body.quality_commands or body.permits) and not user["is_admin"]:
+            _audit(user, "goal_create_denied", "", after={"needs": "administrator"}, severity="warning")
             raise HTTPException(403, "only administrators can set a repository, quality commands or permits")
         try:
             gid = loop.create_goal(body.title, body.description, body.repo_path, body.urls,
@@ -2481,7 +2486,8 @@ def create_app(start_background: bool = True) -> FastAPI:
         return research.collect(body.url, body.depth, body.max_pages, agent_id=lead_id)
 
     @app.post("/api/research/requests")
-    def research_request(body: ResearchBody, user: dict[str, Any] = Depends(allowed("run"))) -> dict[str, Any]:
+    def research_request(body: ResearchBody, user: dict[str, Any] = Depends(allowed("run", "research_request"))
+                         ) -> dict[str, Any]:
         with session() as s:
             seen = _visible_project_ids(s, user)
             g = s.get(Goal, body.goal_id) if body.goal_id is not None else None
@@ -2660,7 +2666,11 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.post("/api/projects/{project_id}/command")
     def project_command(project_id: int, body: CommandBody, user: dict[str, Any] = Depends(current_user)
                         ) -> dict[str, Any]:
-        return projects.command(project_id, user, body.content, body.attachments, body.topic, body.classification)
+        try:
+            return projects.command(project_id, user, body.content, body.attachments, body.topic, body.classification)
+        except PermissionError:  # an order would start agent work: a refused one is audited (SPEC-02 AT-014)
+            _audit(user, "project_command_denied", project_id, severity="warning")
+            raise
 
     # --- topics: conversation lanes of the command window (ASEAO05 S05-R-07) ---
     @app.get("/api/projects/{project_id}/topics")
