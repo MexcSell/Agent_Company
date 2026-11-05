@@ -206,6 +206,45 @@ def _check_retrieval(key: str, value: float, actor: str) -> None:
               key=key, before=before, after=after)
 
 
+def stored_weights() -> dict[str, float | None]:
+    """The stored `retrieval_w_<name>` overrides by name; None where the .env value or the default holds."""
+    with session() as s:
+        rows = {r.key: r.value.get("v") for r in s.scalars(select(Setting).where(Setting.key.in_(RETRIEVAL_KEYS)))}
+    return {k.removeprefix("retrieval_w_"): rows.get(k) for k in sorted(RETRIEVAL_KEYS)}
+
+
+def set_weights(values: dict[str, float | None], actor: str, check: bool = True) -> dict[str, float]:
+    """Several ranking weights at once (a retrieval experiment, S13-R-05): with `check`, recall@5 of the retrieval
+    eval must hold for the change as a whole, not for each weight alone. None clears the override."""
+    from agent_company import learning
+    from agent_company.db import log_event
+
+    keys = {f"retrieval_w_{n}": v for n, v in values.items()}
+    if unknown := sorted(set(keys) - RETRIEVAL_KEYS):
+        raise ValueError(f"unknown ranking weights: {', '.join(unknown)}")
+    coerced = {k: None if v is None else _coerce(k, v) for k, v in keys.items()}
+    before = learning.evaluate_retrieval()["value"]
+    defaults = config.load_settings()
+    after_w = {k.removeprefix("retrieval_w_"): getattr(defaults, k) if v is None else v for k, v in coerced.items()}
+    after = learning.evaluate_retrieval(**after_w)["value"]
+    if check and after < before:
+        raise ValueError(f"these weights lower recall@5 of evals/retrieval.json from {before:.2f} to {after:.2f}")
+    with session() as s:
+        for k, v in coerced.items():
+            row = s.get(Setting, k)
+            if v is None:
+                if row is not None:
+                    s.delete(row)
+            elif row is None:
+                s.add(Setting(key=k, value={"v": v}))
+            else:
+                row.value = {"v": v}
+    load()
+    log_event("retrieval", f"ranking weights set by {actor}: recall@5 {before:.2f} -> {after:.2f}",
+              weights=after_w, before=before, after=after)
+    return learning.weights()
+
+
 def _check_strategies(lines: list[str], actor: str) -> None:
     """The ranking procedures per query class change only when recall@5 of the retrieval eval holds (SE-R-21)."""
     from agent_company import learning

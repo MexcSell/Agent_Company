@@ -19,6 +19,12 @@ Status: `draft -> approved -> implemented -> verified`, `retired` from any (and 
 
 `traceability(project_id)` answers which requirements are implemented, tested and merged (current version only).
 
+Templates (S08-FR-03): a `story` reads "As a <actor>, I want <want>[, so that <benefit>]"; a `use_case` names its
+actors, preconditions, a numbered main flow, alternatives and postconditions in labelled lines (`USE_CASE_TEMPLATE`).
+Both are parsed from the text (or given as `details`, which win) into `Requirement.details`, refused when the actor
+or the want / the actors or the main flow are missing, versioned with the text and shown to the planner. `actors`
+lists who the project's stories and use cases serve.
+
 Conflicts (S08-FR-09): the planner is asked to flag contradicting requirements as a decision; as a backstop, a new
 or changed requirement whose subject matches another one's (the same explicit subject, or nearly the same words)
 while exactly one of them is negated ("must not", "never", ...) records one decision per pair that waits for a
@@ -52,7 +58,8 @@ KEY_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d+$")
 
 def _row(r: Requirement) -> dict[str, Any]:
     return {"id": r.id, "project_id": r.project_id, "key": r.key, "text": r.text, "kind": r.kind,
-            "acceptance": r.acceptance or [], "subject": r.subject or "", "version": r.version,
+            "acceptance": r.acceptance or [], "details": r.details or {}, "subject": r.subject or "",
+            "version": r.version,
             "history": r.history or [], "status": r.status, "source": r.source or "", "conflicts": r.conflicts or [],
             "created_by": r.created_by or "", "note": r.note or "", "at": r.created_at.isoformat(),
             "updated_at": r.updated_at.isoformat() if r.updated_at else None}
@@ -61,6 +68,111 @@ def _row(r: Requirement) -> dict[str, Any]:
 def _texts(items: Any) -> list[str]:
     items = [items] if isinstance(items, str) else list(items or [])
     return [str(x).strip()[:1000] for x in items[:20] if str(x).strip()]
+
+
+# --- story and use-case templates (S08-FR-03) ---
+
+STORY_TEMPLATE = "As a <actor>, I want <what>, so that <benefit>."
+USE_CASE_TEMPLATE = ("<summary line>\nActors: <who>, <who>\nPreconditions: <what holds before>\nMain flow:\n"
+                     "1. <step>\n2. <step>\nAlternatives:\n- <deviation and what happens>\n"
+                     "Postconditions: <what holds after>")
+_STORY = re.compile(r"^\s*as\s+(?:an?|the)?\s*(?P<actor>[^,]+?)\s*,?\s+i\s+(?:want|need|would like|can)\s+(?:to\s+)?"
+                    r"(?P<want>.+?)(?:\s*,?\s+so\s+that\s+(?P<benefit>.+?))?\s*\.?\s*$", re.I | re.S)
+_UC_LABELS = {"actor": "actors", "actors": "actors", "precondition": "preconditions", "preconditions": "preconditions",
+              "main flow": "main_flow", "main success scenario": "main_flow", "basic flow": "main_flow",
+              "flow": "main_flow", "steps": "main_flow", "alternative": "alternatives", "alternatives": "alternatives",
+              "alternative flows": "alternatives", "extensions": "alternatives", "exceptions": "alternatives",
+              "postcondition": "postconditions", "postconditions": "postconditions"}
+_UC_LISTS = ("actors", "preconditions", "main_flow", "alternatives", "postconditions")
+_ITEM = re.compile(r"^\s*(?:[-*•]|\d+[.)]|[a-z][.)])\s*")
+
+
+def _split_actors(text: str) -> list[str]:
+    return [x.strip(" .") for x in re.split(r",|;|\band\b", text) if x.strip(" .")]
+
+
+def parse_story(text: str) -> dict[str, Any]:
+    m = _STORY.match(text.strip().split("\n")[0])
+    if not m:
+        return {}
+    return {"actors": [m["actor"].strip()], "want": m["want"].strip(), "benefit": (m["benefit"] or "").strip()}
+
+
+def parse_use_case(text: str) -> dict[str, Any]:
+    """Labelled lines (`Actors:`, `Preconditions:`, `Main flow:` …); a label's items follow on its line or on the
+    lines below it (numbered or bulleted)."""
+    out: dict[str, list[str]] = {}
+    cur = ""
+    for line in text.splitlines():
+        label, colon, rest = line.partition(":")
+        key = _UC_LABELS.get(label.strip().lower()) if colon else None
+        if key:
+            cur = key
+            out.setdefault(cur, [])
+            rest = rest.strip()
+            if rest:
+                out[cur] += _split_actors(rest) if cur == "actors" else [rest]
+        elif cur and line.strip():
+            item = _ITEM.sub("", line).strip()
+            if item:
+                out[cur] += _split_actors(item) if cur == "actors" else [item]
+    return out
+
+
+def template(kind: str, text: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The kind's template filled from the text, then from explicit `details`; {} for functional and
+    non-functional requirements. A story without actor or want, a use case without actors or main flow is refused
+    with the template to follow."""
+    if kind not in ("story", "use_case"):
+        return {}
+    given = {k: v for k, v in dict(details or {}).items() if v not in (None, "", [])}
+    if kind == "story":
+        d = parse_story(text) | given
+        d["actors"] = _texts(d.get("actors") or ([d["actor"]] if d.get("actor") else []))[:5]
+        d.pop("actor", None)
+        d = {"actors": d["actors"], "want": str(d.get("want") or "").strip()[:1000],
+             "benefit": str(d.get("benefit") or "").strip()[:1000]}
+        if not d["actors"] or not d["want"]:
+            raise ValueError(f"a story names who wants what: \"{STORY_TEMPLATE}\"")
+        return d
+    d = parse_use_case(text) | given
+    d = {k: _texts(d.get(k))[:20] for k in _UC_LISTS}
+    if not d["actors"] or not d["main_flow"]:
+        raise ValueError("a use case names its actors and its main flow:\n" + USE_CASE_TEMPLATE)
+    return d
+
+
+def describe(kind: str, details: dict[str, Any] | None) -> str:
+    """The template in one line for prompts."""
+    d = details or {}
+    if kind == "story" and d.get("actors"):
+        return (f"actor: {', '.join(d['actors'])} | wants: {d.get('want', '')}"
+                + (f" | so that: {d['benefit']}" if d.get("benefit") else ""))
+    if kind == "use_case" and d.get("actors"):
+        parts = [f"Actors: {', '.join(d['actors'])}"]
+        if d.get("preconditions"):
+            parts.append(f"Preconditions: {'; '.join(d['preconditions'])}")
+        parts.append("Main flow: " + " ".join(f"{i}. {x}" for i, x in enumerate(d.get("main_flow") or [], 1)))
+        if d.get("alternatives"):
+            parts.append(f"Alternatives: {'; '.join(d['alternatives'])}")
+        if d.get("postconditions"):
+            parts.append(f"Postconditions: {'; '.join(d['postconditions'])}")
+        return " | ".join(parts)
+    return ""
+
+
+def actors(project_id: int) -> list[dict[str, Any]]:
+    """Who the project's live stories and use cases serve, with the requirement keys of each (case-insensitive)."""
+    with session() as s:
+        rows = list(s.scalars(select(Requirement).where(Requirement.project_id == project_id,
+                                                        Requirement.kind.in_(["story", "use_case"]),
+                                                        Requirement.status.in_(LIVE)).order_by(Requirement.key)))
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        for a in (r.details or {}).get("actors") or []:
+            row = out.setdefault(a.lower(), {"actor": a, "keys": []})
+            row["keys"].append(r.key)
+    return sorted(out.values(), key=lambda x: (-len(x["keys"]), x["actor"].lower()))
 
 
 def _next_key(s: Any, project_id: int) -> str:
@@ -72,12 +184,13 @@ def _next_key(s: Any, project_id: int) -> str:
 
 def create(project_id: int, text: str, kind: str = "functional", acceptance: list[Any] | None = None, *,
            key: str = "", subject: str = "", source: str = "", actor: str = "", status: str = "draft",
-           check_conflicts: bool = True) -> dict[str, Any]:
+           check_conflicts: bool = True, details: dict[str, Any] | None = None) -> dict[str, Any]:
     text = str(text or "").strip()
     if not text:
         raise ValueError("a requirement needs a text")
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}")
+    filled = template(kind, text, details)
     if status not in STATUSES or status == "verified":
         raise ValueError("a new requirement is draft, approved, implemented or retired")
     key = str(key or "").strip().upper()
@@ -90,7 +203,7 @@ def create(project_id: int, text: str, kind: str = "functional", acceptance: lis
         if s.scalars(select(Requirement).where(Requirement.project_id == project_id, Requirement.key == key)).first():
             raise ValueError(f"requirement {key} already exists in this project")
         r = Requirement(project_id=project_id, key=key[:32], text=text[:8000], kind=kind,
-                        acceptance=_texts(acceptance), subject=str(subject or "").strip()[:128], status=status,
+                        acceptance=_texts(acceptance), details=filled, subject=str(subject or "").strip()[:128], status=status,
                         source=str(source or "")[:256], created_by=str(actor or "")[:128])
         s.add(r)
         s.flush()
@@ -124,8 +237,9 @@ def list_requirements(project_id: int, status: str = "") -> list[dict[str, Any]]
 
 def update(requirement_id: int, actor: str, text: str | None = None, kind: str | None = None,
            acceptance: list[Any] | None = None, subject: str | None = None, source: str | None = None,
-           note: str = "", check_conflicts: bool = True) -> dict[str, Any]:
-    """A change of text, kind or acceptance is a new version (the old one is kept); subject and source are not."""
+           note: str = "", check_conflicts: bool = True, details: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A change of text, kind, acceptance or template details is a new version (the old one is kept); subject and
+    source are not."""
     if kind is not None and kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}")
     with session() as s:
@@ -138,13 +252,20 @@ def update(requirement_id: int, actor: str, text: str | None = None, kind: str |
                "acceptance": _texts(acceptance) if acceptance is not None else list(r.acceptance or [])}
         if not new["text"]:
             raise ValueError("a requirement needs a text")
-        versioned = (new["text"], new["kind"], new["acceptance"]) != (r.text, r.kind, list(r.acceptance or []))
+        old = (r.text, r.kind, list(r.acceptance or []), dict(r.details or {}))
+        if (new["text"], new["kind"]) != old[:2]:  # only a changed story is checked again
+            new["details"] = template(new["kind"], new["text"], details)
+        elif details is not None:  # the same text: the stored details stand where the change names nothing
+            new["details"] = template(new["kind"], new["text"], {**old[3], **details})
+        else:
+            new["details"] = old[3]
+        versioned = (new["text"], new["kind"], new["acceptance"], new["details"]) != old
         if versioned:
             r.history = [*(r.history or []), {"version": r.version, "text": r.text, "kind": r.kind,
-                                              "acceptance": list(r.acceptance or []), "status": r.status,
-                                              "by": actor[:128], "until": now().isoformat()}]
+                                              "acceptance": list(r.acceptance or []), "details": old[3],
+                                              "status": r.status, "by": actor[:128], "until": now().isoformat()}]
             r.version += 1
-            r.text, r.kind, r.acceptance = new["text"], new["kind"], new["acceptance"]
+            r.text, r.kind, r.acceptance, r.details = new["text"], new["kind"], new["acceptance"], new["details"]
             if r.status in ("approved", "implemented", "verified"):
                 r.status = "draft"  # the new version was never approved, built or tested
         if subject is not None:
@@ -267,7 +388,9 @@ def planner_note(goal: Goal, limit: int = 8) -> str:
     related = sorted((r for r in rows if r.key not in own and r.status != "draft"),
                      key=lambda r: -len(words & _words(r.text)))
     related = [r for r in related if words & _words(r.text)][:limit]
-    lines = [f"- {r.key} [{r.status}, v{r.version}]: {r.text[:600]}"
+    lines = [f"- {r.key} [{r.status}, v{r.version}"
+             + (f", {r.kind.replace('_', ' ')}" if r.kind in ("story", "use_case") else "") + f"]: {r.text[:600]}"
+             + (f" Template: {describe(r.kind, r.details)[:800]}" if describe(r.kind, r.details) else "")
              + (f" Acceptance: {'; '.join(r.acceptance)}" if r.acceptance else "")
              for r in rows if r.key in own] + [f"- {r.key} (related): {r.text[:300]}" for r in related]
     if not lines:
@@ -390,6 +513,7 @@ def traceability(project_id: int) -> dict[str, Any]:
         for r in reqs:
             cur = [x for x in links.get(r.id, []) if x.version == r.version]
             rows.append({"id": r.id, "key": r.key, "text": r.text, "kind": r.kind, "status": r.status,
+                         "actors": (r.details or {}).get("actors") or [],
                          "version": r.version, "conflicts": r.conflicts or [],
                          "implemented": any(x.kind == "task" and x.passed for x in cur),
                          "tested": any(x.kind == "check" and x.passed for x in cur),
@@ -401,7 +525,7 @@ def traceability(project_id: int) -> dict[str, Any]:
     live = [x for x in rows if x["status"] != "retired"]
     # S09-R-06: agreed requirements no passing check covers in their current version (drafts are not agreed yet)
     untested = [x["key"] for x in live if x["status"] != "draft" and not x["tested"]]
-    return {"project_id": project_id, "requirements": rows, "untested": untested,
+    return {"project_id": project_id, "requirements": rows, "untested": untested, "actors": actors(project_id),
             "counts": {"total": len(live), "implemented": sum(x["implemented"] for x in live),
                        "tested": sum(x["tested"] for x in live), "merged": sum(bool(x["merged"]) for x in live),
                        "untested": len(untested),

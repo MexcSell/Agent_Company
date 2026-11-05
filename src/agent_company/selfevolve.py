@@ -257,16 +257,19 @@ def _work_dir(cid: int) -> Path:
     return d
 
 
-def run_benchmark(tree: Path, bench: dict[str, Any], work: Path) -> dict[str, Any]:
+def run_benchmark(tree: Path, bench: dict[str, Any], work: Path, extra_env: dict[str, str] | None = None
+                  ) -> dict[str, Any]:
     """One run of the contract's copy of the benchmark against the source tree `tree` (its src/ first on the
-    path, a fresh DATA_DIR). Returns the JSON the script printed."""
+    path, a fresh DATA_DIR). `extra_env` sets settings of the measured run (a retrieval experiment's weights).
+    Returns the JSON the script printed."""
     script = work / f"bench-{bench['sha256'][:12]}-{bench['script_name']}"
     if not script.exists():
         script.write_text(bench["script"])
     data = work / f"run-{time.time_ns()}"
     data.mkdir()
     env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(data), "PYTHONPATH": str(tree / "src"),
-           "DATA_DIR": str(data), "BENCH_DATA_DIR": str(data), "EXECUTOR": "offline", "PYTHONDONTWRITEBYTECODE": "1"}
+           "DATA_DIR": str(data), "BENCH_DATA_DIR": str(data), "EXECUTOR": "offline", "PYTHONDONTWRITEBYTECODE": "1",
+           **{k: v for k, v in (extra_env or {}).items() if k.startswith("RETRIEVAL_")}}  # never PATH, DATA_DIR …
     timeout = settings().command_timeout
     try:  # SE-R-22: in the L3 sandbox, the tree and the script read-only, only the fresh DATA_DIR writable
         r = sandbox.run([sys.executable, str(script)], tree, timeout, writable=[data], readonly=[tree, script],

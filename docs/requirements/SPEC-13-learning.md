@@ -33,7 +33,7 @@ evaluation*.
   with the current playbook, then with the candidate; only eval goals see the candidate, and only on
   its side. Passing at least as many runs moves it to the live trial (where `min_improvement` decides);
   fewer rolls it back. Eval goals no longer steer evolution: their lessons start no trials and do not
-  count in `success_rate`. The full S13-R-05 (experiments table, canary) is still open.
+  count in `success_rate`. The full S13-R-05 (experiments table, canary) followed, see below.
 
 ## Specific requirements
 
@@ -81,7 +81,7 @@ Enforced as policy:
 
 Restricted targets (§12.2) are rejected by the proposal path (SPEC-14 S14-R-02).
 
-### S13-R-05 Experiments with baseline and A/B comparison — §10 — **done** for `playbook` and `route` (`experiments.py`)
+### S13-R-05 Experiments with baseline and A/B comparison — §10 — **done** (`experiments.py`: `playbook`, `route`, `strategy`, `retrieval`)
 - Table `experiments`: target (`playbook|route|workflow_template|retrieval_weights`), baseline
   version, candidate version, hypothesis, metrics (success rate, rework rate, time, cost per
   verified task), dataset (eval suite + repeats), results, status.
@@ -95,8 +95,17 @@ Restricted targets (§12.2) are rejected by the proposal path (SPEC-14 S14-R-02)
   candidate is only recommended; an administrator applies it, then a canary of 3 live outcomes of the role
   restores the previous route when it cannot reach the live baseline (the suite's baseline pass rate when the
   role has no live history). A playbook experiment is refused while the agent has no live outcomes or too high a
-  success rate to beat by `min_improvement`. `workflow_template` and
-  `retrieval_weights` targets are open (neither is versioned yet).
+  success rate to beat by `min_improvement`. The workflow-template target is `strategy` (SPEC-04 S04-R-13: template
+  versions, a canary of live goals). The ranking-weight target is `retrieval` (administrators only): the candidate
+  (`name=value` pairs or JSON over `learning.WEIGHTS`) and the current weights each run `evals/retrieval.json`,
+  `evals/retrieval-classes.json` and the fixed `benchmarks/retrieval.py` (weights passed as `RETRIEVAL_W_*`, the
+  procedure per query class in force on both sides, its own DATA_DIR in the L3 sandbox). Better = MRR over all eval
+  cases up by `min_improvement` points, recall@5 not lower on either eval and the benchmark's guard metrics
+  (`hit_at_3`, `mrr`) not lower; a benchmark that did not run holds it back. It has no canary (live work carries
+  no relevance labels): an administrator applies it (`prefs.set_weights`, recall@5 guarded for the change as a
+  whole), it is `rolled_out` with the previous values, and `rollback` restores them (an override that was not
+  there is cleared) unless the weights were changed again since. Weights changed after the proposal stop the run
+  and block the apply. `tests/test_retrieval_experiments.py`.
 
 ### S13-R-06 Model evaluation and routing — §11 — **done** (`eval --model <name> --role <role>`, route experiments)
 - New catalog models can be benchmarked (`eval --label model:<name>`); a route change proposed

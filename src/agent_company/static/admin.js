@@ -159,18 +159,21 @@ async function learningPanel() {
   const pct = (v) => (typeof v === "number" ? `${Math.round(v * 100)}%` : "–");
   const tone = { rolled_out: "approved", canary: "running", baseline: "running", candidate: "running", review: "pending", rolled_back: "rejected", rejected: "rejected", failed: "failed", proposed: "pending", passed: "done", running: "running", planned: "pending", cancelled: "disabled" };
   const tag = (st) => pill(tone[st] || "pending").replace(/>[^<]+</, `>${esc(st)}<`);
-  const side = (r) => (r ? `${pct(r.pass_rate)} <span class="muted">n=${r.runs ?? "?"}</span>` : "–");
+  const side = (r) => (!r ? "–" : r.mrr_all != null ? `<span style="white-space:nowrap">MRR ${r.mrr_all.toFixed(2)} <span class="muted">n=${r.runs}</span></span><div class="muted" style="white-space:nowrap" title="recall@5 of evals/retrieval.json; MRR of the fixed benchmark">recall ${pct(r.recall)} · ${r.benchmark?.metrics ? `bench ${Number(r.benchmark.metrics.mrr).toFixed(2)}` : "no bench"}</div>`
+    : `${pct(r.pass_rate)} <span class="muted">n=${r.runs ?? "?"}</span>`);
   const exp = (e) => {
     const r = e.results || {}, c = r.canary;
     const changes = (c) => Object.entries(c || {}).map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(",") : v}`).join(", ");
     const what = e.target === "route" ? `${esc(e.role)} route: ${esc(e.baseline_version || "MODEL")} → ${esc(e.candidate.model)}`
       : e.target === "strategy" ? `${esc(e.role)} template ${esc(e.baseline_version)} → ${esc(changes(e.candidate.changes) || "candidate")}`
+      : e.target === "retrieval" ? `ranking weights → ${esc(changes(e.candidate.changes))}`
       : `${esc(e.agent || `agent ${e.agent_id}`)} playbook ${esc(e.baseline_version)} → candidate`;
-    const strat = e.target === "strategy";
+    const strat = e.target === "strategy" || e.target === "retrieval";
     const acts = may && (!strat || me.is_admin) ? [
       e.status === "proposed" ? `<button class="btn sm primary" data-ex="start" data-id="${e.id}">Run both sides</button>` : "",
       e.status === "review" && e.target === "route" && (me.is_admin || me.permissions?.manage_models) ? `<button class="btn sm primary" data-ex="apply" data-id="${e.id}">Apply the route</button>` : "",
-      e.status === "review" && strat && r.comparison?.better ? `<button class="btn sm primary" data-ex="apply" data-id="${e.id}">Apply the template</button>` : "",
+      e.status === "review" && strat && r.comparison?.better ? `<button class="btn sm primary" data-ex="apply" data-id="${e.id}">Apply the ${e.target === "retrieval" ? "weights" : "template"}</button>` : "",
+      e.status === "rolled_out" && e.target === "retrieval" && r.deployed ? `<button class="btn sm ghost" data-ex="rollback" data-id="${e.id}">Roll back</button>` : "",
       ["proposed", "review"].includes(e.status) ? `<button class="btn sm ghost" data-ex="reject" data-id="${e.id}">Reject</button>` : "",
     ].join("") : "";
     return `<tr><td class="num">${e.id}</td><td>${what}${e.hypothesis ? `<div class="muted ellipsis">${esc(e.hypothesis)}</div>` : ""}</td><td>${esc(e.dataset.suite || "")}${e.dataset.budget_usd ? `<div class="muted">budget ${money(e.dataset.budget_usd)}</div>` : ""}${e.dataset.source_commit ? `<div class="muted" title="The platform's commit it was set up on">@${esc(e.dataset.source_commit.slice(0, 8))}</div>` : ""}</td><td class="num">${side(r.baseline)}</td><td class="num">${side(r.candidate)}</td>
@@ -180,7 +183,7 @@ async function learningPanel() {
       <span class="muted">${esc(p.practice_suite || "no practice")} → ${esc(p.final_suite)} (pass ${pct(p.pass_mark)})${p.results.final ? ` · final ${pct(p.results.final.pass_rate)}` : ""}</span>${p.recommendation ? `<div class="muted ellipsis">${esc(p.recommendation)}</div>` : ""}</span>
       ${may && p.status === "planned" ? `<button class="btn sm primary" data-lp="start" data-id="${p.id}">Start</button>` : ""}${may && ["planned", "running"].includes(p.status) ? `<button class="btn sm ghost" data-lp="cancel" data-id="${p.id}">Cancel</button>` : ""}</div>`;
   box.innerHTML = `<div class="card"><div class="row nowrap"><h2 class="grow" style="margin:0">Experiments (${ex.experiments.length})</h2>${may ? '<button class="btn" id="ex-new">New experiment</button>' : ""}</div>
-      <p class="muted">A candidate playbook, route or workflow template runs the same eval suite with the same repeats as the current version; the sample sizes are shown. A playbook candidate goes on by the automatic rule (better by <code>min_improvement</code>), a route or a template only when an administrator applies it. The deployed candidate then has a canary on live work and is rolled back as soon as it can no longer reach the baseline.</p>
+      <p class="muted">A candidate playbook, route or workflow template runs the same eval suite with the same repeats as the current version; the sample sizes are shown. A playbook candidate goes on by the automatic rule (better by <code>min_improvement</code>), a route or a template only when an administrator applies it. The deployed candidate then has a canary on live work and is rolled back as soon as it can no longer reach the baseline. Ranking weights are measured on the retrieval evals and the fixed retrieval benchmark (live work has no relevance labels, so there is no canary); an administrator applies them and can roll them back.</p>
       <div class="table-wrap"><table><tr><th class="num">#</th><th>Change</th><th>Suite</th><th class="num">Baseline</th><th class="num">Candidate</th><th>Canary</th><th>Status</th><th></th></tr>${ex.experiments.map(exp).join("") || '<tr><td colspan="8" class="muted">None yet: evolution candidates and your experiments appear here.</td></tr>'}</table></div>
       <details><summary class="muted">Self-improvement levels</summary>${ex.autonomy.map((a) => `<div class="row"><span class="k">${esc(a.level)}</span><span class="grow">${esc(a.what)}</span><span class="muted">${esc(a.control)}</span></div>`).join("")}</details></div>
     <div class="card"><h2>Orchestration strategies</h2><p class="muted">How each workflow template version did on live goals that ran under its rules (eval and platform goals left out), each figure with its sample size. A rule that fires on the current version's evidence becomes a strategy experiment; a candidate that weakens checks, reviews, protected tests, scope or authority is rejected. An administrator applies a better candidate; its canary restores the previous version when live goals get worse.</p>
@@ -197,21 +200,23 @@ async function learningPanel() {
   box.querySelectorAll("[data-ex]").forEach((b) => (b.onclick = () => {
     const what = b.dataset.ex;
     const target = ex.experiments.find((x) => String(x.id) === b.dataset.id)?.target;
-    if (what === "apply" && !confirm(target === "strategy" ? "Save the candidate as the template's new version? Its canary restores the previous version if live goals get worse." : "Make the candidate model this role's route? Its canary restores the old route if live work gets worse.")) return;
+    if (what === "apply" && !confirm(target === "strategy" ? "Save the candidate as the template's new version? Its canary restores the previous version if live goals get worse." : target === "retrieval" ? "Set the candidate ranking weights? Roll back restores the current ones." : "Make the candidate model this role's route? Its canary restores the old route if live work gets worse.")) return;
+    if (what === "rollback" && !confirm("Restore the ranking weights this experiment replaced?")) return;
     run(b, `/api/experiments/${b.dataset.id}/${what}`, what === "reject" ? { note: "" } : undefined);
   }));
   box.querySelectorAll("[data-rec]").forEach((b) => (b.onclick = () => run(b, `/api/strategies/${b.dataset.rec}/recommend`)));
   box.querySelectorAll("[data-lp]").forEach((b) => (b.onclick = () => run(b, `/api/learning/plans/${b.dataset.id}/${b.dataset.lp}`)));
   box.querySelectorAll("[data-gap]").forEach((b) => (b.onclick = () => { const g = gaps[Number(b.dataset.gap)]; run(b, "/api/learning/plans", { agent_id: g.agent_id, capability: g.skill }); }));
   $("#ex-new") && ($("#ex-new").onclick = async () => {
-    const target = prompt("Target: playbook, route or strategy", "route"); if (!target) return;
+    const target = prompt(`Target: playbook, route${me.is_admin ? ", strategy or retrieval" : ""}`, "route"); if (!target) return;
     const body = { target: target.trim() };
     if (body.target === "route") { body.role = prompt("Role", "developer") || ""; body.candidate = prompt("Candidate model (catalog name)") || ""; }
     else if (body.target === "strategy") { body.role = prompt("Goal kind (feature, bugfix, refactor, research, docs)", "feature") || ""; body.candidate = prompt("Template fields to change (JSON)", '{"max_iterations": 4}') || ""; }
+    else if (body.target === "retrieval") { body.candidate = prompt("Ranking weights to change (relevance, technology, verified, author, recency, contradiction)", "recency=0.6") || ""; }
     else { body.agent_id = Number(prompt("Agent id")); body.candidate = prompt("Candidate playbook (DO:/AVOID: lines)") || ""; }
     body.hypothesis = prompt("Hypothesis", "") || "";
-    body.suite = prompt("Suite", "smoke") || "smoke";
-    if (body.target !== "playbook") { const b = prompt("Budget in USD for its eval runs (0 = no limit; it stops once both sides together cost that much)", "0"); if (b === null) return; body.budget_usd = Number(b) || 0; }
+    if (body.target !== "retrieval") body.suite = prompt("Suite", "smoke") || "smoke";
+    if (!["playbook", "retrieval"].includes(body.target)) { const b = prompt("Budget in USD for its eval runs (0 = no limit; it stops once both sides together cost that much)", "0"); if (b === null) return; body.budget_usd = Number(b) || 0; }
     try { await api("/api/experiments", { method: "POST", body }); toast("Experiment proposed"); } catch (e) { toast(e.message); }
     learningPanel();
   });

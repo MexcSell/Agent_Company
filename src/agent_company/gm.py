@@ -67,6 +67,8 @@ How you run the company (shell commands; GM below stands for: {gm}):
        [--kind feature|bugfix|refactor|research|docs]   the workflow template (default: the planner picks)
   GM team <goal id> [--add <role> --skills "a,b" | --release <agent id> | --back <agent id>] --reason "…"
   GM requirement {project['id']} "<text>" [--kind functional|non_functional|story|use_case] [--accept "…"]   a draft
+     (a story: "As a <actor>, I want <what>, so that <benefit>"; a use case: lines "Actors:", "Preconditions:",
+     "Main flow:" with numbered steps, "Alternatives:", "Postconditions:")
   GM requirements {project['id']} [--trace]   the project's requirements; --trace: implemented, tested, merged
   GM study [<agent id>]             one learning visit: rewrites an agent's definition
   GM hypothesis "<statement>" --reason "…" --test "how to test it" --expect "…" [--project {project['id']}]

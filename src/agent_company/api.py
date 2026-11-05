@@ -488,6 +488,9 @@ class RequirementBody(BaseModel):
     key: str = Field(default="", max_length=32)
     subject: str = Field(default="", max_length=128)
     source: str = Field(default="", max_length=256)
+    # S08-FR-03: a story's {actors, want, benefit} or a use case's {actors, preconditions, main_flow, alternatives,
+    # postconditions}; parsed from the text when left out
+    details: dict[str, Any] | None = None
 
 
 class RequirementPatch(BaseModel):
@@ -497,6 +500,7 @@ class RequirementPatch(BaseModel):
     subject: str | None = Field(default=None, max_length=128)
     source: str | None = Field(default=None, max_length=256)
     note: str = Field(default="", max_length=2000)
+    details: dict[str, Any] | None = None
 
 
 class RequirementStatusBody(BaseModel):
@@ -583,9 +587,9 @@ class HypothesisStatusBody(BaseModel):
 
 
 class ExperimentBody(BaseModel):
-    target: str  # playbook|route|strategy
-    candidate: str  # the playbook text, the catalog model for the route, or a JSON object of template fields
-    # (a strategy experiment, S04-R-13; `role` is then the goal kind)
+    target: str  # playbook|route|strategy|retrieval
+    candidate: str  # the playbook text, the catalog model for the route, a JSON object of template fields
+    # (a strategy experiment, S04-R-13; `role` is then the goal kind), or ranking weights (`name=value` or JSON)
     agent_id: int | None = None
     role: str = ""
     hypothesis: str = ""
@@ -1793,6 +1797,8 @@ def create_app(start_background: bool = True) -> FastAPI:
             raise PermissionError("route experiments need the manage_models permission")
         if body.target == "strategy" and not admin["is_admin"]:  # templates are saved by administrators only
             raise PermissionError("workflow template experiments are for administrators")
+        if body.target == "retrieval" and not admin["is_admin"]:  # ranking weights are administrator settings
+            raise PermissionError("ranking-weight experiments are for administrators")
         out = experiments.propose(body.target, body.candidate, agent_id=body.agent_id, role=body.role,
                                   hypothesis=body.hypothesis, suite=body.suite, repeats=body.repeats,
                                   created_by=f"user:{admin['name']}", budget_usd=body.budget_usd)
@@ -1816,9 +1822,24 @@ def create_app(start_background: bool = True) -> FastAPI:
             _audit(admin, "experiment_apply", exp_id, before={"strategy": before["baseline_version"]},
                    after={"strategy": out["decision"], "changes": out["candidate"].get("changes")}, severity="high")
             return out
+        if before["target"] == "retrieval":
+            if not admin["is_admin"]:
+                raise PermissionError("ranking weights are applied by an administrator")
+            out = experiments.apply(exp_id, f"user:{admin['name']}")
+            _audit(admin, "experiment_apply", exp_id, before={"weights": before["candidate"].get("base")},
+                   after={"weights": out["candidate"].get("weights")}, severity="high")
+            return out
         out = experiments.apply(exp_id, f"user:{admin['name']}")
         _audit(admin, "experiment_apply", exp_id, before={"route": before["baseline_version"]},
                after={"route": out["candidate"].get("model")}, severity="high")
+        return out
+
+    @app.post("/api/experiments/{exp_id}/rollback")
+    def experiment_rollback(exp_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        before = experiments.get(exp_id)
+        out = experiments.rollback(exp_id, f"user:{admin['name']}")
+        _audit(admin, "experiment_rollback", exp_id, before={"weights": before["candidate"].get("weights")},
+               after={"previous": ((out["results"] or {}).get("deployed") or {}).get("previous")}, severity="high")
         return out
 
     @app.post("/api/experiments/{exp_id}/reject")
@@ -2144,7 +2165,7 @@ def create_app(start_background: bool = True) -> FastAPI:
         try:
             out = requirements.create(project_id, body.text, body.kind, body.acceptance, key=body.key,
                                       subject=body.subject, source=body.source or f"user:{user['name']}",
-                                      actor=f"user:{user['name']}")
+                                      actor=f"user:{user['name']}", details=body.details)
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
         _audit(user, "requirement_create", out["id"], after={"project": project_id, "key": out["key"]})
@@ -2176,7 +2197,7 @@ def create_app(start_background: bool = True) -> FastAPI:
         before = _requirement_seen(requirement_id, user)
         try:
             out = requirements.update(requirement_id, f"user:{user['name']}", body.text, body.kind, body.acceptance,
-                                      body.subject, body.source, body.note)
+                                      body.subject, body.source, body.note, details=body.details)
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
         _audit(user, "requirement_update", requirement_id, before={"version": before["version"],

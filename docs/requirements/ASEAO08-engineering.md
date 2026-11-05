@@ -19,7 +19,7 @@ push only on `/sync`. The 13 engineering teams (§3) are **gated** (CLAUDE.md).
 | --- | --- | --- |
 | S08-FR-01 | Register product ideas | done as proposals; product register gated (ASEAO10) |
 | S08-FR-02 | Convert ideas into requirements | done (S08-R-01; the GM writes drafts, a person approves) |
-| S08-FR-03 | User stories and use cases | partial (S08-R-01: kinds `story` and `use_case`; no story template or actors) |
+| S08-FR-03 | User stories and use cases | done (S08-R-01 kinds `story` and `use_case` with templates: a story is "As a <actor>, I want <what>, so that <benefit>", a use case has labelled actors, preconditions, numbered main flow, alternatives and postconditions; parsed into `Requirement.details` or given as `details`, refused without actor and want / actors and main flow, versioned with the text, shown to the planner; `requirements.actors` and the traceability's `actors` list who they serve; `tests/test_requirement_templates.py`) |
 | S08-FR-04 | Define acceptance criteria | done (contract `acceptance`) |
 | S08-FR-05 | Functional and non-functional requirements | done (S08-R-01 `kind`) |
 | S08-FR-06 | Dependencies and constraints | done (`depends_on`, `allowed_paths`) |

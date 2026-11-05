@@ -110,7 +110,7 @@ Machines code):
 | Claim-level evidence, independent review of reports, approved claims as knowledge | ASEAO06 §9-11, §16 | done (`research.check_claims`, `review_report`, `_transfer`; S06-R-03, R-04, R-07) |
 | Hypotheses, root-cause analysis, predictions, decision center | ASEAO07 §9-13 | hypotheses done (`hypotheses.py`, tested by experiments, S07-R-03); decision reports with labelled evidence, limitations and independent review done (`decisions.report`, S07-R-01); estimate accuracy per role (`performance.calibration`, S07-R-04); root-cause analysis of failed goals and repeated failing checks with evidence-backed causes, actions as proposals and a follow-up (`rca.py`, S07-R-02) |
 | Architecture Decision Records | ASEAO08 §7.2 | done, adapted (`adr.py`: the plan's technical and critical decisions become `docs/adr/NNNN-title.md` in the goal's branch, superseding earlier ones, S08-R-02) |
-| Requirements traceability (requirement → task → test) | ASEAO08 §5.3, ASEAO09 §5.1 | done (`requirements.py`: versions, conflicts as decisions, links from tasks, checks and merges, S08-R-01; check commands and acceptance commands naming keys, untested requirements, S09-R-06) |
+| Requirements traceability (requirement → task → test) | ASEAO08 §5.3, ASEAO09 §5.1 | done (`requirements.py`: versions, conflicts as decisions, links from tasks, checks and merges, S08-R-01; check commands and acceptance commands naming keys, untested requirements, S09-R-06; story and use-case templates with their actors, S08-FR-03) |
 | Code-review checklist with a logic-verification step (trace data flow; no approval for code that only looks clean) and de-duplicated comments | ASEAO08 §13, `extensions/analysis_results.md` | done (`quality.REVIEW_CHECKLIST`, `review_verdict`, `merge_findings`, S08-R-03) |
 | Change boundaries: no skipped tests, removed assertions, new dependencies or CI/.env edits without a permit | ASEAO08 §12.2 | done (`checks.boundary_violations`, S08-R-04) |
 | Dependency control: changed dependencies itemised per goal, `pip-audit`/`npm audit` at the gate's security stage (a vulnerability the change brought in fails), merged changes recorded; CycloneDX SBOM of every merged commit | ASEAO08 §15 | done (`dependencies.py`, S08-R-05) |
@@ -135,7 +135,7 @@ Machines code):
 | Agent network view: overview counts, graph with server-side filters, pages and bounded depth | SPEC12 §16, §17 | done (`network.graph`, `static/network.js`, S12-R-07) |
 | Shift rotation (acquisition → verification → analysis → organisation → review) with handovers; agent workload | `.rtf` SPEC-12, ASEAO06 §14 | done (`research_shifts`, S12-R-05, S06-R-05) |
 | Capability gaps, learning plans with practice and hidden final evaluations, certification by the harness only | SPEC13 §5, §6, §8, §9 | done (`training.py`, `evals/python-*.json`, S13-R-01..R-03; exercises are hand-written suites, generated ones open) |
-| A/B testing of playbook or model changes: experiments with baseline, candidate, sample sizes, review, canary and rollback; self-improvement levels E0-E6 | SPEC13 §10, §11, §12 | done (`experiments.py`, S13-R-04..R-06; workflow-template and retrieval-weight targets open) |
+| A/B testing of playbook or model changes: experiments with baseline, candidate, sample sizes, review, canary and rollback; self-improvement levels E0-E6 | SPEC13 §10, §11, §12 | done (`experiments.py`, S13-R-04..R-06; workflow templates as `strategy` experiments (S04-R-13), ranking weights as `retrieval` experiments on the retrieval evals and benchmark) |
 | Learning metrics: first-pass success, rework, knowledge reuse, benchmark per playbook version | SPEC13 `.rtf` | done (`training.metrics`, S13-R-07) |
 | Agent behaviour monitoring with deterministic rules | SPEC14 §10 | done (six rules, cost-vs-estimate included, S14-R-03) |
 | Security incident records and response | SPEC14 §11 | done (`incidents`, Security view, S14-R-04) |
@@ -143,7 +143,7 @@ Machines code):
 | Autonomy levels and action classification | SPEC14 §13 | done (`Agent.autonomy` G0–G4, enforced by the tool gateway; only administrators change permissions or autonomy, S14-R-02) |
 | Threat model (STRIDE + AI threats) mapped to controls and tests; security simulations | SPEC14 PDF §19 | done (`docs/threat-model.md`, `tests/test_threats.py`, S14-R-09) |
 | Tool permission contracts: one gateway for every executor run; isolation level, tools and permissions recorded per run | SPEC14 §7.3, §8.2, §8.3 | done (`executors.gate`, `Run.isolation`, `Run.tool_calls`, S14-R-06, S14-R-08; L3 sandbox for checks and benchmarks, `sandbox.py`, S14-R-07) |
-| Information classification and data-handling rules | SPEC14 §5 | partial (projects and lessons; uploads, documents, model rule open) → S14-R-05 |
+| Information classification and data-handling rules | SPEC14 §5 | done (projects, orders, uploads and lessons classified; models receive only what they are cleared for; research sources skipped) → S14-R-05 |
 | MCP tool servers for agents | 1.txt, CDAF guide §11 | done (`mcp.py`, Tools & MCP, G-R-05) |
 | A2A protocol for agent-to-agent messages | 1.txt | done (`a2a.py`: A2A 1.0 agent card, JSON-RPC tasks as goals for issued clients, G-R-06) |
 

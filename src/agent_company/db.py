@@ -874,6 +874,9 @@ class Requirement(Base):
     text: Mapped[str] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(String(16), default="functional")  # functional|non_functional|story|use_case
     acceptance: Mapped[list[Any]] = mapped_column(default=list)
+    # S08-FR-03 template of a story {actors, want, benefit} or a use case {actors, preconditions, main_flow,
+    # alternatives, postconditions}; {} for the other kinds
+    details: Mapped[dict[str, Any]] = mapped_column(default=dict)
     subject: Mapped[str] = mapped_column(String(128), default="")  # what it is about, for conflict detection
     version: Mapped[int] = mapped_column(Integer, default=1)
     history: Mapped[list[Any]] = mapped_column(default=list)  # earlier versions [{version, text, kind, acceptance, ...}]

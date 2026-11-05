@@ -281,10 +281,10 @@ async function projectPlan(id) {
   const tick = (ok, what) => `<span class="pill ${ok ? "done" : ""}" title="${what} (current version)">${ok ? "✓" : "–"} ${what}</span>`;
   const req = (r) => `<div class="list-item"><div class="row nowrap"><code>${esc(r.key)}</code>${pill(r.status)}<span class="muted grow">${esc(r.kind.replace("_", " "))} · v${r.version}</span>${tick(r.implemented, "implemented")}${tick(r.tested, "tested")}${tick(r.merged.length, "merged")}${r.conflicts.length ? `<span class="pill failed" title="decision(s) ${r.conflicts.map((c) => "#" + c.decision_id).join(", ")}">conflicts ${esc(r.conflicts.map((c) => c.key).join(", "))}</span>` : ""}
       ${admin && r.status === "draft" ? ib("check", "Approve", `data-req="${r.id}" data-st="approved"`, "sm primary") : ""}${admin && r.status !== "retired" ? ib("x", "Retire", `data-req="${r.id}" data-st="retired"`, "sm") : ""}</div>
-    <div class="ellipsis" title="${esc(r.text)}">${esc(r.text.split("\n")[0])}</div>${r.failing.length ? `<div class="muted">Failing: ${esc(r.failing.join(" · "))}</div>` : ""}${r.goals.length ? `<div class="row">${r.goals.map((g) => `<a href="#" data-goal="${g}">#${g}</a>`).join(" ")}</div>` : ""}</div>`;
+    <div class="ellipsis" title="${esc(r.text)}">${esc(r.text.split("\n")[0])}</div>${r.actors?.length ? `<div class="muted">Actors: ${esc(r.actors.join(", "))}</div>` : ""}${r.failing.length ? `<div class="muted">Failing: ${esc(r.failing.join(" · "))}</div>` : ""}${r.goals.length ? `<div class="row">${r.goals.map((g) => `<a href="#" data-goal="${g}">#${g}</a>`).join(" ")}</div>` : ""}</div>`;
   const reqOpen = box.querySelector("#req-sec")?.open;
   const reqs = tr ? `<section class="plan-sec"><details id="req-sec" ${reqOpen ? "open" : ""}><summary class="row nowrap"><h3 class="grow" style="margin:0;display:inline">Requirements</h3>
-      <span class="muted">${tr.counts.total} · ${tr.counts.implemented} implemented · ${tr.counts.tested} tested · ${tr.counts.merged} merged${tr.counts.untested ? ` · <span title="S09-R-06: agreed requirements no passing check covers in their current version: ${esc((tr.untested || []).join(", "))}">${tr.counts.untested} untested</span>` : ""}${tr.counts.conflicts ? ` · ${tr.counts.conflicts} in conflict` : ""}</span>
+      <span class="muted"${tr.actors?.length ? ` title="Actors of the stories and use cases: ${esc(tr.actors.map((a) => `${a.actor} (${a.keys.join(", ")})`).join("; "))}"` : ""}>${tr.counts.total} · ${tr.counts.implemented} implemented · ${tr.counts.tested} tested · ${tr.counts.merged} merged${tr.counts.untested ? ` · <span title="S09-R-06: agreed requirements no passing check covers in their current version: ${esc((tr.untested || []).join(", "))}">${tr.counts.untested} untested</span>` : ""}${tr.counts.conflicts ? ` · ${tr.counts.conflicts} in conflict` : ""}</span>
       ${admin ? ib("plus", "Add requirement", 'data-add="requirement"', "sm") + ib("download", "Import docs/requirements of the project", "data-req-import", "sm") : ""}</summary>
       <div class="list">${tr.requirements.map(req).join("") || '<p class="muted">No requirements yet. Goals name them by key (REQ-001) in their text.</p>'}</div></details></section>` : "";
   // Capability gap (SPEC-03 S03-R-01): available = sum of skill level/5 x free capacity x verification (a recruit's
@@ -330,7 +330,7 @@ function planForm(id, what, d) {
       <label for="pl-cat">Category</label><select id="pl-cat">${d.categories.map((c) => `<option value="${c}">${c.replace(/_/g, " ")}</option>`).join("")}</select>
       <label for="pl-sev">Severity</label><select id="pl-sev">${d.severities.map((c) => `<option ${c === "medium" ? "selected" : ""}>${c}</option>`).join("")}</select>
       <label for="pl-prob">Probability (risks, 0-100 %)</label><input id="pl-prob" type="number" min="0" max="100"><label for="pl-impact">Impact</label><textarea id="pl-impact"></textarea><label for="pl-mit">Mitigation</label><textarea id="pl-mit"></textarea>`,
-    requirement: `<label for="pl-title">Requirement</label><textarea id="pl-title" required placeholder="The API answers within 200 ms"></textarea>
+    requirement: `<label for="pl-title">Requirement</label><textarea id="pl-title" required rows="6" placeholder="The API answers within 200 ms"></textarea>
       <label for="pl-kind">Kind</label><select id="pl-kind">${d.requirement_kinds.map((k) => `<option value="${k}">${k.replace("_", " ")}</option>`).join("")}</select>
       <label for="pl-key">Key (optional; REQ-001 … by default)</label><input id="pl-key"><label for="pl-subj">Subject (optional; finds contradicting requirements)</label><input id="pl-subj">
       <label for="pl-accept">Acceptance criteria (one per line)</label><textarea id="pl-accept"></textarea>`,
@@ -341,6 +341,11 @@ function planForm(id, what, d) {
   modal(`<h2>${icon("plus", 18)} New ${what}</h2><form id="plf">${fields[what]}<div class="row" style="margin-top:12px"><button class="btn icon primary" title="Create" aria-label="Create">${icon("check", 16)}</button></div></form>`);
   const v = (sel) => $(sel)?.value.trim() || "";
   const lines = (sel) => v(sel).split("\n").map((x) => x.trim()).filter(Boolean);
+  // S08-FR-03: the template of a story or a use case as the placeholder of the text
+  const REQ_HINT = { functional: "The API answers within 200 ms", non_functional: "Pages load in under 1 s on a 3G connection",
+    story: "As a project manager, I want blocked goals listed first, so that I can unblock them early.",
+    use_case: "Approve a merge\nActors: Administrator, General Manager\nPreconditions: the gate passed\nMain flow:\n1. The GM asks for approval\n2. The administrator approves\n3. The loop merges the branch\nAlternatives:\n- The administrator rejects: the goal goes back to work\nPostconditions: the branch is merged" };
+  if (what === "requirement") $("#pl-kind").onchange = () => ($("#pl-title").placeholder = REQ_HINT[v("#pl-kind")] || "");
   const ids = (sel) => v(sel).split(/[\s,]+/).filter(Boolean).map(Number);
   $("#plf").onsubmit = async (e) => {
     e.preventDefault();

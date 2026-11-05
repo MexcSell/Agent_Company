@@ -106,6 +106,9 @@ the order is safety and correctness of that pipeline first, then management, the
    and G-R-02 operational metrics, then ASEAO10 S10-R-01 (a product proposal needs its documented case)
    and G-R-08 file leases between concurrent goals, then S10-R-02 experiments with their commit and a budget
    (S10-R-03 and S05-R-10 confirmed as met by existing controls).
+   S13-R-05 ranking weights as `retrieval` experiments (both retrieval evals and the fixed benchmark per side,
+   an administrator applies and rolls back) done 2026-11-05, then ASEAO08 S08-FR-03 story and use-case templates
+   with their actors.
 5. **Still open** (2026-11-05): the gated rooms one at a time
    (G-R-04); L3 for the agent CLIs themselves (they need network and their logins, see the threat model's known
    gaps).

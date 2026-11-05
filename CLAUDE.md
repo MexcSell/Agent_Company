@@ -39,7 +39,8 @@ feature came from.
   complementary specialists and a mentor candidate for new agents, administrator corrections, fair staffing
   inputs in `registry._rank`; `graph`/`overview` for the network view) + `mentoring.py` (a mentor per learning plan: reviews practice results, never certifies);
   `requirements.py` (ASEAO08 S08-R-01: project requirements with versions, links from
-  tasks, checks and merges, `traceability`, conflicts as decisions, `import_docs` of `docs/requirements/`);
+  tasks, checks and merges, `traceability`, conflicts as decisions, `import_docs` of `docs/requirements/`;
+  S08-FR-03 story/use-case templates in `details`, `actors`);
   `decisions.py` (decision records; human ones block the merge; `adr.py` writes technical/critical ones as
   `docs/adr/NNNN-title.md` ADRs in the goal's branch (S08-R-02), superseding earlier ones; S07-R-01 reports: criteria, limitations, evidence
   classes, independent reviews that send a disputed decision to a person); `escalation.py` (S04-R-07 levels 1-5 and their
@@ -55,7 +56,8 @@ feature came from.
   resolved by people)
   + `evolution.py` (playbook candidates are experiments); `experiments.py` (SPEC-13: baseline vs candidate on one eval
   suite, review by the E0-E6 policy, canary, rollback; routes only applied by an administrator; S10-R-02 the platform
-  commit in `dataset` and a `budget_usd` that stops route/template experiments); `hypotheses.py`
+  commit in `dataset` and a `budget_usd` that stops route/template experiments; `retrieval` target: ranking weights on
+  the retrieval evals + `benchmarks/retrieval.py`, applied and rolled back by an administrator); `hypotheses.py`
   (ASEAO07 S07-R-03: statements under test with evidence; an experiment's comparison concludes its hypothesis; an agent
   never marks one supported without a recorded test result); `training.py`
   (capability gaps, learning plans: practice + hidden final eval suites run by the trainee in scratch repos,
