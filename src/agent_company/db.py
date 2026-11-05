@@ -525,6 +525,21 @@ class Proposal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class ProjectHandover(Base):
+    """What a project's new General Manager receives when the old one is replaced (ASEAO05 S05-R-09): the open
+    goals, open blockers and open action items at that moment. Never rewritten."""
+
+    __tablename__ = "project_handovers"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    from_agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    to_agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    package: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    actor: Mapped[str] = mapped_column(String(128), default="")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class Milestone(Base):
     """A project milestone with deliverables, required goals and acceptance criteria (management.py, ASEAO05 §7)."""
 

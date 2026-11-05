@@ -25,7 +25,7 @@ Mapping: project → `Project`; project manager agent → `Project.manager_id` (
 ## Specific requirements
 
 Status (2026-11-05): S05-R-01 done · S05-R-02 done · S05-R-03 done · S05-R-04 done · S05-R-05 done ·
-S05-R-06 done · S05-R-07 done · S05-R-08, R-09 open · S05-R-10 done (SPEC-04).
+S05-R-06 done · S05-R-07 done · S05-R-08 open · S05-R-09 done · S05-R-10 done (SPEC-04).
 
 ### S05-R-01 Milestones — §7 (AT-012)
 - Table `milestones`: `project_id`, name, description, target date, deliverables, required goal
@@ -142,6 +142,15 @@ S05-R-06 done · S05-R-07 done · S05-R-08, R-09 open · S05-R-10 done (SPEC-04)
 - Replacing `Project.manager_id` writes a handover (SPEC-12) with open goals, blockers, action items.
 - When the same agent is needed by goals of two projects, `registry.staff` prefers a free agent of
   the same role or clones; the conflict is logged.
+- **Status: done** (`management.gm_handover`, called by `projects.update` inside its session after a `sync`:
+  a `project_handovers` row with the open goals (not approved, rejected or cancelled; no benchmark goals), open
+  blockers and open action items, never rewritten; the old GM's open blockers and action items move to the new one;
+  a `handover_to` link old → new (evidence `project:<id>:gm`), an event and a message in the command window. The
+  Plan tab lists the handovers, the agent card shows them beside task handovers. `registry._other_projects`: when the
+  best-ranked free agent (one with `max_concurrent` > 1 and a slot left) works for a goal of another project, the
+  best agent without such a goal is staffed instead, or that agent is cloned; a `staffing_conflict` event and the
+  task's staffing record (`conflict`) name the agent, the projects and the resolution. Goals of one project, goals
+  without a project and benchmark goals never conflict. `tests/test_project_handover.py`.)
 
 ### S05-R-10 Restart and concurrency — AT-026, AT-027, AT-030
 - Covered by SPEC-04 S04-R-05; project updates use the open session (CLAUDE.md rule).

@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 from agent_company import worktrees
 from agent_company.config import settings
 from agent_company.db import (ActionItem, Agent, Defect, Goal, GoalTransition, Insight, Lesson, Milestone, Project,
-                              Proposal, Risk, Run, Task, log_event, now, session)
+                              ProjectHandover, Proposal, Risk, Run, Task, log_event, now, session)
 
 RISK_CATEGORIES = ["technical", "security", "budget", "schedule", "staffing", "external_dependency", "quality",
                    "infrastructure", "requirements"]
@@ -707,6 +707,65 @@ def advance_insight(insight_id: int, status: str, actor: str, decision: str = ""
     return out
 
 
+# --- replacing a project's General Manager (S05-R-09) --------------------------------------
+
+def gm_handover(s: Session, p: Project, new_id: int, actor: str, reason: str = "") -> dict[str, Any]:
+    """Inside the open session that replaces `p.manager_id`: the handover package (open goals, open blockers and
+    open action items), written as a `project_handovers` row and a `handover_to` link old → new; the old GM's open
+    blockers and action items move to the new one. Call `sync(p.id)` before opening the session so the blockers
+    and generated items are current."""
+    from agent_company import registry
+    from agent_company.workflow import FINAL
+
+    old_id = p.manager_id
+    goals = [{"id": g.id, "title": g.title, "status": g.status, "iteration": g.iteration}
+             for g in s.scalars(select(Goal).where(Goal.project_id == p.id, Goal.origin != "eval",
+                                                   Goal.status.not_in(FINAL)).order_by(Goal.id))]
+    blockers = s.scalars(select(Risk).where(Risk.project_id == p.id, Risk.kind == "blocker", Risk.status == "open")
+                         .order_by(Risk.id)).all()
+    items = s.scalars(select(ActionItem).where(ActionItem.project_id == p.id,
+                                               ActionItem.status.in_(("open", "in_progress"))).order_by(ActionItem.id)).all()
+    package = {"goals": goals,
+               "blockers": [{"id": r.id, "title": r.title, "severity": r.severity, "category": r.category,
+                             "goal_id": r.goal_id} for r in blockers],
+               "action_items": [{"id": a.id, "title": a.title, "priority": a.priority, "status": a.status,
+                                 "due_date": _iso(a.due_date), "goal_id": a.goal_id} for a in items]}
+    moved = 0
+    if old_id:
+        for r in blockers:
+            if r.owner_agent_id == old_id:
+                r.owner_agent_id, moved = new_id, moved + 1
+        for a in items:
+            if a.responsible_agent_id == old_id:
+                a.responsible_agent_id, moved = new_id, moved + 1
+        registry.connect(s, old_id, new_id, "handover_to", 0.1, evidence=f"project:{p.id}:gm")
+    package["reassigned"] = moved
+    h = ProjectHandover(project_id=p.id, from_agent_id=old_id, to_agent_id=new_id, package=package,
+                        actor=actor[:128], reason=reason)
+    s.add(h)
+    s.flush()
+    log_event("handover", f"project {p.name}: GM handover #{h.id} with {len(goals)} open goal(s), "
+              f"{len(blockers)} blocker(s), {len(items)} action item(s)", s=s, project_id=p.id,
+              from_agent_id=old_id, to_agent_id=new_id)
+    return handover_dict(h)
+
+
+def handover_dict(h: ProjectHandover, names: dict[int, str] | None = None) -> dict[str, Any]:
+    names = names or {}
+    return {"id": h.id, "project_id": h.project_id, "from_agent_id": h.from_agent_id,
+            "from_agent": names.get(h.from_agent_id or 0), "to_agent_id": h.to_agent_id,
+            "to_agent": names.get(h.to_agent_id or 0), "package": h.package or {}, "actor": h.actor,
+            "reason": h.reason, "at": _iso(h.created_at)}
+
+
+def list_handovers(project_id: int, limit: int = 20) -> list[dict[str, Any]]:
+    with session() as s:
+        names = dict(s.execute(select(Agent.id, Agent.name)).all())
+        return [handover_dict(h, names) for h in s.scalars(
+            select(ProjectHandover).where(ProjectHandover.project_id == project_id)
+            .order_by(ProjectHandover.id.desc()).limit(limit))]
+
+
 # --- time and weighted progress (S05-R-05) ------------------------------------------------
 
 def goal_time(goal_id: int) -> dict[str, float]:
@@ -765,7 +824,8 @@ def overview(project_id: int) -> dict[str, Any]:
     sync(project_id)
     return {"milestones": list_milestones(project_id), "risks": list_risks(project_id),
             "insights": list_insights(project_id), "action_items": ranked_items(project_id),
-            "progress": progress(project_id), "categories": RISK_CATEGORIES, "severities": SEVERITIES}
+            "progress": progress(project_id), "handovers": list_handovers(project_id, 5),
+            "categories": RISK_CATEGORIES, "severities": SEVERITIES}
 
 
 def status_lines(project_id: int, items: int = 5) -> tuple[list[str], list[str]]:

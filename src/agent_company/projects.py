@@ -312,6 +312,11 @@ def update(project_id: int, changes: dict[str, Any], actor: str = "system") -> d
         raise ValueError(f"not editable: {', '.join(sorted(bad))}")
     if "classification" in changes and changes["classification"] not in CLASSIFICATIONS:
         raise ValueError(f"classification must be one of {', '.join(CLASSIFICATIONS)}")
+    if changes.get("manager_id"):
+        from agent_company.management import sync
+
+        sync(project_id)  # current blockers and action items for the handover package (S05-R-09)
+    handover = None
     with session() as s:
         p = s.get(Project, project_id)
         if p is None:
@@ -330,11 +335,23 @@ def update(project_id: int, changes: dict[str, Any], actor: str = "system") -> d
             if gm is None or gm.lifecycle != "active":
                 raise ValueError("the project's General Manager is an active agent")
             record_position(s, f"project:{p.id}:gm", p.manager_id, gm.id, actor, reason)
+            if gm.id != p.manager_id:
+                from agent_company.management import gm_handover
+
+                handover = gm_handover(s, p, gm.id, actor, reason)
         old = p.classification or "internal"
         for k, v in changes.items():
             setattr(p, k, v.strip() if isinstance(v, str) else v)
         s.flush()
         out = project_dict(p)
+        if handover is not None:
+            pk = handover["package"]
+            s.add(Message(project_id=p.id, author_type="system", kind="chat", agent_id=gm.id,
+                          meta={"handover_id": handover["id"]},
+                          content=f"{gm.name} is now the General Manager of this project ({actor}"
+                                  + (f": {reason}" if reason else "") + "). Handover: "
+                                  + f"{len(pk['goals'])} open goal(s), {len(pk['blockers'])} open blocker(s), "
+                                  + f"{len(pk['action_items'])} open action item(s)."))
     if out["classification"] != old:
         from agent_company.learning import reclassify
 

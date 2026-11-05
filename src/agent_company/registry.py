@@ -77,6 +77,23 @@ def over_quota(s: Session, a: Agent) -> str:
     return f"{base.name} used ${spent:.2f} of its ${quota:.2f} daily quota" if spent >= quota else ""
 
 
+def _other_projects(s: Session, agents: list[Agent], goal: Goal | None) -> dict[int, list[int]]:
+    """For each agent with a slot left that is working on a goal of another project than `goal`'s: those project ids
+    (ASEAO05 S05-R-09). Goals without a project and benchmark goals never conflict."""
+    if goal is None or goal.project_id is None or goal.origin == "eval":
+        return {}
+    ids = {gid for a in agents for gid in (a.active_goals or []) if gid}
+    if not ids:
+        return {}
+    project = dict(s.execute(select(Goal.id, Goal.project_id).where(Goal.id.in_(ids), Goal.origin != "eval")).all())
+    out: dict[int, list[int]] = {}
+    for a in agents:
+        found = sorted({project[gid] for gid in (a.active_goals or []) if project.get(gid) not in (None, goal.project_id)})
+        if found:
+            out[a.id] = found
+    return out
+
+
 def _free(a: Agent, goal_id: int | None) -> bool:
     """A slot is free, and it is not already working on this goal (two of its runs would share a session)."""
     active = list(a.active_goals or [])
@@ -509,6 +526,7 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
     why = ""
     ranks: dict[int, dict[str, Any]] = {}
     explored = False
+    conflict: dict[str, Any] | None = None
     with _staff_lock, session() as s:
         off = organization.disabled_rooms(s)  # S01-R-01: a disabled room's agents are not staffed
         pool = [a for a in s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active"))
@@ -536,10 +554,26 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
             ranks = _rank(s, idle, skills, team)
             agent = max(idle, key=lambda a: ranks[a.id]["score"])
             action = "assigned"
-            new = [a for a in idle if ranks[a.id]["evidence"] < EVIDENCE_MIN]
             g = s.get(Goal, goal_id) if goal_id else None
-            if (new and agent not in new and not critical and not (g is not None and g.origin == "eval")
-                    and _random() < settings().explore_rate):
+            others = _other_projects(s, idle, g)
+            if agent.id in others:  # S05-R-09: the best agent works for another project's goal right now
+                free = [a for a in idle if a.id not in others]
+                conflict = {"shared_agent_id": agent.id, "agent": agent.name, "projects": others[agent.id],
+                            "project_id": g.project_id if g is not None else None}
+                if free:
+                    agent = max(free, key=lambda a: ranks[a.id]["score"])
+                    conflict["resolution"] = f"free agent {agent.name}"
+                else:
+                    agent, action = _clone(s, agent), "cloned"
+                    conflict["resolution"] = f"clone {agent.name}"
+                idle = free
+                why = (f"{conflict['agent']} works for project(s) {', '.join(f'#{x}' for x in conflict['projects'])}: "
+                       f"{conflict['resolution']}")
+                log_event("staffing_conflict", f"{role}: {why}", goal_id=goal_id,
+                          agent_id=conflict["shared_agent_id"], s=s, **conflict)
+            new = [a for a in idle if ranks[a.id]["evidence"] < EVIDENCE_MIN]
+            if (action == "assigned" and new and agent not in new and not critical
+                    and not (g is not None and g.origin == "eval") and _random() < settings().explore_rate):
                 agent, explored = max(new, key=lambda a: ranks[a.id]["score"]), True
                 why = f"exploration: {agent.name} has {ranks[agent.id]['evidence']} verified outcome(s) so far"
         elif pool:  # all busy, degraded or over quota: a fresh clone (a clone starts healthy, with its own runs)
@@ -599,6 +633,7 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
         agent.last_active_at = now()
         names = dict(s.execute(select(Agent.id, Agent.name).where(Agent.id.in_(list(ranks)))).all()) if ranks else {}
         decision = {"action": action, "agent_id": agent.id, "agent": agent.name, "explored": explored, "why": why,
+                    "conflict": conflict,
                     "skills": skills, "critical": critical, "gap": _gap(s, skills) if task_id is not None else {},
                     "candidates": [{"id": i, "name": names.get(i), **p} for i, p in
                                    sorted(ranks.items(), key=lambda x: -x[1]["score"])[:6]]}
@@ -882,6 +917,14 @@ def agent_detail(agent_id: int) -> dict[str, Any]:
                           for h in s.scalars(select(Handover).where(
                               or_(Handover.from_agent_id == a.id, Handover.to_agent_id == a.id))
                               .order_by(Handover.id.desc()).limit(10))]
+        from agent_company.db import ProjectHandover
+
+        d["handovers"] += [{"project_id": h.project_id, "task": "General Manager", "from": h.from_agent_id,
+                            "to": h.to_agent_id, "package": h.package, "at": h.created_at.isoformat()}
+                           for h in s.scalars(select(ProjectHandover).where(
+                               or_(ProjectHandover.from_agent_id == a.id, ProjectHandover.to_agent_id == a.id))
+                               .order_by(ProjectHandover.id.desc()).limit(10))]
+        d["handovers"].sort(key=lambda h: h["at"], reverse=True)
         d["spent_today"] = round(spent_today(s, a), 6)
         d["quota_reason"] = over_quota(s, a)
         d["trial_playbook"] = (a.experiment or {}).get("playbook")

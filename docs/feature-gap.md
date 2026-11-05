@@ -97,6 +97,7 @@ Machines code):
 | Goal-chain depth limit for proposals | SPEC04 §9.4 | done (`max_goal_depth`, message budget, duplicates dropped, unanswered requests escalated, S04-R-08) |
 | Project registration fields (rooms, skills, stack, budget, deadline, priority) and lifecycle (pause, resume, archive, cancel, complete) | ASEAO05 FR-05..09 | done (`projects.set_status`, project budget caps its goals, priority queue, S05-R-06) |
 | Milestones, blockers and risks, insights, upcoming action items per project | ASEAO05 §7-10 | done (`management.py`, Projects → Plan, S05-R-01..R-04; time per goal with the planner's estimates and weighted progress, S05-R-05) |
+| Replacing a project's GM hands over open goals, blockers and action items; one agent needed by two projects' goals | ASEAO05 §4.3, §13 | done (`management.gm_handover`, `registry._other_projects`, S05-R-09) |
 | Continuous monitoring of registered sources (beyond the rotation) | ASEAO06 §13 | done (per-source intervals, page versions, intelligence events; S06-R-02) |
 | Research requests with keywords, source preferences, priority, budget, deadline, recurrence, project/goal link and duplicate detection | ASEAO06 FR-03..08 | done (`research.submit`, `ReportThread`, S06-R-01) |
 | Research-to-innovation pipeline: findings become proposals | ASEAO06 §15 | open → S06-R-06 |

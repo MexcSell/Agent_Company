@@ -292,7 +292,9 @@ async function projectPlan(id) {
     ${section("Blockers &amp; risks", "risk", d.risks.map(risk).join(""), "No open blockers or risks.")}
     ${section("Next", "action item", d.action_items.map(item).join(""), "Nothing waiting.")}
     ${section("Milestones", "milestone", d.milestones.map(ms).join(""), "No milestones yet.")}
-    ${section("Insights", "", d.insights.map(ins).join(""), "Agents report insights in their task output.")}${reqs}${caps}`;
+    ${section("Insights", "", d.insights.map(ins).join(""), "Agents report insights in their task output.")}${reqs}${caps}
+    ${(d.handovers || []).length ? `<section class="plan-sec"><details id="ho-sec" ${box.querySelector("#ho-sec")?.open ? "open" : ""}><summary><h3 style="margin:0;display:inline">General Manager handovers</h3> <span class="muted">${d.handovers.length}</span></summary><div class="list">${d.handovers.map((h) => `<div class="list-item"><div class="row nowrap"><strong class="grow ellipsis">${esc(h.from_agent || "(none)")} → ${esc(h.to_agent || "")}</strong><span class="muted">${esc(h.actor)} · ${day(h.at)}</span></div>
+      ${h.reason ? `<div class="muted">${esc(h.reason)}</div>` : ""}<div class="muted">Open goals: ${(h.package.goals || []).map((g) => `<a href="#" data-goal="${Number(g.id)}">#${Number(g.id)}</a> ${esc(g.status)}`).join(", ") || "none"} · blockers: ${esc((h.package.blockers || []).map((r) => r.title).join("; ") || "none")} · action items: ${(h.package.action_items || []).length}${h.package.reassigned ? ` · ${Number(h.package.reassigned)} moved to the new GM` : ""}</div></div>`).join("")}</div></details></section>` : ""}`;
   if (box.dataset.html === html) return;  // the 5-s refresh never rebuilds an unchanged plan
   box.innerHTML = html; box.dataset.html = html;
   const act = async (fn) => { try { await fn(); box.dataset.html = ""; projectPlan(id); } catch (e) { toast(e.message); } };
