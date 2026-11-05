@@ -32,6 +32,28 @@ function bindDefectActions(root, refresh) {
   }));
 }
 
+function operationsCard(o) {
+  if (!o) return "";
+  const n = (x) => `<span class="muted">n=${Number(x.n)}</span>`;
+  const r = (label, x, title) => `<tr title="${esc(title)}"><td>${label}</td><td class="num">${pct(x.rate)}</td><td class="num">${n(x)}</td></tr>`;
+  const t = (label, x, title) => `<tr title="${esc(title)}"><td>${label}</td><td class="num">${x.median_seconds == null ? "–" : dur(x.median_seconds)}</td><td class="num">${n(x)}</td></tr>`;
+  const sec = o.security_findings;
+  return `<div class="card"><h2>Operational metrics</h2><p class="muted">Verified outcomes of real work (benchmark goals left out), each with its sample size; nothing is combined into one score.</p><table><tr><th>Metric</th><th class="num">Value</th><th class="num">Samples</th></tr>
+    ${r("Quality gate pass rate", o.gate_pass_rate, "Gate evaluations that passed, of all gate evaluations (one per iteration)")}
+    ${r("Passed in iteration 1", o.first_iteration_pass_rate, "Goals whose first gate evaluation passed")}
+    ${r("Review rejection rate", o.review_rejection_rate, "QA and security reviews that answered VERDICT: FAIL")}
+    ${r("Escaped defects", o.escaped_defects, "Defects closed at a merge and reopened afterwards (a retest failed)")}
+    ${t("Median cycle time", o.cycle_time, "From the order to the goal's end (merged, rejected, cancelled or failed)")}
+    <tr title="Time ended goals spent paused, and its share of their cycle time"><td>Blocked time</td><td class="num">${dur(o.blocked_time.seconds)}${o.blocked_time.share != null ? ` · ${pct(o.blocked_time.share)}` : ""}</td><td class="num">${n(o.blocked_time)}</td></tr>
+    ${t("Human approval latency", o.approval_latency, "Median time a goal waited for a person's approve or reject")}
+    ${r("Retry rate", o.retry_rate, "Retries per model run")}
+    <tr title="Model cost of merged goals"><td>Cost per accepted goal</td><td class="num">${o.cost_per_accepted_goal.usd == null ? "–" : money(o.cost_per_accepted_goal.usd)}</td><td class="num">${n(o.cost_per_accepted_goal)}</td></tr>
+    ${r("Rollback rate", o.rollback_rate, "Deployed improvement contracts that were rolled back")}
+    <tr title="Failed goals whose branch was reset to a better earlier iteration"><td>Best-iteration resets</td><td class="num">${Number(o.best_iteration_resets)}</td><td></td></tr>
+    <tr title="Secret scans, security stages and dependency audits that failed, refused commands and security incidents"><td>Security findings</td><td class="num">${Number(sec.total)}</td><td class="num muted">${sec.secret_scan} secret · ${sec.security_stage} stage · ${sec.dependency_audit} dependency · ${sec.refused_commands} refused · ${sec.incidents} incident(s)</td></tr>
+  </table></div>`;
+}
+
 async function viewPerformance(quiet) {
   if (quiet && $("#ev-form")) return;
   const [r, defects, certs, evals, rec] = await Promise.all([api("/api/performance"), api("/api/defects?status=open"), api("/api/certifications"), api("/api/evals"), api("/api/recruitment/effectiveness")]);
@@ -41,6 +63,7 @@ async function viewPerformance(quiet) {
     <div class="grid halves" style="margin-top:12px">
       <div class="grid"><div class="card"><h2>Open defects</h2><p class="muted">Detected → assigned (a writing task of the next iteration) → fix submitted → retested (the gate or a retest ran the check again in a fresh process) → closed at the merge. Priority 1 comes first.</p><div class="table-wrap"><table><tr><th>Priority</th><th>Severity</th><th>Status</th><th>Check</th><th>Goal</th><th>Iterations</th></tr>${defects.slice(0, 40).map((d) => `<tr><td>${me.is_admin ? `<select data-dprio="${d.id}" style="width:auto">${[1, 2, 3, 4, 5].map((p) => `<option ${p === d.priority ? "selected" : ""}>${p}</option>`).join("")}</select>` : `P${Number(d.priority)}`}</td><td>${pill(d.severity === "critical" || d.severity === "high" ? "failed" : "pending").replace(/>[^<]+</, `>${esc(d.severity)}<`)}</td><td>${pill(d.status)}${d.assignee ? `<div class="muted">${esc(d.assignee)}</div>` : ""}</td><td>${esc(d.check)}<div class="muted ellipsis" style="max-width:320px">${esc(d.detail.split("\n")[0])}</div>${me.is_admin ? `<div class="row" style="gap:4px;margin-top:4px">${defectActions(d)}</div>` : ""}</td><td><a href="#" data-goal="${d.goal_id}">#${d.goal_id}</a></td><td class="num">${d.first_iteration}–${d.last_iteration}</td></tr>`).join("") || '<tr><td colspan="6" class="muted">No open defects.</td></tr>'}</table></div></div>
       <div class="card"><h2>Rooms</h2><table><tr><th>Room</th><th class="num">Agents</th><th class="num">Tasks</th><th class="num">Completion</th><th class="num">Cost</th></tr>${r.rooms.map((x) => `<tr><td>${esc(x.name)}</td><td class="num">${x.agents}</td><td class="num">${x.tasks}</td><td class="num">${pct(x.completion_rate)}</td><td class="num">${money(x.cost)}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No work yet.</td></tr>'}</table></div>
+      ${operationsCard(r.operations)}
       ${calibrationCard(r.calibration)}
       <div class="card"><h2>Eval harness</h2><p class="muted">Runs a suite of checkable tasks several times in fresh repositories; a task is solved only if every run passes. Compare labels to see whether a model or routing change helped.</p>
         ${me.is_admin ? `<form id="ev-form" class="row"><select id="ev-suite" style="width:auto">${evals.suites.map((s) => `<option>${esc(s.name)}</option>`).join("")}</select><input id="ev-label" placeholder="label, e.g. sonnet-v1" required pattern="[\\w.-]{1,64}" class="grow"><input id="ev-rep" type="number" min="1" max="10" value="1" style="width:70px" title="repeats"><button class="btn primary">Run</button></form>` : ""}

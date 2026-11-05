@@ -46,6 +46,16 @@ Performance view adds: acceptance-test pass rate, escaped defects (defects reope
 merge), review rejection rate, median cycle time per goal, blocked time, retry rate, cost per
 accepted goal, rollback rate, security findings, human approval latency. Optimise for verified
 outcomes, not activity.
+**Status: done** (`performance.operations`, `report()["operations"]`, Performance → Operational metrics;
+`tests/test_performance.py`). Over real work (benchmark goals left out), each rate with its sample size `n` and
+`None` without samples, nothing combined into one score: the quality gate's pass rate per evaluation and the share of
+goals passing in iteration 1 (the gate is the platform's acceptance test: commands, stages, reviews); review
+rejection rate (QA/security reviews answering `VERDICT: FAIL`); escaped defects (closed at a merge, then reopened —
+only a later check run, e.g. a retest, can reopen them); median cycle time (order → merged, rejected, cancelled or
+failed) and blocked time (paused) from `goal_transitions`; human approval latency (`awaiting_approval` → a person's
+approve or reject); retry rate and cost per accepted (merged) goal, shared with the enablement gate
+(`_retries_and_cost`); rollback rate of deployed improvement contracts, with best-iteration resets counted beside it;
+security findings (failed secret scans, security stages and dependency audits, refused commands, incidents).
 
 ### G-R-03 Failure-mode tests — Designing guide §8
 `tests/` covers: executor timeout, provider rate limit (429), worker crash mid-goal (restart

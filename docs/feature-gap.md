@@ -83,6 +83,7 @@ Machines code):
 | Defect records from failed checks, closed when fixed, reopened on regression | ASEAO09 §11 | done (`performance.track_defects`) |
 | Defect priority and lifecycle (assigned, fix submitted, retested; duplicate, not reproducible, deferred, accepted risk), fixes verified by a fresh run of the check | ASEAO09 §11-12 | done (`performance`, S09-R-03) |
 | Performance intelligence: agent, room and company metrics | ASEAO07 §15 | done (`performance.report`, Performance view) |
+| Operational metrics: gate pass rate, escaped defects, review rejections, cycle and blocked time, retries, cost per accepted goal, rollbacks, security findings, approval latency | Designing guide §10 | done (`performance.operations`, Performance → Operational metrics) → G-R-02 |
 | Agent lifecycle states (active, paused, retired) | SPEC02 §6 | done (`Agent.lifecycle`) |
 | Duplicate-agent prevention: role synonyms, reuse of an agent covering the skills, near-duplicate list | SPEC03 §6, §11.2 | done (S03-R-02) |
 | Capability-gap calculation, recruitment records and job descriptions | SPEC03 §5, §7, §8 | done (`recruitment.py`, S03-R-01, S03-R-03) |

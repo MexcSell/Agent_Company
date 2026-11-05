@@ -60,7 +60,7 @@ feature came from.
   certification only from the harness; learning metrics); `selfevolve.py` (verified self-evolution of the platform's own code: improvement contracts, protected
   control plane, failure layers, a fixed benchmark from `benchmarks/` run on the base and candidate commits, approval,
   deploy via the safe restart, monitoring, rollback; docs/requirements/SELF-EVOLUTION.md); `performance.py` (defects with priority and a lifecycle
-  the loop drives, S09-R-03; certification, metrics, estimate accuracy); `rca.py` (S07-R-02 root-cause analysis of failed goals and repeated failing checks:
+  the loop drives, S09-R-03; certification, metrics, estimate accuracy, G-R-02 operational metrics `operations`); `rca.py` (S07-R-02 root-cause analysis of failed goals and repeated failing checks:
   evidence pack, causes that must cite it, actions as proposals, follow-up); `evaluation.py` (eval harness; S09-R-05 dimensions with sample sizes per run and summary, no combined score; `adversarial` suites run like final ones); `research.py` (crawl, knowledge, sources with monitoring rules: versions on change, intelligence events; shifts on the
   rotation with handover packages, `research_shifts`; research requests with priority, deadline, budget, recurrence and
   duplicate detection, run by `ReportThread`; S06-R-03/R-04 claims checked against stored documents and an independent review (another agent, another model family when usable, else a person): only approved reports become `report://` documents, blackboard entries, `research` knowledge items and `research` proposals); `governance.py` (audit, notifications,

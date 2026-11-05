@@ -190,3 +190,40 @@ def test_estimates_are_compared_with_what_happened(monkeypatch):
     assert cal["goal_cost"]["samples"] == 2 and cal["goal_cost"]["actual"] > cal["goal_cost"]["estimated"] > 0
     monkeypatch.setattr(performance, "CALIBRATION_MIN", 5)
     assert performance.calibration()["time_by_role"][0]["bias"] == "too few samples"
+
+
+def test_operational_metrics_report_verified_outcomes_with_sample_sizes():
+    """G-R-02: gate pass rate, review rejections, escaped defects, cycle time, blocked time, approval latency,
+    retries, cost per accepted goal, rollbacks and security findings; benchmark goals left out."""
+    empty = performance.report()["operations"]
+    assert empty["gate_pass_rate"] == {"rate": None, "hits": 0, "n": 0} and empty["cycle_time"]["median_seconds"] is None
+    ok = loop.create_goal("Passes", quality_commands=["test -f WORKLOG.md"])
+    loop.run_goal(ok)
+    assert loop._goal(ok).status == "awaiting_approval"
+    loop.approve(ok, actor="user:admin")
+    bad = loop.create_goal("Needs a fix", quality_commands=["test -f FIXED"], max_iterations=1)
+    loop.run_goal(bad)
+    held = loop.create_goal("Held")
+    loop.pause(held, actor="user:admin")
+    loop.cancel(held, actor="user:admin")
+    bench = loop.create_goal("Benchmark", quality_commands=["test -f FIXED"], max_iterations=1, origin="eval")
+    loop.run_goal(bench)
+    # a defect of the merged goal that a later check run reopens has escaped; a failed secret scan is a finding
+    performance.track_defects(ok, 1, [{"check": "command pytest", "passed": False, "detail": "1 failed"}])
+    performance.track_defects(ok, 2, [{"check": "command pytest", "passed": True}])
+    performance.on_merged(ok, "abc1234567")
+    performance.track_defects(ok, 3, [{"check": "command pytest", "passed": False, "detail": "back"}])
+    performance.track_defects(bad, 1, [{"check": "secret scan", "passed": False, "detail": "a.py: AWS"}])
+    o = performance.report()["operations"]
+    assert o["gate_pass_rate"] == {"rate": 0.5, "hits": 1, "n": 2}, "the benchmark goal's gate is not counted"
+    assert o["first_iteration_pass_rate"] == {"rate": 0.5, "hits": 1, "n": 2}
+    assert o["escaped_defects"] == {"rate": 1.0, "hits": 1, "n": 1}
+    assert o["cycle_time"]["n"] == 3 and o["cycle_time"]["median_seconds"] >= 0
+    assert o["approval_latency"]["n"] == 1, "only a person's decision on a waiting goal"
+    assert o["blocked_time"]["n"] == 3 and o["blocked_time"]["seconds"] >= 0
+    assert o["review_rejection_rate"]["n"] >= 1 and o["review_rejection_rate"]["rate"] is not None
+    assert o["retry_rate"]["n"] > 0 and o["cost_per_accepted_goal"]["n"] == 1
+    assert o["rollback_rate"] == {"rate": None, "hits": 0, "n": 0}
+    assert o["security_findings"]["secret_scan"] == 1 and o["security_findings"]["total"] >= 1
+    gate = performance.enablement_gate()["metrics"]
+    assert gate["accepted_goals"] == 1 and gate["retry_rate"] == o["retry_rate"]["rate"]

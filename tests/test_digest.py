@@ -27,7 +27,11 @@ def test_goal_outcome_posts_a_digest_with_tasks_tokens_cost_and_merge_state():
     d = loop.digest(g.id)
     assert d["tasks"] >= 1 and d["tasks_done"] == d["tasks"] and d["merge"] == "waiting for approval to merge"
     assert d["tokens"] > 0 and d["cost"] >= 0 and d["duration"] >= d["active"] >= 0
-    result = [m for m in projects.messages(p["id"]) if m["kind"] == "result"][-1]["content"]
+    end, mine = time.time() + 10, []
+    while not mine and time.time() < end:  # the outcome is posted just after the status changes
+        mine = [m["content"] for m in projects.messages(p["id"]) if m["content"].startswith(f"Goal #{g.id}: ")]
+        time.sleep(0.05)
+    result = mine[-1]
     assert result.splitlines()[1].startswith("Digest: ")
     assert f"{d['tasks_done']}/{d['tasks']} task(s) passed" in result and "tokens" in result and "approval" in result
     loop.approve(g.id)

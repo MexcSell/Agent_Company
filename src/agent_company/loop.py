@@ -1193,7 +1193,8 @@ def _chat_outcome(goal_id: int, out: dict[str, Any]) -> None:
     except Exception as e:  # noqa: BLE001 - the digest never keeps the outcome from being posted
         line = ""
         log_event("error", f"mission digest failed: {e}", goal_id=goal_id)
-    post_for_goal(goal_id, f"Goal #{goal_id}: {text}\n{line}\n\n{g.result}".strip(),
+    head = "\n".join(x for x in (f"Goal #{goal_id}: {text}", line) if x)
+    post_for_goal(goal_id, f"{head}\n\n{g.result}".strip(),
                   kind="result" if out["status"] in {"approved", "awaiting_approval"} else "error",
                   agent_id=None, status=out["status"])
 

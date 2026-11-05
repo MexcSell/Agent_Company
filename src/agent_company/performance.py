@@ -325,6 +325,112 @@ def _agent_metrics(s, a: Agent, tasks: list[Task], runs: list[Run], goal_passed:
     }
 
 
+def _retries_and_cost(s) -> dict[str, Any]:  # noqa: ANN001
+    """Retries per model run, and the model cost per accepted (merged, `approved`) goal of real work. Shared by the
+    enablement gate (G-R-04) and the operational metrics (G-R-02)."""
+    total_runs = s.scalar(select(func.count()).select_from(Run)) or 0
+    retries = s.scalar(select(func.count()).select_from(Event).where(Event.kind == "retry")) or 0
+    accepted = [g.id for g in s.scalars(select(Goal).where(Goal.status == "approved", Goal.origin != "eval"))]
+    cost = s.scalar(select(func.coalesce(func.sum(Run.cost), 0.0)).where(Run.goal_id.in_(accepted))) if accepted else 0.0
+    return {"runs": total_runs, "retries": retries, "retry_rate": round(retries / total_runs, 3) if total_runs else None,
+            "accepted_goals": len(accepted),
+            "cost_per_accepted_goal": round(cost / len(accepted), 4) if accepted else None}
+
+
+# --- operational metrics (guides G-R-02) -----------------------------------------------------------
+
+SECURITY_CHECKS = ("secret scan", "stage security", "dependency audit")
+ENDED = ("approved", "rejected", "cancelled", "failed")
+
+
+def _rate(hits: int, n: int) -> dict[str, Any]:
+    return {"rate": round(hits / n, 3) if n else None, "hits": hits, "n": n}
+
+
+def _median(values: list[float]) -> dict[str, Any]:
+    return {"median_seconds": round(statistics.median(values), 1) if values else None, "n": len(values)}
+
+
+def _aware(dt):  # noqa: ANN001, ANN202 - SQLite hands datetimes back without their zone
+    return dt if dt.tzinfo else dt.replace(tzinfo=now().tzinfo)
+
+
+def operations(s) -> dict[str, Any]:  # noqa: ANN001
+    """Outcome metrics of the delivery pipeline (guides G-R-02: optimise for verified outcomes, not activity), over
+    real work (benchmark goals left out). Every rate carries its sample size `n` and is None without samples."""
+    from agent_company.db import GoalTransition, ImprovementContract, Incident
+    from agent_company.quality import REVIEW_ROLES
+
+    goals = {g.id: g for g in s.scalars(select(Goal).where(Goal.origin != "eval"))}
+    gates = [h for g in goals.values() for h in (g.history or []) if "passed" in h]
+    judged = [g for g in goals.values() if any("passed" in h for h in g.history or [])]
+    first = sum(1 for g in judged if next(h for h in g.history if "passed" in h)["passed"])
+    reviews = [t for t in s.scalars(select(Task).where(Task.role.in_(REVIEW_ROLES), Task.status.in_(("done", "failed"))))
+               if t.goal_id in goals]
+    rejected = sum(1 for t in reviews if "VERDICT: FAIL" in (t.output or "").upper())
+    # cycle time, blocked time and the time a person took to decide, from each goal's workflow history (S04-R-04)
+    steps: dict[int, list[GoalTransition]] = defaultdict(list)
+    for t in s.scalars(select(GoalTransition).order_by(GoalTransition.id)):
+        if t.goal_id in goals:
+            steps[t.goal_id].append(t)
+    cycles: list[float] = []
+    waits: list[float] = []
+    blocked = 0.0
+    for gid, g in goals.items():
+        start, status, paused = _aware(g.created_at), "queued", 0.0
+        ended: float | None = None
+        for t in steps[gid]:
+            at = _aware(t.created_at)
+            if status == "paused":
+                paused += max(0.0, (at - start).total_seconds())
+            if (status == "awaiting_approval" and t.to_status in ("approved", "rejected")
+                    and (t.actor or "").startswith("user:")):
+                waits.append(max(0.0, (at - start).total_seconds()))
+            if t.to_status in ENDED:
+                ended = (at - _aware(g.created_at)).total_seconds()
+            start, status = at, t.to_status
+        if g.status in ENDED and ended is not None:
+            cycles.append(max(0.0, ended))
+            blocked += paused
+    merged = escaped = 0
+    findings = {"secret_scan": 0, "security_stage": 0, "dependency_audit": 0}
+    for d in s.scalars(select(Defect).where(Defect.goal_id.in_(list(goals)))):
+        moves = d.history or []
+        at_merge = next((i for i, m in enumerate(moves) if m.get("to") == "closed" and m.get("by") == "merge"), None)
+        if at_merge is not None:
+            merged += 1
+            escaped += any(m.get("to") == "reopened" for m in moves[at_merge + 1:])
+        if d.check.startswith(SECURITY_CHECKS):
+            findings["secret_scan" if d.check == "secret scan" else "security_stage" if d.check == "stage security"
+                     else "dependency_audit"] += 1
+    findings["refused_commands"] = s.scalar(select(func.count()).select_from(Event).where(
+        Event.kind == "command_refused", Event.goal_id.in_(list(goals)))) or 0
+    findings["incidents"] = s.scalar(select(func.count()).select_from(Incident)) or 0
+    deployed = s.scalar(select(func.count()).select_from(ImprovementContract).where(
+        ImprovementContract.status.in_(("monitoring", "stable", "rolled_back")))) or 0
+    rolled = s.scalar(select(func.count()).select_from(ImprovementContract).where(
+        ImprovementContract.status == "rolled_back")) or 0
+    resets = s.scalar(select(func.count()).select_from(Event).where(
+        Event.kind == "gate", Event.message.like("Kept iteration %"), Event.goal_id.in_(list(goals)))) or 0
+    rc = _retries_and_cost(s)
+    total_cycle = sum(cycles)
+    return {
+        "gate_pass_rate": _rate(sum(bool(h["passed"]) for h in gates), len(gates)),
+        "first_iteration_pass_rate": _rate(first, len(judged)),
+        "review_rejection_rate": _rate(rejected, len(reviews)),
+        "escaped_defects": _rate(escaped, merged),
+        "cycle_time": _median(cycles),
+        "blocked_time": {"seconds": round(blocked, 1), "share": round(blocked / total_cycle, 3) if total_cycle else None,
+                         "n": len(cycles)},
+        "approval_latency": _median(waits),
+        "retry_rate": {"rate": rc["retry_rate"], "hits": rc["retries"], "n": rc["runs"]},
+        "cost_per_accepted_goal": {"usd": rc["cost_per_accepted_goal"], "n": rc["accepted_goals"]},
+        "rollback_rate": _rate(rolled, deployed),
+        "best_iteration_resets": resets,
+        "security_findings": findings | {"total": sum(findings.values())},
+    }
+
+
 # --- measured gate for enabling more roles (guides G-R-04) ------------------------------------------
 
 GATE_SUITE, GATE_PASS_RATE, GATE_REPEATS = "smoke", 0.8, 3
@@ -360,12 +466,9 @@ def enablement_gate() -> dict[str, Any]:
             Defect.severity == "critical", Defect.status.in_(OPEN))) or 0
         if critical:
             reasons.append(f"{critical} critical defect(s) open")
-        total_runs = s.scalar(select(func.count()).select_from(Run)) or 0
-        retries = s.scalar(select(func.count()).select_from(Event).where(Event.kind == "retry")) or 0
-        accepted = [g.id for g in s.scalars(select(Goal).where(Goal.status == "approved", Goal.origin != "eval"))]
-        cost = s.scalar(select(func.coalesce(func.sum(Run.cost), 0.0)).where(Run.goal_id.in_(accepted))) if accepted else 0.0
-        metrics.update(critical_defects=critical, retry_rate=round(retries / total_runs, 3) if total_runs else 0.0,
-                       accepted_goals=len(accepted), cost_per_accepted_goal=round(cost / len(accepted), 4) if accepted else None)
+        rc = _retries_and_cost(s)
+        metrics.update(critical_defects=critical, retry_rate=rc["retry_rate"] or 0.0,
+                       accepted_goals=rc["accepted_goals"], cost_per_accepted_goal=rc["cost_per_accepted_goal"])
     return {"met": not reasons, "reasons": reasons, "metrics": metrics,
             "rule": f"{GATE_SUITE} suite ≥ {GATE_PASS_RATE:.0%} over ≥ {GATE_REPEATS} repeats with real models, "
                     "no open critical defect"}
@@ -463,4 +566,5 @@ def report() -> dict[str, Any]:
             "open_defects": open_defects,
         }
         calibrated = calibration(s)
-    return {"company": company, "rooms": rooms, "agents": agents, "calibration": calibrated}
+        ops = operations(s)
+    return {"company": company, "rooms": rooms, "agents": agents, "calibration": calibrated, "operations": ops}
