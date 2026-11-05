@@ -91,8 +91,8 @@ the order is safety and correctness of that pipeline first, then management, the
    S14-R-07 L3 isolation (bubblewrap sandbox for checks and benchmarks, with SE-R-22) done 2026-11-05.
    S09-R-04 independent verification evidence per gate command done 2026-11-05, then S09-R-06 checks naming the
    requirements they test, and S08-R-02 Architecture Decision Records. S07-R-04 estimate accuracy per role, then
-   S07-R-02 root-cause analysis of failing goals.
-5. **Still open** (2026-11-05): S09-R-03 defect priority and lifecycle, S09-R-02 a stored risk-based test strategy
+   S07-R-02 root-cause analysis of failing goals. S09-R-03 defect priority and lifecycle.
+5. **Still open** (2026-11-05): S09-R-02 a stored risk-based test strategy
    per goal (only the security review of high-risk tasks exists), S09-R-05 evaluation dimensions and an adversarial
    suite, S08-R-05 dependency audit, S06-R-03/R-04/R-06/R-07 claim-level evidence, report review, research →
    proposal pipeline and knowledge transfer, S14-R-05's remainder (uploads, documents, model rule), S04-FR-27/28

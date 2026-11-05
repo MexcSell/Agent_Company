@@ -835,6 +835,7 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             t = s.get(Task, task_id)
             assert t is not None
             contract = contracts.TaskContract.model_validate(t.contract)
+            iteration = t.iteration
             deps = {d.key: d.output for d in s.scalars(select(Task).where(
                 Task.goal_id == t.goal_id, Task.iteration == t.iteration, Task.key.in_(contract.depends_on)))}
         from agent_company.quality import REVIEW_CHECKLIST, REVIEW_ROLES
@@ -863,6 +864,10 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
         set_task_stage(task_id, "assigned", agent.name)  # S05-R-08
 
         set_status(task_id, "running", agent_id=agent.id, role=role)
+        if writes and iteration > 1:  # S09-R-03: the open defects of earlier iterations are this agent's to fix
+            from agent_company.performance import assign
+
+            assign(goal.id, iteration, agent.id)
         try:
             handover = _handover(goal, contract, agent)
             try:
@@ -1268,6 +1273,9 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                 except BudgetExhausted as e:
                     return _out_of_budget(goal_id, str(e), report, overrun=isinstance(e, CostOverrun))
             _spec_step(specs.write_outputs, goal, iteration, None)
+            from agent_company.performance import fix_submitted, track_defects
+
+            fix_submitted(goal_id, iteration)  # S09-R-03: only the gate's run below moves them on
             report = quality.evaluate(goal_id, iteration)
             _spec_step(specs.write_decision, goal, iteration, report)
             _record_history(goal_id, iteration, report)
@@ -1277,8 +1285,6 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
             _update_goal(goal_id, checkpoint={"iteration": iteration, "planned": True, "evaluated": True,
                                               "passed": report["passed"], "feedback": report["feedback"],
                                               "commit": report.get("head")})
-            from agent_company.performance import track_defects
-
             track_defects(goal_id, iteration, report["checks"])
             log_event("gate", f"iteration {iteration}: quality gate {'passed' if report['passed'] else 'failed'}",
                       goal_id=goal_id, **{k: report[k] for k in ("passed", "checks", "commit")})
@@ -1748,6 +1754,9 @@ def _merge(goal_id: int) -> str:
     def merge() -> str:
         sha = worktrees.merge(g.repo_path, g.branch, g.base_branch, author=identity_for(g.created_by))
         log_event("goal", f"merged {g.branch} into {g.base_branch} ({sha[:10]})", goal_id=goal_id)
+        from agent_company.performance import on_merged
+
+        on_merged(goal_id, sha)  # S09-R-03: the verified fixes are released
         return sha
 
     return _once(f"goal:{goal_id}:{g.iteration}:merge", merge)

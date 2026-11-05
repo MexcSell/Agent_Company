@@ -80,6 +80,7 @@ Machines code):
 | Task handover package when work moves to another agent | SPEC12 §10 | done (`loop._handover`, `handovers` table) |
 | Capability certification from evaluations (L0-L5, expiry) | SPEC13 §9 | done (`performance.certification`) |
 | Defect records from failed checks, closed when fixed, reopened on regression | ASEAO09 §11 | done (`performance.track_defects`) |
+| Defect priority and lifecycle (assigned, fix submitted, retested; duplicate, not reproducible, deferred, accepted risk), fixes verified by a fresh run of the check | ASEAO09 §11-12 | done (`performance`, S09-R-03) |
 | Performance intelligence: agent, room and company metrics | ASEAO07 §15 | done (`performance.report`, Performance view) |
 | Agent lifecycle states (active, paused, retired) | SPEC02 §6 | done (`Agent.lifecycle`) |
 | Duplicate-agent prevention: role synonyms, reuse of an agent covering the skills, near-duplicate list | SPEC03 §6, §11.2 | done (S03-R-02) |

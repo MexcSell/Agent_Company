@@ -32,6 +32,7 @@ from sqlalchemy import func, select
 
 from agent_company.db import (Agent, Defect, Event, Goal, Lesson, Proposal, Risk, Run, Task, log_event, now,
                               session)
+from agent_company.performance import OPEN
 
 STREAK = 3
 ACTIONS = 3
@@ -92,7 +93,7 @@ def evidence(goal_ids: list[int]) -> dict[str, Any]:
                 items.append((f"check:{d.check}", f"goal #{gid}: '{d.check}' ({d.severity}) failed in iteration(s) "
                                                   f"{d.first_iteration}-{d.last_iteration}, now {d.status}: "
                                                   f"{d.detail.strip()[:300]}"))
-                if d.status in ("detected", "reopened"):
+                if d.status in OPEN:
                     watch[d.check] = watch.get(d.check, 0) + n
             minutes = dict(s.execute(select(Run.task_id, func.sum(Run.duration)).where(Run.goal_id == gid)
                                      .group_by(Run.task_id)).all())

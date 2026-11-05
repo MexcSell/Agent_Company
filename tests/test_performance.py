@@ -20,7 +20,7 @@ def test_defects_open_close_and_reopen():
     performance.track_defects(gid, 2, [{"check": "command pytest", "passed": True},
                                        {"check": "secret scan", "passed": False, "detail": "still"}])
     by = {d["check"]: d for d in performance.list_defects(goal_id=gid)}
-    assert by["command pytest"]["status"] == "closed" and by["command pytest"]["closed_iteration"] == 2
+    assert by["command pytest"]["status"] == "retested" and by["command pytest"]["closed_iteration"] == 2
     assert by["secret scan"]["last_iteration"] == 2
     performance.track_defects(gid, 3, [{"check": "command pytest", "passed": False, "detail": "again"}])
     assert performance.list_defects(goal_id=gid)[0]["status"] in {"reopened", "detected"}

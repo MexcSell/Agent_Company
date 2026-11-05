@@ -33,6 +33,8 @@ from agent_company import worktrees
 from agent_company.config import settings
 from agent_company.db import (ActionItem, Agent, Defect, Goal, GoalTransition, Insight, Lesson, Milestone, Project,
                               ProjectHandover, Proposal, Risk, Run, Task, log_event, now, session)
+from agent_company.performance import OPEN as OPEN_DEFECT
+from agent_company.performance import PRIORITY as DEFECT_PRIORITY
 
 RISK_CATEGORIES = ["technical", "security", "budget", "schedule", "staffing", "external_dependency", "quality",
                    "infrastructure", "requirements"]
@@ -42,7 +44,6 @@ RISK_STATUSES = ["open", "mitigated", "resolved", "closed"]
 INSIGHT_CHAIN = ["recorded", "analyzed", "reviewed", "accepted", "implemented", "evaluated"]
 ITEM_STATUSES = ["open", "in_progress", "done", "dropped"]
 INSIGHTS_PER_TASK = 3
-DEFECT_PRIORITY = {"critical": 1, "high": 2, "medium": 3, "low": 4, "info": 5}
 FAR = datetime(9999, 1, 1, tzinfo=UTC)
 
 
@@ -423,13 +424,13 @@ def _wanted_items(s: Session, project_id: int, manager_id: int | None) -> dict[s
                                     "priority": 2, "goal_id": p.goal_id, "responsible_agent_id": manager_id,
                                     "expected_output": "approved (a new goal) or rejected"}
     defects = s.execute(select(Defect, Goal.title).join(Goal, Goal.id == Defect.goal_id).where(
-        Goal.project_id == project_id, Defect.status.in_(("detected", "reopened")),
+        Goal.project_id == project_id, Defect.status.in_(OPEN_DEFECT),
         # a failed goal's leftovers come back as a new order, not as items that never close
         Goal.status.not_in(("cancelled", "rejected", "failed")), Goal.origin != "eval")).all()
     for d, title in defects:
         want[f"defect:{d.id}"] = {"title": f"Fix {d.severity} defect: {d.check}"[:256],
                                   "description": f"Goal #{d.goal_id} {title}\n{d.detail[:1000]}",
-                                  "priority": DEFECT_PRIORITY.get(d.severity, 3), "goal_id": d.goal_id,
+                                  "priority": d.priority or DEFECT_PRIORITY.get(d.severity, 3), "goal_id": d.goal_id,
                                   "expected_output": "the check passes"}
     for r in s.scalars(select(Risk).where(Risk.project_id == project_id, Risk.kind == "blocker", Risk.status == "open")):
         want[f"risk:{r.id}"] = {"title": f"Resolve blocker: {r.title}"[:256], "description": r.mitigation,

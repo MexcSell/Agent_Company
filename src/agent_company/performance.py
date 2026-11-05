@@ -23,6 +23,7 @@ from __future__ import annotations
 import statistics
 from collections import defaultdict
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, select
@@ -30,6 +31,11 @@ from sqlalchemy import func, select
 from agent_company.db import Agent, Defect, EvalRun, Event, Goal, Lesson, Relationship, Room, Run, Task, now, session
 
 # --- defects ----------------------------------------------------------------------
+
+OPEN = ("detected", "reopened", "assigned", "fix_submitted")
+SET_BY_ADMIN = ("accepted_risk", "deferred", "duplicate", "not_reproducible")
+PRIORITY = {"critical": 1, "high": 2, "medium": 3, "low": 4, "info": 5}  # the default priority of a severity
+
 
 def severity_of(check: str) -> str:
     if check in {"secret scan"} or "refused by the command policy" in check:
@@ -43,8 +49,25 @@ def severity_of(check: str) -> str:
     return "info"
 
 
+def _move(d: Defect, to: str, by: str = "system", note: str = "") -> None:
+    """One lifecycle step, kept in the defect's history (S09-R-03)."""
+    if d.status == to:
+        return
+    d.history = [*(d.history or []), {"at": now().isoformat(), "from": d.status, "to": to, "by": by,
+                                      "note": note[:500]}][-50:]
+    d.status = to
+
+
+def _evidence(c: dict[str, Any], iteration: int, how: str) -> dict[str, Any]:
+    """§12: what proves the check's state is the platform's own run of it, never an agent's report."""
+    return {"how": how, "iteration": iteration, "passed": bool(c["passed"]), "at": now().isoformat(),
+            **{k: c[k] for k in ("command", "commit", "exit_code", "duration_s", "isolation") if k in c}}
+
+
 def track_defects(goal_id: int, iteration: int, checks: list[dict[str, Any]]) -> dict[str, int]:
-    """Open, reopen or close the goal's defects from one gate report."""
+    """Open, reopen or retest the goal's defects from one gate report. The gate ran every check again in a fresh
+    process, so a passing check is a verified fix (`retested`); the merge closes it (`on_merged`). A check failing
+    again reopens a fixed, submitted or unreproducible defect; one an administrator deferred or accepted stays so."""
     opened = closed = 0
     with session() as s:
         existing = {d.check: d for d in s.scalars(select(Defect).where(Defect.goal_id == goal_id))}
@@ -53,49 +76,170 @@ def track_defects(goal_id: int, iteration: int, checks: list[dict[str, Any]]) ->
             d = existing.get(name)
             if not c["passed"]:
                 if d is None:
-                    s.add(Defect(goal_id=goal_id, check=name, severity=severity_of(name),
+                    sev = severity_of(name)
+                    s.add(Defect(goal_id=goal_id, check=name, severity=sev,
                                  detail=c.get("detail", "")[-2000:], first_iteration=iteration,
-                                 last_iteration=iteration))
+                                 last_iteration=iteration, verification=_evidence(c, iteration, "gate"),
+                                 history=[{"at": now().isoformat(), "from": "", "to": "detected", "by": "gate",
+                                           "note": f"iteration {iteration}"}]))
                     opened += 1
-                else:
-                    if d.status == "closed":
-                        d.status, d.closed_iteration = "reopened", None
-                        opened += 1
-                    d.last_iteration, d.detail = iteration, c.get("detail", "")[-2000:]
-            elif d is not None and d.status in {"detected", "reopened"}:
-                d.status, d.closed_iteration = "closed", iteration
+                    continue
+                if d.status in ("closed", "retested", "fix_submitted", "not_reproducible"):
+                    _move(d, "reopened", "gate", f"failed again in iteration {iteration}")
+                    d.closed_iteration = None
+                    opened += 1
+                d.last_iteration, d.detail = iteration, c.get("detail", "")[-2000:]
+                d.verification = _evidence(c, iteration, "gate")
+            elif d is not None and d.status in OPEN:
+                _move(d, "retested", "gate", f"passed in iteration {iteration}")
+                d.closed_iteration, d.verification = iteration, _evidence(c, iteration, "gate")
                 closed += 1
     return {"opened": opened, "closed": closed}
 
 
-def defect_dict(d: Defect) -> dict[str, Any]:
+def assign(goal_id: int, iteration: int, agent_id: int) -> int:
+    """A writing task of a later iteration started: the goal's open defects from earlier iterations are its work."""
+    with session() as s:
+        n = 0
+        for d in s.scalars(select(Defect).where(Defect.goal_id == goal_id, Defect.first_iteration < iteration,
+                                                Defect.status.in_(("detected", "reopened")))):
+            d.assignee_agent_id = agent_id
+            _move(d, "assigned", "loop", f"iteration {iteration}")
+            n += 1
+        return n
+
+
+def fix_submitted(goal_id: int, iteration: int) -> int:
+    """The iteration's writing tasks finished: their change is submitted as the fix. Only the gate's own run of the
+    check moves it on (retested or reopened); a developer's report never does."""
+    with session() as s:
+        wrote = s.scalar(select(func.count()).select_from(Task).where(
+            Task.goal_id == goal_id, Task.iteration == iteration, Task.writes.is_(True), Task.status == "done"))
+        if not wrote:
+            return 0
+        rows = s.scalars(select(Defect).where(Defect.goal_id == goal_id, Defect.status == "assigned")).all()
+        for d in rows:
+            _move(d, "fix_submitted", "loop", f"iteration {iteration}")
+        return len(rows)
+
+
+def on_merged(goal_id: int, sha: str) -> int:
+    """The goal reached its base branch: its verified fixes are closed."""
+    with session() as s:
+        rows = s.scalars(select(Defect).where(Defect.goal_id == goal_id, Defect.status == "retested")).all()
+        for d in rows:
+            _move(d, "closed", "merge", f"merged {sha[:10]}")
+        return len(rows)
+
+
+def defect_dict(d: Defect, names: dict[int, str] | None = None) -> dict[str, Any]:
     return {"id": d.id, "goal_id": d.goal_id, "check": d.check, "severity": d.severity, "status": d.status,
+            "open": d.status in OPEN, "priority": d.priority or PRIORITY.get(d.severity, 3), "assignee_agent_id": d.assignee_agent_id,
+            "assignee": (names or {}).get(d.assignee_agent_id or 0), "duplicate_of": d.duplicate_of,
+            "verification": d.verification or {}, "resolution": d.resolution or "", "history": d.history or [],
+            "retestable": d.check.startswith("command "),
             "detail": d.detail, "first_iteration": d.first_iteration, "last_iteration": d.last_iteration,
             "closed_iteration": d.closed_iteration, "updated_at": d.updated_at.isoformat()}
 
 
 def list_defects(status: str = "", goal_id: int | None = None) -> list[dict[str, Any]]:
-    order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
     with session() as s:
         q = select(Defect)
         if status == "open":
-            q = q.where(Defect.status.in_(["detected", "reopened"]))
+            q = q.where(Defect.status.in_(OPEN))
         elif status:
             q = q.where(Defect.status == status)
         if goal_id is not None:
             q = q.where(Defect.goal_id == goal_id)
-        rows = [defect_dict(d) for d in s.scalars(q.order_by(Defect.id.desc()).limit(500))]
-    return sorted(rows, key=lambda d: (d["status"] == "closed", order.get(d["severity"], 9), -d["id"]))
+        names = dict(s.execute(select(Agent.id, Agent.name)).all())
+        rows = [defect_dict(d, names) for d in s.scalars(q.order_by(Defect.id.desc()).limit(500))]
+    return sorted(rows, key=lambda d: (not d["open"], d["priority"], PRIORITY.get(d["severity"], 9), -d["id"]))
 
 
-def set_defect_status(defect_id: int, status: str) -> dict[str, Any]:
-    if status not in {"accepted_risk", "deferred", "detected"}:
-        raise ValueError("status is accepted_risk, deferred or detected")
+def set_defect_status(defect_id: int, status: str, note: str = "", duplicate_of: int | None = None,
+                      actor: str = "admin") -> dict[str, Any]:
+    """An administrator's decision (S09-R-03): accepted_risk, deferred, duplicate (of another defect of the goal),
+    not_reproducible (only after a passing retest of the current code), or detected (open it again). Closing is not
+    a decision: only a merged, retested fix closes a defect."""
+    if status not in (*SET_BY_ADMIN, "detected"):
+        raise ValueError("status is " + ", ".join(SET_BY_ADMIN) + " or detected")
     with session() as s:
         d = s.get(Defect, defect_id)
         if d is None:
             raise KeyError(defect_id)
-        d.status = status
+        if status == "duplicate":
+            other = s.get(Defect, duplicate_of) if duplicate_of else None
+            if other is None or other.id == d.id or other.goal_id != d.goal_id:
+                raise ValueError("a duplicate names another defect of the same goal")
+            if other.duplicate_of == d.id:
+                raise ValueError(f"defect #{other.id} is already a duplicate of this one")
+            d.duplicate_of = other.id
+        else:
+            d.duplicate_of = None
+        if status == "not_reproducible":
+            v = d.verification or {}
+            if not (v.get("how") == "retest" and v.get("passed")):
+                raise ValueError("retest the defect first: not reproducible needs a passing fresh run of its check")
+        d.resolution = note[:2000] if status in SET_BY_ADMIN else ""
+        if status in SET_BY_ADMIN:
+            d.assignee_agent_id = None
+        if status == "detected":
+            d.closed_iteration = None
+        _move(d, status, actor, note)
+        return defect_dict(d)
+
+
+def set_defect_priority(defect_id: int, priority: int, actor: str = "admin") -> dict[str, Any]:
+    if priority not in range(1, 6):
+        raise ValueError("priority is 1 (first) to 5")
+    with session() as s:
+        d = s.get(Defect, defect_id)
+        if d is None:
+            raise KeyError(defect_id)
+        if d.priority != priority:
+            d.history = [*(d.history or []), {"at": now().isoformat(), "from": d.status, "to": d.status, "by": actor,
+                                              "note": f"priority {d.priority or '-'} -> {priority}"}][-50:]
+            d.priority = priority
+        return defect_dict(d)
+
+
+def retest(defect_id: int, actor: str = "admin") -> dict[str, Any]:
+    """§12: run a command check again in a fresh process (the L3 sandbox, like the gate) on the goal's current code.
+    A pass verifies an open defect's fix (`retested`); a failure reopens a fixed or unreproducible one."""
+    from agent_company import contracts, sandbox, worktrees
+    from agent_company.config import settings
+
+    with session() as s:
+        d = s.get(Defect, defect_id)
+        if d is None:
+            raise KeyError(defect_id)
+        if not d.check.startswith("command "):
+            raise ValueError("only command checks can be retested alone; the next gate run retests the others")
+        g = s.get(Goal, d.goal_id)
+        if g is None or not g.worktree or not Path(g.worktree).is_dir():
+            raise ValueError("the goal's worktree is gone; nothing to retest")
+        if g.status in ("planning", "running", "recovering"):
+            raise ValueError(f"goal is {g.status}: its own gate retests the defect")
+        # the gate's own record of the command (the check name is cut at 256 characters)
+        run = (d.verification or {}).get("command") or d.check[len("command "):]
+        worktree, mode = Path(g.worktree), sandbox.mode_for(g, s=s)
+    info: dict[str, Any] = {}
+    ok, detail = contracts.run_command(run, worktree, settings().command_timeout, mode=mode, info=info)
+    row = {"passed": ok, "command": run, "commit": worktrees.git(worktree, "rev-parse", "HEAD"),
+           "exit_code": info.get("exit_code"), "duration_s": info.get("duration_s", 0.0),
+           "isolation": info.get("isolation", "")}
+    with session() as s:
+        d = s.get(Defect, defect_id)
+        assert d is not None
+        d.verification = _evidence(row, d.last_iteration, "retest") | {"by": actor,
+                                                                        "output_tail": info.get("output_tail", "")}
+        if ok and d.status in OPEN:
+            _move(d, "retested", actor, "passed a retest")
+        elif not ok:
+            d.detail = detail[-2000:]
+            if d.status in ("retested", "closed", "not_reproducible"):
+                _move(d, "reopened", actor, "failed a retest")
+                d.closed_iteration = None
         return defect_dict(d)
 
 
@@ -213,7 +357,7 @@ def enablement_gate() -> dict[str, Any]:
             if not kinds or kinds <= {"offline"}:
                 reasons.append(f"label '{last.label}' ran on the offline simulator, not the configured models")
         critical = s.scalar(select(func.count()).select_from(Defect).where(
-            Defect.severity == "critical", Defect.status.in_(["detected", "reopened"]))) or 0
+            Defect.severity == "critical", Defect.status.in_(OPEN))) or 0
         if critical:
             reasons.append(f"{critical} critical defect(s) open")
         total_runs = s.scalar(select(func.count()).select_from(Run)) or 0
@@ -310,7 +454,7 @@ def report() -> dict[str, Any]:
         spend = dict(s.execute(select(Run.goal_id, func.sum(Run.cost)).where(Run.goal_id.is_not(None))
                                .group_by(Run.goal_id)).all())
         open_defects = s.scalar(select(func.count()).select_from(Defect)
-                                .where(Defect.status.in_(["detected", "reopened"]))) or 0
+                                .where(Defect.status.in_(OPEN))) or 0
         company = {
             "goals": len(goals), "finished": len(finished), "passed": len(passed),
             "pass_rate": round(len(passed) / len(finished), 3) if finished else None,

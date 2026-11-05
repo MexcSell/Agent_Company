@@ -163,6 +163,11 @@ class Handover(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+def _defect_priority(ctx: Any) -> int:
+    """A new defect's priority follows its severity until an administrator changes it (S09-R-03)."""
+    return {"critical": 1, "high": 2, "medium": 3, "low": 4}.get(ctx.get_current_parameters().get("severity"), 5)
+
+
 class Defect(Base):
     """A failed quality-gate check, tracked until a later iteration passes it (ASEAO09 §11)."""
 
@@ -173,7 +178,15 @@ class Defect(Base):
     check: Mapped[str] = mapped_column(String(256))
     severity: Mapped[str] = mapped_column(String(16))  # critical|high|medium|low|info
     status: Mapped[str] = mapped_column(String(16), default="detected")
-    # detected|reopened|closed|accepted_risk|deferred
+    # open: detected|reopened|assigned|fix_submitted; retested (the gate passed it again) -> closed at the merge;
+    # set by an administrator: accepted_risk|deferred|duplicate|not_reproducible (S09-R-03)
+    priority: Mapped[int | None] = mapped_column(Integer, default=_defect_priority)  # 1 (first) .. 5
+    assignee_agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duplicate_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # the last fresh-process run of the check: how (gate|retest), passed, command, commit, exit_code, duration_s
+    verification: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    resolution: Mapped[str] = mapped_column(Text, default="")  # an administrator's reason
+    history: Mapped[list[Any]] = mapped_column(default=list)  # [{at, from, to, by, note}]
     detail: Mapped[str] = mapped_column(Text, default="")
     first_iteration: Mapped[int] = mapped_column(Integer, default=1)
     last_iteration: Mapped[int] = mapped_column(Integer, default=1)

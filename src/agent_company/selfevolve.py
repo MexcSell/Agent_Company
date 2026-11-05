@@ -48,6 +48,7 @@ from agent_company import sandbox, worktrees
 from agent_company.config import REPO_ROOT, settings
 from agent_company.db import (Defect, EvalRun, Event, EvolutionEvent, Goal, ImprovementContract, Project, log_event,
                               now, session)
+from agent_company.performance import OPEN
 
 PKG = "src/agent_company"
 
@@ -181,7 +182,7 @@ def weaknesses(days: int = 30, limit: int = 12) -> list[dict[str, Any]]:
     with session() as s:
         for g in s.scalars(select(Goal).where(Goal.status == "failed", Goal.created_at >= since)):
             found.append((f"{g.title}\n{g.result or ''}"[:4000], f"goal #{g.id}"))
-        for d in s.scalars(select(Defect).where(Defect.status.in_(["detected", "reopened"]))):
+        for d in s.scalars(select(Defect).where(Defect.status.in_(OPEN))):
             found.append((f"failed check {d.check}: {d.detail}"[:4000], f"defect #{d.id}"))
         for r in s.scalars(select(EvalRun).where(EvalRun.passed.is_(False), EvalRun.created_at >= since)):
             found.append((f"{r.end_reason} {r.status} {r.task}", f"eval {r.label}/{r.task}"))

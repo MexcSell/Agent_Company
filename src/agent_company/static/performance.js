@@ -11,6 +11,27 @@ function calibrationCard(cal) {
   return `<div class="card"><h2>Estimate accuracy</h2><p class="muted">Planner estimates against what happened: task minutes per role, goal cost. Median ratio actual/estimate; within ±50%; labelled from ${Number(cal.min_samples)} samples.</p><div class="table-wrap"><table><tr><th>Role</th><th class="num">Samples</th><th class="num">Estimated → actual</th><th class="num">Ratio</th><th class="num">±50%</th><th></th></tr>${rows || '<tr><td colspan="6" class="muted">No finished task had an estimate yet.</td></tr>'}</table></div></div>`;
 }
 
+// S09-R-03: an administrator's defect decisions; a retest runs the command check again in a fresh process
+function defectActions(d) {
+  const b = (s, label) => `<button class="btn sm" data-dst="${d.id}" data-s="${s}">${label}</button>`;
+  if (!d.open) return d.status === "detected" ? "" : b("detected", "Open again");
+  return (d.retestable ? `<button class="btn sm" data-dretest="${d.id}">Retest</button>` : "") + b("accepted_risk", "Accept risk") + b("deferred", "Defer") + b("duplicate", "Duplicate") + (d.verification.how === "retest" && d.verification.passed ? b("not_reproducible", "Not reproducible") : "");
+}
+
+function bindDefectActions(root, refresh) {
+  root.querySelectorAll("[data-dst]").forEach((b) => (b.onclick = async () => {
+    const body = { status: b.dataset.s };
+    if (body.status === "duplicate") { const id = prompt("Duplicate of defect # (same goal)"); if (!id) return; body.duplicate_of = Number(id.replace("#", "")); }
+    if (body.status !== "detected") { const note = prompt("Why? (kept with the defect)"); if (note === null) return; body.note = note; }
+    try { await api(`/api/defects/${b.dataset.dst}/status`, { method: "POST", body }); refresh(); } catch (err) { toast(err.message); }
+  }));
+  root.querySelectorAll("[data-dprio]").forEach((sel) => (sel.onchange = async () => { try { await api(`/api/defects/${sel.dataset.dprio}/priority`, { method: "POST", body: { priority: Number(sel.value) } }); refresh(); } catch (err) { toast(err.message); } }));
+  root.querySelectorAll("[data-dretest]").forEach((b) => (b.onclick = async () => {
+    b.disabled = true;
+    try { const d = await api(`/api/defects/${b.dataset.dretest}/retest`, { method: "POST" }); toast(`Retest ${d.verification.passed ? "passed" : "failed"} (exit ${d.verification.exit_code ?? "–"}, ${d.verification.duration_s}s): ${d.status.replace(/_/g, " ")}`); refresh(); } catch (err) { toast(err.message); b.disabled = false; }
+  }));
+}
+
 async function viewPerformance(quiet) {
   if (quiet && $("#ev-form")) return;
   const [r, defects, certs, evals, rec] = await Promise.all([api("/api/performance"), api("/api/defects?status=open"), api("/api/certifications"), api("/api/evals"), api("/api/recruitment/effectiveness")]);
@@ -18,7 +39,7 @@ async function viewPerformance(quiet) {
   const k = (label, value) => `<div class="card kpi"><div class="label">${label}</div><div class="value">${value}</div></div>`;
   $("#view").innerHTML = `<div class="grid kpis">${k("Goals finished", `${c.finished} / ${c.goals}`)}${k("Pass rate", pct(c.pass_rate))}${k("Iterations to pass", c.avg_iterations_to_pass ?? "–")}${k("Cost per passed goal", c.cost_per_passed_goal === null ? "–" : money(c.cost_per_passed_goal))}${k("Open defects", c.open_defects)}</div>
     <div class="grid halves" style="margin-top:12px">
-      <div class="grid"><div class="card"><h2>Open defects</h2><div class="table-wrap"><table><tr><th>Severity</th><th>Check</th><th>Goal</th><th>Iterations</th><th></th></tr>${defects.slice(0, 40).map((d) => `<tr><td>${pill(d.severity === "critical" || d.severity === "high" ? "failed" : "pending").replace(/>[^<]+</, `>${esc(d.severity)}<`)}</td><td>${esc(d.check)}<div class="muted ellipsis" style="max-width:320px">${esc(d.detail.split("\n")[0])}</div></td><td><a href="#" data-goal="${d.goal_id}">#${d.goal_id}</a></td><td class="num">${d.first_iteration}–${d.last_iteration}</td><td>${me.is_admin ? `<button class="btn sm" data-dst="${d.id}" data-s="accepted_risk">Accept risk</button><button class="btn sm" data-dst="${d.id}" data-s="deferred">Defer</button>` : ""}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No open defects.</td></tr>'}</table></div></div>
+      <div class="grid"><div class="card"><h2>Open defects</h2><p class="muted">Detected → assigned (a writing task of the next iteration) → fix submitted → retested (the gate or a retest ran the check again in a fresh process) → closed at the merge. Priority 1 comes first.</p><div class="table-wrap"><table><tr><th>Priority</th><th>Severity</th><th>Status</th><th>Check</th><th>Goal</th><th>Iterations</th></tr>${defects.slice(0, 40).map((d) => `<tr><td>${me.is_admin ? `<select data-dprio="${d.id}" style="width:auto">${[1, 2, 3, 4, 5].map((p) => `<option ${p === d.priority ? "selected" : ""}>${p}</option>`).join("")}</select>` : `P${Number(d.priority)}`}</td><td>${pill(d.severity === "critical" || d.severity === "high" ? "failed" : "pending").replace(/>[^<]+</, `>${esc(d.severity)}<`)}</td><td>${pill(d.status)}${d.assignee ? `<div class="muted">${esc(d.assignee)}</div>` : ""}</td><td>${esc(d.check)}<div class="muted ellipsis" style="max-width:320px">${esc(d.detail.split("\n")[0])}</div>${me.is_admin ? `<div class="row" style="gap:4px;margin-top:4px">${defectActions(d)}</div>` : ""}</td><td><a href="#" data-goal="${d.goal_id}">#${d.goal_id}</a></td><td class="num">${d.first_iteration}–${d.last_iteration}</td></tr>`).join("") || '<tr><td colspan="6" class="muted">No open defects.</td></tr>'}</table></div></div>
       <div class="card"><h2>Rooms</h2><table><tr><th>Room</th><th class="num">Agents</th><th class="num">Tasks</th><th class="num">Completion</th><th class="num">Cost</th></tr>${r.rooms.map((x) => `<tr><td>${esc(x.name)}</td><td class="num">${x.agents}</td><td class="num">${x.tasks}</td><td class="num">${pct(x.completion_rate)}</td><td class="num">${money(x.cost)}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No work yet.</td></tr>'}</table></div>
       ${calibrationCard(r.calibration)}
       <div class="card"><h2>Eval harness</h2><p class="muted">Runs a suite of checkable tasks several times in fresh repositories; a task is solved only if every run passes. Compare labels to see whether a model or routing change helped.</p>
@@ -30,7 +51,7 @@ async function viewPerformance(quiet) {
       <div class="card"><h2>Recruitment effectiveness</h2><p class="muted">Recruits that finished probation: ${rec.passed}/${rec.finished} passed (${pct(rec.pass_rate)}). A recruit passes after 3 verified tasks and is retired after 2 failed ones.${rec.qualification_runs ? ` Qualification runs: ${rec.qualified}/${rec.qualification_runs} passed; evaluation cost $${(rec.evaluation_cost_usd || 0).toFixed(2)}.` : ""}</p><div class="table-wrap"><table><tr><th>Recruit</th><th>Role</th><th>Probation</th><th class="num">Passed</th><th class="num">Failed</th></tr>${rec.recruits.map((x) => `<tr><td><a href="#" data-agent="${x.agent_id}">${esc(x.agent)}</a></td><td>${esc(x.role)}</td><td>${esc(x.state)}</td><td class="num">${x.passed_tasks ?? "–"}</td><td class="num">${x.failed_tasks}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No recruit yet.</td></tr>'}</table></div></div></div></div>`;
   document.querySelectorAll("[data-goal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); goalModal(Number(a.dataset.goal)); }));
   document.querySelectorAll("[data-agent]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); agentModal(Number(a.dataset.agent)); }));
-  document.querySelectorAll("[data-dst]").forEach((b) => (b.onclick = async () => { await api(`/api/defects/${b.dataset.dst}/status`, { method: "POST", body: { status: b.dataset.s } }); viewPerformance(); }));
+  bindDefectActions($("#view"), viewPerformance);
   document.querySelectorAll("[data-label]").forEach((a) => (a.onclick = async (e) => { e.preventDefault(); evalSummary(await api(`/api/evals/${encodeURIComponent(a.dataset.label)}`)); }));
   $("#cmp-go") && ($("#cmp-go").onclick = async () => {
     const r2 = await api(`/api/evals/compare?a=${encodeURIComponent($("#cmp-a").value)}&b=${encodeURIComponent($("#cmp-b").value)}`);

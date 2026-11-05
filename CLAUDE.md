@@ -55,8 +55,8 @@ feature came from.
   (capability gaps, learning plans: practice + hidden final eval suites run by the trainee in scratch repos,
   certification only from the harness; learning metrics); `selfevolve.py` (verified self-evolution of the platform's own code: improvement contracts, protected
   control plane, failure layers, a fixed benchmark from `benchmarks/` run on the base and candidate commits, approval,
-  deploy via the safe restart, monitoring, rollback; docs/requirements/SELF-EVOLUTION.md); `performance.py` (defects, certification,
-  metrics, estimate accuracy); `rca.py` (S07-R-02 root-cause analysis of failed goals and repeated failing checks:
+  deploy via the safe restart, monitoring, rollback; docs/requirements/SELF-EVOLUTION.md); `performance.py` (defects with priority and a lifecycle
+  the loop drives, S09-R-03; certification, metrics, estimate accuracy); `rca.py` (S07-R-02 root-cause analysis of failed goals and repeated failing checks:
   evidence pack, causes that must cite it, actions as proposals, follow-up); `evaluation.py` (eval harness); `research.py` (crawl, knowledge, sources with monitoring rules: versions on change, intelligence events; shifts on the
   rotation with handover packages, `research_shifts`; research requests with priority, deadline, budget, recurrence and
   duplicate detection, run by `ReportThread`); `governance.py` (audit, notifications,

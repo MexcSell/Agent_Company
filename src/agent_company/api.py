@@ -604,6 +604,16 @@ class StatusBody(BaseModel):
     status: str
 
 
+class DefectStatusBody(BaseModel):
+    status: str
+    note: str = ""
+    duplicate_of: int | None = None
+
+
+class DefectPriorityBody(BaseModel):
+    priority: int
+
+
 class LifecycleBody(BaseModel):
     state: str
 
@@ -1622,10 +1632,26 @@ def create_app(start_background: bool = True) -> FastAPI:
         return performance.list_defects(status, goal_id)
 
     @app.post("/api/defects/{defect_id}/status")
-    def defect_status(defect_id: int, body: StatusBody, admin: dict[str, Any] = Depends(admin_user)
+    def defect_status(defect_id: int, body: DefectStatusBody, admin: dict[str, Any] = Depends(admin_user)
                       ) -> dict[str, Any]:
-        out = performance.set_defect_status(defect_id, body.status)
-        _audit(admin, "defect_status", defect_id, after={"status": body.status})
+        out = performance.set_defect_status(defect_id, body.status, body.note, body.duplicate_of,
+                                            actor=admin["name"])
+        _audit(admin, "defect_status", defect_id, after={"status": body.status, "note": body.note[:500],
+                                                         "duplicate_of": body.duplicate_of})
+        return out
+
+    @app.post("/api/defects/{defect_id}/priority")
+    def defect_priority(defect_id: int, body: DefectPriorityBody, admin: dict[str, Any] = Depends(admin_user)
+                        ) -> dict[str, Any]:
+        out = performance.set_defect_priority(defect_id, body.priority, actor=admin["name"])
+        _audit(admin, "defect_priority", defect_id, after={"priority": body.priority})
+        return out
+
+    @app.post("/api/defects/{defect_id}/retest")
+    def defect_retest(defect_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = performance.retest(defect_id, actor=admin["name"])
+        _audit(admin, "defect_retest", defect_id, after={"passed": out["verification"].get("passed"),
+                                                         "status": out["status"]})
         return out
 
     @app.get("/api/certifications")

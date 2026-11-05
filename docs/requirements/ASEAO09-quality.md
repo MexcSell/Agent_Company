@@ -40,6 +40,19 @@ scope checks (`quality.py`, `checks.py`); defects opened/closed/reopened automat
   `deferred`, `duplicate`, `not_reproducible`, `accepted_risk` (administrator only, audited).
 - A defect fix is verified by re-running the failing check in a fresh process, not by the
   developer's report (§12).
+- **Status: done** (`performance.OPEN`, `assign`, `fix_submitted`, `track_defects`, `on_merged`, `retest`,
+  `set_defect_status`, `set_defect_priority`; `tests/test_defects.py`). `priority` 1 (first) to 5 follows the
+  severity until an administrator changes it; the open list sorts by it and project action items use it. The loop
+  drives the lifecycle, never an agent's output: a writing task of a later iteration starting → `assigned` (to its
+  agent); the iteration's writing tasks done → `fix_submitted`; the gate's own fresh run of the check passing →
+  `retested` (with the run's command, commit, exit code and duration as `verification`), failing → `reopened`;
+  the merge closes retested defects (`closed` is never set by hand). Open = detected, reopened, assigned,
+  fix_submitted: an open critical one in any of them blocks `approve`. Administrator alternatives (admin API,
+  audited, a reason kept as `resolution`): `accepted_risk`, `deferred`, `duplicate` (of another defect of the same
+  goal), `not_reproducible` (only after a passing `retest`), or `detected` to open it again. `retest` runs a command
+  check alone again through `contracts.run_command` (L3 sandbox, the goal's sandbox mode) on the goal's worktree
+  while the goal is not running; other checks are retested by the next gate. Each step is in the defect's
+  `history`; Performance → Open defects and the goal page show priority, status, assignee and the evidence.
 
 ### S09-R-04 Independent verification — §12 (AT-011, AT-026)
 - The gate re-runs commands itself and records: commit SHA, command, exit code, duration, output
