@@ -593,6 +593,11 @@ Next.js front end only when one machine is no longer enough.
 
 - Agents never edit the main checkout. File-changing executors run only inside
   `data/worktrees/`, and file blocks that point outside the worktree are refused.
+- Every agent run passes one tool gateway: changing files needs the agent's `write`
+  permission and autonomy G2 or more, commands need `shell`, granted MCP tools need G3,
+  and an agent at G0 runs nothing (agent card → Permissions; only administrators change
+  them). Each run records its isolation level (L0 text, L1 read-only tools, L2 worktree
+  writes), its tools and what was withheld, shown in the goal trace.
 - Claude Code's Bash access is limited to tests and read-only git; Codex runs in its
   `workspace-write` sandbox. This is not a container: for untrusted goals, run the
   service in a disposable VM or container with no production credentials.

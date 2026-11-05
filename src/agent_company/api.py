@@ -28,6 +28,7 @@ from agent_company import (
     decisions,
     evaluation,
     evolution,
+    executors,
     experiments,
     files,
     gitsync,
@@ -701,7 +702,8 @@ def create_app(start_background: bool = True) -> FastAPI:
 
     @app.get("/api/agents/{agent_id}")
     def agent(agent_id: int, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-        return registry.agent_detail(agent_id) | {"certification": performance.certification(agent_id)}
+        return registry.agent_detail(agent_id) | {"certification": performance.certification(agent_id),
+                                                  "autonomy_levels": executors.AUTONOMY}
 
     def _enable_gate(agent_id: int, admin: dict[str, Any], override: bool) -> None:
         cur = registry.agent_detail(agent_id)
@@ -719,13 +721,16 @@ def create_app(start_background: bool = True) -> FastAPI:
                      ) -> dict[str, Any]:
         override = bool(changes.pop("override_gate", False))
         expected = changes.pop("expected_version", None)
+        authority = {"permissions", "autonomy"} & set(changes)
+        if authority and not admin["is_admin"]:  # SPEC-14 S14-R-02: an agent's authority is a human administrator's call
+            raise HTTPException(403, f"only an administrator changes an agent's {' and '.join(sorted(authority))}")
         if changes.get("enabled"):
             _enable_gate(agent_id, admin, override)
         try:
             out = registry.update_agent(agent_id, changes, admin["name"], expected)
         except registry.StaleVersion as e:  # SPEC-02 AT-023: a stale edit is refused, not silently lost
             raise HTTPException(409, str(e)) from e
-        _audit(admin, "agent_update", out["name"], after=changes)
+        _audit(admin, "agent_update", out["name"], after=changes, severity="high" if authority else "info")
         agentdefs.sync(agent_id, f"settings changed by {admin['name']}: {', '.join(sorted(changes))}")
         return out
 
@@ -740,11 +745,16 @@ def create_app(start_background: bool = True) -> FastAPI:
         if target is None:
             raise HTTPException(404, f"agent {agent_id} has no version {version}")
         before = registry.agent_detail(agent_id)
+        if not admin["is_admin"] and any(target["snapshot"].get(k, before.get(k)) != before.get(k)
+                                         for k in ("permissions", "autonomy")):
+            raise HTTPException(403, "this version has other permissions or another autonomy level: only an "
+                                "administrator rolls back to it")
         if target["snapshot"].get("enabled"):
             _enable_gate(agent_id, admin, override_gate)
         out = registry.rollback(agent_id, version, admin["name"])
         _audit(admin, "agent_rollback", out["name"], before={k: before.get(k) for k in ("model_pref", "enabled",
-                                                                                          "lifecycle", "permissions")},
+                                                                                          "lifecycle", "permissions",
+                                                                                          "autonomy")},
                after={"version": version, "now": out["config_version"]}, severity="high")
         agentdefs.sync(agent_id, f"configuration rolled back to v{version} by {admin['name']}")
         return out

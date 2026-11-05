@@ -120,7 +120,8 @@ Machines code):
 | Agent behaviour monitoring with deterministic rules | SPEC14 §10 | done (six rules, cost-vs-estimate included, S14-R-03) |
 | Security incident records and response | SPEC14 §11 | done (`incidents`, Security view, S14-R-04) |
 | Emergency shutdown with levels E0-E5 (executor, agent, goal, project, room, company), CLI and top-bar control | SPEC14 §12 | done (`governance.stop`, `python -m agent_company stop`, S14-R-01) |
-| Autonomy levels and action classification | SPEC14 §13 | partial (agents cannot approve authority-raising proposals; autonomy levels open) → S14-R-02 |
+| Autonomy levels and action classification | SPEC14 §13 | done (`Agent.autonomy` G0–G4, enforced by the tool gateway; only administrators change permissions or autonomy, S14-R-02) |
+| Tool permission contracts: one gateway for every executor run; isolation level, tools and permissions recorded per run | SPEC14 §7.3, §8.2, §8.3 | done (`executors.gate`, `Run.isolation`, S14-R-06; L3 containers and per-call tool logs open, S14-R-07, S14-R-08) |
 | Information classification and data-handling rules | SPEC14 §5 | partial (projects and lessons; uploads, documents, model rule open) → S14-R-05 |
 | MCP tool servers for agents | 1.txt, CDAF guide §11 | done (`mcp.py`, Tools & MCP, G-R-05) |
 | A2A protocol for agent-to-agent messages | 1.txt | done (`a2a.py`: A2A 1.0 agent card, JSON-RPC tasks as goals for issued clients, G-R-06) |

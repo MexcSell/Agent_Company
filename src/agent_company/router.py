@@ -433,7 +433,7 @@ def test_model(model_id: int) -> dict[str, Any]:
     res = executors.for_choice(choice, 120).run(req)
     usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
                  output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
-                 error=res.error, purpose="test")
+                 error=res.error, purpose="test", res=res)
     from agent_company import registry
 
     registry.recheck_model(choice.name)  # agents asking for this model first may now be degraded, or healthy

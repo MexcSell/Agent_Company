@@ -56,10 +56,15 @@ class RoleSpec:
     skills: dict[str, int] = field(default_factory=dict)
     permissions: tuple[str, ...] = ("read",)
     enabled: bool = False
+    autonomy: str = ""  # G0..G4 (executors.AUTONOMY); "" = G3 for the roles on by default, G2 for gated ones
 
     @property
     def writes(self) -> bool:
         return "write" in self.permissions
+
+    @property
+    def default_autonomy(self) -> str:
+        return self.autonomy or ("G3" if self.enabled else "G2")
 
 
 ROLES: dict[str, RoleSpec] = {

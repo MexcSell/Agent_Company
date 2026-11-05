@@ -34,6 +34,24 @@ class Request:
     data: dict[str, Any] = field(default_factory=dict)  # structured hints for the offline executor
     agent_id: int | None = None  # who runs it and for which goal: an emergency stop kills by these
     goal_id: int | None = None
+    # the running agent's permissions and autonomy level; a request without them (an internal summary, a model
+    # test) is read-only at G1. `gate` turns them into what the run may use (SPEC-14 S14-R-06)
+    permissions: list[str] | None = None
+    autonomy: str = ""
+    grant: Grant | None = None  # set by Executor.run
+
+
+@dataclass
+class Grant:
+    """What one run may use, decided by `gate` before it starts."""
+
+    writes: bool = False
+    shell: bool = False
+    mcp: bool = False
+    isolation: str = "L0"  # L0 text only, L1 read-only tools, L2 writes in the worktree (S14-R-07)
+    permissions: list[str] = field(default_factory=list)  # the permissions this run uses
+    dropped: list[str] = field(default_factory=list)  # asked for and not granted
+    refused: str = ""  # non-empty: the run does not start
 
 
 @dataclass
@@ -47,6 +65,11 @@ class Result:
     files: list[str] = field(default_factory=list)
     duration: float = 0.0
     session_id: str = ""
+    isolation: str = ""  # from the run's Grant
+    tools: list[str] = field(default_factory=list)  # the tools the run was allowed
+    permissions: list[str] = field(default_factory=list)
+    dropped: list[str] = field(default_factory=list)
+    denied_tools: list[str] = field(default_factory=list)  # tool calls the CLI refused (Claude Code reports them)
 
 
 FILE_BLOCK_HELP = (
@@ -65,6 +88,88 @@ def estimate_tokens(text: str) -> int:
 
 
 MAX_OUTPUT = 5_000_000  # characters of stdout an executor run may produce (SPEC-14 S14-R-07)
+
+
+# --- the tool gateway (SPEC-14 S14-R-02, S14-R-06, S14-R-07) ----------------------------------------
+# Every run passes `Executor.run`, so every path is covered: agent permission -> autonomy level -> emergency
+# state -> approval -> run with limits -> recorded on the run (usage.record) and audited when something is
+# withheld (loop._execute). The Workspace terminal and Claude Code panel are not executors and never pass here.
+
+# Autonomy levels of agents (SPEC-14 §13). G5 (unbounded) is reserved to humans and cannot be given to an agent.
+AUTONOMY = {
+    "G0": "observe: no runs",
+    "G1": "recommend: text and read-only tools; no file changes, no commands",
+    "G2": "low-risk operations: changes in the goal's worktree and the test/inspect commands",
+    "G3": "approved workflows: G2 and the MCP tools an administrator granted",
+    "G4": "bounded autonomy: the tools of G3; the highest level an agent can have",
+}
+
+
+@dataclass(frozen=True)
+class ToolContract:
+    """What an executor can do, who may use it and its limits."""
+
+    capabilities: tuple[str, ...]
+    max_seconds: int  # a hard cap above the configured command timeout
+    roles: tuple[str, ...] = ()  # empty: every role
+    requires_approval: bool = False  # a run needs `data["approved"]` (none of today's executors)
+    write_needs_shell: bool = False  # it cannot change files without also running commands
+
+
+TOOL_CONTRACTS = {
+    "llm": ToolContract(("text", "file_blocks"), 7200),
+    "claude_code": ToolContract(("text", "read", "edit", "bash", "mcp"), 7200),
+    "codex": ToolContract(("text", "read", "edit", "commands"), 7200, write_needs_shell=True),
+    "offline": ToolContract(("text", "file_blocks"), 600),
+}
+CLI_KINDS = {"claude_code", "codex"}
+
+
+def level(autonomy: str) -> int:
+    """The number of an autonomy level; anything that is not G0..G4 counts as G1."""
+    return int(autonomy[1]) if re.fullmatch(r"G[0-4]", autonomy or "") else 1
+
+
+def gate(req: Request, kind: str) -> Grant:
+    """What this run may use: the request's wishes cut down to the agent's permissions and autonomy level."""
+    contract = TOOL_CONTRACTS.get(kind, ToolContract(("text",), 600))
+    perms = set(req.permissions if req.permissions is not None else ["read"])
+    n = level(req.autonomy)
+    if contract.roles and req.role not in contract.roles:
+        return Grant(refused=f"refused by the tool gateway: {kind} is not allowed for the role {req.role}")
+    if n == 0:
+        return Grant(refused="refused by the tool gateway: autonomy G0 (observe) runs nothing")
+    if contract.requires_approval and not req.data.get("approved"):
+        return Grant(refused=f"refused by the tool gateway: {kind} runs need an approval")
+    dropped: list[str] = []
+    # the CLI General Manager's configure step edits .claude/ (everything else is put back by
+    # specs.revert_outside_config); it is the only write an agent without `write` may make
+    configure = req.purpose == "configure" and req.role == "general_manager"
+    writes = req.writes and req.workdir is not None
+    if writes and "write" not in perms and not configure:
+        writes = False
+        dropped.append("write: no write permission")
+    if writes and n < 2:
+        writes = False
+        dropped.append(f"write: autonomy G{n}")
+    shell_ok = kind in CLI_KINDS and "shell" in perms and n >= 2
+    if writes and contract.write_needs_shell and not shell_ok:
+        writes = False
+        dropped.append(f"write: {kind} cannot change files without running commands, and shell is not granted")
+    # commands (Claude Code's test/inspect allow-list, Codex's workspace-write) only come with a writing run, as
+    # before the gateway; Codex's read-only sandbox may still run read-only commands, which is Codex's own design
+    shell = shell_ok and writes
+    if writes and kind in CLI_KINDS and not shell and not configure:  # configure only edits .claude/
+        dropped.append("shell: no shell permission")
+    servers, _ = req.data.get("mcp") or ({}, [])
+    mcp = kind == "claude_code" and bool(servers.get("mcpServers")) and n >= 3
+    if servers.get("mcpServers") and kind == "claude_code" and not mcp:
+        dropped.append(f"mcp: autonomy G{n}")
+    used = sorted({"read"} | ({"write"} if writes else set()) | ({"shell"} if shell else set()))
+    if configure and writes and "write" not in perms:
+        used = [p if p != "write" else "write:.claude" for p in used]
+    isolation = "L2" if writes else "L1" if kind in CLI_KINDS else "L0"
+    return Grant(writes=writes, shell=shell, mcp=mcp, isolation=isolation, permissions=used, dropped=dropped)
 
 
 def _track(pid: int, program: str, kind: str, req: Request) -> None:
@@ -155,12 +260,33 @@ class Executor:
 
     def run(self, req: Request) -> Result:
         start = time.monotonic()
+        grant, wanted = gate(req, self.kind), req.writes
         try:
+            if grant.refused:
+                raise PermissionError(grant.refused)
+            from agent_company.governance import stopped
+
+            why = stopped(agent_id=req.agent_id, executor=self.kind)  # also for runs that do not pass the loop
+            if why:
+                raise PermissionError(f"emergency stop: {why}")
+            req.grant, req.writes = grant, grant.writes
+            if not grant.mcp:
+                req.data.pop("mcp", None)
+            self.timeout = min(self.timeout, TOOL_CONTRACTS.get(self.kind, ToolContract((), 600)).max_seconds)
             res = self._run(req)
         except Exception as e:  # noqa: BLE001 - an executor failure is a task failure, not a crash
             res = Result(text="", ok=False, error=f"{type(e).__name__}: {e}")
+        finally:
+            req.writes = wanted  # the next executor of a fallback chain is gated on its own
         res.duration = time.monotonic() - start
+        res.isolation, res.permissions, res.dropped = grant.isolation, grant.permissions, grant.dropped
+        if not res.tools:
+            res.tools = self.tools(grant) if not grant.refused else []
         return res
+
+    def tools(self, grant: Grant) -> list[str]:
+        """The tools a run with this grant is given (recorded on the run, S14-R-08)."""
+        return ["text"] + (["file_blocks"] if grant.writes else [])
 
     def _run(self, req: Request) -> Result:
         raise NotImplementedError
@@ -239,11 +365,17 @@ def claude_env(choice: Choice) -> dict[str, str] | None:
 class ClaudeCodeExecutor(Executor):
     kind = "claude_code"
 
+    def tools(self, grant: Grant) -> list[str]:
+        """--allowedTools: Edit/Write need `write`, Bash needs `shell` (SEC-011), MCP tools autonomy G3."""
+        return (["Read", "Grep", "Glob"] + (["Edit", "Write"] if grant.writes else [])
+                + (list(CLAUDE_BASH) if grant.shell else []))
+
     def _run(self, req: Request) -> Result:
         if req.workdir is None:
             raise RuntimeError("Claude Code needs a worktree")
         cwd = ensure_sandboxed(req.workdir)
-        tools = ["Read", "Grep", "Glob"] + (["Edit", "Write", *CLAUDE_BASH] if req.writes else [])
+        grant = req.grant or Grant()
+        tools = self.tools(grant)
         cmd = ["claude", "-p", req.prompt, "--output-format", "json",
                "--append-system-prompt", req.system, "--allowedTools", ",".join(tools)]
         if req.writes:
@@ -267,6 +399,7 @@ class ClaudeCodeExecutor(Executor):
                 json.dump(servers, f)
             cmd += ["--mcp-config", mcp_file, "--strict-mcp-config"]
             cmd[cmd.index("--allowedTools") + 1] += "," + ",".join(mcp_tools)
+            tools = [*tools, *mcp_tools]
         try:
             proc = self._spawn(cmd, req, cwd, env=claude_env(self.choice))
         finally:
@@ -284,11 +417,16 @@ class ClaudeCodeExecutor(Executor):
                       cost=float(data.get("total_cost_usd") or 0.0),
                       ok=not data.get("is_error") and proc.returncode == 0,
                       error="" if proc.returncode == 0 else (proc.stderr or str(data.get("result")))[-2000:],
-                      session_id=str(data.get("session_id") or ""))
+                      session_id=str(data.get("session_id") or ""), tools=tools,
+                      denied_tools=sorted({str(d.get("tool_name") or "?") for d in data.get("permission_denials") or []
+                                           if isinstance(d, dict)}))
 
 
 class CodexExecutor(Executor):
     kind = "codex"
+
+    def tools(self, grant: Grant) -> list[str]:
+        return ["sandbox:workspace-write" if grant.writes else "sandbox:read-only"]
 
     def _run(self, req: Request) -> Result:
         if req.workdir is None:

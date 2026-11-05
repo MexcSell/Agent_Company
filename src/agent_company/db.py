@@ -64,6 +64,7 @@ class Agent(Base):
     backstory: Mapped[str] = mapped_column(Text, default="")
     skills: Mapped[dict[str, Any]] = mapped_column(default=dict)  # skill -> level (1..10)
     permissions: Mapped[list[Any]] = mapped_column(default=list)  # read, write, shell, network
+    autonomy: Mapped[str] = mapped_column(String(4), default="G3")  # G0..G4, executors.AUTONOMY (S14-R-02)
     model_pref: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="idle")  # idle|busy|disabled
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -624,6 +625,13 @@ class Run(Base):
     duration: Mapped[float] = mapped_column(Float, default=0.0)
     ok: Mapped[bool] = mapped_column(Boolean, default=True)
     error: Mapped[str] = mapped_column(Text, default="")
+    # what the tool gateway granted (SPEC-14 S14-R-06..R-08): isolation L0..L2, the tools it was given, the
+    # permissions it used, what was withheld, and the tool calls the CLI refused
+    isolation: Mapped[str] = mapped_column(String(4), default="")
+    tools: Mapped[list[Any]] = mapped_column(default=list)
+    permissions: Mapped[list[Any]] = mapped_column(default=list)
+    dropped: Mapped[list[Any]] = mapped_column(default=list)
+    denied_tools: Mapped[list[Any]] = mapped_column(default=list)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
 

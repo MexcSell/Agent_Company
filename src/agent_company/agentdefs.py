@@ -66,7 +66,7 @@ def render(a: Agent, keep: dict[str, str] | None = None) -> str:
     tools = sorted({t for p in (a.permissions or []) for t in TOOLS_BY_PERMISSION.get(p, [])})
     skills = ", ".join(f"{k} {v}" for k, v in sorted((a.skills or {}).items(), key=lambda x: -x[1]))
     head = (f"---\nname: {a.name}\nrole: {a.role}\ntitle: {a.title}\nroom: {a.room_key}\n"
-            f"model: {a.model_pref or 'route for ' + a.role}\ntools: {', '.join(tools)}\n"
+            f"model: {a.model_pref or 'route for ' + a.role}\ntools: {', '.join(tools)}\nautonomy: {a.autonomy or 'G3'}\n"
             f"skills: {skills}\nplugins: {', '.join(a.plugins or [])}\nversion: {(a.definition_version or 0) + 1}\n---\n")
     parts = [f"# {a.name}", f"## Mission\n{a.goal.strip() or 'Do excellent work in your role.'}"]
     if (a.backstory or "").strip():

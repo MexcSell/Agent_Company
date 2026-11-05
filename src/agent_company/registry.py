@@ -19,6 +19,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from agent_company import org
+from agent_company.executors import AUTONOMY, level
 from agent_company.db import Agent, AgentVersion, Goal, Relationship, Room, log_event, now, session
 
 _staff_lock = threading.Lock()
@@ -28,7 +29,7 @@ def agent_dict(a: Agent) -> dict[str, Any]:
     return {
         "id": a.id, "name": a.name, "role": a.role, "title": a.title, "room": a.room_key,
         "superior_id": a.superior_id, "parent_id": a.parent_id, "goal": a.goal,
-        "skills": a.skills, "permissions": a.permissions, "model_pref": a.model_pref,
+        "skills": a.skills, "permissions": a.permissions, "autonomy": a.autonomy or "G3", "model_pref": a.model_pref,
         "status": a.status, "enabled": a.enabled, "xp": a.xp, "level": a.level,
         "tasks_done": a.tasks_done, "tasks_failed": a.tasks_failed, "playbook": a.playbook,
         "lifecycle": a.lifecycle, "playbook_version": a.playbook_version, "in_trial": bool(a.experiment),
@@ -86,7 +87,7 @@ def _free(a: Agent, goal_id: int | None) -> bool:
 
 # What a version records and a rollback restores. The playbook is versioned on its own (evolution.versions /
 # restore) and the definition file in its git repository; skill levels grown by experience are not versions.
-CONFIG_FIELDS = ("skills", "permissions", "model_pref", "superior_id", "room_key", "enabled", "lifecycle", "goal",
+CONFIG_FIELDS = ("skills", "permissions", "autonomy", "model_pref", "superior_id", "room_key", "enabled", "lifecycle", "goal",
                  "plugins", "max_concurrent", "daily_cost_quota_usd")
 
 
@@ -304,7 +305,8 @@ def seed() -> None:
             if a is None:
                 a = Agent(name=spec.title, role=spec.role, title=spec.title, room_key=spec.room,
                           goal=spec.goal, backstory=spec.backstory, skills=dict(spec.skills),
-                          permissions=list(spec.permissions), enabled=spec.enabled)
+                          permissions=list(spec.permissions), enabled=spec.enabled,
+                          autonomy=spec.default_autonomy)
                 s.add(a)
                 s.flush()
             by_role[spec.role] = a
@@ -597,7 +599,7 @@ def _covering(s: Session, skills: list[str], writes: bool | None) -> tuple[Agent
         return None
     best: tuple[Agent, float] | None = None
     for a in s.scalars(select(Agent).where(Agent.enabled, Agent.lifecycle == "active", Agent.parent_id.is_(None))):
-        if writes and "write" not in (a.permissions or []):
+        if writes and ("write" not in (a.permissions or []) or level(a.autonomy) < 2):
             continue
         share = len(set(skills) & set(a.skills or {})) / len(set(skills))
         if share >= REUSE_COVERAGE and (best is None or share > best[1]
@@ -630,7 +632,7 @@ def _clone(s: Session, src: Agent) -> Agent:
     clone = Agent(name=name, role=base.role, title=base.title, room_key=base.room_key,
                   superior_id=base.superior_id, parent_id=base.id, goal=base.goal,
                   backstory=base.backstory, skills=dict(base.skills), permissions=list(base.permissions),
-                  model_pref=base.model_pref, playbook=base.playbook, enabled=True,
+                  autonomy=base.autonomy or "G3", model_pref=base.model_pref, playbook=base.playbook, enabled=True,
                   max_concurrent=base.max_concurrent or 1)
     s.add(clone)
     s.flush()
@@ -663,7 +665,8 @@ def _recruit(s: Session, role: str, skills: list[str], writes: bool | None) -> A
                   goal=f"Handle {role.replace('_', ' ')} work to a high standard",
                   backstory=f"You are a newly recruited {title.lower()}. Draw on the experience "
                             "of related agents shown in your context.",
-                  skills={k: 5 for k in skills} or {role: 5}, permissions=perms, enabled=True)
+                  skills={k: 5 for k in skills} or {role: 5}, permissions=perms, enabled=True,
+                  autonomy="G2")  # a new, unproven specialist gets no MCP tools until an administrator raises it
     s.add(agent)
     s.flush()
     _link_similar(s, agent, threshold=0.05)  # a recruit always learns from its closest peers
@@ -708,7 +711,7 @@ def list_rooms() -> list[dict[str, Any]]:
                  "rotational": r.rotational, "agents": counts.get(r.key, 0)} for r in rooms]
 
 
-EDITABLE = {"enabled", "model_pref", "skills", "playbook", "superior_id", "goal", "permissions", "plugins",
+EDITABLE = {"enabled", "model_pref", "skills", "playbook", "superior_id", "goal", "permissions", "autonomy", "plugins",
             "max_concurrent", "daily_cost_quota_usd"}
 PERMISSIONS = {"read", "write", "shell", "network"}
 
@@ -731,6 +734,8 @@ def update_agent(agent_id: int, changes: dict[str, Any], actor: str = "system",
             raise ValueError("an agent cannot report to itself")
         if "permissions" in changes and not set(changes["permissions"]) <= PERMISSIONS:
             raise ValueError(f"permissions are a subset of {sorted(PERMISSIONS)}")
+        if "autonomy" in changes and changes["autonomy"] not in AUTONOMY:
+            raise ValueError(f"autonomy is one of {', '.join(AUTONOMY)} (G5 is reserved to humans)")
         if a.lifecycle == "retired" and changes.get("enabled"):
             raise ValueError("a retired agent cannot be enabled")
         if "max_concurrent" in changes:
@@ -886,7 +891,7 @@ def create_agent(role: str, title: str = "", skills: dict[str, int] | None = Non
                   backstory=spec.backstory if spec else "",
                   skills=dict(skills or (spec.skills if spec else {role: 5})),
                   permissions=list(spec.permissions) if spec else (["read", "write", "shell"] if writes else ["read"]),
-                  enabled=True)
+                  autonomy=spec.default_autonomy if spec else "G2", enabled=True)
         s.add(a)
         s.flush()
         _link_similar(s, a, threshold=0.05)

@@ -840,7 +840,13 @@ def settle_proposals(goal_id: int) -> None:
             prompt=(f"An agent working on '{goal_title}' proposes follow-up work:\n{title}\n{why}\n\n"
                     "Approve it only if it clearly serves the project and is safe and small enough. "
                     "Answer with APPROVE or REJECT on the first line, then one sentence why."),
-            data={"title": title})
+            data={"title": title}, agent_id=gm.id, goal_id=goal_id, permissions=list(gm.permissions or []),
+            autonomy=gm.autonomy or "")
         res = executors.for_choice(choice, settings().command_timeout).run(req)
+        from agent_company import usage
+
+        usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
+                     output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
+                     error=res.error, agent_id=gm.id, purpose="triage", goal_id=goal_id, res=res)
         verdict = res.text.strip().upper().startswith("APPROVE") if res.ok else False
         decide(pid, verdict, f"{gm.name} (GM)", by_human=False)

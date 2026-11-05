@@ -29,14 +29,19 @@ def cost_of(entry: ModelEntry | None, input_tokens: int, output_tokens: int) -> 
 def record(*, model_name: str, kind: str, input_tokens: int = 0, output_tokens: int = 0,
            cost: float | None = None, duration: float = 0.0, ok: bool = True, error: str = "",
            task_id: int | None = None, agent_id: int | None = None, purpose: str = "task",
-           goal_id: int | None = None) -> None:
+           goal_id: int | None = None, res: Any = None) -> None:
+    """One run. `res` (an executors.Result) adds what the tool gateway granted it."""
     with session() as s:
         entry = s.scalars(select(ModelEntry).where(ModelEntry.name == model_name)).first()
         if cost is None:
             cost = cost_of(entry, input_tokens, output_tokens)
         s.add(Run(model_name=model_name, kind=kind, input_tokens=input_tokens,
                   output_tokens=output_tokens, cost=cost, duration=duration, ok=ok,
-                  error=error[:2000], task_id=task_id, agent_id=agent_id, purpose=purpose, goal_id=goal_id))
+                  error=error[:2000], task_id=task_id, agent_id=agent_id, purpose=purpose, goal_id=goal_id,
+                  isolation=getattr(res, "isolation", "") or "", tools=list(getattr(res, "tools", None) or [])[:100],
+                  permissions=list(getattr(res, "permissions", None) or []),
+                  dropped=list(getattr(res, "dropped", None) or []),
+                  denied_tools=list(getattr(res, "denied_tools", None) or [])[:100]))
     if agent_id is not None:  # activity and health (SPEC-02 S02-R-02)
         from agent_company import registry
 

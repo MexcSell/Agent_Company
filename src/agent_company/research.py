@@ -871,7 +871,7 @@ def run_report(report_id: int, client: httpx.Client | None = None, allow_private
 
         usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
                      output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
-                     error=res.error, agent_id=agent.id, purpose="report")
+                     error=res.error, agent_id=agent.id, purpose="report", res=res)
         sources = [{"n": i, "url": d["url"], "title": d["title"], "kind": d["category"]} for i, d in enumerate(docs, 1)]
         with session() as s:
             r = s.get(ResearchReport, report_id)

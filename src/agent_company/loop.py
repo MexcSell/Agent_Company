@@ -185,7 +185,7 @@ TRANSIENT = re.compile(r"(?i)(\b(429|50[0-4]|529)\b|rate.?limit|overloaded|timed
                        r"|connection (reset|refused|error|aborted)|network is unreachable|service unavailable"
                        r"|APIConnectionError|ECONNRESET)")
 # Policy refusals and stops are final: retrying them would only repeat the refusal (S04-R-06).
-NO_RETRY = re.compile(r"(?i)refused by the command policy|emergency stop|\bE[0-5] stop\b|WorktreeError|outside the worktree"
+NO_RETRY = re.compile(r"(?i)refused by the command policy|refused by the tool gateway|emergency stop|\bE[0-5] stop\b|WorktreeError|outside the worktree"
                       r"|no model is cleared for")
 _sleep = time.sleep  # tests replace it
 
@@ -230,6 +230,7 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
     if why:
         return _stopped_result(why)
     req.agent_id, req.goal_id = agent.id, goal_id
+    req.permissions, req.autonomy = list(agent.permissions or []), agent.autonomy or ""  # the tool gateway's inputs
     try:  # only models cleared for the goal's classification (S14-R-05)
         chain = router.resolve_chain(agent.role, pref, escalate, avoid_provider, level)
     except router.NotCleared as e:
@@ -265,7 +266,12 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
             res = executors.for_choice(choice, run_timeout).run(req)
             usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
                          output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
-                         error=res.error, task_id=task_id, agent_id=agent.id, purpose=purpose, goal_id=goal_id)
+                         error=res.error, task_id=task_id, agent_id=agent.id, purpose=purpose, goal_id=goal_id,
+                         res=res)
+            if res.dropped and not fresh_session_tried and attempt == 0:  # once per model: what the gateway withheld
+                log_event("security", f"{agent.name} ({choice.name}): the tool gateway withheld "
+                          + "; ".join(res.dropped), goal_id=goal_id, agent_id=agent.id, dropped=res.dropped,
+                          isolation=res.isolation, autonomy=req.autonomy)
             if res.ok:
                 break
             log_event("error", f"{agent.name} ({choice.name}) failed: {res.error[:300]}", goal_id=goal_id,
@@ -707,7 +713,7 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
         except registry.QuotaExceeded as e:  # S02-R-03: the task waits; the goal pauses after the iteration
             set_status(task_id, "skipped", output=f"{QUOTA_SKIP}{e}")
             return False
-        writes = contract.writes and "write" in (agent.permissions or [])
+        writes = contract.writes and "write" in (agent.permissions or []) and executors.level(agent.autonomy) >= 2
 
         set_status(task_id, "running", agent_id=agent.id, role=role)
         try:
@@ -1606,7 +1612,9 @@ def trace(goal_id: int) -> dict[str, Any]:
         runs = [{"id": r.id, "task_id": r.task_id, "agent": names.get(r.agent_id), "agent_id": r.agent_id,
                  "model": r.model_name, "executor": r.kind, "purpose": r.purpose, "ok": r.ok,
                  "error": r.error[:500], "duration": round(r.duration, 2), "cost": r.cost,
-                 "tokens": r.input_tokens + r.output_tokens, "at": r.started_at.isoformat()}
+                 "tokens": r.input_tokens + r.output_tokens, "at": r.started_at.isoformat(),
+                 "isolation": r.isolation or "", "tools": list(r.tools or []), "permissions": list(r.permissions or []),
+                 "withheld": list(r.dropped or []), "denied_tools": list(r.denied_tools or [])}
                 for r in s.scalars(select(Run).where(Run.goal_id == goal_id).order_by(Run.id))]
         gates = [{"at": e.created_at.isoformat(), "passed": e.data.get("passed"), "commit": e.data.get("commit"),
                   "checks": e.data.get("checks", []), "message": e.message}

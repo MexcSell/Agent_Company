@@ -9,7 +9,8 @@ feature came from.
 - `src/agent_company/` – one module per service:
   `registry.py` + `org.py` (agents, rooms; configuration versions with rollback, health: degraded/inactive), `scheduler.py`, `router.py` (models, routes, fallback,
   provider catalogs, classification clearance per model), `contracts.py` (task contracts with scope, risk, budget, deadline; output lines),
-  `executors.py` (tracked subprocesses: `terminate` for stops), `worktrees.py`,
+  `executors.py` (tracked subprocesses: `terminate` for stops; `gate`, the tool gateway every run passes: permissions and
+  `Agent.autonomy` G0-G4 decide writes, Bash and MCP tools, the isolation level L0-L2 is recorded on the `Run`), `worktrees.py`,
   `quality.py` + `checks.py` (gate: contracts, review verdicts with logic verification, secrets, syntax, scope,
   change boundaries, baseline), `usage.py`; `loop.py` (circular goal loop, budgets that pause, best-iteration
   rollback, handovers, checkpoint commits per writing task + worktree reconcile on resume, retry policy,
