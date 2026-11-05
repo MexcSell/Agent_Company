@@ -37,10 +37,11 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                 parent_goal_id: int | None = None, allowed_paths: list[str] | None = None,
                 protect_tests: bool = False, extract_checks: bool = False,
                 permits: list[str] | None = None, estimated_cost_usd: float = 0.0, topic: str = "general",
-                classification: str = "") -> int:
+                classification: str = "", trial: dict[str, Any] | None = None) -> int:
     """Create a goal. `extract_checks` (only for trusted authors) adds the test/lint commands
     the description names in backticks when no quality commands are given. `classification` (S14-R-05) can
-    only raise the level: the goal is at least as classified as its project and its attachments."""
+    only raise the level: the goal is at least as classified as its project and its attachments. `trial`
+    (eval goals only, SPEC-13) carries experiment sides, model overrides, the trainee and hidden checks."""
     from agent_company.checks import extract_check_commands
     from agent_company.governance import check_command, stops
 
@@ -51,6 +52,8 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
     bad = set(permits or []) - PERMITS
     if bad:
         raise ValueError(f"unknown permit(s) {', '.join(sorted(bad))}; one of {', '.join(sorted(PERMITS))}")
+    if trial and origin != "eval":
+        raise ValueError("only eval goals take trial options")
     if extract_checks and not quality_commands:
         quality_commands = [c for c in extract_check_commands(f"{title}\n{description}") if not check_command(c)]
     for cmd in quality_commands or []:
@@ -79,7 +82,7 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                  parent_goal_id=parent_goal_id, allowed_paths=[p.strip() for p in allowed_paths or [] if p.strip()],
                  protect_tests=protect_tests, permits=sorted(set(permits or [])),
                  estimated_cost_usd=max(0.0, float(estimated_cost_usd or 0)), topic=topic or "general",
-                 classification=level)
+                 classification=level, trial=dict(trial or {}))
         s.add(g)
         s.flush()
         gid = g.id
@@ -215,18 +218,20 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
 
     from agent_company.learning import goal_level
 
-    project_id, level = None, "internal"
+    project_id, level, pref = None, "internal", agent.model_pref
     if goal_id is not None:
         with session() as s:
             g = s.get(Goal, goal_id)
             project_id = g.project_id if g else None
             level = goal_level(s, g)
+            if g is not None and g.origin == "eval":  # a route experiment's side (S13-R-05, S13-R-06)
+                pref = ((g.trial or {}).get("models") or {}).get(agent.role) or pref
     why = stopped(agent_id=agent.id, project_id=project_id, room=agent.room_key)
     if why:
         return _stopped_result(why)
     req.agent_id, req.goal_id = agent.id, goal_id
     try:  # only models cleared for the goal's classification (S14-R-05)
-        chain = router.resolve_chain(agent.role, agent.model_pref, escalate, avoid_provider, level)
+        chain = router.resolve_chain(agent.role, pref, escalate, avoid_provider, level)
     except router.NotCleared as e:
         log_event("security", f"{agent.name}: {e}", goal_id=goal_id, agent_id=agent.id, classification=level)
         return (executors.Result(text="", ok=False, error=str(e)),
@@ -879,6 +884,9 @@ def _lesson_text(agent_id: int, title: str, success: bool, feedback: str, goal_i
 
 def _learn_from(goal_id: int, iteration: int, passed: bool, feedback: str, commit: str = "") -> None:
     with session() as s:
+        g = s.get(Goal, goal_id)
+        if g is not None and (g.trial or {}).get("hide_checks"):  # a final evaluation: the findings name its
+            feedback = ""                                          # checks, which no prompt may see (LE-021)
         rows = [(t.agent_id, t.title, t.status, list((t.contract or {}).get("skills", [])), t.id)
                 for t in s.scalars(select(Task).where(Task.goal_id == goal_id, Task.iteration == iteration))
                 if t.agent_id]

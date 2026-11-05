@@ -7,15 +7,16 @@
   smoke     with `candidate_smoke` on, the candidate first runs the smoke suite against the current
             playbook, off the goal loop; it reaches users' goals only if it passes at least as many
             runs (S13-D-02), else it is rolled back
-  evaluate  the candidate runs for EVAL_WINDOW tasks; it is promoted to a new version
+  evaluate  the candidate runs for EVAL_WINDOW tasks (the canary); it is promoted to a new version
             only if its success rate beats the baseline by `min_improvement` points
-            (a tie keeps the current version), else rolled back
+            (a tie keeps the current version), else rolled back, as soon as the rest of the window
+            can no longer reach that
   flag      an agent failing more than 70 % of its last 10 tasks is flagged for review
   merge     after a goal, its idle clones fold their XP, skills, counts and lessons
             back into the original and retire, so the registry does not sprawl
 
 Every change is recorded as an evolution event and every playbook as a version, so
-any version can be restored.
+any version can be restored; every candidate is an experiment record (experiments.py, S13-R-05).
 """
 
 from __future__ import annotations
@@ -97,6 +98,9 @@ def success_rate(s: Session, agent_id: int, n: int) -> tuple[float, int]:
 def after_task(agent_id: int, success: bool) -> None:
     """Called after each lesson is recorded (learning.learn)."""
     _after_task(agent_id, success)
+    from agent_company import experiments
+
+    experiments.observe(agent_id, success)  # the canary of a route change to the agent's role (S13-R-05)
     start_smoke(agent_id)
 
 
@@ -110,23 +114,36 @@ def _after_task(agent_id: int, success: bool) -> None:
             _flag_unreliable(s, a)
             return
         if exp:
+            from agent_company import experiments
+
             exp["outcomes"] = [*exp.get("outcomes", []), success]
-            if len(exp["outcomes"]) >= EVAL_WINDOW:
-                rate = sum(exp["outcomes"]) / len(exp["outcomes"])
-                need = exp["baseline"] + settings().min_improvement / 100
-                n = len(exp["outcomes"])
+            outs, n = exp["outcomes"], len(exp["outcomes"])
+            need = exp["baseline"] + settings().min_improvement / 100
+            canary = {"window": EVAL_WINDOW, "baseline": exp["baseline"], "needed": round(min(need, 1), 3),
+                      "outcomes": outs}
+            # LE-018: the canary ends as soon as the rest of the window cannot reach what promotion needs
+            hopeless = (sum(outs) + EVAL_WINDOW - n) / EVAL_WINDOW < need - 1e-9
+            if n >= EVAL_WINDOW or hopeless:
+                rate = sum(outs) / n
                 _event(s, "evaluate", a.id, f"{a.name}: candidate {rate:.0%} vs baseline {exp['baseline']:.0%} "
                        f"(n={n}, needs {min(need, 1):.0%})", candidate=rate, baseline=exp["baseline"], samples=n,
                        needed=need)
                 # S13-D-01: strictly better by min_improvement; a tie or a small edge keeps the current version
-                if rate >= need - 1e-9 and rate > exp["baseline"]:
+                if not hopeless and rate >= need - 1e-9 and rate > exp["baseline"] and experiments.may_deploy(
+                        "playbook", "system"):
                     _new_version(s, a, exp["playbook"], f"experiment won ({rate:.0%} vs {exp['baseline']:.0%}, n={n})")
                     _event(s, "promote", a.id, f"{a.name}: playbook v{a.playbook_version} promoted")
+                    experiments.update(s, exp.get("experiment_id"), status="rolled_out", canary=canary,
+                                       decision=f"promoted as v{a.playbook_version}: {rate:.0%} live, n={n}")
                 else:
                     _event(s, "rollback", a.id, f"{a.name}: candidate rolled back, v{a.playbook_version} kept")
+                    experiments.update(s, exp.get("experiment_id"), status="rolled_back", canary=canary,
+                                       decision=f"canary {sum(outs)}/{n} live, needs {min(need, 1):.0%}; "
+                                                f"v{a.playbook_version} kept")
                 a.experiment = {}
             else:
                 a.experiment = exp
+                experiments.update(s, exp.get("experiment_id"), canary=canary)
             return
         _flag_unreliable(s, a)
         since = s.scalar(select(func.max(PlaybookVersion.created_at)).where(PlaybookVersion.agent_id == a.id))
@@ -207,16 +224,28 @@ def _set_side(agent_id: int, side: str) -> bool:
 def smoke_trial(agent_id: int, repeats: int = 1) -> dict[str, float]:
     """Run the smoke suite with the current playbook, then with the candidate (S13-D-02, S13-R-05: same suite, same
     repeats). The candidate goes on to the live trial if it passes at least as many runs, else it is rolled back."""
-    from agent_company import evaluation
+    from agent_company import evaluation, experiments
 
     results: dict[str, float] = {}
     try:
+        with session() as s:
+            a = s.get(Agent, agent_id)
+            exp = dict(a.experiment or {}) if a else {}
+        suite, exp_id = exp.get("suite") or SMOKE_SUITE, exp.get("experiment_id")
+        repeats = int(exp.get("repeats") or repeats)
         with _smoke_lock:
             for side in ("baseline", "candidate"):
                 if not _set_side(agent_id, side):
                     return {}
+                with session() as s:
+                    experiments.update(s, exp_id, status=side)
                 label = f"smoke-agent{agent_id}-{side}-{int(time.time() * 1000)}"
-                results[side] = evaluation.run_suite(SMOKE_SUITE, label, repeats=repeats)["pass_rate"]
+                # the agent under trial does the work (registry: the trial's trainee), both sides the same suite
+                trial = {"trainee_id": agent_id, "side": side} | ({"experiment_id": exp_id} if exp_id else {})
+                summary = evaluation.run_suite(suite, label, repeats=repeats, trial=trial)
+                results[side] = summary["pass_rate"]
+                with session() as s:
+                    experiments.update(s, exp_id, **{side: experiments.side_metrics(summary)})
         with session() as s:
             a = s.get(Agent, agent_id)
             exp = dict(a.experiment or {}) if a else {}
@@ -224,21 +253,28 @@ def smoke_trial(agent_id: int, repeats: int = 1) -> dict[str, float]:
                 return {}
             passed = results["candidate"] >= results["baseline"]
             _event(s, "smoke", a.id, f"{a.name}: candidate {results['candidate']:.0%} vs current "
-                   f"{results['baseline']:.0%} on the {SMOKE_SUITE} suite", passed=passed, **results)
+                   f"{results['baseline']:.0%} on the {suite} suite", passed=passed, **results)
+            cmp = {"pass_rate_change": round(results["candidate"] - results["baseline"], 3), "passed": passed}
             if passed:
                 exp.pop("smoke_side", None)
                 a.experiment = {**exp, "stage": "live", "smoke": results}
-                _event(s, "experiment", a.id, f"{a.name}: trying the failure-aware playbook for {EVAL_WINDOW} tasks")
+                _event(s, "experiment", a.id, f"{a.name}: trying the candidate playbook for {EVAL_WINDOW} tasks")
+                experiments.update(s, exp_id, status="canary", comparison=cmp,
+                                   decision=f"passed the {suite} suite; on live work for {EVAL_WINDOW} tasks")
             else:
                 a.experiment = {}
-                _event(s, "rollback", a.id, f"{a.name}: candidate rolled back after the {SMOKE_SUITE} suite, "
+                _event(s, "rollback", a.id, f"{a.name}: candidate rolled back after the {suite} suite, "
                        f"v{a.playbook_version} kept")
+                experiments.update(s, exp_id, status="rolled_back", comparison=cmp,
+                                   decision=f"worse on the {suite} suite; v{a.playbook_version} kept")
         return results
     except Exception as e:  # noqa: BLE001 - a broken suite must not leave a candidate waiting forever
         log_event("error", f"smoke trial of agent {agent_id} failed: {type(e).__name__}: {e}", agent_id=agent_id)
         with session() as s:
             a = s.get(Agent, agent_id)
             if a is not None and a.experiment and _stage(a.experiment) == "smoke":
+                experiments.update(s, a.experiment.get("experiment_id"), status="failed",
+                                   decision=f"the smoke trial failed: {type(e).__name__}: {e}")
                 a.experiment = {}
                 _event(s, "rollback", a.id, f"{a.name}: candidate rolled back, the smoke trial failed: {e}"[:500])
         return {}
@@ -254,6 +290,11 @@ def restore(agent_id: int, version: int) -> dict[str, Any]:
                                                     PlaybookVersion.version == version)).first()
         if a is None or v is None:
             raise KeyError(f"agent {agent_id} version {version}")
+        if a.experiment:
+            from agent_company import experiments
+
+            experiments.update(s, a.experiment.get("experiment_id"), status="rolled_back",
+                               decision=f"ended by restoring v{version}")
         a.experiment = {}
         _new_version(s, a, v.playbook, f"restored v{version}")
         _event(s, "rollback", a.id, f"{a.name}: restored playbook v{version} as v{a.playbook_version}")
@@ -274,7 +315,8 @@ def overview(limit: int = 100) -> dict[str, Any]:
                    "detail": e.detail, "at": e.created_at.isoformat()}
                   for e in s.scalars(select(EvolutionEvent).order_by(EvolutionEvent.id.desc()).limit(limit))]
         trials = [{"agent_id": a.id, "agent": a.name, "baseline": a.experiment.get("baseline"),
-                   "outcomes": a.experiment.get("outcomes", [])}
+                   "outcomes": a.experiment.get("outcomes", []), "stage": _stage(a.experiment),
+                   "experiment_id": a.experiment.get("experiment_id")}
                   for a in s.scalars(select(Agent)) if a.experiment]
     return {"events": events, "experiments": trials}
 
@@ -293,8 +335,18 @@ def _diagnose(s: Session, a: Agent) -> bool:
             return True
     candidate = curate(s, a.id, failures_first=True)
     if candidate and candidate != a.playbook:
+        from agent_company import experiments
+
         smoke = settings().candidate_smoke
-        a.experiment = {"playbook": candidate, "baseline": rate, "outcomes": [], "stage": "smoke" if smoke else "live"}
+        row = experiments.record(s, "playbook", agent_id=a.id, role=a.role, baseline_version=f"v{a.playbook_version}",
+                                 candidate={"playbook": candidate},
+                                 hypothesis=f"Warnings from recent failures first lift {a.name}'s success rate "
+                                            f"above {rate:.0%} (last {n} tasks)", suite=SMOKE_SUITE,
+                                 status="baseline" if smoke else "canary")
+        if not smoke:
+            experiments.update(s, row.id, decision="candidate_smoke is off: straight to the live trial")
+        a.experiment = {"playbook": candidate, "baseline": rate, "outcomes": [], "stage": "smoke" if smoke else "live",
+                        "experiment_id": row.id}
         _event(s, "diagnose", a.id, f"{a.name}: success rate {rate:.0%} over the last {n} tasks")
         _event(s, "experiment", a.id, f"{a.name}: failure-aware playbook first runs the {SMOKE_SUITE} suite" if smoke
                else f"{a.name}: trying a failure-aware playbook for {EVAL_WINDOW} tasks")
@@ -319,6 +371,13 @@ def cycle() -> int:
         waiting = [a.id for a in s.scalars(select(Agent)) if a.experiment and _stage(a.experiment) == "smoke"]
     for agent_id in waiting:  # new candidates, and smoke trials a restart cut off
         start_smoke(agent_id)
+    from agent_company import training
+
+    try:  # capability gaps (S13-R-01) and learning plans a restart cut off
+        training.raise_gaps()
+        training.resume_plans()
+    except Exception as e:  # noqa: BLE001 - the diagnosis above already happened
+        log_event("error", f"capability gaps: {type(e).__name__}: {e}")
     return started
 
 

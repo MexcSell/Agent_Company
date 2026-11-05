@@ -133,7 +133,10 @@ def certification(agent_id: int) -> dict[str, Any]:
         expired = bool(newest and newest.replace(tzinfo=None) < (now() - timedelta(days=CERT_TTL_DAYS)).replace(tzinfo=None))
         if expired and level > 0:
             level -= 1
+        from agent_company.training import certified
+
         return {"agent_id": a.id, "agent": a.name, "skill_family": a.role, "level": level,
+                "skills": certified(a.id, s),  # per capability, from final evaluations only (S13-R-03)
                 "meaning": LEVELS[level], "evidence": {"outcomes": len(lessons), "passed": passes,
                                                         "goals": goals, "eval_passed": eval_passes},
                 "expired": expired, "newest_evidence": newest.isoformat() if newest else None}

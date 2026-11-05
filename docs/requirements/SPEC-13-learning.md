@@ -37,15 +37,18 @@ evaluation*.
 
 ## Specific requirements
 
-### S13-R-01 Capability gap detection — §5
+### S13-R-01 Capability gap detection — §5 — **done** (`training.gaps`, `raise_gaps` from `evolution.cycle`)
 - Per agent and skill, readiness = verified knowledge + practical performance (gate pass rate on
   tasks tagged with that skill) + independent evaluation (eval results) + recency.
 - Gap categories (§5.2): missing capability, insufficient proficiency, outdated (no success in
   90 days), poor practical performance, low reliability.
 - `GET /api/learning/gaps` lists gaps; the scheduler or `evolution.cycle` raises them.
 - Acceptance: LE-001; an agent failing 3 of its last 4 `sql` tasks has a `poor_performance` gap.
+- Done: gaps are recorded once a week as `gap` evolution events; a gap whose skill a `final` suite covers gets a
+  proposed (not started) plan. Missing capability = at least 2 of the role's tasks asked for a skill the agent
+  does not list; low reliability = under 80 % of its last 20 model runs succeeded.
 
-### S13-R-02 Learning plans and exercises — §6, §8
+### S13-R-02 Learning plans and exercises — §6, §8 — **done** (`training.create_plan`, `run_plan`)
 - Table `learning_plans`: agent, target capability, current/target level, objectives, resources
   (knowledge IDs), exercises, evaluation suite, status (`planned|running|passed|failed`).
 - Exercises are eval-suite goals (`evals/*.json`) run in worktrees of a scratch repository —
@@ -53,13 +56,18 @@ evaluation*.
 - Practice exercises and final evaluation sets are separate files; agents never see the final
   set's expected checks in their prompts (§8.3, LE-021).
 - Acceptance: LE-002, LE-004, LE-007.
+- Done: suites carry `kind` (`practice`/`final`) and `skills`; a plan refuses a practice suite as its final set
+  and vice versa. A final suite's goals have `trial.hide_checks`: one iteration, no quality commands in
+  `.claude/specs/*/requirements.md`, no findings in lessons. `Goal.trial.trainee_id` makes the trainee do its
+  role's work (a clone when it is busy). Exercises are hand-written (`evals/python-practice.json`,
+  `python-final.json`); generating them is open.
 
-### S13-R-03 Independent evaluation and certification — §9
+### S13-R-03 Independent evaluation and certification — §9 — **done** (`training.certified`, in `performance.certification`)
 - Certification changes only from eval runs scored by the harness (commands), never from the
   agent's or its mentor's own report (LE-022).
 - Failing an evaluation recommends retraining (LE-009); passing updates `skills` evidence (LE-011).
 
-### S13-R-04 Self-improvement levels — §12
+### S13-R-04 Self-improvement levels — §12 — **done** (`experiments.AUTONOMY`, `check_target`, `may_deploy`)
 Enforced as policy:
 
 | Level | What | Control |
@@ -72,7 +80,7 @@ Enforced as policy:
 
 Restricted targets (§12.2) are rejected by the proposal path (SPEC-14 S14-R-02).
 
-### S13-R-05 Experiments with baseline and A/B comparison — §10
+### S13-R-05 Experiments with baseline and A/B comparison — §10 — **done** for `playbook` and `route` (`experiments.py`)
 - Table `experiments`: target (`playbook|route|workflow_template|retrieval_weights`), baseline
   version, candidate version, hypothesis, metrics (success rate, rework rate, time, cost per
   verified task), dataset (eval suite + repeats), results, status.
@@ -81,12 +89,17 @@ Restricted targets (§12.2) are rejected by the proposal path (SPEC-14 S14-R-02)
 - Rollback restores the previous version automatically when live success drops below baseline
   during the canary (LE-018).
 - Acceptance: LE-013..LE-018, LE-023.
+- Done: evolution candidates are experiment records (smoke trial = baseline and candidate runs, live trial = canary,
+  ended early once it cannot reach `min_improvement`); users propose playbook or route experiments. A route
+  candidate is only recommended; an administrator applies it, then a canary of 3 live outcomes of the role
+  restores the previous route when it cannot reach the live baseline. `workflow_template` and
+  `retrieval_weights` targets are open (neither is versioned yet).
 
-### S13-R-06 Model evaluation and routing — §11
+### S13-R-06 Model evaluation and routing — §11 — **done** (`eval --model <name> --role <role>`, route experiments)
 - New catalog models can be benchmarked (`eval --label model:<name>`); a route change proposed
   from results is applied only by an administrator (LE-019, LE-020).
 
-### S13-R-07 Learning metrics — `.rtf` SPEC-13
+### S13-R-07 Learning metrics — `.rtf` SPEC-13 — **done** (`training.metrics`, `/api/learning/metrics`)
 - Performance view adds: first-pass success rate, rework frequency (iterations per goal),
   knowledge reuse rate (retrieved items later cited in passing tasks), improvement over the
   fixed benchmark per playbook version.

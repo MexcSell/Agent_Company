@@ -1,0 +1,32 @@
+{
+  "name": "python-practice",
+  "kind": "practice",
+  "skills": [
+    "python",
+    "testing"
+  ],
+  "description": "Practice exercises for the python learning plan. Its checks may be seen and retried; the final set (python-final) is separate.",
+  "tasks": [
+    {
+      "name": "clamp",
+      "title": "Add clamp(x, lo, hi) to numbers_util.py",
+      "description": "clamp(5, 0, 3) == 3, clamp(-1, 0, 3) == 0, clamp(2, 0, 3) == 2. Add tests in tests/test_numbers_util.py.",
+      "files": {
+        "numbers_util.py": "\"\"\"Number helpers.\"\"\"\n"
+      },
+      "checks": [
+        "python3 -c \"from numbers_util import clamp as c; assert (c(5, 0, 3), c(-1, 0, 3), c(2, 0, 3)) == (3, 0, 2)\""
+      ],
+      "max_iterations": 2
+    },
+    {
+      "name": "word-count",
+      "title": "Add word_count(text) to words.py",
+      "description": "word_count returns a dict of lower-cased words to their counts; punctuation is not part of a word. word_count('A a, b!') == {'a': 2, 'b': 1}.",
+      "checks": [
+        "python3 -c \"from words import word_count as w; assert w('A a, b!') == {'a': 2, 'b': 1} and w('') == {}\""
+      ],
+      "max_iterations": 2
+    }
+  ]
+}

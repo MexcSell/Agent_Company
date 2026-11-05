@@ -110,8 +110,9 @@ Machines code):
 | Memory-poisoning protection for learned lessons | SPEC11 §10.4 | done (`learning.screen`, people review, S11-R-05) |
 | Agent mentoring and knowledge transfer | SPEC12 §9 | open → S12-R-04 |
 | Collaboration recommendation with bias and reputation-manipulation protection | SPEC12 §11, §18 | open → S12-R-03, S12-R-06 |
-| Autonomous learning planner and training-exercise generator | SPEC13 §6, §8 | open → S13-R-01, S13-R-02 |
-| A/B testing of playbook or model changes | SPEC13 §10.4 | partial (a candidate must pass the smoke suite against the current playbook before its live trial, S13-D-02; promotion needs a clear improvement, S13-D-01) → S13-R-05 |
+| Capability gaps, learning plans with practice and hidden final evaluations, certification by the harness only | SPEC13 §5, §6, §8, §9 | done (`training.py`, `evals/python-*.json`, S13-R-01..R-03; exercises are hand-written suites, generated ones open) |
+| A/B testing of playbook or model changes: experiments with baseline, candidate, sample sizes, review, canary and rollback; self-improvement levels E0-E6 | SPEC13 §10, §11, §12 | done (`experiments.py`, S13-R-04..R-06; workflow-template and retrieval-weight targets open) |
+| Learning metrics: first-pass success, rework, knowledge reuse, benchmark per playbook version | SPEC13 `.rtf` | done (`training.metrics`, S13-R-07) |
 | Agent behaviour monitoring with deterministic rules | SPEC14 §10 | done (six rules, cost-vs-estimate included, S14-R-03) |
 | Security incident records and response | SPEC14 §11 | done (`incidents`, Security view, S14-R-04) |
 | Emergency shutdown with levels E0-E5 (executor, agent, goal, project, room, company), CLI and top-bar control | SPEC14 §12 | done (`governance.stop`, `python -m agent_company stop`, S14-R-01) |

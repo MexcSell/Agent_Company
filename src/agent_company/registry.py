@@ -17,7 +17,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from agent_company import org
-from agent_company.db import Agent, AgentVersion, Relationship, Room, log_event, now, session
+from agent_company.db import Agent, AgentVersion, Goal, Relationship, Room, log_event, now, session
 
 _staff_lock = threading.Lock()
 
@@ -453,7 +453,12 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
         quota = {a.id: over_quota(s, a) for a in pool}  # S02-R-03: the quota covers an agent and its clones
         idle = [a for a in pool if _free(a, goal_id) and a.health != "degraded" and not quota[a.id]]  # S02-R-02
         team = _team_weights(s, goal_id)
-        if idle:
+        trainee = _trainee(s, goal_id, pool)  # an exercise or experiment measures one agent (SPEC-13)
+        if trainee is not None and trainee in idle:
+            agent, action = trainee, "assigned"
+        elif trainee is not None and not quota[trainee.id]:  # busy: its clone, which merges back after the goal
+            agent, action = _clone(s, trainee), "cloned"
+        elif idle:
             agent = max(idle, key=lambda a: _skill_score(a, skills, team))
             action = "assigned"
         elif pool:  # all busy, degraded or over quota: a fresh clone (a clone starts healthy, with its own runs)
@@ -495,6 +500,16 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
     log_event("staff", f"{action} {agent.name} as {role}" + (f" ({why})" if why else ""), goal_id=goal_id,
               agent_id=agent.id)
     return agent
+
+
+def _trainee(s: Session, goal_id: int | None, pool: list[Agent]) -> Agent | None:
+    """The agent an eval goal's trial names (a learning plan's trainee, a playbook experiment's agent), if it is
+    in this role's pool."""
+    if goal_id is None:
+        return None
+    g = s.get(Goal, goal_id)
+    tid = (g.trial or {}).get("trainee_id") if g is not None and g.origin == "eval" else None
+    return next((a for a in pool if a.id == tid), None) if tid else None
 
 
 def _covering(s: Session, skills: list[str], writes: bool | None) -> tuple[Agent, float] | None:

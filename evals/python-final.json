@@ -1,0 +1,28 @@
+{
+  "name": "python-final",
+  "kind": "final",
+  "skills": [
+    "python",
+    "testing"
+  ],
+  "description": "Final evaluation of the python learning plan. Its checks are hidden from the agents (one iteration, no findings in prompts or lessons).",
+  "tasks": [
+    {
+      "name": "dedupe",
+      "title": "Add dedupe(items) to lists.py",
+      "description": "dedupe returns the items without repeats, keeping the first occurrence of each, in their original order. It accepts any iterable of hashable items and returns a list.",
+      "checks": [
+        "python3 -c \"from lists import dedupe as d; assert d([3, 1, 3, 2, 1]) == [3, 1, 2] and d([]) == [] and d('abca') == ['a', 'b', 'c']\""
+      ]
+    },
+    {
+      "name": "parse-duration",
+      "title": "Add parse_duration(text) to durations.py",
+      "description": "parse_duration turns strings such as '1h30m', '45s' or '2m5s' into a number of seconds (int). Hours (h), minutes (m) and seconds (s) may appear once each, in that order. Anything else raises ValueError.",
+      "checks": [
+        "python3 -c \"from durations import parse_duration as p; assert (p('1h30m'), p('45s'), p('2m5s')) == (5400, 45, 125)\"",
+        "python3 -c \"import unittest, durations as d; unittest.TestCase().assertRaises(ValueError, d.parse_duration, '5x')\""
+      ]
+    }
+  ]
+}

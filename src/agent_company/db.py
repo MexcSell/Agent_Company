@@ -180,6 +180,56 @@ class EvalRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class Experiment(Base):
+    """A baseline-vs-candidate comparison on a fixed eval suite (SPEC-13 S13-R-05): propose -> baseline run ->
+    candidate run on the same suite and repeats -> compare (sample sizes kept) -> review -> canary -> rollout
+    or rollback. Playbook candidates of the evolution loop are experiments too (evolution.py)."""
+
+    __tablename__ = "experiments"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    target: Mapped[str] = mapped_column(String(24))  # playbook|route
+    agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # playbook experiments
+    role: Mapped[str] = mapped_column(String(64), default="")  # route experiments
+    baseline_version: Mapped[str] = mapped_column(String(128), default="")  # "v3" or the route's model
+    candidate: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"playbook": text} or {"model": name}
+    hypothesis: Mapped[str] = mapped_column(Text, default="")
+    dataset: Mapped[dict[str, Any]] = mapped_column(default=dict)  # suite, repeats
+    results: Mapped[dict[str, Any]] = mapped_column(default=dict)  # baseline, candidate, comparison, canary
+    status: Mapped[str] = mapped_column(String(16), default="proposed")
+    # proposed|baseline|candidate|review|canary|rolled_out|rolled_back|rejected|failed
+    origin: Mapped[str] = mapped_column(String(16), default="evolution")  # evolution|user
+    decision: Mapped[str] = mapped_column(Text, default="")
+    reviewed_by: Mapped[str] = mapped_column(String(128), default="")
+    created_by: Mapped[str] = mapped_column(String(128), default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class LearningPlan(Base):
+    """A plan to close one capability gap of one agent (SPEC-13 S13-R-02): practice exercises, then a separate
+    final evaluation, both eval-suite goals in scratch repositories, scored only by the harness (S13-R-03)."""
+
+    __tablename__ = "learning_plans"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(Integer, index=True)
+    capability: Mapped[str] = mapped_column(String(64))
+    gap: Mapped[str] = mapped_column(String(32), default="")  # the gap category it came from, if any
+    current_level: Mapped[int] = mapped_column(Integer, default=0)  # certification L0-L5
+    target_level: Mapped[int] = mapped_column(Integer, default=1)
+    objectives: Mapped[list[Any]] = mapped_column(default=list)
+    resources: Mapped[list[Any]] = mapped_column(default=list)  # knowledge item ids
+    practice_suite: Mapped[str] = mapped_column(String(128), default="")
+    final_suite: Mapped[str] = mapped_column(String(128))
+    repeats: Mapped[int] = mapped_column(Integer, default=1)
+    pass_mark: Mapped[float] = mapped_column(Float, default=0.8)
+    status: Mapped[str] = mapped_column(String(16), default="planned")  # planned|running|passed|failed|cancelled
+    results: Mapped[dict[str, Any]] = mapped_column(default=dict)  # practice, final (harness summaries)
+    recommendation: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(128), default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 class ImprovementContract(Base):
     """Verified self-evolution of the platform's own code (selfevolve.py): one capability, a fixed benchmark taken
     at creation, candidate goals measured against the baseline commit, approval, deployment, monitoring and
@@ -330,6 +380,9 @@ class Goal(Base):
     topic: Mapped[str] = mapped_column(String(64), default="general")
     # the order's classification (its attachments, its project at creation); the project's current one may raise it
     classification: Mapped[str] = mapped_column(String(16), default="internal")
+    # eval goals only (SPEC-13): experiment_id + side, role -> model overrides, trainee_id (the agent staffed for
+    # its role), plan_id, hide_checks (a final evaluation: its checks never reach a prompt or the worktree)
+    trial: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 

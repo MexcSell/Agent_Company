@@ -113,7 +113,63 @@ async function viewEvolution() {
   api("/api/events").then((evs) => { const box = $("#ev-learning"); if (box) box.innerHTML = evs.filter((x) => x.kind === "learning").slice(-12).reverse().map((x) => `<div><span class="k">learning</span>${esc(x.message)} <span class="muted">${ago(x.at)}</span></div>`).join("") || '<span class="muted">No study visit yet.</span>'; }).catch(() => {});
   $("#ev-cycle") && ($("#ev-cycle").onclick = async () => { const r = await api("/api/evolution/cycle", { method: "POST" }); toast(`${r.experiments_started} trial(s) started`); viewEvolution(); });
   $("#ev-cons") && ($("#ev-cons").onclick = async () => { const r = await api("/api/agents/consolidate", { method: "POST", body: { role: $("#ev-role").value } }); toast(`${r.length} clone(s) merged`); viewEvolution(); });
+  learningPanel();
   if (me.is_admin) codeEvolution();
+}
+
+// SPEC-13: experiments (baseline vs candidate on one suite), capability gaps, learning plans.
+async function learningPanel() {
+  let box = $("#lp");
+  if (!box) { $("#view").insertAdjacentHTML("beforeend", '<div id="lp" class="grid" style="margin-top:12px"></div>'); box = $("#lp"); }
+  let ex, gaps, plans;
+  try { [ex, gaps, plans] = await Promise.all([api("/api/experiments"), api("/api/learning/gaps"), api("/api/learning/plans")]); } catch (e) { box.innerHTML = `<div class="card"><h2>Experiments</h2><span class="muted">${esc(e.message)}</span></div>`; return; }
+  const may = me.is_admin || me.permissions?.manage_agents;
+  const pct = (v) => (typeof v === "number" ? `${Math.round(v * 100)}%` : "–");
+  const tone = { rolled_out: "approved", canary: "running", baseline: "running", candidate: "running", review: "pending", rolled_back: "rejected", rejected: "rejected", failed: "failed", proposed: "pending", passed: "done", running: "running", planned: "pending", cancelled: "disabled" };
+  const tag = (st) => pill(tone[st] || "pending").replace(/>[^<]+</, `>${esc(st)}<`);
+  const side = (r) => (r ? `${pct(r.pass_rate)} <span class="muted">n=${r.runs ?? "?"}</span>` : "–");
+  const exp = (e) => {
+    const r = e.results || {}, c = r.canary;
+    const what = e.target === "route" ? `${esc(e.role)} route: ${esc(e.baseline_version || "MODEL")} → ${esc(e.candidate.model)}` : `${esc(e.agent || `agent ${e.agent_id}`)} playbook ${esc(e.baseline_version)} → candidate`;
+    const acts = may ? [
+      e.status === "proposed" ? `<button class="btn sm primary" data-ex="start" data-id="${e.id}">Run both sides</button>` : "",
+      e.status === "review" && e.target === "route" && (me.is_admin || me.permissions?.manage_models) ? `<button class="btn sm primary" data-ex="apply" data-id="${e.id}">Apply the route</button>` : "",
+      ["proposed", "review"].includes(e.status) ? `<button class="btn sm ghost" data-ex="reject" data-id="${e.id}">Reject</button>` : "",
+    ].join("") : "";
+    return `<tr><td class="num">${e.id}</td><td>${what}${e.hypothesis ? `<div class="muted ellipsis">${esc(e.hypothesis)}</div>` : ""}</td><td>${esc(e.dataset.suite || "")}</td><td class="num">${side(r.baseline)}</td><td class="num">${side(r.candidate)}</td>
+      <td>${c ? `${(c.outcomes || []).map((o) => (o ? "✓" : "✗")).join(" ") || "…"} <span class="muted">/ ${c.window} vs ${pct(c.baseline)}</span>` : ""}</td><td>${tag(e.status)}<div class="muted ellipsis">${esc(e.decision || "")}</div></td><td>${acts}</td></tr>`;
+  };
+  const plan = (p) => `<div class="row">${tag(p.status)}<span class="grow"><strong>#${p.id}</strong> ${esc(p.agent || p.agent_id)}: ${esc(p.capability)} L${p.current_level} → L${p.target_level}
+      <span class="muted">${esc(p.practice_suite || "no practice")} → ${esc(p.final_suite)} (pass ${pct(p.pass_mark)})${p.results.final ? ` · final ${pct(p.results.final.pass_rate)}` : ""}</span>${p.recommendation ? `<div class="muted ellipsis">${esc(p.recommendation)}</div>` : ""}</span>
+      ${may && p.status === "planned" ? `<button class="btn sm primary" data-lp="start" data-id="${p.id}">Start</button>` : ""}${may && ["planned", "running"].includes(p.status) ? `<button class="btn sm ghost" data-lp="cancel" data-id="${p.id}">Cancel</button>` : ""}</div>`;
+  box.innerHTML = `<div class="card"><div class="row nowrap"><h2 class="grow" style="margin:0">Experiments (${ex.experiments.length})</h2>${may ? '<button class="btn" id="ex-new">New experiment</button>' : ""}</div>
+      <p class="muted">A candidate playbook or route runs the same eval suite with the same repeats as the current version; the sample sizes are shown. A playbook candidate goes on by the automatic rule (better by <code>min_improvement</code>), a route only when an administrator applies it. The deployed candidate then has a canary on live work and is rolled back as soon as it can no longer reach the baseline.</p>
+      <div class="table-wrap"><table><tr><th class="num">#</th><th>Change</th><th>Suite</th><th class="num">Baseline</th><th class="num">Candidate</th><th>Canary</th><th>Status</th><th></th></tr>${ex.experiments.map(exp).join("") || '<tr><td colspan="8" class="muted">None yet: evolution candidates and your experiments appear here.</td></tr>'}</table></div>
+      <details><summary class="muted">Self-improvement levels</summary>${ex.autonomy.map((a) => `<div class="row"><span class="k">${esc(a.level)}</span><span class="grow">${esc(a.what)}</span><span class="muted">${esc(a.control)}</span></div>`).join("")}</details></div>
+    <div class="grid two"><div class="card"><h2>Capability gaps (${gaps.length})</h2><p class="muted">Per agent and skill, from verified knowledge, gate outcomes, eval runs and recency. Found gaps are raised by “Diagnose all agents now”.</p>
+      <div class="events">${gaps.map((g, i) => `<div class="row"><span class="k">${esc(g.category.replace(/_/g, " "))}</span><span class="grow"><a href="#" data-agent="${g.agent_id}">${esc(g.agent)}</a> · ${esc(g.skill)} <span class="muted">${esc(g.detail)} · readiness ${pct(g.readiness)}</span></span>${may && !g.plan_id && g.skill !== "*" ? `<button class="btn sm" data-gap="${i}">Plan</button>` : g.plan_id ? `<span class="muted">plan #${g.plan_id}</span>` : ""}</div>`).join("") || '<span class="muted">No gaps.</span>'}</div></div>
+    <div class="card"><h2>Learning plans (${plans.length})</h2><p class="muted">Practice exercises, then a separate final evaluation whose checks the agents never see. Both run as eval goals in scratch repositories; only the final evaluation's result changes a certified level.</p>
+      <div class="events">${plans.map(plan).join("") || '<span class="muted">No plans yet.</span>'}</div></div></div>`;
+  box.querySelectorAll("[data-agent]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); agentModal(Number(a.dataset.agent)); }));
+  const run = async (b, path, body) => { b.classList.add("busy"); try { await api(path, { method: "POST", body }); } catch (e) { toast(e.message); } learningPanel(); };
+  box.querySelectorAll("[data-ex]").forEach((b) => (b.onclick = () => {
+    const what = b.dataset.ex;
+    if (what === "apply" && !confirm("Make the candidate model this role's route? Its canary restores the old route if live work gets worse.")) return;
+    run(b, `/api/experiments/${b.dataset.id}/${what}`, what === "reject" ? { note: "" } : undefined);
+  }));
+  box.querySelectorAll("[data-lp]").forEach((b) => (b.onclick = () => run(b, `/api/learning/plans/${b.dataset.id}/${b.dataset.lp}`)));
+  box.querySelectorAll("[data-gap]").forEach((b) => (b.onclick = () => { const g = gaps[Number(b.dataset.gap)]; run(b, "/api/learning/plans", { agent_id: g.agent_id, capability: g.skill }); }));
+  $("#ex-new") && ($("#ex-new").onclick = async () => {
+    const target = prompt("Target: playbook or route", "route"); if (!target) return;
+    const body = { target: target.trim() };
+    if (body.target === "route") { body.role = prompt("Role", "developer") || ""; body.candidate = prompt("Candidate model (catalog name)") || ""; }
+    else { body.agent_id = Number(prompt("Agent id")); body.candidate = prompt("Candidate playbook (DO:/AVOID: lines)") || ""; }
+    body.hypothesis = prompt("Hypothesis", "") || "";
+    body.suite = prompt("Suite", "smoke") || "smoke";
+    try { await api("/api/experiments", { method: "POST", body }); toast("Experiment proposed"); } catch (e) { toast(e.message); }
+    learningPanel();
+  });
+  if (ex.experiments.some((e) => ["baseline", "candidate"].includes(e.status)) || plans.some((p) => p.status === "running")) setTimeout(() => $("#lp") === box && learningPanel(), 10000);
 }
 
 // Verified self-evolution of the platform's own code (selfevolve.py): contracts, old-vs-new benchmark, deploy, rollback.

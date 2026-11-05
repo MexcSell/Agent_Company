@@ -30,6 +30,12 @@ def env(tmp_path, monkeypatch):
 
     evolution._smoking.clear()  # smoke trials never start in the background; tests call smoke_trial themselves
     monkeypatch.setattr(evolution, "_spawn", lambda fn: None)
+    from agent_company import experiments, training
+
+    experiments._running.clear()  # experiments and learning plans never start in the background either
+    training._running.clear()
+    monkeypatch.setattr(experiments, "_spawn", lambda fn: None)
+    monkeypatch.setattr(training, "_spawn", lambda fn: None)
     from agent_company import api
     from agent_company.api import bootstrap
 

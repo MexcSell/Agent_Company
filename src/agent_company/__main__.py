@@ -20,7 +20,7 @@ import sys
 
 from dotenv import load_dotenv
 
-COMMANDS = {"serve", "goal", "crawl", "models", "agents", "approve", "crew", "rotate", "eval", "supervise", "host", "gm",
+COMMANDS = {"serve", "goal", "crawl", "models", "agents", "approve", "crew", "rotate", "eval", "learn", "supervise", "host", "gm",
             "stop", "improve"}
 
 
@@ -119,6 +119,12 @@ def main(argv: list[str] | None = None) -> None:
     ev.add_argument("--repeats", type=int, default=3)
     ev.add_argument("--tasks", nargs="*", help="only these task names")
     ev.add_argument("--compare", nargs=2, metavar=("A", "B"))
+    ev.add_argument("--model", help="benchmark this catalog model for --role (S13-R-06); label defaults to model:<name>")
+    ev.add_argument("--role", default="developer", help="the role --model stands in for")
+    le = sub.add_parser("learn", help="capability gaps, learning plans and experiments (SPEC-13)")
+    le.add_argument("action", choices=["gaps", "raise", "plans", "plan", "start", "cancel", "experiments", "metrics"])
+    le.add_argument("args", nargs="*", help="plan: <agent id> <capability> [final suite] [practice suite]; "
+                                            "start/cancel: <plan id>")
     a = sub.add_parser("approve")
     a.add_argument("goal_id", type=int)
     im = sub.add_parser("improve", help="verified self-evolution: improvement contracts for the platform's code")
@@ -218,13 +224,43 @@ def main(argv: list[str] | None = None) -> None:
             for t in out["tasks"]:
                 print(f"  {t['task']:<24} {t[args.compare[0]]} -> {t[args.compare[1]]}")
             return
-        if not args.label:
+        trial = {"models": {args.role: args.model}} if args.model else None
+        label = args.label or (f"model:{args.model}" if args.model else "")
+        if not label:
             raise SystemExit("--label is required to run a suite")
-        out = evaluation.run_suite(args.suite, args.label, args.repeats, args.tasks)
+        out = evaluation.run_suite(args.suite, label, args.repeats, args.tasks, trial=trial)
         print(f"{out['label']}: {out['solved']}/{out['tasks']} solved, pass rate {out['pass_rate']:.0%}, "
               f"cost {out['total_cost']:.4f} USD, {out['avg_seconds']}s per run")
         for t in out["by_task"]:
             print(f"  {t['task']:<24} {t['passed']}/{t['runs']} {', '.join(t['end_reasons'])}")
+    elif args.cmd == "learn":
+        from agent_company import experiments, training
+
+        a = args.args
+        if args.action == "gaps":
+            out = training.gaps()
+        elif args.action == "raise":
+            out = training.raise_gaps()
+        elif args.action == "plans":
+            out = training.list_plans()
+        elif args.action == "plan":
+            if len(a) < 2:
+                raise SystemExit("learn plan <agent id> <capability> [final suite] [practice suite]")
+            out = training.create_plan(int(a[0]), a[1], final_suite=a[2] if len(a) > 2 else "",
+                                       practice_suite=a[3] if len(a) > 3 else "", created_by="cli")
+        elif args.action in {"start", "cancel"}:
+            if not a:
+                raise SystemExit(f"learn {args.action} <plan id>")
+            if args.action == "cancel":
+                out = training.cancel_plan(int(a[0]))
+            else:  # in the foreground: the CLI waits for the practice and final runs
+                training._spawn = lambda fn: fn()
+                out = training.start_plan(int(a[0]))
+        elif args.action == "experiments":
+            out = experiments.list_experiments()
+        else:
+            out = training.metrics()
+        print(json.dumps(out, indent=2, default=str))
     elif args.cmd == "rotate":
         from agent_company import research
 

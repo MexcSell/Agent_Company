@@ -64,7 +64,7 @@ def fake_suite(monkeypatch, aid, rates):
 
     seen = []
 
-    def run_suite(suite, label, repeats=3, only=None):
+    def run_suite(suite, label, repeats=3, only=None, trial=None):
         with session() as s:
             a = s.get(Agent, aid)
             seen.append((label.split("-")[2], evolution.active_playbook(a, eval_run=True),

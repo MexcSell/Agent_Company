@@ -9,6 +9,9 @@ A suite is a JSON file:
          "max_iterations": 2}
     ]}
 
+A suite may name its `kind` (`benchmark`, the default; `practice` exercises; or a `final` evaluation set,
+whose checks never reach an agent: SPEC-13 S13-R-02) and the `skills` it trains or measures.
+
 Each task runs `repeats` times, each time as a fresh goal (origin "eval") in a new
 repository seeded with `files`. A task counts as solved only if every repeat passes.
 Per run we record pass/fail, why it ended, iterations, cost, tokens and time; results
@@ -51,7 +54,8 @@ def list_suites() -> list[dict[str, Any]]:
     for p in sorted(SUITES_DIR.glob("*.json")):
         try:
             s = load_suite(p)
-            out.append({"name": s["name"], "file": p.name, "tasks": [t["name"] for t in s["tasks"]]})
+            out.append({"name": s["name"], "file": p.name, "tasks": [t["name"] for t in s["tasks"]],
+                        "kind": s.get("kind", "benchmark"), "skills": list(s.get("skills") or [])})
         except (ValueError, json.JSONDecodeError):
             continue
     return out
@@ -84,17 +88,23 @@ def _end_reason(goal: Goal) -> str:
     return "gate_failed"
 
 
-def run_suite(suite: str | Path, label: str, repeats: int = 3, only: list[str] | None = None) -> dict[str, Any]:
+def run_suite(suite: str | Path, label: str, repeats: int = 3, only: list[str] | None = None,
+              trial: dict[str, Any] | None = None) -> dict[str, Any]:
+    """`trial` goes to every goal (experiment side, model overrides, trainee). A `final` suite hides its checks and
+    gets one iteration: a second one would hand the agents the failed checks as findings."""
     data = load_suite(suite)
     tasks = [t for t in data["tasks"] if not only or t["name"] in only]
+    final = data.get("kind") == "final"
+    trial = dict(trial or {}) | ({"hide_checks": True} if final else {})
     for task in tasks:
         for rep in range(1, repeats + 1):
             repo = _seed_repo(label, task, rep)
             started = time.monotonic()
             gid = loop.create_goal(task["title"], task.get("description", task["title"]), str(repo),
                                    quality_commands=list(task.get("checks", [])),
-                                   max_iterations=task.get("max_iterations"), origin="eval",
-                                   allowed_paths=task.get("allowed_paths"), protect_tests=task.get("protect_tests", False))
+                                   max_iterations=1 if final else task.get("max_iterations"), origin="eval",
+                                   allowed_paths=task.get("allowed_paths"), protect_tests=task.get("protect_tests", False),
+                                   trial=trial or None)
             loop.run_goal(gid)
             g = loop._goal(gid)
             with session() as s:
@@ -123,8 +133,11 @@ def summary(label: str) -> dict[str, Any]:
                   "avg_seconds": round(sum(r.seconds for r in rs) / len(rs), 2),
                   "avg_iterations": round(sum(r.iterations for r in rs) / len(rs), 2),
                   "end_reasons": sorted({r.end_reason for r in rs})} for t, rs in by_task.items()]
-        return {"label": label, "suite": runs[0].suite, "runs": len(runs),
-                "pass_rate": round(sum(r.passed for r in runs) / len(runs), 3),
+        passed = sum(r.passed for r in runs)
+        return {"label": label, "suite": runs[0].suite, "runs": len(runs), "passed": passed,
+                "pass_rate": round(passed / len(runs), 3),
+                "avg_iterations": round(sum(r.iterations for r in runs) / len(runs), 2),
+                "cost_per_passed": round(sum(r.cost for r in runs) / passed, 6) if passed else None,
                 "solved": sum(t["solved"] for t in tasks), "tasks": len(tasks),
                 "total_cost": round(sum(r.cost for r in runs), 6),
                 "avg_seconds": round(sum(r.seconds for r in runs) / len(runs), 2), "by_task": tasks}

@@ -26,6 +26,7 @@ from agent_company import (
     decisions,
     evaluation,
     evolution,
+    experiments,
     files,
     gitsync,
     governance,
@@ -42,6 +43,7 @@ from agent_company import (
     router,
     selfevolve,
     terminal,
+    training,
     transport,
     usage,
     workflow,
@@ -419,6 +421,30 @@ class EvalBody(BaseModel):
     label: str = Field(pattern=r"^[\w.-]{1,64}$")
     repeats: int = Field(default=1, ge=1, le=10)
     tasks: list[str] = Field(default_factory=list)
+
+
+class ExperimentBody(BaseModel):
+    target: str  # playbook|route
+    candidate: str  # the playbook text, or the catalog model for the route
+    agent_id: int | None = None
+    role: str = ""
+    hypothesis: str = ""
+    suite: str = "smoke"
+    repeats: int = Field(default=1, ge=1, le=10)
+
+
+class PlanBody(BaseModel):
+    agent_id: int
+    capability: str
+    target_level: int | None = Field(default=None, ge=1, le=5)
+    practice_suite: str = ""
+    final_suite: str = ""
+    repeats: int = Field(default=1, ge=1, le=10)
+    pass_mark: float = Field(default=0.8, gt=0, le=1)
+
+
+class NoteBody(BaseModel):
+    note: str = ""
 
 
 class StatusBody(BaseModel):
@@ -1267,6 +1293,87 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.post("/api/evolution/cycle")
     def evolution_cycle(admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
         return {"experiments_started": evolution.cycle()}
+
+    # --- experiments, capability gaps, learning plans (SPEC-13) ---
+    @app.get("/api/experiments")
+    def experiments_list(status: str = "", target: str = "", _: dict[str, Any] = Depends(current_user)
+                         ) -> dict[str, Any]:
+        return {"experiments": experiments.list_experiments(status, target),
+                "autonomy": [{"level": k, "what": v[0], "control": v[1]} for k, v in experiments.AUTONOMY.items()]}
+
+    @app.get("/api/experiments/{exp_id}")
+    def experiment_get(exp_id: int, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return experiments.get(exp_id)
+
+    @app.post("/api/experiments")
+    def experiment_propose(body: ExperimentBody, admin: dict[str, Any] = Depends(allowed("manage_agents"))
+                           ) -> dict[str, Any]:
+        if body.target == "route" and not auth.can(admin, "manage_models"):
+            raise PermissionError("route experiments need the manage_models permission")
+        out = experiments.propose(body.target, body.candidate, agent_id=body.agent_id, role=body.role,
+                                  hypothesis=body.hypothesis, suite=body.suite, repeats=body.repeats,
+                                  created_by=f"user:{admin['name']}")
+        _audit(admin, "experiment_propose", out["id"], after={"target": out["target"], "role": out["role"],
+                                                             "agent_id": out["agent_id"]})
+        return out
+
+    @app.post("/api/experiments/{exp_id}/start")
+    def experiment_start(exp_id: int, admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        out = experiments.start(exp_id)
+        _audit(admin, "experiment_start", exp_id)
+        return out
+
+    @app.post("/api/experiments/{exp_id}/apply")
+    def experiment_apply(exp_id: int, admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
+        before = experiments.get(exp_id)
+        out = experiments.apply(exp_id, f"user:{admin['name']}")
+        _audit(admin, "experiment_apply", exp_id, before={"route": before["baseline_version"]},
+               after={"route": out["candidate"].get("model")}, severity="high")
+        return out
+
+    @app.post("/api/experiments/{exp_id}/reject")
+    def experiment_reject(exp_id: int, body: NoteBody, admin: dict[str, Any] = Depends(allowed("manage_agents"))
+                          ) -> dict[str, Any]:
+        out = experiments.reject(exp_id, f"user:{admin['name']}", body.note)
+        _audit(admin, "experiment_reject", exp_id, after={"note": body.note})
+        return out
+
+    @app.get("/api/learning/gaps")
+    def learning_gaps(agent_id: int | None = None, _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        return training.gaps(agent_id)
+
+    @app.get("/api/learning/metrics")
+    def learning_metrics(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return training.metrics()
+
+    @app.get("/api/learning/plans")
+    def learning_plans(agent_id: int | None = None, status: str = "", _: dict[str, Any] = Depends(current_user)
+                       ) -> list[dict[str, Any]]:
+        return training.list_plans(agent_id, status)
+
+    @app.post("/api/learning/plans")
+    def learning_plan_create(body: PlanBody, admin: dict[str, Any] = Depends(allowed("manage_agents"))
+                             ) -> dict[str, Any]:
+        out = training.create_plan(body.agent_id, body.capability, body.target_level, body.practice_suite,
+                                   body.final_suite, repeats=body.repeats, pass_mark=body.pass_mark,
+                                   created_by=f"user:{admin['name']}")
+        _audit(admin, "learning_plan_create", out["id"], after={"agent_id": body.agent_id,
+                                                               "capability": out["capability"]})
+        return out
+
+    @app.post("/api/learning/plans/{plan_id}/start")
+    def learning_plan_start(plan_id: int, admin: dict[str, Any] = Depends(allowed("manage_agents"))
+                            ) -> dict[str, Any]:
+        out = training.start_plan(plan_id)
+        _audit(admin, "learning_plan_start", plan_id)
+        return out
+
+    @app.post("/api/learning/plans/{plan_id}/cancel")
+    def learning_plan_cancel(plan_id: int, admin: dict[str, Any] = Depends(allowed("manage_agents"))
+                             ) -> dict[str, Any]:
+        out = training.cancel_plan(plan_id)
+        _audit(admin, "learning_plan_cancel", plan_id)
+        return out
 
     # --- verified self-evolution of the platform's code (selfevolve.py) ---
     def _contract_call(fn: Any, *args: Any) -> dict[str, Any]:

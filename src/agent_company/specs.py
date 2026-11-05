@@ -46,7 +46,8 @@ def _write(path: Path, text: str) -> None:
 def write_plan(goal: Goal, iteration: int, plan: list[Any], summary: str = "") -> None:
     d = folder(goal)
     _write(d / "requirements.md", f"# Requirements: {goal.title}\n\n{goal.description or goal.title}\n\n"
-           + ("## Quality commands\n" + "\n".join(f"- `{c}`" for c in goal.quality_commands) + "\n\n" if goal.quality_commands else "")
+           + ("## Quality commands\n" + "\n".join(f"- `{c}`" for c in goal.quality_commands) + "\n\n"
+              if goal.quality_commands and not (goal.trial or {}).get("hide_checks") else "")
            + ("## Scope\n" + "\n".join(f"- `{p}`" for p in goal.allowed_paths) + "\n" if goal.allowed_paths else ""))
     lines = [f"# Tasks (iteration {iteration})", "", summary, ""]
     for i, c in enumerate(plan, 1):
