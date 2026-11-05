@@ -66,7 +66,7 @@ def test_goal_lifecycle_over_http(app):
     gid = app.post("/api/goals", json={"title": "Write a hello world", "quality_commands": ["test -f WORKLOG.md"]}).json()["id"]
     for _ in range(100):
         g = app.get(f"/api/goals/{gid}").json()
-        if g["status"] not in {"queued", "running"}:
+        if g["status"] not in {"queued", "planning", "running", "recovering"}:
             break
         time.sleep(0.1)
     assert g["status"] == "awaiting_approval", g

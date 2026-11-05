@@ -171,7 +171,7 @@ async function projectMain(id, incremental, early = null) {
   if (mode === "orders" && $("#msgs")) {
     const fresh = await api(`/api/projects/${id}/messages?after=${lastMessageId}`);
     if (fresh.length || !lastMessageId) { messageCache.push(...fresh); lastMessageId = messageCache.length ? messageCache[messageCache.length - 1].id : 0; renderMessages(lastMessageId && incremental); }
-    $("#p-running").textContent = `${d.goals.filter((g) => ["queued", "running"].includes(g.status)).length} goal(s) running`;
+    $("#p-running").textContent = `${d.goals.filter((g) => GOAL_ACTIVE.includes(g.status) && g.status !== "paused").length} goal(s) running`;
   }
   const pending = d.proposals.filter((p) => p.status === "pending");
   $("#p-props").innerHTML = pending.length ? `<div class="props"><strong>Proposals waiting</strong>${pending.map((p) => `<div class="row"><span class="grow">${esc(p.title)} <span class="muted">${esc(p.agent || "")} · from #${p.goal_id}</span></span>${me.is_admin ? ib("check", "Approve", `data-prop="${p.id}" data-d="approve"`, "sm primary") + ib("x", "Reject", `data-prop="${p.id}" data-d="reject"`, "sm") : ""}</div>`).join("")}</div>` : "";

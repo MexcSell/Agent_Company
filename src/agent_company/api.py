@@ -39,6 +39,7 @@ from agent_company import (
     terminal,
     transport,
     usage,
+    workflow,
     workspace,
 )
 from agent_company.config import settings
@@ -653,7 +654,7 @@ def create_app(start_background: bool = True) -> FastAPI:
             with session() as s:
                 return (s.scalar(select(func.max(Event.id))) or 0, s.scalar(select(func.max(Message.id))) or 0,
                         s.scalar(select(func.max(Notification.id))) or 0,
-                        s.scalar(select(func.count()).select_from(Goal).where(Goal.status == "running")) or 0)
+                        s.scalar(select(func.count()).select_from(Goal).where(Goal.status.in_(workflow.WORKING))) or 0)
 
         async def gen():  # noqa: ANN202
             last, idle = None, 0
@@ -1206,17 +1207,18 @@ def create_app(start_background: bool = True) -> FastAPI:
             d["events"] = [_event_dict(e) for e in s.scalars(
                 select(Event).where(Event.goal_id == goal_id).order_by(Event.id))]
         d["defects"] = performance.list_defects(goal_id=goal_id)
+        d["transitions"] = workflow.history(goal_id)
         return d
 
     @app.post("/api/goals/{goal_id}/approve")
     def goal_approve(goal_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
-        out = loop.approve(goal_id)
+        out = loop.approve(goal_id, actor=f"user:{admin['name']}")
         _audit(admin, "goal_approve", goal_id, after=out)
         return out
 
     @app.post("/api/goals/{goal_id}/reject")
     def goal_reject(goal_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
-        loop.reject(goal_id)
+        loop.reject(goal_id, actor=f"user:{admin['name']}")
         _audit(admin, "goal_reject", goal_id)
         return {"ok": True}
 
@@ -1227,8 +1229,35 @@ def create_app(start_background: bool = True) -> FastAPI:
             seen = _visible_project_ids(s, user)
             if g is None or (seen is not None and g.project_id is not None and g.project_id not in seen):
                 raise KeyError(goal_id)
-        loop.cancel(goal_id)
+        loop.cancel(goal_id, actor=f"user:{user['name']}")
         return {"ok": True}
+
+    @app.post("/api/goals/{goal_id}/pause")
+    def goal_pause(goal_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            loop.pause(goal_id, actor=f"user:{admin['name']}")
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "goal_pause", goal_id)
+        return {"ok": True}
+
+    @app.post("/api/goals/{goal_id}/resume")
+    def goal_resume(goal_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            loop.resume(goal_id, actor=f"user:{admin['name']}")
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "goal_resume", goal_id)
+        return {"ok": True}
+
+    @app.get("/api/goals/{goal_id}/trace")
+    def goal_trace(goal_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        with session() as s:
+            g = s.get(Goal, goal_id)
+            seen = _visible_project_ids(s, user)
+            if g is None or (seen is not None and g.project_id is not None and g.project_id not in seen):
+                raise KeyError(goal_id)
+        return loop.trace(goal_id)
 
     @app.get("/api/events")
     def events(after: int = 0, goal_id: int | None = None, user: dict[str, Any] = Depends(current_user)

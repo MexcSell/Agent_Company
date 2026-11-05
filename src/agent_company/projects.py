@@ -27,6 +27,7 @@ from sqlalchemy import func, select
 from agent_company import worktrees
 from agent_company.config import REPO_ROOT, settings
 from agent_company.db import Agent, Goal, Message, Project, Proposal, Task, Upload, log_event, session
+from agent_company.workflow import ACTIVE, set_status
 
 NAME_RE = re.compile(r"^[\w][\w .-]{0,127}$")
 PLATFORM = "Agent Company"
@@ -70,7 +71,7 @@ def list_projects(user: dict[str, Any]) -> list[dict[str, Any]]:
         out = []
         for p in s.scalars(visible(user).order_by(Project.protected.desc(), Project.id)):
             running = s.scalar(select(func.count()).select_from(Goal).where(
-                Goal.project_id == p.id, Goal.status.in_(["queued", "running"]))) or 0
+                Goal.project_id == p.id, Goal.status.in_(ACTIVE))) or 0
             agents = s.scalar(select(func.count(func.distinct(Task.agent_id))).join(Goal, Goal.id == Task.goal_id)
                               .where(Goal.project_id == p.id, Task.status == "running")) or 0
             out.append(project_dict(p, {"running_goals": running, "running_agents": agents}))
@@ -168,8 +169,8 @@ def delete(project_ids: list[int]) -> list[int]:
                 continue
             if p.protected:
                 raise ValueError("the platform project cannot be deleted")
-            for g in s.scalars(select(Goal).where(Goal.project_id == pid, Goal.status.in_(["queued", "running"]))):
-                g.status = "cancelled"
+            for g in s.scalars(select(Goal).where(Goal.project_id == pid, Goal.status.in_(ACTIVE))):
+                set_status(s, g, "cancelled", "project deleted")
             s.query(Message).filter(Message.project_id == pid).delete()
             s.delete(p)
             done.append(pid)
@@ -294,7 +295,7 @@ def command(project_id: int, user: dict[str, Any], content: str, attachment_ids:
     if slash == "/stop":
         with session() as s:
             ids = [g.id for g in s.scalars(select(Goal).where(Goal.project_id == p.id,
-                                                              Goal.status.in_(["queued", "running"])))]
+                                                              Goal.status.in_(ACTIVE)))]
         for gid in ids:
             loop.cancel(gid)
         post(p.id, f"Stopped {len(ids)} goal(s)." if ids else "Nothing is running.", kind="result")
@@ -404,8 +405,31 @@ def _spawned_from(s, root_id: int) -> int:  # noqa: ANN001
     return count
 
 
-def decide(proposal_id: int, approve: bool, decided_by: str) -> dict[str, Any]:
-    """Approve (spawning a goal, within the loop guard) or reject a proposal."""
+def _depth(s, goal: Goal) -> int:  # noqa: ANN001
+    """1 for a goal a person ordered, +1 for each proposal generation below it."""
+    depth, seen = 1, set()
+    while goal.parent_goal_id and goal.id not in seen:
+        seen.add(goal.id)
+        goal = s.get(Goal, goal.parent_goal_id)
+        if goal is None:
+            break
+        depth += 1
+    return depth
+
+
+# Proposals that would change authority, budgets or safety controls are decided by a person, never by an
+# agent (SPEC-14 S14-R-02, SEC-007): an agent must not approve a change that raises any agent's authority.
+RESTRICTED = re.compile(r"(?i)\b(permission|privilege|autonomy|budget|setting|route|routing|model choice"
+                        r"|security|approval|emergency|audit|credential|secret|access control|sudo)s?\b")
+
+
+def restricted(title: str, description: str = "") -> bool:
+    return bool(RESTRICTED.search(f"{title}\n{description}"))
+
+
+def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = True) -> dict[str, Any]:
+    """Approve (spawning a goal, within the loop guards) or reject a proposal. An agent (`by_human=False`)
+    cannot approve a restricted proposal."""
     from agent_company import loop
 
     spawn: dict[str, Any] | None = None
@@ -418,8 +442,12 @@ def decide(proposal_id: int, approve: bool, decided_by: str) -> dict[str, Any]:
         origin = s.get(Goal, p.goal_id)
         note = ""
         limit = settings().max_proposal_goals
+        if approve and not by_human and restricted(p.title, p.description):
+            raise PermissionError("this proposal touches authority, budgets or safety controls: a person decides it")
         if approve and origin is not None and _spawned_from(s, _root(s, origin).id) >= limit:
             approve, note = False, f" (limit of {limit} proposal goals reached)"
+        elif approve and origin is not None and _depth(s, origin) >= settings().max_goal_depth:
+            approve, note = False, f" (goal chain depth {settings().max_goal_depth} reached)"  # S04-R-08
         p.status, p.decided_by = ("approved" if approve else "rejected"), decided_by + note
         if approve:
             spawn = {"title": p.title, "description": p.description or p.title,
@@ -457,6 +485,15 @@ def settle_proposals(goal_id: int) -> None:
         goal_title = g.title if g else ""
     if not pending:
         return
+    if settings().proposal_policy == "superiors" and gm is not None:  # the GM decides only unrestricted ones
+        human = [x for x in pending if restricted(x[1], x[2])]
+        pending = [x for x in pending if not restricted(x[1], x[2])]
+        for pid, title, why in human:
+            post_for_goal(goal_id, f"Proposal (needs a person: it touches authority or safety controls): {title}"
+                          + (f"\n{why}" if why else ""), kind="proposal", proposal_id=pid)
+        if human:
+            notify(f"{len(human)} proposal(s) need a person's decision", goal_title, level="warning",
+                   source="proposals", goal_id=goal_id, admin_only=True)
     if settings().proposal_policy != "superiors" or gm is None:
         for pid, title, why in pending:
             post_for_goal(goal_id, f"Proposal: {title}" + (f"\n{why}" if why else ""), kind="proposal",
@@ -474,4 +511,4 @@ def settle_proposals(goal_id: int) -> None:
             data={"title": title})
         res = executors.for_choice(choice, settings().command_timeout).run(req)
         verdict = res.text.strip().upper().startswith("APPROVE") if res.ok else False
-        decide(pid, verdict, f"{gm.name} (GM)")
+        decide(pid, verdict, f"{gm.name} (GM)", by_human=False)

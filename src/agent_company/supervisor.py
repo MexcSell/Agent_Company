@@ -75,7 +75,9 @@ def running_goals() -> int:
     from agent_company.db import Goal, session
 
     with session() as s:
-        return s.scalar(select(func.count()).select_from(Goal).where(Goal.status == "running")) or 0
+        from agent_company.workflow import WORKING
+
+        return s.scalar(select(func.count()).select_from(Goal).where(Goal.status.in_(WORKING))) or 0
 
 
 def healthy(port: int, timeout: float = 60.0) -> bool:

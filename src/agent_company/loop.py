@@ -22,7 +22,7 @@ from sqlalchemy import select
 
 from agent_company import contracts, executors, learning, quality, registry, research, router, specs, usage, worktrees
 from agent_company.config import settings
-from agent_company.db import Agent, Goal, Task, log_event, session
+from agent_company.db import Agent, Event, Goal, Task, log_event, session
 from agent_company.org import ROLES
 
 OUTPUT_CAP = 6000
@@ -104,16 +104,34 @@ def _goal(goal_id: int) -> Goal:
         return g
 
 
-def _update_goal(goal_id: int, **fields: Any) -> None:
+class Halted(Exception):
+    """An administrator paused or cancelled the goal while the loop was working on it."""
+
+
+def _update_goal(goal_id: int, reason: str = "", actor: str = "system", **fields: Any) -> None:
+    """Change fields of a goal; a status change goes through the workflow (S04-R-04)."""
+    from agent_company import workflow
+
     with session() as s:
         g = s.get(Goal, goal_id)
-        if g is not None:
-            for k, v in fields.items():
-                setattr(g, k, v)
+        if g is None:
+            return
+        to = fields.pop("status", None)
+        if to is not None and to != g.status:
+            if g.status in {"paused", "cancelled"}:
+                raise Halted(g.status)
+            workflow.set_status(s, g, to, reason, actor)
+        for k, v in fields.items():
+            setattr(g, k, v)
 
 
 def cancelled(goal_id: int) -> bool:
     return _goal(goal_id).status == "cancelled"
+
+
+def _halted(goal_id: int) -> str | None:
+    st = _goal(goal_id).status
+    return st if st in {"cancelled", "paused"} else None
 
 
 MAX_FALLBACKS = 3
@@ -603,7 +621,7 @@ def run_goal(goal_id: int) -> dict[str, Any]:
     from agent_company.governance import emergency
 
     goal = _goal(goal_id)
-    if goal.status not in {"queued", "running"}:
+    if goal.status not in {"queued", "recovering"}:
         return {"status": goal.status}
     if emergency():  # E5: the goal stays queued until the stop is lifted
         return {"status": "queued", "held": "emergency stop"}
@@ -639,8 +657,16 @@ def _chat_outcome(goal_id: int, out: dict[str, Any]) -> None:
 
 
 def _run(goal_id: int) -> dict[str, Any]:
+    try:
+        return _run_steps(goal_id)
+    except Halted as h:
+        log_event("goal", f"goal {h.args[0]} by an administrator; the loop stopped", goal_id=goal_id)
+        return {"status": h.args[0]}
+
+
+def _run_steps(goal_id: int) -> dict[str, Any]:
     goal = _goal(goal_id)
-    _update_goal(goal_id, status="running")
+    _update_goal(goal_id, status="planning", reason="started")
     try:
         repo = Path(goal.repo_path) if goal.repo_path else worktrees.new_workspace(f"goal-{goal_id}")
         wt, branch, base = worktrees.create(repo, f"goal-{goal_id}")
@@ -660,8 +686,9 @@ def _run(goal_id: int) -> dict[str, Any]:
         if resume and cp.get("evaluated") and not cp.get("passed"):  # that iteration was judged: go on
             first, feedback, resume = first + 1, cp.get("feedback", ""), False
         for iteration in range(first, goal.max_iterations + 1):
-            if cancelled(goal_id):
-                return {"status": "cancelled"}
+            halted = _halted(goal_id)
+            if halted:
+                return {"status": halted}
             _update_goal(goal_id, iteration=iteration)
             goal = _goal(goal_id)
             try:
@@ -675,6 +702,8 @@ def _run(goal_id: int) -> dict[str, Any]:
                 resume = False
             else:
                 _discard_iteration(goal_id, iteration)  # leftovers of a run cut short before it was planned
+                _update_goal(goal_id, status="planning", reason=f"iteration {iteration}"
+                             + (": revision required" if iteration > 1 else ""))
                 log_event("iteration", f"iteration {iteration} started", goal_id=goal_id)
                 notes = _research(goal, iteration, feedback)
                 if iteration == 1:
@@ -686,10 +715,12 @@ def _run(goal_id: int) -> dict[str, Any]:
                 _spec_step(specs.write_plan, goal, iteration, plan)
             from agent_company.scheduler import run_dag
 
+            _update_goal(goal_id, status="running", reason=f"iteration {iteration}: {len(ids)} task(s)")
             run_dag(ids, _make_worker(goal, notes, feedback, started, planner_id), goal.worktree,
                     lambda: cancelled(goal_id))
-            if cancelled(goal_id):
-                return {"status": "cancelled"}
+            halted = _halted(goal_id)
+            if halted:
+                return {"status": halted}
             _spec_step(specs.write_outputs, goal, iteration, None)
             report = quality.evaluate(goal_id, iteration)
             _spec_step(specs.write_decision, goal, iteration, report)
@@ -725,8 +756,13 @@ def _run(goal_id: int) -> dict[str, Any]:
         _update_goal(goal_id, status="failed", result=_summary(goal_id, goal.max_iterations, report) + kept)
         _notify_goal(goal_id, "failed")
         return {"status": "failed", "iterations": goal.max_iterations, "report": report}
+    except Halted:
+        raise
     except Exception as e:
-        _update_goal(goal_id, status="failed", result=f"{type(e).__name__}: {e}")
+        try:
+            _update_goal(goal_id, status="failed", reason=f"{type(e).__name__}", result=f"{type(e).__name__}: {e}")
+        except Halted:
+            raise
         _notify_goal(goal_id, "failed")
         log_event("error", f"goal failed: {type(e).__name__}: {e}", goal_id=goal_id)
         raise
@@ -889,12 +925,12 @@ def _push(goal_id: int) -> None:
     _once(f"goal:{goal_id}:{g.iteration}:push", lambda: (auto_push(g.project_id, g.created_by), True)[1])
 
 
-def approve(goal_id: int) -> dict[str, Any]:
+def approve(goal_id: int, actor: str = "system") -> dict[str, Any]:
     g = _goal(goal_id)
     if g.status != "awaiting_approval":
         raise ValueError(f"goal is {g.status}, not awaiting approval")
     sha = _merge(goal_id)
-    _update_goal(goal_id, status="approved")
+    _update_goal(goal_id, status="approved", reason=f"merged {sha[:10]}", actor=actor)
     from agent_company.projects import post_for_goal
 
     post_for_goal(goal_id, f"Goal #{goal_id} approved and merged ({sha[:10]}).", kind="result")
@@ -902,19 +938,84 @@ def approve(goal_id: int) -> dict[str, Any]:
     return {"status": "approved", "merge_commit": sha}
 
 
-def reject(goal_id: int) -> None:
+def reject(goal_id: int, actor: str = "system") -> None:
     g = _goal(goal_id)
     if g.status != "awaiting_approval":
         raise ValueError(f"goal is {g.status}, not awaiting approval")
-    _update_goal(goal_id, status="rejected")
+    _update_goal(goal_id, status="rejected", reason="work rejected", actor=actor)
     log_event("goal", "work rejected by reviewer", goal_id=goal_id)
 
 
-def cancel(goal_id: int) -> None:
+def cancel(goal_id: int, actor: str = "system") -> None:
+    from agent_company import workflow
+
     g = _goal(goal_id)
-    if g.status in {"queued", "running"}:
-        _update_goal(goal_id, status="cancelled")
+    if g.status in workflow.ACTIVE:
+        workflow.transition(goal_id, "cancelled", "cancelled", actor)
         log_event("goal", "goal cancelled", goal_id=goal_id)
+
+
+def pause(goal_id: int, actor: str = "system", reason: str = "paused") -> None:
+    """Pause a goal: tasks already started finish, the loop stops at the next step boundary."""
+    from agent_company import workflow
+
+    g = _goal(goal_id)
+    if g.status not in workflow.ACTIVE or g.status == "paused":
+        raise ValueError(f"goal is {g.status}; only an active goal can be paused")
+    workflow.transition(goal_id, "paused", reason, actor)
+    log_event("goal", f"goal paused by {actor}: {reason}", goal_id=goal_id)
+
+
+def resume(goal_id: int, actor: str = "system") -> None:
+    """Resume a paused goal: it is queued again and continues from its checkpoint (S04-R-05)."""
+    from agent_company import workflow
+
+    if _goal(goal_id).status != "paused":
+        raise ValueError("only a paused goal can be resumed")
+    workflow.transition(goal_id, "queued", "resumed", actor)
+    log_event("goal", f"goal resumed by {actor}", goal_id=goal_id)
+    enqueue(goal_id)
+
+
+def trace(goal_id: int) -> dict[str, Any]:
+    """Execution trace of a goal (S04-R-12, SPEC-14 S14-R-08): workflow transitions, tasks, every run with its
+    agent and model, gate results per iteration, decisions, and the non-repeatable operations (merge, push)."""
+    from agent_company import workflow
+    from agent_company.db import Operation, Run
+
+    with session() as s:
+        g = s.get(Goal, goal_id)
+        if g is None:
+            raise KeyError(goal_id)
+        names = dict(s.execute(select(Agent.id, Agent.name)).all())
+        tasks = [{"id": t.id, "iteration": t.iteration, "key": t.key, "title": t.title, "role": t.role,
+                  "agent": names.get(t.agent_id), "agent_id": t.agent_id, "model": t.model_name, "status": t.status,
+                  "started_at": t.started_at.isoformat() if t.started_at else None,
+                  "finished_at": t.finished_at.isoformat() if t.finished_at else None,
+                  "acceptance": (t.gate or {}).get("acceptance", []), "files": (t.gate or {}).get("files", [])}
+                 for t in s.scalars(select(Task).where(Task.goal_id == goal_id).order_by(Task.id))]
+        runs = [{"id": r.id, "task_id": r.task_id, "agent": names.get(r.agent_id), "agent_id": r.agent_id,
+                 "model": r.model_name, "executor": r.kind, "purpose": r.purpose, "ok": r.ok,
+                 "error": r.error[:500], "duration": round(r.duration, 2), "cost": r.cost,
+                 "tokens": r.input_tokens + r.output_tokens, "at": r.started_at.isoformat()}
+                for r in s.scalars(select(Run).where(Run.goal_id == goal_id).order_by(Run.id))]
+        gates = [{"at": e.created_at.isoformat(), "passed": e.data.get("passed"), "commit": e.data.get("commit"),
+                  "checks": e.data.get("checks", []), "message": e.message}
+                 for e in s.scalars(select(Event).where(Event.goal_id == goal_id, Event.kind == "gate")
+                                    .order_by(Event.id)) if "checks" in (e.data or {})]
+        ops = [{"key": o.key, "status": o.status, "result": o.result, "at": o.updated_at.isoformat()}
+               for o in s.scalars(select(Operation).where(Operation.key.like(f"goal:{goal_id}:%")))]
+        head = {"id": g.id, "title": g.title, "status": g.status, "iteration": g.iteration,
+                "project_id": g.project_id, "history": g.history or []}
+    out = {"goal": head, "transitions": workflow.history(goal_id), "tasks": tasks, "runs": runs, "gates": gates,
+           "operations": ops}
+    try:
+        from agent_company import decisions
+
+        out["decisions"] = decisions.list_decisions(goal_id=goal_id)
+    except ImportError:
+        out["decisions"] = []
+    return out
 
 
 # --- background queue (used by the server) ---------------------------------------
@@ -927,9 +1028,12 @@ class GoalQueue:
 
     def start(self) -> None:
         set_queue(self)
+        from agent_company import workflow
+
         with session() as s:  # resume goals interrupted by a restart
-            for g in s.scalars(select(Goal).where(Goal.status.in_(["queued", "running"]))):
-                g.status = "queued"
+            for g in s.scalars(select(Goal).where(Goal.status.in_(["queued", *workflow.WORKING]))):
+                if g.status != "queued":
+                    workflow.set_status(s, g, "recovering", "server restarted", "system")
                 self.q.put(g.id)
         self.seen = {gid for gid in list(self.q.queue)}
         for t in self.threads:

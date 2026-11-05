@@ -58,6 +58,7 @@ class Settings:
     # A candidate playbook replaces the current one only if its success rate beats the baseline by this
     # many percentage points (S13-D-01); a tie keeps the current version.
     min_improvement: int = 10
+    max_goal_depth: int = 3  # generations of proposal goals below a person's order (S04-R-08)
 
     @property
     def worktrees_dir(self) -> Path:
@@ -102,6 +103,7 @@ def load_settings() -> Settings:
         retry_base_seconds=float(os.environ.get("RETRY_BASE_SECONDS") or 2),
         retry_max_seconds=float(os.environ.get("RETRY_MAX_SECONDS") or 60),
         min_improvement=_int("MIN_IMPROVEMENT", 10),
+        max_goal_depth=_int("MAX_GOAL_DEPTH", 3),
     )
 
 

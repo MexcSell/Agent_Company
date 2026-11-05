@@ -23,6 +23,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from agent_company.db import AuditEvent, Notification, session
+from agent_company.workflow import ACTIVE, set_status
 
 _audit_lock = threading.Lock()
 
@@ -188,8 +189,8 @@ def set_emergency(on: bool, actor: str, reason: str = "") -> dict[str, Any]:
         else:
             row.value = value
         if on:
-            for g in s.scalars(select(Goal).where(Goal.status.in_(["queued", "running"]))):
-                g.status = "cancelled"
+            for g in s.scalars(select(Goal).where(Goal.status.in_(ACTIVE))):
+                set_status(s, g, "cancelled", f"E5 emergency stop: {reason}"[:500], actor)
                 cancelled.append(g.id)
     killed = _kill(everything=True) if on else []
     audit(actor, "emergency_stop" if on else "emergency_lift", "all autonomous execution",
@@ -270,8 +271,8 @@ def stop(level: str, scope: str | int, actor: str, reason: str) -> dict[str, Any
             g = s.get(Goal, int(scope))
             if g is None:
                 raise KeyError(f"goal {scope}")
-            if g.status in {"queued", "running"}:
-                g.status = "cancelled"
+            if g.status in ACTIVE:
+                set_status(s, g, "cancelled", f"E2 stop: {reason}"[:500], actor)
                 cancelled.append(g.id)
         else:
             if level in {"E1", "E4"}:
@@ -285,9 +286,8 @@ def stop(level: str, scope: str | int, actor: str, reason: str) -> dict[str, Any
                         a.lifecycle = "paused"
                         paused.append(a.id)
             if level == "E3":
-                for g in s.scalars(select(Goal).where(Goal.project_id == int(scope),
-                                                      Goal.status.in_(["queued", "running"]))):
-                    g.status = "cancelled"
+                for g in s.scalars(select(Goal).where(Goal.project_id == int(scope), Goal.status.in_(ACTIVE))):
+                    set_status(s, g, "cancelled", f"E3 stop: {reason}"[:500], actor)
                     cancelled.append(g.id)
             items = [x for x in current if not (x["level"] == level and str(x["scope"]) == scope)]
             items.append({"level": level, "scope": scope, "actor": actor, "reason": reason[:500],

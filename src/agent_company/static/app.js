@@ -61,6 +61,7 @@ const ROLE_ICON = { general_manager: "general_manager", architect: "architect", 
 const ib = (name, label, attrs = "", cls = "") => `<button type="button" class="btn icon ${cls}" title="${esc(label)}" aria-label="${esc(label)}" ${attrs}>${icon(name, 16)}</button>`;
 const icon = (name, size = 20) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${P[name] || P.specialist}"/></svg>`;
 const roleIcon = (role) => icon(ROLE_ICON[role] || "specialist");
+const GOAL_ACTIVE = ["queued", "planning", "running", "recovering", "paused"];  // workflow.ACTIVE
 const pill = (s) => `<span class="pill ${esc(s)}">${esc(String(s).replace(/_/g, " "))}</span>`;
 
 // --- storage-safe helpers -------------------------------------------------------
@@ -398,7 +399,9 @@ async function goalDetail(id, openIds = new Set()) {
   const iters = [...new Set(g.tasks.map((t) => t.iteration))].sort((a, b) => b - a);
   const actions = [
     g.status === "awaiting_approval" && me.is_admin ? ib("check", "Approve and merge", 'data-act="approve"', "primary") + ib("x", "Reject", 'data-act="reject"', "danger") : "",
-    ["queued", "running"].includes(g.status) ? ib("stop", "Cancel the goal", 'data-act="cancel"', "danger") : "",
+    GOAL_ACTIVE.includes(g.status) && g.status !== "paused" && me.is_admin ? ib("pause", "Pause the goal (tasks already started finish)", 'data-act="pause"') : "",
+    g.status === "paused" && me.is_admin ? ib("play", "Resume the goal from its checkpoint", 'data-act="resume"', "primary") : "",
+    GOAL_ACTIVE.includes(g.status) ? ib("stop", "Cancel the goal", 'data-act="cancel"', "danger") : "",
   ].join("");
   $("#goal-detail").innerHTML = `<div class="row"><h2 class="grow" style="margin:0">#${g.id} ${esc(g.title)}</h2>${pill(g.status)}${actions}</div>
     <p class="muted">Iteration ${g.iteration}/${g.max_iterations} · branch <code>${esc(g.branch || "-")}</code> · worktree <code>${esc(g.worktree || "-")}</code></p>
@@ -410,6 +413,7 @@ async function goalDetail(id, openIds = new Set()) {
       ${(t.gate?.acceptance || []).map((c) => `<div class="muted">${c.passed ? "✓" : "✗"} ${esc(JSON.stringify(c.condition))} ${esc(c.detail || "")}</div>`).join("")}
       ${t.gate?.files?.length ? `<div class="muted">Files: ${esc(t.gate.files.join(", "))}</div>` : ""}<pre>${esc(t.output || "(no output yet)")}</pre></details>`).join("")}`).join("")}
     ${(g.defects || []).length ? `<h3>Defects</h3>${g.defects.map((d) => `<div class="row">${pill(d.status === "closed" ? "done" : d.status === "accepted_risk" || d.status === "deferred" ? "pending" : "failed").replace(/>[^<]+</, `>${esc(d.status.replace("_", " "))}<`)}<span class="pill">${esc(d.severity)}</span><span class="grow">${esc(d.check)}</span><span class="muted">iterations ${d.first_iteration}–${d.closed_iteration || d.last_iteration}</span></div>`).join("")}` : ""}
+    ${(g.transitions || []).length ? `<h3>Workflow</h3><div class="events">${g.transitions.map((x) => `<div><span class="k">${esc(x.to.replace(/_/g, " "))}</span>${esc(x.from.replace(/_/g, " "))} → ${esc(x.to.replace(/_/g, " "))}${x.reason ? ` · ${esc(x.reason)}` : ""} <span class="muted">${esc(x.actor)} · ${ago(x.at)}</span></div>`).join("")}</div>` : ""}
     <h3>Activity</h3><div class="events">${g.events.map((e) => `<div><span class="k">${esc(e.kind)}</span>${esc(e.message)} <span class="muted">${ago(e.at)}</span></div>`).join("")}</div>`;
   $("#goal-detail").querySelectorAll("[data-act]").forEach((b) => (b.onclick = async () => {
     try { await api(`/api/goals/${id}/${b.dataset.act}`, { method: "POST" }); toast(`Goal ${b.dataset.act}d`); goalDetail(id); } catch (err) { toast(err.message); }

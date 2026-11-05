@@ -30,7 +30,7 @@ def wait(gid, timeout=20):
     end = time.time() + timeout
     while time.time() < end:
         g = loop._goal(gid)
-        if g.status not in {"queued", "running"}:
+        if g.status not in {"queued", "planning", "running", "recovering"}:
             return g
         time.sleep(0.05)
     raise AssertionError("goal did not finish")

@@ -29,6 +29,7 @@ from typing import Any
 from sqlalchemy import select
 
 from agent_company.db import Agent, Goal, Project, session
+from agent_company.workflow import ACTIVE
 
 
 def _cli() -> str:
@@ -86,7 +87,7 @@ def status() -> dict[str, Any]:
 
     with session() as s:
         goals = [{"id": g.id, "title": g.title, "status": g.status, "project_id": g.project_id}
-                 for g in s.scalars(select(Goal).where(Goal.status.in_(["queued", "running", "awaiting_approval"])))]
+                 for g in s.scalars(select(Goal).where(Goal.status.in_([*ACTIVE, "awaiting_approval"])))]
         agents = s.scalars(select(Agent).where(Agent.lifecycle == "active")).all()
         busy = [a.name for a in agents if a.status == "busy"]
     items = catalog.list_items()

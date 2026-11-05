@@ -209,7 +209,7 @@ class Goal(Base):
     title: Mapped[str] = mapped_column(String(256))
     description: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(24), default="queued")
-    # queued|running|awaiting_approval|approved|rejected|failed|cancelled
+    # queued|planning|running|recovering|paused|awaiting_approval|approved|rejected|failed|cancelled (workflow.py)
     repo_path: Mapped[str] = mapped_column(Text, default="")
     base_branch: Mapped[str] = mapped_column(String(128), default="")
     branch: Mapped[str] = mapped_column(String(128), default="")
@@ -518,6 +518,19 @@ class Notification(Base):
     admin_only: Mapped[bool] = mapped_column(Boolean, default=False)
     read_by: Mapped[list[Any]] = mapped_column(default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
+class GoalTransition(Base):
+    """One change of a goal's workflow state (workflow.py, SPEC-04 S04-R-04)."""
+
+    __tablename__ = "goal_transitions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    goal_id: Mapped[int] = mapped_column(ForeignKey("goals.id", ondelete="CASCADE"), index=True)
+    from_status: Mapped[str] = mapped_column(String(24))
+    to_status: Mapped[str] = mapped_column(String(24))
+    reason: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(128), default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class LiveProcess(Base):

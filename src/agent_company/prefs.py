@@ -32,13 +32,14 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "retry_base_seconds": (float, "First retry delay in seconds; it doubles on each retry"),
     "retry_max_seconds": (float, "Longest delay between two retries, in seconds"),
     "min_improvement": (int, "Percentage points a trial playbook must beat the baseline by to be promoted"),
+    "max_goal_depth": (int, "Generations of goals that proposals may spawn below a person's order"),
 }
 LIMITS: dict[str, tuple[float, float]] = {
     "max_iterations": (1, 10), "max_parallel": (1, 16), "command_timeout": (10, 7200),
     "rotation_interval": (0, 86400), "max_proposal_goals": (0, 20), "goal_budget_usd": (0, 10_000),
     "goal_time_budget": (0, 7 * 86400), "study_interval": (0, 7 * 86400),
     "retry_max_attempts": (1, 10), "retry_base_seconds": (0, 600), "retry_max_seconds": (0, 3600),
-    "min_improvement": (0, 100),
+    "min_improvement": (0, 100), "max_goal_depth": (1, 10),
 }
 CHOICES: dict[str, set[str]] = {"proposal_policy": {"user", "superiors"}, "executor": {"auto", "offline"},
                                 "transport": {"https", "http"}}
