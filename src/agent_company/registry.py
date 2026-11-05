@@ -508,7 +508,8 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
     ranks: dict[int, dict[str, Any]] = {}
     explored = False
     with _staff_lock, session() as s:
-        pool = s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active")).all()
+        pool = [a for a in s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active"))
+                if level(a.autonomy) > 0]  # G0 observes only (S14-R-02)
         quota = {a.id: over_quota(s, a) for a in pool}  # S02-R-03: the quota covers an agent and its clones
         idle = [a for a in pool if _free(a, goal_id) and a.health != "degraded" and not quota[a.id]]  # S02-R-02
         team = _team_weights(s, goal_id)
@@ -547,6 +548,9 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
             # an emergency stop (E1/E4) or an administrator paused this role's agents: recruiting a
             # replacement would walk around the stop
             raise RuntimeError(f"every {role} agent is paused; lift the stop or resume one first")
+        elif s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active")).first():
+            # an administrator set them to autonomy G0: a clone or a recruit would walk around that decision
+            raise RuntimeError(f"every {role} agent is at autonomy G0 (observe only); an administrator raises it")
         else:
             found = _covering(s, skills, writes)
             if found is not None:  # discovery before recruitment (SPEC-03 S03-R-02): no duplicate specialist
@@ -599,7 +603,7 @@ def _covering(s: Session, skills: list[str], writes: bool | None) -> tuple[Agent
         return None
     best: tuple[Agent, float] | None = None
     for a in s.scalars(select(Agent).where(Agent.enabled, Agent.lifecycle == "active", Agent.parent_id.is_(None))):
-        if writes and ("write" not in (a.permissions or []) or level(a.autonomy) < 2):
+        if level(a.autonomy) == 0 or (writes and ("write" not in (a.permissions or []) or level(a.autonomy) < 2)):
             continue
         share = len(set(skills) & set(a.skills or {})) / len(set(skills))
         if share >= REUSE_COVERAGE and (best is None or share > best[1]

@@ -260,18 +260,18 @@ class Executor:
 
     def run(self, req: Request) -> Result:
         start = time.monotonic()
-        grant, wanted = gate(req, self.kind), req.writes
+        grant, wanted = Grant(refused="not gated"), req.writes
         try:
+            grant = gate(req, self.kind)
             if grant.refused:
                 raise PermissionError(grant.refused)
             from agent_company.governance import stopped
 
-            why = stopped(agent_id=req.agent_id, executor=self.kind)  # also for runs that do not pass the loop
+            # also for runs that do not pass the loop; an administrator's model test is not autonomous work
+            why = stopped(agent_id=req.agent_id, executor=self.kind) if req.purpose != "test" else None
             if why:
                 raise PermissionError(f"emergency stop: {why}")
             req.grant, req.writes = grant, grant.writes
-            if not grant.mcp:
-                req.data.pop("mcp", None)
             self.timeout = min(self.timeout, TOOL_CONTRACTS.get(self.kind, ToolContract((), 600)).max_seconds)
             res = self._run(req)
         except Exception as e:  # noqa: BLE001 - an executor failure is a task failure, not a crash
@@ -390,7 +390,7 @@ class ClaudeCodeExecutor(Executor):
         elif self.choice.session_id:  # a model pinned to a session: start from its context, never change it
             cmd += ["--resume", self.choice.session_id, "--fork-session"]
         mcp_file = None
-        servers, mcp_tools = req.data.get("mcp") or ({}, [])
+        servers, mcp_tools = (req.data.get("mcp") or ({}, [])) if grant.mcp else ({}, [])
         if servers.get("mcpServers"):  # the agent's granted servers from Tools & MCP, allowed tools only
             import tempfile
 

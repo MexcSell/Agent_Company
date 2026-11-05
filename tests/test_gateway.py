@@ -79,8 +79,10 @@ def test_mcp_tools_need_g3(claude, wt):
     mcp = ({"mcpServers": {"db": {"type": "stdio", "command": "x"}}}, ["mcp__db__query"])
     res = cc(req(wt, ["read"], autonomy="G2", data={"mcp": mcp}))
     assert "--mcp-config" not in claude[0] and "mcp: autonomy G2" in res.dropped
-    res = cc(req(wt, ["read"], autonomy="G3", data={"mcp": mcp}))
-    assert "--mcp-config" in claude[1] and "mcp__db__query" in res.tools
+    r = req(wt, ["read"], autonomy="G3", data={"mcp": mcp})
+    executors.CodexExecutor(router.Choice("Codex", "codex", "", "t")).run(r)  # a fallback chain: codex first
+    res = cc(r)
+    assert "--mcp-config" in claude[-1] and "mcp__db__query" in res.tools, "the grant survives the first executor"
 
 
 def test_a_request_without_an_agent_is_read_only(claude, wt):
@@ -139,6 +141,24 @@ def test_runs_record_the_grant_and_the_loop_audits_what_was_withheld():
         assert "withheld write: autonomy G1" in ev.message
     trace = loop.trace(gid)
     assert trace["runs"][0]["isolation"] == "L0" and trace["runs"][0]["withheld"] == ["write: autonomy G1"]
+
+
+def test_g0_agents_are_never_staffed_and_never_replaced():
+    with session() as s:
+        for a in s.scalars(select(Agent).where(Agent.role == "qa")):
+            a.autonomy = "G0"
+    gid = loop.create_goal("contained")
+    with pytest.raises(RuntimeError, match="autonomy G0"):
+        registry.staff("qa", ["testing"], gid)
+    with session() as s:
+        assert len(s.scalars(select(Agent).where(Agent.role == "qa")).all()) == 1, "no clone, no recruit"
+        dev = s.scalars(select(Agent).where(Agent.role == "developer")).first()
+        dev.autonomy = "G0"
+    for _ in range(4):  # refused runs never degrade an agent's health
+        res, _ = loop._execute(dev, executors.Request(purpose="task", role="developer", system="", prompt="p"),
+                               "task", goal_id=gid)
+        assert not res.ok and "tool gateway" in res.error
+    assert registry.check_health(dev.id) == "ok"
 
 
 def test_roles_get_default_levels_and_a_clone_keeps_its_level():
