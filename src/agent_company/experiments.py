@@ -197,7 +197,13 @@ def start(exp_id: int) -> dict[str, Any]:
                 raise KeyError(f"agent {e.agent_id}")
             if a.experiment:
                 raise ValueError(f"{a.name} already has a candidate on trial")
-            rate, _ = evolution.success_rate(s, a.id, evolution.DIAGNOSE_WINDOW)
+            rate, n = evolution.success_rate(s, a.id, evolution.DIAGNOSE_WINDOW)
+            room = 1 - settings().min_improvement / 100
+            if n == 0 or rate > room + 1e-9:  # the canary could never show the improvement promotion needs
+                raise ValueError(f"{a.name} has " + ("no live outcomes yet" if n == 0 else
+                                 f"a live success rate of {rate:.0%} over its last {n} tasks") +
+                                 f": a candidate cannot beat it by min_improvement ({settings().min_improvement} "
+                                 "points). Wait for live outcomes or lower min_improvement")
             a.experiment = {"playbook": e.candidate["playbook"], "baseline": rate, "outcomes": [], "stage": "smoke",
                             "experiment_id": e.id, "suite": e.dataset.get("suite", "smoke"),
                             "repeats": int(e.dataset.get("repeats", 1))}
@@ -284,13 +290,16 @@ def apply(exp_id: int, actor: str) -> dict[str, Any]:
             raise ValueError("playbook candidates are deployed by the evolution loop's own rule")
         role, model, previous = e.role, e.candidate["model"], e.baseline_version
         rate, n = role_success_rate(s, role)
+        source = "live"
+        if n == 0:  # no live history of the role: the suite's measurement of the current route stands in
+            rate, source = float(((e.results or {}).get("baseline") or {}).get("pass_rate") or 0.0), "suite"
     router.set_route(role, model)
     with session() as s:
         e = s.get(Experiment, exp_id)
         e.reviewed_by = actor
         update(s, exp_id, status="canary", decision=f"applied by {actor}",
-               canary={"window": CANARY_WINDOW, "baseline": rate, "baseline_samples": n, "outcomes": [],
-                       "previous": previous})
+               canary={"window": CANARY_WINDOW, "baseline": rate, "baseline_samples": n, "baseline_source": source,
+                       "outcomes": [], "previous": previous})
         log_event("evolution", f"experiment #{exp_id}: {model} is the {role} route (canary of {CANARY_WINDOW})", s=s)
     return get(exp_id)
 

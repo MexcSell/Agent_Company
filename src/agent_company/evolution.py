@@ -118,7 +118,7 @@ def _after_task(agent_id: int, success: bool) -> None:
 
             exp["outcomes"] = [*exp.get("outcomes", []), success]
             outs, n = exp["outcomes"], len(exp["outcomes"])
-            need = exp["baseline"] + settings().min_improvement / 100
+            need = min(1.0, exp["baseline"] + settings().min_improvement / 100)
             canary = {"window": EVAL_WINDOW, "baseline": exp["baseline"], "needed": round(min(need, 1), 3),
                       "outcomes": outs}
             # LE-018: the canary ends as soon as the rest of the window cannot reach what promotion needs

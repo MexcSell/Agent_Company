@@ -98,7 +98,8 @@ def gaps(agent_id: int | None = None) -> list[dict[str, Any]]:
             for sk in {_slug(x) for x in (contract or {}).get("skills", []) if _slug(x)}:
                 asked[role][sk] += 1
         runs: dict[int, list[bool]] = defaultdict(list)
-        for aid, ok in s.execute(select(Run.agent_id, Run.ok).where(Run.agent_id.in_(ids)).order_by(Run.id.desc())):
+        for aid, ok in s.execute(select(Run.agent_id, Run.ok).where(Run.agent_id.in_(ids))
+                                 .order_by(Run.id.desc()).limit(20 * len(ids))):
             if len(runs[aid]) < 20:
                 runs[aid].append(bool(ok))
         out: list[dict[str, Any]] = []

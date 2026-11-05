@@ -59,7 +59,8 @@ evaluation*.
 - Done: suites carry `kind` (`practice`/`final`) and `skills`; a plan refuses a practice suite as its final set
   and vice versa. A final suite's goals have `trial.hide_checks`: one iteration, no quality commands in
   `.claude/specs/*/requirements.md`, no findings in lessons. `Goal.trial.trainee_id` makes the trainee do its
-  role's work (a clone when it is busy). Exercises are hand-written (`evals/python-practice.json`,
+  role's work (a clone when it is busy; the clone's eval evidence shows in `gaps` only after it merges back).
+  Exercises are hand-written (`evals/python-practice.json`,
   `python-final.json`); generating them is open.
 
 ### S13-R-03 Independent evaluation and certification — §9 — **done** (`training.certified`, in `performance.certification`)
@@ -92,7 +93,9 @@ Restricted targets (§12.2) are rejected by the proposal path (SPEC-14 S14-R-02)
 - Done: evolution candidates are experiment records (smoke trial = baseline and candidate runs, live trial = canary,
   ended early once it cannot reach `min_improvement`); users propose playbook or route experiments. A route
   candidate is only recommended; an administrator applies it, then a canary of 3 live outcomes of the role
-  restores the previous route when it cannot reach the live baseline. `workflow_template` and
+  restores the previous route when it cannot reach the live baseline (the suite's baseline pass rate when the
+  role has no live history). A playbook experiment is refused while the agent has no live outcomes or too high a
+  success rate to beat by `min_improvement`. `workflow_template` and
   `retrieval_weights` targets are open (neither is versioned yet).
 
 ### S13-R-06 Model evaluation and routing — §11 — **done** (`eval --model <name> --role <role>`, route experiments)

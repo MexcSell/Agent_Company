@@ -241,9 +241,10 @@ def test_a_better_route_is_only_recommended_until_an_administrator_applies_it(mo
     applied = experiments.apply(e["id"], "user:admin")
     assert applied["status"] == "canary" and applied["results"]["canary"]["previous"] == "Old"
     assert router.list_routes()["developer"] == "New"
+    assert applied["results"]["canary"]["baseline_source"] == "suite", "no live history: the suite's 50 % stands in"
     aid = dev_id()
     experiments.observe(aid, False)
-    experiments.observe(aid, False)  # 0/2: even a pass now cannot reach the live baseline (1.0 without history)
+    experiments.observe(aid, False)  # 0/2: even a pass now (1/3) cannot reach the baseline of 50 %
     out = experiments.get(e["id"])
     assert out["status"] == "rolled_back" and router.list_routes()["developer"] == "Old"
 
@@ -287,6 +288,9 @@ def test_evolution_candidates_are_experiments_with_both_sides_and_a_canary(monke
 def test_a_users_playbook_experiment_runs_the_same_path(monkeypatch):
     aid = dev_id()
     e = experiments.propose("playbook", "DO: write the test first.", agent_id=aid, suite="smoke")
+    with pytest.raises(ValueError, match="no live outcomes"):
+        experiments.start(e["id"])  # with nothing to compare against, the canary could never promote it
+    outcomes(aid, "python", "1010")  # 50 %: room to show an improvement of min_improvement points
     spawned = []
     monkeypatch.setattr(evolution, "_spawn", spawned.append)
     assert experiments.start(e["id"])["status"] == "baseline" and len(spawned) == 1
@@ -294,11 +298,21 @@ def test_a_users_playbook_experiment_runs_the_same_path(monkeypatch):
         experiments.start(e["id"])
     fake_suite(monkeypatch, {"baseline": 0.5, "candidate": 0.5})
     spawned[0]()
+    assert experiments.get(e["id"])["status"] == "canary", "a tie on the suite may go on to the canary"
     for i in range(3):
         learning.learn(aid, None, f"Live pass {i}.", True, [])
     e = experiments.get(e["id"])
-    # the baseline was 100 % (no history): a tie keeps the current version (S13-D-01)
-    assert e["status"] == "rolled_back"
+    assert e["status"] == "rolled_out" and e["results"]["canary"]["outcomes"] == [True, True, True]
+    with session() as s:
+        assert s.get(Agent, aid).playbook == "DO: write the test first."
+
+
+def test_a_healthy_agent_has_no_room_for_a_playbook_experiment():
+    aid = dev_id()
+    outcomes(aid, "python", "1111")
+    e = experiments.propose("playbook", "DO: x", agent_id=aid)
+    with pytest.raises(ValueError, match="cannot beat it"):
+        experiments.start(e["id"])
 
 
 def test_learning_metrics():
