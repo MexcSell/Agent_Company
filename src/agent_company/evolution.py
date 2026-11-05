@@ -23,7 +23,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from agent_company.config import settings
-from agent_company.db import Agent, EvolutionEvent, Lesson, PlaybookVersion, Task, log_event, session
+from agent_company.db import Agent, EvolutionEvent, Lesson, PlaybookVersion, Task, log_event, now, session
 
 EVAL_WINDOW = 3
 DIAGNOSE_WINDOW = 6
@@ -40,8 +40,16 @@ def curate(s: Session, agent_id: int, failures_first: bool = False) -> str:
     """Playbook from the most recent distinct lessons: DO rules from successes, AVOID from failures."""
     seen: set[str] = set()
     rows: list[tuple[int, str]] = []
-    for lesson in s.scalars(select(Lesson).where(Lesson.agent_id == agent_id, Lesson.outcome != "research")
+    # The playbook goes into every prompt of the agent, on any project: only screened, current items that may
+    # leave their project feed it (S11-R-05, SPEC-14 S14-R-05). Confidential lessons stay retrievable in their
+    # own project only (learning.retrieve).
+    cutoff = now().replace(tzinfo=None)
+    for lesson in s.scalars(select(Lesson).where(Lesson.agent_id == agent_id, Lesson.outcome != "research",
+                                                 Lesson.status == "approved",
+                                                 Lesson.classification.in_(["public", "internal"]))
                             .order_by(Lesson.id.desc()).limit(60)):
+        if lesson.review_due_at is not None and lesson.review_due_at.replace(tzinfo=None) <= cutoff:
+            continue
         key = lesson.text.lower()[:120]
         if key in seen:
             continue
@@ -198,6 +206,9 @@ def cycle() -> int:
 
     if emergency():  # E5 stops the evolution cycle too
         return 0
+    from agent_company.learning import expire_due
+
+    expire_due()
     started = 0
     with session() as s:
         for a in s.scalars(select(Agent).where(Agent.lifecycle == "active")):

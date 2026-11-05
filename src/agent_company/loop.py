@@ -370,7 +370,8 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                      if feedback else "")
                   + (f"\nResearch notes:\n{notes}\n" if notes else "")
                   + f"\nAvailable roles:\n{role_lines}\n\n"
-                  + (learning.experience_context(gm.id) + "\n\n")
+                  + (learning.experience_context(gm.id, goal_id=goal.id, query=f"{goal.title} {goal.description}")
+                     + "\n\n")
                   + PLAN_INSTRUCTIONS)
         req = executors.Request(purpose="plan", role="general_manager", system=_system_for(gm), prompt=prompt,
                                 workdir=Path(goal.worktree), data={"goal": goal.title, "feedback": feedback})
@@ -494,7 +495,8 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                       + handover
                       + blackboard.context_for(goal.id, role, exclude={contract.key, *contract.depends_on})
                       + blackboard.inbox(goal.id, role, agent.id)
-                      + learning.experience_context(agent.id)
+                      + learning.experience_context(agent.id, goal_id=goal.id, query=" ".join(
+                          [contract.title, contract.description, *contract.skills]))
                       + _attachment_note(goal)
                       + ("\n\nYou may change files in the working directory." if writes
                          else "\n\nDo not change files; answer in text.")
@@ -632,15 +634,15 @@ def _lesson_text(agent_id: int, title: str, success: bool, feedback: str, goal_i
         f"'{title}' {'passed' if success else 'failed'}.")
 
 
-def _learn_from(goal_id: int, iteration: int, passed: bool, feedback: str) -> None:
+def _learn_from(goal_id: int, iteration: int, passed: bool, feedback: str, commit: str = "") -> None:
     with session() as s:
-        rows = [(t.agent_id, t.title, t.status, list((t.contract or {}).get("skills", [])))
+        rows = [(t.agent_id, t.title, t.status, list((t.contract or {}).get("skills", [])), t.id)
                 for t in s.scalars(select(Task).where(Task.goal_id == goal_id, Task.iteration == iteration))
                 if t.agent_id]
-    for agent_id, title, status, skills in rows:
+    for agent_id, title, status, skills, task_id in rows:
         ok = passed and status == "done"
         learning.learn(agent_id, goal_id, _lesson_text(agent_id, title, ok, "" if ok else feedback, goal_id),
-                       ok, skills)
+                       ok, skills, task_id=task_id, commit=commit or "")
     learning.link_team(goal_id, [(r[0], r[2]) for r in rows], passed)
 
 
@@ -761,7 +763,7 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
             track_defects(goal_id, iteration, report["checks"])
             log_event("gate", f"iteration {iteration}: quality gate {'passed' if report['passed'] else 'failed'}",
                       goal_id=goal_id, **{k: report[k] for k in ("passed", "checks", "commit")})
-            _learn_from(goal_id, iteration, report["passed"], report["feedback"])
+            _learn_from(goal_id, iteration, report["passed"], report["feedback"], report.get("head") or "")
             halt = _behaviour_rules(goal_id, iteration, report)
             if halt:
                 kept = _keep_best(goal_id)

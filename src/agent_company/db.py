@@ -176,6 +176,23 @@ class Lesson(Base):
     goal_id: Mapped[int | None] = mapped_column(ForeignKey("goals.id"), nullable=True)
     text: Mapped[str] = mapped_column(Text)
     outcome: Mapped[str] = mapped_column(String(16))  # success|failure|research
+    # a knowledge item (SPEC-11 S11-R-01): kind, evidence class, provenance, review status, classification
+    kind: Mapped[str] = mapped_column(String(16), default="episodic")
+    # episodic|semantic|procedural|architectural|research|operational|capability|organizational|negative
+    evidence_class: Mapped[str] = mapped_column(String(12), default="MEASURED")
+    # FACT|MEASURED|INFERENCE|HYPOTHESIS|ASSUMPTION|PREDICTION|UNKNOWN
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    task_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sources: Mapped[list[Any]] = mapped_column(default=list)  # goal:, task:, commit:, url: references
+    technologies: Mapped[list[Any]] = mapped_column(default=list)
+    status: Mapped[str] = mapped_column(String(12), default="approved")
+    # draft|approved|rejected|quarantined|superseded|expired
+    status_reason: Mapped[str] = mapped_column(Text, default="")
+    reviewed_by: Mapped[str] = mapped_column(String(128), default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    supersedes_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    review_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    classification: Mapped[str] = mapped_column(String(16), default="internal")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -246,6 +263,8 @@ class Project(Base):
     protected: Mapped[bool] = mapped_column(Boolean, default=False)
     manager_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # public|internal|confidential|restricted|secret (SPEC-14 S14-R-05): what may leave the project
+    classification: Mapped[str] = mapped_column(String(16), default="internal")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

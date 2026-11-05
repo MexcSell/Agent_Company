@@ -29,6 +29,7 @@ from agent_company import (
     files,
     gitsync,
     governance,
+    learning,
     loop,
     machines,
     mcp,
@@ -1218,6 +1219,18 @@ def create_app(start_background: bool = True) -> FastAPI:
         d["decisions"] = decisions.list_decisions(goal_id=goal_id)
         d["blackboard"] = blackboard.read(goal_id)
         return d
+
+    # --- knowledge items (SPEC-11): lessons with provenance; people review, agents never do ---
+    @app.get("/api/knowledge")
+    def knowledge_list(status: str = "", agent_id: int | None = None, _: dict[str, Any] = Depends(admin_user)
+                       ) -> list[dict[str, Any]]:
+        return learning.knowledge(status, agent_id)
+
+    @app.post("/api/knowledge/{item_id}/review")
+    def knowledge_review(item_id: int, body: DecideBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = learning.review(item_id, body.approve, f"user:{admin['name']}", body.note)
+        _audit(admin, "knowledge_review", item_id, after={"status": out["status"]})
+        return out
 
     @app.get("/api/decisions")
     def decisions_list(goal_id: int | None = None, status: str = "", user: dict[str, Any] = Depends(current_user)

@@ -209,7 +209,7 @@ def study(agent_id: int | None = None) -> dict[str, Any]:
             nxt = next((a for a in agents if a.id == agent_id), None)
             if nxt is None:
                 raise KeyError(agent_id)
-        lessons = [x.text for x in s.scalars(select(Lesson).where(Lesson.agent_id == nxt.id)
+        lessons = [x.text for x in s.scalars(select(Lesson).where(Lesson.agent_id == nxt.id, Lesson.status == "approved")
                                              .order_by(Lesson.id.desc()).limit(12))]
         s.expunge(nxt)
     topic = " ".join(list((nxt.skills or {}).keys())[:6]) or nxt.role

@@ -38,6 +38,7 @@ UPLOAD_TYPES = ("image/", "text/", "application/json", "application/pdf", "appli
 def project_dict(p: Project, counts: dict[str, int] | None = None) -> dict[str, Any]:
     return {"id": p.id, "name": p.name, "path": p.path, "github_url": p.github_url, "description": p.description,
             "quality_commands": p.quality_commands, "protected": p.protected, "manager_id": p.manager_id,
+            "classification": p.classification or "internal",
             "created_at": p.created_at.isoformat(), **(counts or {})}
 
 
@@ -141,10 +142,14 @@ def create(name: str, path: str = "", github_url: str = "", description: str = "
 
 
 def update(project_id: int, changes: dict[str, Any]) -> dict[str, Any]:
-    allowed = {"name", "github_url", "description", "quality_commands"}
+    from agent_company.learning import CLASSIFICATIONS
+
+    allowed = {"name", "github_url", "description", "quality_commands", "classification"}
     bad = set(changes) - allowed
     if bad:
         raise ValueError(f"not editable: {', '.join(sorted(bad))}")
+    if "classification" in changes and changes["classification"] not in CLASSIFICATIONS:
+        raise ValueError(f"classification must be one of {', '.join(CLASSIFICATIONS)}")
     with session() as s:
         p = s.get(Project, project_id)
         if p is None:
@@ -153,10 +158,16 @@ def update(project_id: int, changes: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("the platform project cannot be renamed")
         _check(changes.get("name", p.name), "", changes.get("github_url", p.github_url),
                changes.get("quality_commands", p.quality_commands))
+        old = p.classification or "internal"
         for k, v in changes.items():
             setattr(p, k, v.strip() if isinstance(v, str) else v)
         s.flush()
-        return project_dict(p)
+        out = project_dict(p)
+    if out["classification"] != old:
+        from agent_company.learning import reclassify
+
+        reclassify(project_id, out["classification"])
+    return out
 
 
 def delete(project_ids: list[int]) -> list[int]:

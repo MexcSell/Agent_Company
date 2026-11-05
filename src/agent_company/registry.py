@@ -302,8 +302,8 @@ def agent_detail(agent_id: int) -> dict[str, Any]:
                         for o, w in related(s, a.id, 8)]
         d["subordinates"] = [{"id": o.id, "name": o.name, "role": o.role}
                              for o in s.scalars(select(Agent).where(Agent.superior_id == a.id))]
-        d["lessons"] = [{"text": lesson.text, "outcome": lesson.outcome,
-                         "at": lesson.created_at.isoformat()}
+        d["lessons"] = [{"id": lesson.id, "text": lesson.text, "outcome": lesson.outcome, "kind": lesson.kind,
+                         "status": lesson.status, "goal_id": lesson.goal_id, "at": lesson.created_at.isoformat()}
                         for lesson in s.scalars(select(Lesson).where(Lesson.agent_id == a.id)
                                                 .order_by(Lesson.id.desc()).limit(20))]
         from agent_company.db import Handover
