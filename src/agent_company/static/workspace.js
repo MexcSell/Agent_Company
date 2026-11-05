@@ -14,6 +14,7 @@ window.WSP = window.WSP || {};
     sel: new Set(), anchor: null, clip: null, tabs: [], active: null, el: null,
     sizes: { left: 260, right: 400, term: 260, ...read("ac.wsp.sizes", {}) }, termHidden: store.get("ac.wsp.termHidden") === "1",
     win: { min: new Set(readList("ac.wsp.min")), max: store.get("ac.wsp.max") || null }, git: {}, filter: "", panes: [], noClaude: false,
+    id: "main", box: null, orient: store.get("ac.wsp.orient") === "h" ? "h" : "v", focus: null, dragFrom: null, offline: false,
   });
   const saveOpen = () => store.set("ac.wsp.open", JSON.stringify([...S.open].slice(-300)));
   const parentOf = (p) => p.slice(0, p.lastIndexOf("/")) || "/";
@@ -43,8 +44,8 @@ window.WSP = window.WSP || {};
     "docker-compose.yml": "dockercompose", "docker-compose.yaml": "dockercompose", "compose.yml": "dockercompose", "compose.yaml": "dockercompose",
     ".env": "dotenv", ".gitignore": "ignore", ".dockerignore": "ignore", gemfile: "ruby", rakefile: "ruby" };
     const IMG = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "avif", "tif", "tiff"]), AUD = new Set(["mp3", "wav", "ogg", "flac", "m4a", "aac"]), VID = new Set(["mp4", "webm", "mov", "mkv", "avi"]);
-  const FOLDER = { src: "#4f8fe8", lib: "#4f8fe8", app: "#4f8fe8", test: "#43a047", tests: "#43a047", spec: "#43a047", docs: "#2aa6d6", doc: "#2aa6d6", ".git": "#f05032", ".github": "#6d8086",
-    node_modules: "#7cb342", static: "#fb8c00", public: "#fb8c00", assets: "#fb8c00", images: "#26a69a", data: "#8e5cc8", scripts: "#3d9a2c", bin: "#3d9a2c", config: "#6d8086", ".venv": "#3776ab", venv: "#3776ab", dist: "#a67c00", build: "#a67c00" };
+  // Folders: one yellow, drawn 10% larger than file icons.
+  const FOLDER_COLOUR = "#f2b705", FOLDER_SCALE = 1.1;
   function setiIcon(lower) {
     const T = window.SETI;
     if (!T) return null;
@@ -62,8 +63,8 @@ window.WSP = window.WSP || {};
   W.fileIcon = (name, dir, size = 16, open = false) => {
     const lower = name.toLowerCase();
     if (dir) {
-      const c = FOLDER[lower] || "#d9a53f";
-      return `<svg class="fico" width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true">${open
+      const c = FOLDER_COLOUR, px = Math.round(size * FOLDER_SCALE * 10) / 10;
+      return `<svg class="fico fdir" width="${px}" height="${px}" viewBox="0 0 24 24" aria-hidden="true">${open
         ? `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v1H8.5a2 2 0 0 0-1.9 1.4L4 19H5a2 2 0 0 1-2-2z" fill="${c}" opacity=".7"/><path d="M6.6 11.4A2 2 0 0 1 8.5 10H22l-2.6 8.2A2 2 0 0 1 17.5 20H4z" fill="${c}"/>`
         : `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="${c}"/>`}</svg>`;
     }
@@ -106,23 +107,27 @@ window.WSP = window.WSP || {};
   addEventListener("blur", closeMenu);
 
   // --- layout ---------------------------------------------------------------------------
-  const LAYOUT = `
-    <aside class="wx" aria-label="Explorer">
-      <div class="wx-head"><span class="wx-title">Explorer</span>
-        <button class="icon-btn sm" data-x="newfile" title="New file">${svg("M6 2h9l5 5v15H6zM14 2v6h6M12 11v6M9 14h6")}</button>
+  // The explorer's buttons; every explorer window has them (the first one in the head of the column).
+  const PANE_BTNS = `<button class="icon-btn sm" data-x="newfile" title="New file">${svg("M6 2h9l5 5v15H6zM14 2v6h6M12 11v6M9 14h6")}</button>
         <button class="icon-btn sm" data-x="newdir" title="New folder">${svg("M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 10v6M9 13h6")}</button>
         <button class="icon-btn sm" data-x="upload" title="Upload files">${svg("M12 16V4M7 9l5-5 5 5M4 20h16")}</button>
         <button class="icon-btn sm" data-x="refresh" title="Refresh">${svg("M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7")}</button>
         <button class="icon-btn sm" data-x="collapse" title="Collapse folders">${svg("M8 4l4 4 4-4M8 20l4-4 4 4")}</button>
-        <button class="icon-btn sm" data-x="filter" title="Filter files by name (Ctrl+F in the explorer)">${svg("M3 5h18l-7 8v6l-4 2v-8z")}</button>
-        <button class="icon-btn sm" data-x="split" title="Split: add another explorer pane (+)">${svg("M12 5v14M5 12h14")}</button>
-        ${winBtns("explorer")}</div>
-      <div class="wx-filter" id="wx-filter" hidden><input id="wx-filter-q" type="search" placeholder="Filter by name…" aria-label="Filter files"></div>
-      ${strip("explorer", "Explorer")}
-      <div class="wx-root"><select id="wx-roots" aria-label="Folder"></select><button class="icon-btn sm" id="wx-close-root" title="Close this folder" hidden>✕</button></div>
-      <div class="wx-tree" id="wx-tree" tabindex="0" role="tree" aria-label="Files"></div>
+        <button class="icon-btn sm" data-x="filter" title="Filter files by name (Ctrl+F in the list)">${svg("M3 5h18l-7 8v6l-4 2v-8z")}</button>`;
+  const FILTER = '<div class="wx-filter" hidden><input type="search" placeholder="Filter by name…" aria-label="Filter files"></div>';
+  const LAYOUT = `
+    <aside class="wx" aria-label="Files">
+      <div class="wx-head">${PANE_BTNS}
+        <button class="icon-btn sm" data-x="split" title="Split: open another file window (+)">${svg("M12 5v14M5 12h14")}</button>
+        <button class="icon-btn sm" data-x="orient" id="wx-orient" hidden></button>
+        <span class="grow"></span>${winBtns("explorer")}</div>
+      ${strip("explorer", "files", svg("M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"))}
+      <div class="wx-split" id="wx-split">
+        <section class="wx-pane wx-main">${FILTER}
+          <div class="wx-root"><select id="wx-roots" aria-label="Folder"></select><button class="icon-btn sm" id="wx-close-root" title="Close this folder" hidden>✕</button></div>
+          <div class="wx-tree" id="wx-tree" tabindex="0" role="tree" aria-label="Files"></div></section>
+      </div>
       <div class="wx-status muted" id="wx-status"></div>
-      <div class="wx-panes" id="wx-panes"></div>
       <input type="file" id="wx-file" multiple hidden>
     </aside>
     <div class="wgut v" data-g="left" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
@@ -138,8 +143,8 @@ window.WSP = window.WSP || {};
     return `<button class="icon-btn sm win-btn" data-win="min" data-pane="${pane}" title="Minimise">${svg("M7 5l5 5 5-5M4 15h16v4H4z")}</button>`
       + `<button class="icon-btn sm win-btn" data-win="max" data-pane="${pane}" title="Maximise / restore">${svg("M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7")}</button>`;
   }
-  function strip(pane, label) {
-    return `<button class="win-strip" data-win="restore" data-pane="${pane}" title="Restore ${label}"><span>${label}</span></button>`;
+  function strip(pane, label, html) {
+    return `<button class="win-strip" data-win="restore" data-pane="${pane}" title="Restore ${label}"><span>${html || label}</span></button>`;
   }
   W.winBtns = winBtns; W.winStrip = strip;
   function svg(d) { return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`; }
@@ -180,6 +185,8 @@ window.WSP = window.WSP || {};
   };
   W.toggleTerminal = (show = S.termHidden) => { S.termHidden = !show; store.set("ac.wsp.termHidden", S.termHidden ? "1" : ""); applySizes(); if (show) W.focusTerminal?.(); };
   W.maximizeTerminal = () => { S.termHidden = false; W.win("terminal", "max"); };
+  // Side by side, the file windows may take most of the width; stacked, the column stays narrow.
+  const sideBySide = () => S.orient === "h" && S.panes.length > 0;
   function wireGutters() {
     S.el.querySelectorAll(".wgut").forEach((g) => (g.onpointerdown = (e) => {
       e.preventDefault();
@@ -188,7 +195,7 @@ window.WSP = window.WSP || {};
       const which = g.dataset.g, start = { x: e.clientX, y: e.clientY, ...S.sizes };
       const total = S.el.clientWidth, mh = S.el.querySelector(".wm").clientHeight;
       g.onpointermove = (ev) => {
-        if (which === "left") S.sizes.left = Math.max(160, Math.min(total * 0.4, start.left + ev.clientX - start.x));
+        if (which === "left") S.sizes.left = Math.max(160, Math.min(total * (sideBySide() ? 0.7 : 0.4), start.left + ev.clientX - start.x));
         if (which === "right") S.sizes.right = Math.max(280, Math.min(total * 0.6, start.right - (ev.clientX - start.x)));
         if (which === "term") S.sizes.term = Math.max(80, Math.min(mh - 120, start.term - (ev.clientY - start.y)));
         applySizes();
@@ -198,12 +205,20 @@ window.WSP = window.WSP || {};
     addEventListener("resize", () => S.el?.isConnected && applySizes());
   }
 
-  // --- explorer -----------------------------------------------------------------------------
+  // --- explorer windows ---------------------------------------------------------------------
+  // The first window is the project's (its state is S itself); "+" opens more, each with its own folder, open
+  // folders, selection and filter, and the same code: one clipboard, menus, keys and drag and drop across them all.
+  // A list stays as it was while the server cannot be reached; only a real answer (gone, forbidden) empties it.
   const status = (t) => { const el = S.el?.querySelector("#wx-status"); if (el) el.textContent = t || ""; };
-  async function loadDir(path) {
+  const unreachable = (e) => !e?.status || e.status >= 502;
+  const allPanes = () => [S, ...S.panes];
+  const treeEl = (T) => T.box.querySelector(".wx-tree");
+  const renderAll = () => allPanes().forEach((T) => renderTree(T));
+  const refreshAll = () => Promise.all(allPanes().map((T) => refresh(T)));
+  async function loadDir(T, path) {
     const d = await api(`/api/files/list?path=${encodeURIComponent(path)}`);
     const items = d.items.filter((it) => it.name !== ".git");
-    S.dirs.set(path, items);
+    T.dirs.set(path, items);
     items.forEach((it) => S.items.set(it.path, it));
     return items;
   }
@@ -211,17 +226,24 @@ window.WSP = window.WSP || {};
     S.roots = await api("/api/files/roots");
     if (!S.roots.some((r) => r.path === S.root)) S.root = (S.roots.find((r) => r.name !== "data") || S.roots[0])?.path || "";
     renderRoots();
-    await refresh();
+    await refresh(S);
   }
+  const rootOptions = (more) => S.roots.map((r) => `<option value="${esc(r.path)}">${esc(r.name)} · ${esc(r.path)}</option>`).join("") + `<option value="__open">${more}</option>`;
   function renderRoots() {
     const sel = S.el.querySelector("#wx-roots");
-    sel.innerHTML = S.roots.map((r) => `<option value="${esc(r.path)}">${esc(r.name)} · ${esc(r.path)}</option>`).join("") + '<option value="__open">＋ Open folder…</option>';
+    sel.innerHTML = rootOptions("＋ Open folder…");
     sel.value = S.root;
     S.el.querySelector("#wx-close-root").hidden = !S.roots.find((r) => r.path === S.root)?.opened;
+    S.panes.forEach(renderPaneRoots);
+  }
+  function renderPaneRoots(T) {
+    const sel = T.box.querySelector("select");
+    sel.innerHTML = rootOptions("＋ Open folder from / …");
+    sel.value = T.root;
   }
   async function setRoot(path) {
     S.root = path; store.set("ac.wsp.root", path); S.sel.clear(); S.anchor = null;
-    renderRoots(); await refresh(); W.onRoot?.(path);
+    renderRoots(); await refresh(S); W.onRoot?.(path);
   }
   // Show `path` in the explorer, opening it as a root first if needed (resuming a session in its folder).
   W.openRoot = async (path) => {
@@ -236,186 +258,209 @@ window.WSP = window.WSP || {};
     if (!dir) { renderRoots(); return; }
     try { const r = await api("/api/files/roots", { method: "POST", body: { path: dir } }); S.roots = await api("/api/files/roots"); await setRoot(r.path); } catch (e) { toast(e.message); renderRoots(); }
   }
+  const saveState = (T) => (T === S ? saveOpen() : savePanes());
   // Only folders whose whole chain is open are listed (an open folder inside a closed one is not visible).
-  const shown = (p) => { for (let d = parentOf(p); d.length > S.root.length; d = parentOf(d)) if (!S.open.has(d)) return false; return true; };
-  async function refresh() {
-    if (!S.root) return renderTree();
-    const dirs = [S.root, ...[...S.open].filter((p) => p.startsWith(S.root + "/") && shown(p))];
-    const fresh = new Map(S.dirs);
-    let rootOk = false;
-    api(`/api/files/git-status?path=${encodeURIComponent(S.root)}`).then((g) => {
-      if (JSON.stringify(g) !== JSON.stringify(S.git)) { S.git = g; renderTree(); }
+  const shown = (T, p) => { for (let d = parentOf(p); d.length > T.root.length; d = parentOf(d)) if (!T.open.has(d)) return false; return true; };
+  async function refresh(T = S) {
+    if (!T.root) return renderTree(T);
+    const dirs = [T.root, ...[...T.open].filter((p) => p.startsWith(T.root + "/") && shown(T, p))];
+    const fresh = new Map(T.dirs);
+    let rootOk = false, lost = false;
+    api(`/api/files/git-status?path=${encodeURIComponent(T.root)}`).then((g) => {
+      if (JSON.stringify(g) !== JSON.stringify(T.git)) { T.git = g; renderTree(T); }
     }).catch(() => {});
-    await Promise.all(dirs.map(async (d) => { try { fresh.set(d, (await api(`/api/files/list?path=${encodeURIComponent(d)}`)).items.filter((it) => it.name !== ".git")); if (d === S.root) rootOk = true; } catch { fresh.delete(d); if (d !== S.root) S.open.delete(d); } }));
-    if (!rootOk) { status("This folder is not available."); S.dirs.clear(); return renderTree(); }
-    const before = JSON.stringify([...S.dirs.entries()].filter(([k]) => fresh.has(k)).map(([k, v]) => [k, v.map((i) => i.name + i.size + i.modified)]));
-    S.dirs = fresh;
+    await Promise.all(dirs.map(async (d) => {
+      try { fresh.set(d, (await api(`/api/files/list?path=${encodeURIComponent(d)}`)).items.filter((it) => it.name !== ".git")); if (d === T.root) rootOk = true; }
+      catch (e) { if (unreachable(e)) { lost = true; return; } fresh.delete(d); if (d !== T.root) T.open.delete(d); }
+    }));
+    if (lost) { S.offline = true; status("Server not reachable: showing the last list"); return; }
+    if (S.offline) { S.offline = false; status(""); }
+    T.missing = !rootOk;
+    if (!rootOk) { T.dirs.clear(); return renderTree(T); }
+    const before = JSON.stringify([...T.dirs.entries()].filter(([k]) => fresh.has(k)).map(([k, v]) => [k, v.map((i) => i.name + i.size + i.modified)]));
+    T.dirs = fresh;
     fresh.forEach((items) => items.forEach((it) => S.items.set(it.path, it)));
-    const after = JSON.stringify([...S.dirs.entries()].map(([k, v]) => [k, v.map((i) => i.name + i.size + i.modified)]));
-    S.idle = before === after ? (S.idle || 0) + 1 : 0;
-    if (before !== after || !S.el.querySelector("#wx-tree .tr")) renderTree();
+    const after = JSON.stringify([...T.dirs.entries()].map(([k, v]) => [k, v.map((i) => i.name + i.size + i.modified)]));
+    if (T === S) S.idle = before === after ? (S.idle || 0) + 1 : 0;
+    if (before !== after || !treeEl(T).querySelector(".tr")) renderTree(T);
   }
-  W.refreshExplorer = refresh;
+  W.refreshExplorer = refreshAll;
 
-  function visibleRows() {
+  function visibleRows(T) {
     const rows = [];
     const walk = (dir, depth) => {
-      for (const it of S.dirs.get(dir) || []) {
+      for (const it of T.dirs.get(dir) || []) {
         rows.push({ it, depth });
-        if (it.dir && S.open.has(it.path) && S.dirs.has(it.path)) walk(it.path, depth + 1);
+        if (it.dir && T.open.has(it.path) && T.dirs.has(it.path)) walk(it.path, depth + 1);
       }
     };
-    if (S.root) walk(S.root, 0);
+    if (T.root) walk(T.root, 0);
     return rows;
   }
-  function renderTree() {
-    const tree = S.el.querySelector("#wx-tree");
-    if (!S.root) { tree.innerHTML = `<div class="wx-empty"><p class="muted">No folder open.</p><button class="btn primary" data-x="openfolder">Open folder</button></div>`; return; }
-    let rows = visibleRows();
-    const q = S.filter.trim().toLowerCase();
+  function renderTree(T = S) {
+    const tree = treeEl(T);
+    if (!T.root) { tree.innerHTML = T === S ? `<div class="wx-empty"><p class="muted">No folder open.</p><button class="btn primary" data-x="openfolder">Open folder</button></div>` : '<div class="wx-empty muted">Choose a folder above.</div>'; return; }
+    if (T.missing) { tree.innerHTML = '<div class="wx-empty muted">This folder is not available.</div>'; return; }
+    let rows = visibleRows(T);
+    const q = T.filter.trim().toLowerCase();
     if (q) {  // keep matching rows and the folders that lead to them
       const keep = new Set();
-      rows.forEach(({ it }) => { if (it.name.toLowerCase().includes(q)) { keep.add(it.path); for (let d = parentOf(it.path); d.length > S.root.length; d = parentOf(d)) keep.add(d); } });
+      rows.forEach(({ it }) => { if (it.name.toLowerCase().includes(q)) { keep.add(it.path); for (let d = parentOf(it.path); d.length > T.root.length; d = parentOf(d)) keep.add(d); } });
       rows = rows.filter(({ it }) => keep.has(it.path));
     }
     const cut = new Set(S.clip?.cut ? S.clip.paths : []);
     const G = { M: "modified", A: "added", D: "deleted", U: "untracked", R: "renamed", C: "copied", dot: "contains changes" };
     tree.innerHTML = rows.map(({ it, depth }) => {
-      const open = it.dir && S.open.has(it.path), g = S.git[it.path];
-      return `<div class="tr${S.sel.has(it.path) ? " sel" : ""}${cut.has(it.path) ? " cut" : ""}${S.active === it.path ? " act" : ""}${g ? ` g-${g}` : ""}" role="treeitem" data-path="${esc(it.path)}"${it.dir ? ` data-dir="1" aria-expanded="${open}"` : ""} draggable="true" style="--d:${depth}"
+      const open = it.dir && T.open.has(it.path), g = T.git[it.path];
+      return `<div class="tr${T.sel.has(it.path) ? " sel" : ""}${cut.has(it.path) ? " cut" : ""}${S.active === it.path ? " act" : ""}${g ? ` g-${g}` : ""}" role="treeitem" data-path="${esc(it.path)}"${it.dir ? ` data-dir="1" aria-expanded="${open}"` : ""} draggable="true" style="--d:${depth}"
         title="${esc(it.name)}${it.dir ? "" : ` · ${W.size(it.size)}`}${g ? ` · ${G[g]}` : ""}"><span class="chev${open ? " open" : ""}">${it.dir ? "›" : ""}</span>${W.fileIcon(it.name, it.dir, 16, open)}<span class="tn">${esc(it.name)}</span>${g ? `<span class="gd">${g === "dot" ? "●" : g}</span>` : ""}</div>`;
     }).join("") || `<div class="wx-empty muted">${q ? "No file matches the filter." : "Empty folder. Drop files here to upload."}</div>`;
   }
 
-  async function toggleDir(path, force) {
-    const open = force ?? !S.open.has(path);
-    if (open) { S.open.add(path); if (!S.dirs.has(path)) { try { await loadDir(path); } catch (e) { toast(e.message); S.open.delete(path); } } }
-    else S.open.delete(path);
-    saveOpen(); renderTree();
+  async function toggleDir(T, path, force) {
+    const open = force ?? !T.open.has(path);
+    if (open) { T.open.add(path); if (!T.dirs.has(path)) { try { await loadDir(T, path); } catch (e) { toast(e.message); T.open.delete(path); } } }
+    else T.open.delete(path);
+    saveState(T); renderTree(T);
   }
-  async function reveal(path) {
-    if (!S.root || !path.startsWith(S.root + "/")) return;
-    const parts = path.slice(S.root.length + 1).split("/");
-    let cur = S.root;
-    for (const part of parts.slice(0, -1)) { cur += "/" + part; S.open.add(cur); if (!S.dirs.has(cur)) { try { await loadDir(cur); } catch { break; } } }
-    saveOpen(); renderTree();
-    S.el.querySelector(`.tr[data-path="${CSS.escape(path)}"]`)?.scrollIntoView({ block: "nearest" });
+  async function reveal(T, path) {
+    if (!T.root || !path.startsWith(T.root + "/")) return;
+    const parts = path.slice(T.root.length + 1).split("/");
+    let cur = T.root;
+    for (const part of parts.slice(0, -1)) { cur += "/" + part; T.open.add(cur); if (!T.dirs.has(cur)) { try { await loadDir(T, cur); } catch { break; } } }
+    saveState(T); renderTree(T);
+    treeEl(T).querySelector(`.tr[data-path="${CSS.escape(path)}"]`)?.scrollIntoView({ block: "nearest" });
   }
 
-  const targetDir = (row) => (row ? (row.dataset.dir ? row.dataset.path : parentOf(row.dataset.path)) : S.root);
-  const selection = (row) => (row && S.sel.has(row.dataset.path) ? [...S.sel] : row ? [row.dataset.path] : [...S.sel]);
+  const targetDir = (T, row) => (row ? (row.dataset.dir ? row.dataset.path : parentOf(row.dataset.path)) : T.root);
+  const selection = (T, row) => (row && T.sel.has(row.dataset.path) ? [...T.sel] : row ? [row.dataset.path] : [...T.sel]);
 
+  // The first window's own controls: its head buttons, the folder select and the upload input.
   function wireExplorer() {
-    const tree = S.el.querySelector("#wx-tree");
-    S.el.querySelector(".wx").addEventListener("click", (e) => { const b = e.target.closest("[data-x]"); if (b) explorerAction(b.dataset.x); });
+    S.el.querySelector(".wx-head").addEventListener("click", (e) => { const b = e.target.closest("[data-x]"); if (b) explorerAction(S, b.dataset.x); });
+    S.el.querySelector(".wx-main").addEventListener("click", (e) => { const b = e.target.closest("[data-x]"); if (b) explorerAction(S, b.dataset.x); });
     S.el.querySelector("#wx-roots").onchange = (e) => (e.target.value === "__open" ? openFolder() : setRoot(e.target.value));
     S.el.querySelector("#wx-close-root").onclick = async () => {
       if (!confirm(`Close ${S.root} in the explorer? Nothing on disk changes.`)) return;
       await api(`/api/files/roots?path=${encodeURIComponent(S.root)}`, { method: "DELETE" }).catch((e) => toast(e.message));
       S.root = ""; await loadRoots();
     };
-    S.el.querySelector("#wx-file").onchange = async (e) => { await uploadFiles([...e.target.files], S.uploadDir || S.root); e.target.value = ""; };
-
+    S.el.querySelector("#wx-file").onchange = async (e) => { const T = S.uploadPane || S; await uploadFiles(T, [...e.target.files], S.uploadDir || T.root); e.target.value = ""; };
+    wireTree(S);
+    renderOrient();
+  }
+  // One file window's list: the same for the first window and every added one.
+  function wireTree(T) {
+    const tree = treeEl(T);
+    tree.addEventListener("focusin", () => (S.focus = T));
     tree.onclick = (e) => {
+      if (e.target.closest("[data-x]")) return;  // "Open folder" in an empty window
       const row = e.target.closest(".tr");
-      if (!row) { S.sel.clear(); renderTree(); return; }
+      if (!row) { T.sel.clear(); renderTree(T); return; }
       const path = row.dataset.path;
       const rows = [...tree.querySelectorAll(".tr")].map((r) => r.dataset.path);
-      if (e.shiftKey && S.anchor) {
-        const [a, b] = [rows.indexOf(S.anchor), rows.indexOf(path)].sort((x, y) => x - y);
-        if (!(e.ctrlKey || e.metaKey)) S.sel.clear();
-        rows.slice(a, b + 1).forEach((p) => S.sel.add(p));
-      } else if (e.ctrlKey || e.metaKey) { S.sel.has(path) ? S.sel.delete(path) : S.sel.add(path); S.anchor = path; }
+      if (e.shiftKey && T.anchor) {
+        const [a, b] = [rows.indexOf(T.anchor), rows.indexOf(path)].sort((x, y) => x - y);
+        if (!(e.ctrlKey || e.metaKey)) T.sel.clear();
+        rows.slice(a, b + 1).forEach((p) => T.sel.add(p));
+      } else if (e.ctrlKey || e.metaKey) { T.sel.has(path) ? T.sel.delete(path) : T.sel.add(path); T.anchor = path; }
       else {
-        S.sel.clear(); S.sel.add(path); S.anchor = path;
-        if (row.dataset.dir) return toggleDir(path);
+        T.sel.clear(); T.sel.add(path); T.anchor = path;
+        if (row.dataset.dir) return toggleDir(T, path);
         W.openPath(path);
       }
-      renderTree();
+      renderTree(T);
     };
     tree.oncontextmenu = (e) => {
       e.preventDefault();
       const row = e.target.closest(".tr");
-      if (row && !S.sel.has(row.dataset.path)) { S.sel.clear(); S.sel.add(row.dataset.path); S.anchor = row.dataset.path; renderTree(); }
-      if (!row) { S.sel.clear(); renderTree(); }
-      W.menu(e.clientX, e.clientY, menuFor(row ? S.el.querySelector(`.tr[data-path="${CSS.escape(row.dataset.path)}"]`) : null));
+      if (row && !T.sel.has(row.dataset.path)) { T.sel.clear(); T.sel.add(row.dataset.path); T.anchor = row.dataset.path; renderTree(T); }
+      if (!row) { T.sel.clear(); renderTree(T); }
+      W.menu(e.clientX, e.clientY, menuFor(T, row ? tree.querySelector(`.tr[data-path="${CSS.escape(row.dataset.path)}"]`) : null));
     };
-    const fq = S.el.querySelector("#wx-filter-q");
-    fq.oninput = () => { S.filter = fq.value; renderTree(); };
-    fq.onkeydown = (e) => { if (e.key === "Escape") { e.preventDefault(); toggleFilter(false); tree.focus(); } };
+    const fq = T.box.querySelector(".wx-filter input");
+    fq.oninput = () => { T.filter = fq.value; renderTree(T); };
+    fq.onkeydown = (e) => { if (e.key === "Escape") { e.preventDefault(); toggleFilter(T, false); tree.focus(); } };
     tree.onkeydown = (e) => {
-      const sel = [...S.sel], one = sel.length === 1 ? sel[0] : null, mod = e.ctrlKey || e.metaKey;
-      if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); toggleFilter(true); return; }
-      if (e.key === "Delete" && sel.length) { e.preventDefault(); act.delete(sel); }
-      else if (e.key === "F2" && one) { e.preventDefault(); act.rename(one); }
-      else if (e.key === "Enter" && one) { e.preventDefault(); S.items.get(one)?.dir ? toggleDir(one) : W.openPath(one); }
+      const sel = [...T.sel], one = sel.length === 1 ? sel[0] : null, mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); toggleFilter(T, true); return; }
+      if (e.key === "Delete" && sel.length) { e.preventDefault(); act.delete(T, sel); }
+      else if (e.key === "F2" && one) { e.preventDefault(); act.rename(T, one); }
+      else if (e.key === "Enter" && one) { e.preventDefault(); S.items.get(one)?.dir ? toggleDir(T, one) : W.openPath(one); }
       else if (mod && e.key.toLowerCase() === "c" && sel.length) { e.preventDefault(); act.clip(sel, false); }
       else if (mod && e.key.toLowerCase() === "x" && sel.length) { e.preventDefault(); act.clip(sel, true); }
-      else if (mod && e.key.toLowerCase() === "v" && S.clip) { e.preventDefault(); act.paste(one && S.items.get(one)?.dir ? one : one ? parentOf(one) : S.root); }
+      else if (mod && e.key.toLowerCase() === "v" && S.clip) { e.preventDefault(); act.paste(T, one && S.items.get(one)?.dir ? one : one ? parentOf(one) : T.root); }
       else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
         const rows = [...tree.querySelectorAll(".tr")].map((r) => r.dataset.path);
-        const i = Math.max(-1, rows.indexOf(S.anchor)) + (e.key === "ArrowDown" ? 1 : -1);
-        if (rows[i]) { S.sel.clear(); S.sel.add(rows[i]); S.anchor = rows[i]; renderTree(); tree.querySelector(".tr.sel")?.scrollIntoView({ block: "nearest" }); }
-      } else if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && one && S.items.get(one)?.dir) { e.preventDefault(); toggleDir(one, e.key === "ArrowRight"); }
+        const i = Math.max(-1, rows.indexOf(T.anchor)) + (e.key === "ArrowDown" ? 1 : -1);
+        if (rows[i]) { T.sel.clear(); T.sel.add(rows[i]); T.anchor = rows[i]; renderTree(T); tree.querySelector(".tr.sel")?.scrollIntoView({ block: "nearest" }); }
+      } else if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && one && S.items.get(one)?.dir) { e.preventDefault(); toggleDir(T, one, e.key === "ArrowRight"); }
     };
 
-    // Drag and drop: rows move (Ctrl/Alt copies); files and folders from the computer upload.
+    // Drag and drop: rows move within a window and copy into another one (Ctrl/Alt copies, Shift moves);
+    // files and folders from the computer upload.
     tree.ondragstart = (e) => {
       const row = e.target.closest(".tr");
       if (!row) return;
-      const paths = selection(row);
+      const paths = selection(T, row);
+      S.dragFrom = T;
       e.dataTransfer.setData("text/x-paths", JSON.stringify(paths));
       e.dataTransfer.setData("text/plain", paths.join("\n"));
       e.dataTransfer.effectAllowed = "copyMove";
     };
+    tree.ondragend = () => (S.dragFrom = null);
+    const copying = (e) => e.ctrlKey || e.altKey || (!!S.dragFrom && S.dragFrom !== T && !e.shiftKey);
     let hover = null;
     const mark = (el) => { if (hover !== el) { hover?.classList.remove("drop"); hover = el; hover?.classList.add("drop"); } };
     tree.ondragover = (e) => {
       e.preventDefault();
-      const row = e.target.closest(".tr");
-      const dir = targetDir(row);
+      const dir = targetDir(T, e.target.closest(".tr"));
       const internal = e.dataTransfer.types.includes("text/x-paths");
-      e.dataTransfer.dropEffect = internal ? (e.ctrlKey || e.altKey ? "copy" : "move") : "copy";
-      mark(dir === S.root ? tree : S.el.querySelector(`.tr[data-path="${CSS.escape(dir)}"]`) || tree);
+      e.dataTransfer.dropEffect = internal ? (copying(e) ? "copy" : "move") : "copy";
+      mark(dir === T.root ? tree : tree.querySelector(`.tr[data-path="${CSS.escape(dir)}"]`) || tree);
     };
     tree.ondragleave = (e) => { if (!tree.contains(e.relatedTarget)) mark(null); };
     tree.ondrop = async (e) => {
       e.preventDefault(); mark(null);
-      const dir = targetDir(e.target.closest(".tr"));
+      const dir = targetDir(T, e.target.closest(".tr"));
       const raw = e.dataTransfer.getData("text/x-paths");
-      if (raw) return moveTo(JSON.parse(raw), dir, e.ctrlKey || e.altKey);
+      const copy = copying(e);
+      S.dragFrom = null;
+      if (raw) return moveTo(T, JSON.parse(raw), dir, copy);
       // Entries must be taken before the first await: the DataTransfer empties after the event.
       const entries = [...(e.dataTransfer.items || [])].map((i) => (i.kind === "file" ? i.webkitGetAsEntry?.() : null)).filter(Boolean);
       const filesList = [...e.dataTransfer.files];
-      if (entries.length) await uploadEntries(entries, dir);
-      else if (filesList.length) await uploadFiles(filesList, dir);
+      if (entries.length) await uploadEntries(T, entries, dir);
+      else if (filesList.length) await uploadFiles(T, filesList, dir);
     };
   }
 
-  function explorerAction(x) {
-    const one = S.sel.size === 1 ? [...S.sel][0] : null;
-    const dir = one ? (S.items.get(one)?.dir ? one : parentOf(one)) : S.root;
+  function explorerAction(T, x) {
+    const one = T.sel.size === 1 ? [...T.sel][0] : null;
+    const dir = one ? (S.items.get(one)?.dir ? one : parentOf(one)) : T.root;
     if (x === "openfolder") return openFolder();
-    if (!S.root) return toast("Open a folder first");
-    if (x === "newfile") return act.create(dir, false);
-    if (x === "newdir") return act.create(dir, true);
-    if (x === "upload") return act.upload(dir);
-    if (x === "refresh") return refresh().then(() => toast("Refreshed"));
-    if (x === "collapse") { S.open.clear(); saveOpen(); renderTree(); }
-    if (x === "filter") return toggleFilter();
     if (x === "split") return addPane();
+    if (x === "orient") return toggleOrient();
+    if (x === "close") return closePane(T);
+    if (!T.root) return toast("Open a folder first");
+    if (x === "newfile") return act.create(T, dir, false);
+    if (x === "newdir") return act.create(T, dir, true);
+    if (x === "upload") return act.upload(T, dir);
+    if (x === "refresh") return refresh(T).then(() => toast(S.offline ? "The server is not reachable" : "Refreshed"));
+    if (x === "collapse") { T.open.clear(); saveState(T); renderTree(T); }
+    if (x === "filter") return toggleFilter(T);
   }
-  function toggleFilter(show) {
-    const box = S.el.querySelector("#wx-filter"), on = show ?? box.hidden;
+  function toggleFilter(T, show) {
+    const box = T.box.querySelector(".wx-filter"), on = show ?? box.hidden;
     box.hidden = !on;
-    if (on) box.querySelector("input").focus(); else { S.filter = ""; box.querySelector("input").value = ""; renderTree(); }
+    if (on) box.querySelector("input").focus(); else { T.filter = ""; box.querySelector("input").value = ""; renderTree(T); }
   }
 
-  function menuFor(row) {
-    const sel = row ? selection(row) : [];
+  function menuFor(T, row) {
+    const sel = row ? selection(T, row) : [];
     const path = row?.dataset.path, isDir = !!row?.dataset.dir, many = sel.length > 1;
-    const dir = targetDir(row);
+    const dir = targetDir(T, row);
     const lower = (path || "").toLowerCase();
     const archive = /\.(zip|tar|tgz|tar\.(gz|bz2|xz)|tbz2|txz)$/.test(lower);
     const runnable = { py: "python3", sh: "bash", js: "node", mjs: "node", rb: "ruby", go: "go run", php: "php", pl: "perl", ts: "npx tsx" }[lower.split(".").pop()];
@@ -423,34 +468,34 @@ window.WSP = window.WSP || {};
     return [
       row && !isDir && !many && { label: "Open", key: "Enter", act: () => W.openPath(path) },
       row && !isDir && !many && runnable && { label: `Run in terminal (${runnable})`, act: () => W.sendToTerminal(`cd ${q(parentOf(path))} && ${runnable} ${q(baseName(path))}\r`) },
-      (!row || isDir) && { label: "New file…", act: () => act.create(dir, false) },
-      (!row || isDir) && { label: "New folder…", act: () => act.create(dir, true) },
-      (!row || isDir) && { label: "Upload files here…", act: () => act.upload(dir) },
+      (!row || isDir) && { label: "New file…", act: () => act.create(T, dir, false) },
+      (!row || isDir) && { label: "New folder…", act: () => act.create(T, dir, true) },
+      (!row || isDir) && { label: "Upload files here…", act: () => act.upload(T, dir) },
       { label: "Open in terminal", act: () => W.newTerminal(dir) },
       row && { label: many ? `Ask Claude about ${sel.length} items` : "Ask Claude about this", act: () => W.claudeMention(sel) },
       "-",
       row && { label: "Cut", key: "Ctrl+X", act: () => act.clip(sel, true) },
       row && { label: "Copy", key: "Ctrl+C", act: () => act.clip(sel, false) },
-      { label: S.clip ? `Paste ${S.clip.paths.length} item(s)` : "Paste", key: "Ctrl+V", disabled: !S.clip, act: () => act.paste(dir) },
+      { label: S.clip ? `Paste ${S.clip.paths.length} item(s)` : "Paste", key: "Ctrl+V", disabled: !S.clip, act: () => act.paste(T, dir) },
       row && !many && { label: "Duplicate", act: () => act.duplicate(path) },
       "-",
       row && { label: many ? "Copy paths" : "Copy path", act: () => W.copyText(sel.join("\n"), "Path copied") },
       row && { label: many ? "Copy relative paths" : "Copy relative path", act: () => W.copyText(sel.map(W.rel).join("\n"), "Path copied") },
-      !row && { label: "Copy folder path", act: () => W.copyText(S.root, "Path copied") },
+      !row && { label: "Copy folder path", act: () => W.copyText(T.root, "Path copied") },
       "-",
       row && { label: many || isDir ? "Download as .zip" : "Download", act: () => act.download(sel) },
-      row && { label: "Compress to .zip", act: () => act.compress(sel) },
-      row && !many && archive && { label: "Extract here", act: () => act.extract(path) },
+      row && { label: "Compress to .zip", act: () => act.compress(T, sel) },
+      row && !many && archive && { label: "Extract here", act: () => act.extract(T, path) },
       "-",
-      row && !many && { label: "Rename…", key: "F2", act: () => act.rename(path) },
-      row && { label: many ? `Delete ${sel.length} items` : "Delete", key: "Del", danger: true, act: () => act.delete(sel) },
-      !row && { label: "Refresh", act: () => refresh() },
+      row && !many && { label: "Rename…", key: "F2", act: () => act.rename(T, path) },
+      row && { label: many ? `Delete ${sel.length} items` : "Delete", key: "Del", danger: true, act: () => act.delete(T, sel) },
+      !row && { label: "Refresh", act: () => refresh(T) },
     ].filter((x, i, arr) => x && !(x === "-" && (i === 0 || arr.slice(0, i).filter(Boolean).pop() === "-")));
   }
 
   // VS Code-style inline input in the tree (new file, new folder, rename): Enter accepts, Esc cancels.
-  function inlineInput({ dir, depth, after, value = "", folder = false, onDone }) {
-    const tree = S.el.querySelector("#wx-tree");
+  function inlineInput(T, { depth, after, value = "", folder = false, onDone }) {
+    const tree = treeEl(T);
     const row = document.createElement("div");
     row.className = "tr tr-input"; row.style.setProperty("--d", depth);
     row.innerHTML = `<span class="chev"></span>${W.fileIcon(value || (folder ? "folder" : "file"), folder, 16)}<input class="tr-edit" spellcheck="false" autocomplete="off" aria-label="${folder ? "Folder" : "File"} name">`;
@@ -460,49 +505,50 @@ window.WSP = window.WSP || {};
     const dot = value.lastIndexOf(".");
     input.focus(); input.setSelectionRange(0, dot > 0 && !folder ? dot : value.length);
     let done = false;
-    const finish = (ok) => { if (done) return; done = true; const v = input.value.trim(); row.remove(); if (ok && v && v !== value) onDone(v); else renderTree(); };
+    const finish = (ok) => { if (done) return; done = true; const v = input.value.trim(); row.remove(); if (ok && v && v !== value) onDone(v); else renderTree(T); };
     input.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); finish(true); } else if (e.key === "Escape") { e.preventDefault(); finish(false); } };
     input.onblur = () => finish(true);
     input.onclick = (e) => e.stopPropagation();
   }
-  const depthOf = (path) => (path === S.root ? -1 : path.slice(S.root.length + 1).split("/").length - 1);
+  const depthOf = (T, path) => (path === T.root ? -1 : path.slice(T.root.length + 1).split("/").length - 1);
+  // Every change is shown in every window (two windows may list the same folder).
   const act = {
-    async create(dir, folder) {
-      if (dir !== S.root && !S.open.has(dir)) await toggleDir(dir, true);
-      const dirRow = dir === S.root ? null : S.el.querySelector(`.tr[data-path="${CSS.escape(dir)}"]`);
-      inlineInput({ dir, depth: depthOf(dir) + 1, after: dirRow, folder, onDone: (name) => act.createNamed(dir, name, folder) });
+    async create(T, dir, folder) {
+      if (dir !== T.root && !T.open.has(dir)) await toggleDir(T, dir, true);
+      const dirRow = dir === T.root ? null : treeEl(T).querySelector(`.tr[data-path="${CSS.escape(dir)}"]`);
+      inlineInput(T, { depth: depthOf(T, dir) + 1, after: dirRow, folder, onDone: (name) => act.createNamed(T, dir, name, folder) });
     },
-    async createNamed(dir, name, folder) {
+    async createNamed(T, dir, name, folder) {
       try {
         const r = await api("/api/files/create", { method: "POST", body: { path: `${dir}/${name}`, folder } });
-        if (dir !== S.root) S.open.add(dir);
-        await refresh(); await reveal(r.path);
+        if (dir !== T.root) T.open.add(dir);
+        await refreshAll(); await reveal(T, r.path);
         if (!folder) W.openPath(r.path);
       } catch (e) { toast(e.message); }
     },
-    upload(dir) { S.uploadDir = dir; S.el.querySelector("#wx-file").click(); },
-    async rename(path) {
-      const row = S.el.querySelector(`.tr[data-path="${CSS.escape(path)}"]`);
-      if (row) { row.hidden = true; inlineInput({ depth: depthOf(path), after: row, value: baseName(path), folder: !!row.dataset.dir, onDone: (n) => act.renameTo(path, n) }); return; }
+    upload(T, dir) { S.uploadDir = dir; S.uploadPane = T; S.el.querySelector("#wx-file").click(); },
+    async rename(T, path) {
+      const row = treeEl(T).querySelector(`.tr[data-path="${CSS.escape(path)}"]`);
+      if (row) { row.hidden = true; inlineInput(T, { depth: depthOf(T, path), after: row, value: baseName(path), folder: !!row.dataset.dir, onDone: (n) => act.renameTo(T, path, n) }); return; }
       const name = prompt("New name", baseName(path));
-      if (name && name !== baseName(path)) act.renameTo(path, name);
+      if (name && name !== baseName(path)) act.renameTo(T, path, name);
     },
-    async renameTo(path, name) {
-      try { const r = await api("/api/files/move", { method: "POST", body: { src: path, dest: `${parentOf(path)}/${name}` } }); retarget(path, r.path); S.sel.clear(); S.sel.add(r.path); await refresh(); } catch (e) { toast(e.message); }
+    async renameTo(T, path, name) {
+      try { const r = await api("/api/files/move", { method: "POST", body: { src: path, dest: `${parentOf(path)}/${name}` } }); retarget(path, r.path); T.sel.clear(); T.sel.add(r.path); await refreshAll(); } catch (e) { toast(e.message); }
     },
     async duplicate(path) {
       const name = baseName(path), dot = name.lastIndexOf(".") > 0 ? name.lastIndexOf(".") : name.length;
-      const siblings = new Set((S.dirs.get(parentOf(path)) || []).map((i) => i.name));
+      const siblings = new Set(allPanes().flatMap((T) => (T.dirs.get(parentOf(path)) || []).map((i) => i.name)));
       let n = 1, cand;
       do { cand = `${name.slice(0, dot)} copy${n > 1 ? " " + n : ""}${name.slice(dot)}`; n++; } while (siblings.has(cand));
-      try { await api("/api/files/move", { method: "POST", body: { src: path, dest: `${parentOf(path)}/${cand}`, copy: true } }); await refresh(); } catch (e) { toast(e.message); }
+      try { await api("/api/files/move", { method: "POST", body: { src: path, dest: `${parentOf(path)}/${cand}`, copy: true } }); await refreshAll(); } catch (e) { toast(e.message); }
     },
-    clip(paths, cut) { S.clip = { paths, cut }; toast(`${paths.length} item(s) ${cut ? "cut" : "copied"}`); renderTree(); },
-    async paste(dir) {
+    clip(paths, cut) { S.clip = { paths, cut }; toast(`${paths.length} item(s) ${cut ? "cut" : "copied"}`); renderAll(); },
+    async paste(T, dir) {
       if (!S.clip) return;
-      await moveTo(S.clip.paths, dir, !S.clip.cut);
+      await moveTo(T, S.clip.paths, dir, !S.clip.cut);
       if (S.clip.cut) S.clip = null;
-      renderTree();
+      renderAll();
     },
     download(paths) {
       const one = paths.length === 1 && !S.items.get(paths[0])?.dir;
@@ -510,34 +556,33 @@ window.WSP = window.WSP || {};
       a.href = one ? W.rawUrl(paths[0], true) : `/api/files/archive?${paths.map((p) => `paths=${encodeURIComponent(p)}`).join("&")}`;
       a.download = ""; document.body.append(a); a.click(); a.remove();
     },
-    async compress(paths) {
+    async compress(T, paths) {
       status("Compressing…");
-      try { const r = await api("/api/files/compress", { method: "POST", body: { paths } }); await refresh(); await reveal(r.path); toast(`Created ${baseName(r.path)} (${W.size(r.size)})`); } catch (e) { toast(e.message); }
+      try { const r = await api("/api/files/compress", { method: "POST", body: { paths } }); await refreshAll(); await reveal(T, r.path); toast(`Created ${baseName(r.path)} (${W.size(r.size)})`); } catch (e) { toast(e.message); }
       status("");
     },
-    async extract(path) {
+    async extract(T, path) {
       status("Extracting…");
-      try { const r = await api("/api/files/extract", { method: "POST", body: { path } }); S.open.add(r.path); await refresh(); await reveal(r.path); toast(`Extracted to ${baseName(r.path)}`); } catch (e) { toast(e.message); }
+      try { const r = await api("/api/files/extract", { method: "POST", body: { path } }); T.open.add(r.path); await refreshAll(); await reveal(T, r.path); toast(`Extracted to ${baseName(r.path)}`); } catch (e) { toast(e.message); }
       status("");
     },
-    async delete(paths) {
+    async delete(T, paths) {
       if (!confirm(paths.length === 1 ? `Delete ${baseName(paths[0])}?${S.items.get(paths[0])?.dir ? " The folder is deleted with everything in it." : ""}` : `Delete ${paths.length} items? Folders are deleted with their contents.`)) return;
       try {
         await api("/api/files/delete", { method: "POST", body: { paths } });
         paths.forEach((p) => S.tabs.filter((t) => t.path === p || t.path.startsWith(p + "/")).forEach((t) => closeTab(t, true)));
-        S.sel.clear(); await refresh();
+        allPanes().forEach((x) => x.sel.clear()); await refreshAll();
       } catch (e) { toast(e.message); }
     },
   };
-  W.explorerAct = act;
 
-  async function moveTo(paths, dest, copy) {
+  async function moveTo(T, paths, dest, copy) {
     let done = 0;
     for (const p of paths) {
       if (p === dest || (!copy && parentOf(p) === dest) || dest.startsWith(p + "/")) continue;
       try { const r = await api("/api/files/move", { method: "POST", body: { src: p, dest, copy } }); if (!copy) retarget(p, r.path); done++; } catch (e) { toast(e.message); }
     }
-    if (done) { S.open.add(dest); S.sel.clear(); await refresh(); toast(`${copy ? "Copied" : "Moved"} ${done} item(s)`); }
+    if (done) { if (dest !== T.root) T.open.add(dest); saveState(T); allPanes().forEach((x) => x.sel.clear()); await refreshAll(); toast(`${copy ? "Copied" : "Moved"} ${done} item(s)`); }
   }
   function retarget(from, to) {
     for (const t of S.tabs) if (t.path === from || t.path.startsWith(from + "/")) { t.path = to + t.path.slice(from.length); t.name = baseName(t.path); }
@@ -550,9 +595,9 @@ window.WSP = window.WSP || {};
     const r = await fetch(`/api/files/upload?folder=${encodeURIComponent(dir)}`, { method: "POST", body: fd, credentials: "same-origin" });
     if (!r.ok) throw new Error(`${file.name}: ${(await r.json().catch(() => ({}))).detail || r.statusText}`);
   }
-  async function uploadFiles(list, dir) {
+  async function uploadFiles(T, list, dir) {
     if (!list.length) return;
-    const existing = new Set((S.dirs.get(dir) || []).map((i) => i.name));
+    const existing = new Set((T.dirs.get(dir) || []).map((i) => i.name));
     const clash = list.filter((f) => existing.has(f.name));
     if (clash.length && !confirm(`Replace ${clash.length} existing file(s) in ${baseName(dir)}? (${clash.slice(0, 3).map((f) => f.name).join(", ")}${clash.length > 3 ? "…" : ""})`)) return;
     let n = 0;
@@ -560,10 +605,10 @@ window.WSP = window.WSP || {};
       status(`Uploading ${++n}/${list.length}: ${f.name}`);
       try { await uploadOne(f, dir); } catch (e) { toast(e.message); }
     }
-    status(""); if (dir !== S.root) S.open.add(dir);
-    await refresh(); toast(`Uploaded ${list.length} file(s)`);
+    status(""); if (dir !== T.root) T.open.add(dir);
+    await refreshAll(); toast(`Uploaded ${list.length} file(s)`);
   }
-  async function uploadEntries(entries, dir) {
+  async function uploadEntries(T, entries, dir) {
     let n = 0;
     const walk = async (entry, into) => {
       if (entry.isFile) {
@@ -578,76 +623,68 @@ window.WSP = window.WSP || {};
         do { batch = await new Promise((ok, fail) => reader.readEntries(ok, fail)); for (const e of batch) await walk(e, sub); } while (batch.length);
       }
     };
-    const existing = new Set((S.dirs.get(dir) || []).map((i) => i.name));
+    const existing = new Set((T.dirs.get(dir) || []).map((i) => i.name));
     const clash = entries.filter((e) => existing.has(e.name));
     if (clash.length && !confirm(`Replace or merge ${clash.length} existing item(s) in ${baseName(dir)}?`)) return;
     for (const e of entries) await walk(e, dir);
-    status(""); if (dir !== S.root) S.open.add(dir);
-    await refresh(); toast(`Uploaded ${n} file(s)`);
+    status(""); if (dir !== T.root) T.open.add(dir);
+    await refreshAll(); toast(`Uploaded ${n} file(s)`);
   }
 
-  // --- more explorer panes ("+"): the first explorer is the project's and stays; each added pane has its own
-  // folder (chosen from the registered roots, or any folder from "/" through the picker) and can be closed.
-  function addPane(root) {
-    const pane = { id: Math.random().toString(36).slice(2, 8), root: root || S.root, open: new Set(), dirs: new Map() };
-    S.panes.push(pane); savePanes(); renderPane(pane); loadPane(pane);
+  // --- more windows ("+"), stacked or side by side ------------------------------------------
+  // An added window chooses its folder from the registered roots, or any folder from "/" through the picker.
+  function addPane(root, open = []) {
+    const T = { id: Math.random().toString(36).slice(2, 8), root: root || S.root, dirs: new Map(), open: new Set(open), sel: new Set(), anchor: null, filter: "", git: {}, box: null };
+    S.panes.push(T); buildPane(T); savePanes(); renderOrient(); renderTree(T); refresh(T);
+    if (sideBySide()) widenForSide();
   }
-  const savePanes = () => store.set("ac.wsp.panes", JSON.stringify(S.panes.map((p) => p.root)));
-  function paneEl(pane) {
-    let el = S.el.querySelector(`.wx-pane[data-pane="${pane.id}"]`);
-    if (!el) {
-      el = document.createElement("section");
-      el.className = "wx-pane"; el.dataset.pane = pane.id;
-      el.innerHTML = `<div class="wx-pane-head"><select aria-label="Folder"></select>
-        <button class="icon-btn sm" data-pa="refresh" title="Refresh">${svg("M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7")}</button>
-        <button class="icon-btn sm" data-pa="collapse" title="Collapse folders">${svg("M8 4l4 4 4-4M8 20l4-4 4 4")}</button>
-        <button class="icon-btn sm" data-pa="close" title="Close this pane">${svg("M6 6l12 12M18 6L6 18")}</button></div><div class="wx-pane-tree" tabindex="0" role="tree"></div>`;
-      S.el.querySelector("#wx-panes").append(el);
-      el.querySelector("select").onchange = async (e) => {
-        if (e.target.value === "__open") {
-          const dir = await pickFolder("/");
-          if (dir) { try { const r = await api("/api/files/roots", { method: "POST", body: { path: dir } }); S.roots = await api("/api/files/roots"); renderRoots(); pane.root = r.path; } catch (x) { toast(x.message); } }
-        } else pane.root = e.target.value;
-        pane.open.clear(); pane.dirs.clear(); savePanes(); renderPane(pane); loadPane(pane);
-      };
-      el.querySelector(".wx-pane-head").onclick = (e) => {
-        const b = e.target.closest("[data-pa]"); if (!b) return;
-        if (b.dataset.pa === "close") { S.panes = S.panes.filter((x) => x !== pane); savePanes(); el.remove(); }
-        if (b.dataset.pa === "refresh") { pane.dirs.clear(); loadPane(pane); }
-        if (b.dataset.pa === "collapse") { pane.open.clear(); renderPane(pane); }
-      };
-      el.querySelector(".wx-pane-tree").onclick = async (e) => {
-        const row = e.target.closest(".tr"); if (!row) return;
-        const path = row.dataset.path;
-        if (row.dataset.dir) { if (pane.open.has(path)) pane.open.delete(path); else { pane.open.add(path); if (!pane.dirs.has(path)) await loadPane(pane, path); } renderPane(pane); }
-        else W.openPath(path);
-      };
-      el.querySelector(".wx-pane-tree").oncontextmenu = (e) => {
-        const row = e.target.closest(".tr"); if (!row) return;
-        e.preventDefault();
-        const path = row.dataset.path, dir = row.dataset.dir ? path : parentOf(path);
-        W.menu(e.clientX, e.clientY, [!row.dataset.dir && { label: "Open", act: () => W.openPath(path) }, { label: "Open in terminal", act: () => W.newTerminal(dir) },
-          { label: "Copy path", act: () => W.copyText(path, "Path copied") }, { label: "Ask Claude about this", act: () => W.claudeMention?.([path]) }]);
-      };
-      el.querySelector(".wx-pane-tree").ondragstart = (e) => { const row = e.target.closest(".tr"); if (row) { e.dataTransfer.setData("text/x-paths", JSON.stringify([row.dataset.path])); e.dataTransfer.setData("text/plain", row.dataset.path); } };
-    }
-    return el;
+  const savePanes = () => store.set("ac.wsp.panes", JSON.stringify(S.panes.map((T) => ({ root: T.root, open: [...T.open].slice(-200) }))));
+  function buildPane(T) {
+    const box = document.createElement("section");
+    box.className = "wx-pane"; box.dataset.pane = T.id;
+    box.innerHTML = `<div class="wx-ph"><select aria-label="Folder"></select></div><div class="wx-ph-btns">${PANE_BTNS}<span class="grow"></span>
+        <button class="icon-btn sm" data-x="close" title="Close this window">${svg("M6 6l12 12M18 6L6 18")}</button></div>${FILTER}
+      <div class="wx-tree" tabindex="0" role="tree" aria-label="Files"></div>`;
+    S.el.querySelector("#wx-split").append(box);
+    T.box = box;
+    box.querySelector(".wx-ph-btns").addEventListener("click", (e) => { const b = e.target.closest("[data-x]"); if (b) explorerAction(T, b.dataset.x); });
+    box.querySelector("select").onchange = async (e) => {
+      let root = e.target.value;
+      if (root === "__open") {
+        const dir = await pickFolder("/");
+        root = "";
+        if (dir) { try { const r = await api("/api/files/roots", { method: "POST", body: { path: dir } }); S.roots = await api("/api/files/roots"); root = r.path; } catch (x) { toast(x.message); } }
+      }
+      if (root) Object.assign(T, { root, missing: false, anchor: null, git: {} });
+      if (root) { T.open.clear(); T.dirs.clear(); T.sel.clear(); }
+      renderRoots(); savePanes(); renderTree(T); refresh(T);
+    };
+    renderPaneRoots(T); wireTree(T);
   }
-  async function loadPane(pane, path = pane.root) {
-    try { const d = await api(`/api/files/list?path=${encodeURIComponent(path)}`); pane.dirs.set(path, d.items.filter((it) => it.name !== ".git")); }
-    catch (e) { pane.dirs.set(path, []); if (path === pane.root) toast(e.message); }
-    renderPane(pane);
+  function closePane(T) {
+    if (T === S) return;
+    S.panes = S.panes.filter((x) => x !== T); T.box.remove(); savePanes(); renderOrient();
+    if (S.focus === T) S.focus = S;
+    applySizes();
   }
-  function renderPane(pane) {
-    const el = paneEl(pane), sel = el.querySelector("select");
-    sel.innerHTML = S.roots.map((r) => `<option value="${esc(r.path)}">${esc(r.name)} · ${esc(r.path)}</option>`).join("") + '<option value="__open">＋ Open folder from / …</option>';
-    sel.value = pane.root;
-    const rows = [];
-    const walk = (dir, depth) => { for (const it of pane.dirs.get(dir) || []) { rows.push({ it, depth }); if (it.dir && pane.open.has(it.path)) walk(it.path, depth + 1); } };
-    walk(pane.root, 0);
-    el.querySelector(".wx-pane-tree").innerHTML = rows.map(({ it, depth }) => { const open = it.dir && pane.open.has(it.path);
-      return `<div class="tr" data-path="${esc(it.path)}"${it.dir ? ' data-dir="1"' : ""} draggable="true" style="--d:${depth}" title="${esc(it.path)}"><span class="chev${open ? " open" : ""}">${it.dir ? "›" : ""}</span>${W.fileIcon(it.name, it.dir, 16, open)}<span class="tn">${esc(it.name)}</span></div>`; }).join("")
-      || '<div class="wx-empty muted">Empty folder.</div>';
+  // "v": one window above the other; "h": side by side.
+  function renderOrient() {
+    const b = S.el.querySelector("#wx-orient"), side = S.orient === "h";
+    S.el.querySelector(".wx").classList.toggle("side", side);
+    b.hidden = !S.panes.length;
+    b.title = side ? "Windows side by side: show them one above the other" : "Windows one above the other: show them side by side";
+    b.innerHTML = svg(side ? "M3 4h18v16H3zM12 4v16" : "M3 4h18v16H3zM3 12h18");
+  }
+  function widenForSide() {
+    const total = S.el.clientWidth || innerWidth, want = Math.min(total * 0.6, 230 * (S.panes.length + 1));
+    if (S.sizes.left < want) { S.sizes.left = Math.round(want); store.set("ac.wsp.sizes", JSON.stringify(S.sizes)); }
+    applySizes();
+  }
+  function toggleOrient() {
+    S.orient = S.orient === "h" ? "v" : "h"; store.set("ac.wsp.orient", S.orient);
+    renderOrient();
+    if (sideBySide()) widenForSide();
+    else { S.sizes.left = Math.min(S.sizes.left, Math.round((S.el.clientWidth || innerWidth) * 0.4)); applySizes(); }
   }
 
   // --- editor tabs ------------------------------------------------------------------------
@@ -657,13 +694,13 @@ window.WSP = window.WSP || {};
       try {
         await api("/api/files/write", { method: "PUT", body: { path: tab.path, text: tab.text } });
         tab.dirty = false; if (tab.file) tab.file.text = tab.text;
-        toast(`Saved ${tab.name}`); renderTabs(); W.renderView(tab, tab.host, viewActions); refresh();
+        toast(`Saved ${tab.name}`); renderTabs(); W.renderView(tab, tab.host, viewActions); refreshAll();
       } catch (e) { toast(e.message); }
     },
   };
   W.openPath = async (path, line) => {
     const item = S.items.get(path);
-    if (item?.dir) { await reveal(path + "/x"); return toggleDir(path, true); }
+    if (item?.dir) { await reveal(S, path + "/x"); return toggleDir(S, path, true); }
     let tab = S.tabs.find((t) => t.path === path);
     if (!tab) {
       const name = baseName(path), kind = item?.kind && item.kind !== "file" ? item.kind : W.kindOf(name);
@@ -703,7 +740,7 @@ window.WSP = window.WSP || {};
         { label: "Close others", act: () => S.tabs.filter((x) => x !== t).forEach((x) => closeTab(x)) },
         { label: "Close all", act: () => [...S.tabs].forEach((x) => closeTab(x)) }, "-",
         { label: "Copy path", act: () => W.copyText(t.path, "Path copied") },
-        { label: "Reveal in explorer", act: () => reveal(t.path) },
+        { label: "Reveal in explorer", act: () => reveal(S, t.path) },
         { label: "Ask Claude about this", act: () => W.claudeMention([t.path]) }]); };
     });
     if (!S.tabs.length) S.el.querySelector("#we-hosts").innerHTML = welcome();
@@ -721,12 +758,11 @@ window.WSP = window.WSP || {};
   W.reloadCleanTabs = () => S.tabs.forEach((t) => { if (!t.dirty) { t.file = null; t.text = null; t.pdf = null; t.stamp = Date.now(); W.renderView(t, t.host, viewActions); } });
 
   // --- view ------------------------------------------------------------------------------
-  // The Workspace and the File Manager are the same windows: the File Manager hides Claude Code.
   async function viewWorkspace(quiet, noClaude = false) {
     $("#view").classList.add("flush");
     if (S.el) {
       S.noClaude = noClaude;
-      if (S.el.parentNode !== $("#view")) { $("#view").replaceChildren(S.el); refresh(); }
+      if (S.el.parentNode !== $("#view")) { $("#view").replaceChildren(S.el); refreshAll(); }
       applySizes();
       return;
     }
@@ -735,6 +771,7 @@ window.WSP = window.WSP || {};
     S.el.className = "wsp";
     S.el.innerHTML = LAYOUT;
     $("#view").replaceChildren(S.el);
+    S.box = S.el.querySelector(".wx-main");
     applySizes(); wireGutters(); wireExplorer(); renderTabs();
     W.initTerminals(S.el.querySelector("#wt"));
     W.initClaude(S.el.querySelector("#wc")).then(() => {
@@ -745,18 +782,21 @@ window.WSP = window.WSP || {};
     });
     S.el.addEventListener("click", (e) => { const b = e.target.closest("[data-win]"); if (b) { e.stopPropagation(); W.win(b.dataset.pane, b.dataset.win); } });
     await loadRoots();
-    for (const r of readList("ac.wsp.panes")) if (S.roots.some((x) => x.path === r)) addPane(r);
+    for (const x of readList("ac.wsp.panes")) {  // a window's folder and open folders; before: only the folder
+      const root = typeof x === "string" ? x : x?.root, open = Array.isArray(x?.open) ? x.open.filter((p) => typeof p === "string") : [];
+      if (S.roots.some((r) => r.path === root)) addPane(root, open);
+    }
     const saved = read("ac.wsp.tabs", { open: [] });
     for (const p of saved.open || []) await W.openPath(p);
     if (saved.active && S.tabs.some((t) => t.path === saved.active)) activate(S.tabs.find((t) => t.path === saved.active));
     // Poll gently: every 10 s while things change, up to 60 s when nothing did; never while hidden. Coming back
     // to the page refreshes at once.
     const tick = () => {
-      if (S.el.isConnected && !document.hidden && !menuEl) refresh().catch(() => {});
+      if (S.el.isConnected && !document.hidden && !menuEl) refreshAll().catch(() => {});
       setTimeout(tick, Math.min(60000, 10000 * (1 + Math.floor((S.idle || 0) / 3))));
     };
     setTimeout(tick, 10000);
-    addEventListener("focus", () => { if (S.el.isConnected) { S.idle = 0; refresh().catch(() => {}); } });
+    addEventListener("focus", () => { if (S.el.isConnected) { S.idle = 0; refreshAll().catch(() => {}); } });
     document.addEventListener("keydown", (e) => {
       if (!S.el.isConnected) return;
       if (e.ctrlKey && e.key === "`") { e.preventDefault(); W.toggleTerminal(true); }
@@ -765,5 +805,4 @@ window.WSP = window.WSP || {};
   }
 
   registerView({ id: "workspace", title: "Workspace", icon: "workspace", admin: true }, (q) => viewWorkspace(q, false), 0);
-  W.viewFileManager = (q) => viewWorkspace(q, true);
 })();

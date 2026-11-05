@@ -1,6 +1,6 @@
 "use strict";
 // Agents: the organisation (every layer of the hierarchy on one screen, scaled to fit) beside the agent list
-// (the only part that scrolls); Tools & MCP (mcp.py) and Skills & plugins (catalog.py) as tabs.
+// (the only part that scrolls); the agent network (network.js), Tools & MCP (mcp.py) and Skills & plugins (catalog.py) as tabs.
 // The agent card edits model (also another agent's, for the General Manager), plugins and the agent's
 // definition file: the body learning rewrites (agentdefs.py). Every configuration change is a version the card's
 // history can roll back to; degraded agents (failing runs or model test) are flagged and can be reset (SPEC-02).
@@ -9,13 +9,14 @@ let agentsTab = store.get("ac.agents.tab") || "org";
 
 async function viewAgents(quiet) {
   if (quiet && $("#ag-page") && agentsTab !== "org") return;  // the catalog tabs keep their forms
-  const tabs = [["org", "Organisation", "sitemap"], ["mcp", "Tools & MCP", "plug"], ["catalog", "Skills & plugins", "book"]];
+  const tabs = [["org", "Organisation", "sitemap"], ["network", "Agent network", "network"], ["mcp", "Tools & MCP", "plug"], ["catalog", "Skills & plugins", "book"]];
   if (!$("#ag-page") || !quiet) {
     $("#view").innerHTML = `<div class="ag-page" id="ag-page"><div class="ag-tabs" role="tablist">${tabs.map(([k, l, i]) => `<button role="tab" data-agtab="${k}" aria-selected="${agentsTab === k}">${icon(i, 16)} ${l}</button>`).join("")}
       <span class="grow"></span><span id="ag-tools"></span></div><div class="ag-body" id="ag-body"></div></div>`;
     $("#view").classList.add("fit");
     document.querySelectorAll("[data-agtab]").forEach((b) => (b.onclick = () => { agentsTab = b.dataset.agtab; store.set("ac.agents.tab", agentsTab); viewAgents(); }));
   }
+  if (agentsTab === "network") { $("#ag-tools").innerHTML = ""; return viewNetwork($("#ag-body")); }
   if (agentsTab === "mcp") return viewMcp();
   if (agentsTab === "catalog") return viewCatalog();
   return viewOrg(quiet);

@@ -84,11 +84,17 @@ feature came from.
   (`.claude/specs/<slug>/` artifacts of every goal, the GM's `.claude/` configure step); `hooks.py` (TaskCreated,
   TaskCompleted, TeammateIdle → `data/logs/team-hooks.jsonl`, fail-open);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
-  (Workspace Claude Code panel: a tab per conversation (new ones on the far left), titled by Haiku; other live host sessions only in the sessions window (a tab while one is opened), session history with resume/stop/delete); `api.py`; `static/` (dashboard, plain JS, one file per area; `agents.js` (org chart, Tools & MCP, Skills & plugins, agent card), `network.js` (Agent network: overview counts, paged
-  relationship graph from `network.graph`),
+  (Workspace Claude Code panel: a tab per conversation of this browser session (new ones on the far left; earlier ones
+  only in the sessions window), titled by Haiku; other live host sessions only in the sessions window (a tab while one is
+  opened), session history with resume/stop/delete); the Workspace explorer opens more file windows ("+", stacked or
+  side by side) that share one code path, clipboard and drag and drop, and keeps its lists while the server is unreachable; `api.py`; `static/` (dashboard, plain JS, one file per area; `agents.js` (org chart, Agent network, Tools & MCP, Skills & plugins, agent card), `network.js` (the
+  Agents page's Agent network tab: overview counts, paged relationship graph from `network.graph`),
   `models.js`; `knowledge.js` (Knowledge: items, review queue, contradictions, graph explorer); `security.js` (Security: stops, incidents,
-  refused commands, alerts); rail order shared by all users via `/api/ui/nav_layout` (Settings → Navigation); buttons with a known
-  label become icons (`iconize` in app.js); `index.html` is served with content-hashed static URLs;
+  refused commands, alerts); rail order shared by all users via `/api/ui/nav_layout` (Settings → Navigation); Notifications,
+  Audit log, Settings and Users are top-bar buttons (`TOPBAR` in app.js), never on the rail; the tab icon (`setFavicon`) shows
+  the stop status, running goals, unread notifications, waiting approvals and audit records not yet seen (`audit_last`
+  in `/api/overview`); buttons with a known label become icons (`iconize` in app.js); no File Manager page (the
+  Workspace explorer is it; `files.js` keeps the folder picker and preview); `index.html` is served with content-hashed static URLs;
   `workspace.js` + `viewer.js` + `console.js` + `claude.js` are the Workspace home page, sharing
   `window.WSP`; `vendor/` holds xterm.js, pdf.js, mammoth and noVNC); `crew.py` (classic crew); `__main__.py` (CLI)
 - `evals/` – benchmark suites (JSON; `kind` benchmark|practice|final|adversarial, `skills`; a final suite's checks never reach agents);

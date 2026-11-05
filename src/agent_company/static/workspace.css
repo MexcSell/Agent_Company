@@ -48,8 +48,7 @@ kbd { font-family: var(--mono); font-size: 11px; padding: 0 5px; border: 1px sol
 
 /* explorer */
 .wx { display: flex; flex-direction: column; background: var(--panel); }
-.wx-head { display: flex; align-items: center; gap: 2px; padding: 6px 6px 4px 12px; }
-.wx-title { flex: 1; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.wx-head { display: flex; align-items: center; gap: 2px; padding: 6px 6px 4px 8px; }
 .wx-root { display: flex; gap: 4px; padding: 0 8px 6px; }
 .wx-root select { font-size: 12px; padding: 3px 6px; min-width: 0; }
 .wx-tree { flex: 1; overflow: auto; padding: 2px 0 24px; outline: none; font-size: 13px; }
@@ -61,7 +60,7 @@ kbd { font-family: var(--mono); font-size: 11px; padding: 0 5px; border: 1px sol
 .wx-tree:focus .tr.sel { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
 .tr.cut { opacity: .5; }
 .tr.drop { background: color-mix(in srgb, var(--accent) 22%, transparent); outline: 1px dashed var(--accent); }
-.tr .chev { width: 12px; flex: none; color: var(--muted); display: inline-block; transition: transform .12s; font-size: 14px; text-align: center; }
+.tr .chev { width: 18px; flex: none; color: var(--muted); display: inline-block; transition: transform .12s; font-size: 21px; line-height: 1; text-align: center; }
 .tr .chev.open { transform: rotate(90deg); }
 .tr .tn { overflow: hidden; text-overflow: ellipsis; }
 .fico { flex: none; }
@@ -433,14 +432,20 @@ table.csv .c4 { color: var(--t-kw); } table.csv .c5 { color: var(--t-num); } tab
 .tr.g-D .tn, .tr.g-D .gd { color: var(--bad); text-decoration: line-through; } .tr.g-R .tn, .tr.g-R .gd { color: #58a6ff; }
 .tr.g-dot .gd { color: #d29922; font-size: 9px; }
 :root:not([data-theme="dark"]) .tr.g-M .tn, :root:not([data-theme="dark"]) .tr.g-M .gd { color: #9a6700; }
-.wx-panes { display: contents; }
-.wx-pane { flex: 1 1 0; min-height: 90px; display: flex; flex-direction: column; border-top: 1px solid var(--border); }
-.wx-pane-head { display: flex; gap: 2px; align-items: center; padding: 4px 6px; background: var(--panel-2); }
-.wx-pane-head select { font-size: 12px; padding: 2px 4px; min-width: 0; flex: 1; }
-.wx-pane-tree { flex: 1; overflow: auto; font-size: 13px; padding: 2px 0 12px; outline: none; }
-.wx > .wx-tree { flex: 1 1 0; min-height: 90px; }
+/* file windows: the first one and those added with "+", one above the other or side by side (.wx.side) */
+.wx-split { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.wx.side .wx-split { flex-direction: row; }
+.wx-pane { flex: 1 1 0; min-height: 90px; min-width: 0; display: flex; flex-direction: column; }
+.wx-pane + .wx-pane { border-top: 1px solid var(--border); }
+.wx.side .wx-pane { min-width: 150px; }
+.wx.side .wx-pane + .wx-pane { border-top: 0; border-left: 1px solid var(--border); }
+.wx-pane .wx-tree { flex: 1 1 0; min-height: 0; }
+.wx-ph { display: flex; gap: 4px; padding: 6px 8px 0; }
+.wx-ph select { font-size: 12px; padding: 3px 6px; min-width: 0; flex: 1; }
+.wx-ph-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 2px 6px 4px 4px; }
+.wx-pane:not(.wx-main) { background: color-mix(in srgb, var(--panel-2) 35%, var(--panel)); }
 .wx-head { flex-wrap: wrap; row-gap: 2px; }
-.wx-head .wx-title { min-width: 70px; }
+.wx-head > .grow, .wx-ph-btns > .grow { flex: 1 1 0 !important; }  /* a spacer: never pushes a button to the next row */
 /* /status: tokens and cost today and this week */
 .wc-usage { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .wc-usage th { text-align: left; font-weight: 600; color: var(--muted); padding: 3px 10px 3px 0; white-space: nowrap; }

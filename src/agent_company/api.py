@@ -67,7 +67,7 @@ from agent_company import (
     workspace,
 )
 from agent_company.config import settings
-from agent_company.db import Agent, Decision, Event, Goal, Task, session
+from agent_company.db import Agent, AuditEvent, Decision, Event, Goal, Task, session
 
 STATIC = Path(__file__).parent / "static"
 COOKIE = "ac_session"
@@ -943,9 +943,11 @@ def create_app(start_background: bool = True) -> FastAPI:
             docs = s.scalar(select(func.count()).select_from(research.Document))
             proposals = s.scalar(select(func.count()).select_from(projects.Proposal)
                                  .where(projects.Proposal.status == "pending")) if user["is_admin"] else 0
+            # The newest audit record: the browser counts the ones after the last it showed (tab icon, top bar).
+            audit_last = (s.scalar(select(func.max(AuditEvent.id))) or 0) if user["is_admin"] else 0
         return {"goals": by_status, "agents": agents, "pending_users": pending, "documents": docs,
                 "usage": usage.summary()["totals"], "unread": governance.unread_count(user),
-                "pending_proposals": proposals, "build": static_build(),
+                "pending_proposals": proposals, "audit_last": audit_last, "build": static_build(),
                 "stopped": (bool(governance.emergency()) or bool(governance.stops())) if user["is_admin"] else False,
                 "stop_level": governance.stop_level()}  # every user sees the level (S15-R-01), not its scope
 

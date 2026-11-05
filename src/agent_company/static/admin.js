@@ -56,7 +56,7 @@ function navCard() {
   const col = (key, label, hint, list) => `<div class="nav-col"><h3>${label}</h3><p class="muted">${hint}</p><div class="nav-list" data-group="${key}">${list.map(item).join("")}</div></div>`;
   return `<div class="card nav-card" style="margin-bottom:12px"><div class="row"><h2 class="grow" style="margin:0">Navigation</h2>
       ${ib("edit", "Edit: drag icons between the lists", 'id="nav-edit"')}${ib("save", "Save for every user", 'id="nav-save" disabled', "primary")}${ib("refresh", "Back to the default order", 'id="nav-reset"')}</div>
-    <p class="muted">The icon rail on the left: the top group, then the bottom group. Press Edit, then drag icons to reorder them, move them between groups, or to Hidden (drag back to add them again). The rail's own edit button (bottom of the rail) does the same in place.</p>
+    <p class="muted">The icon rail on the left: the top group, then the bottom group. Press Edit, then drag icons to reorder them, move them between groups, or to Hidden (drag back to add them again). The rail's own edit button (bottom of the rail) does the same in place. Notifications, Audit log, Settings and Users are buttons at the top right, not on the rail.</p>
     <div class="nav-cols" id="nav-cols">${col("top", "Top", "Work", g.top)}${col("bottom", "Bottom", "Tools and administration", g.bottom)}${col("hidden", "Hidden", "Not on the rail", g.hidden)}</div></div>`;
 }
 function wireNavCard() {

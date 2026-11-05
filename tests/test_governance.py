@@ -153,3 +153,18 @@ def test_every_user_sees_the_stop_level_but_only_admins_see_the_details():
         governance.set_emergency(True, "user:admin", "drill")
         assert other.get("/api/overview").json()["stop_level"] == "E5"
         assert app.get("/api/security").json()["stops"][0]["level"] == "E5"
+
+
+def test_overview_reports_the_newest_audit_record_to_admins_only():
+    """The tab icon and the top bar count audit records after the newest one the browser showed."""
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
+        app.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
+        guest_secret = secrets.token_urlsafe(32)
+        other = TestClient(app.app)
+        uid = other.post("/api/auth/register", json={"name": "guest", "device_secret": guest_secret}).json()["user"]["id"]
+        app.post(f"/api/users/{uid}/approve")
+        other.post("/api/auth/device", json={"device_secret": guest_secret})
+        before = app.get("/api/overview").json()["audit_last"]
+        governance.audit("user:admin", "test_action", "x")
+        assert app.get("/api/overview").json()["audit_last"] > before
+        assert other.get("/api/overview").json()["audit_last"] == 0

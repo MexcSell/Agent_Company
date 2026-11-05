@@ -1,15 +1,16 @@
 // Agent network (SPEC-12 S12-R-07): overview counts, the relationship graph with server-side filters and pages
 // (GET /api/network/graph), bounded depth around one agent, zoom and pan. Edges: colour and line style by origin
 // (observed solid, inferred dashed, corrected dotted), width by weight, an arrow for directed kinds. The table under
-// the graph is the same page as text. Corrections stay on the agent card's Relationships tab.
+// the graph is the same page as text. Corrections stay on the agent card's Relationships tab. A tab of the Agents page.
 const NET = { agent_id: "", depth: 1, room: "", skill: "", kind: "", origin: "", include_expired: false, offset: 0, limit: 100 };
 const NET_ORIGINS = ["observed", "inferred", "corrected"];
 
-async function viewNetwork() {
+async function viewNetwork(box) {
   const [o, agents, rooms] = await Promise.all([api("/api/network/overview"), api("/api/agents"), api("/api/rooms")]);
   const k = (label, value, title = "") => `<div class="card kpi" title="${esc(title)}"><div class="label">${label}</div><div class="value">${value}</div></div>`;
   const links = o.links.observed + o.links.inferred + o.links.corrected;
-  $("#view").innerHTML = `<div class="grid kpis">
+  box.classList.add("ag-scroll");
+  box.innerHTML = `<div class="grid kpis">
       ${k("Active agents", `${o.active_agents}<span class="muted" style="font-size:14px"> / ${o.agents}</span>`)}
       ${k("Active links", links, `${o.links.observed} observed · ${o.links.inferred} inferred · ${o.links.corrected} corrected · ${o.expired_links} expired`)}
       ${k("Current teams", o.teams, o.team_sizes.length ? `agents per team: ${o.team_sizes.join(", ")}` : "no goal is being worked on")}
@@ -136,4 +137,3 @@ function netPanZoom(svg) {
   svg.querySelectorAll(".node").forEach((n) => n.addEventListener("click", () => { if (!moved) netCentre(Number(n.dataset.netnode)); }));
 }
 
-registerView({ id: "network", title: "Agent network", icon: "sitemap" }, viewNetwork);

@@ -7,7 +7,9 @@
 // writes from the first prompt (+ opens another on the far left and keeps the others). Other
 // Claude Code sessions on the host (VS Code, terminal, SDK) get no tab of their own: they stay in
 // the sessions window, and one opened from there has a tab while it is selected; an ended one
-// can be continued in place. A conversation still working after a server restart is followed
+// can be continued in place. In the Workspace only the conversations of this browser session have tabs (the one
+// selected last, those working and those opened since the tab was opened); earlier ones stay in the sessions window
+// (History: Open, Continue). A conversation still working after a server restart is followed
 // live in its own tab, never shown twice. The drawer answers /status, /tasks and /agents (typed
 // in the prompt box or opened with the header button) for the selected tab: model, context,
 // background commands, todos, subagents and agent types.
@@ -51,6 +53,19 @@ window.WSP = window.WSP || {};
   const draft = (id = C.tab) => (C.drafts[id] ||= { text: "", uploads: [] });
   const convTitle = (c) => c.title || firstLine(c.runs.find((r) => r.prompt)?.prompt, 40) || "New conversation";
   const cwdOf = (c = cur()) => (c ? c.cwd || ROOT() : C.view.d?.cwd || C.names[C.tab]?.cwd || "");
+  // The conversations this browser tab worked with (sessionStorage: a new browser tab or window starts empty).
+  const SKEY = K + ".shown";
+  const touched = (() => { try { return new Set(JSON.parse(sessionStorage.getItem(SKEY) || "[]")); } catch { return new Set(); } })();
+  const touch = (id) => { if (!opt.workspace || touched.has(id)) return; touched.add(id); try { sessionStorage.setItem(SKEY, JSON.stringify([...touched])); } catch { /* private mode */ } };
+  const shownConv = (c) => !opt.workspace || c.id === C.tab || busy(c) || touched.has(c.id);
+  // Where the selection goes when its tab closes: another shown conversation, else an empty one.
+  function nextShown() {
+    const c = C.convs.find((x) => x.id !== C.tab && shownConv(x)) || C.convs.find((x) => x.id !== C.tab && !x.session && !x.runs.length);
+    if (c) return c.id;
+    const n = newConv();
+    C.convs.unshift(n); saveConvs();
+    return n.id;
+  }
 
   const init = async (el) => {
     C.el = el;
@@ -173,6 +188,7 @@ window.WSP = window.WSP || {};
     if (!C.convs.length) C.convs.push(newConv());
     const last = store.get(K + ".tab") || "";
     C.tab = conv(last) ? last : C.convs[0].id;
+    touch(C.tab);
     saveConvs();
     renderTabs(); renderCwd(); renderBusy(); renderLog();
     pollSessions().then(showTab);
@@ -184,6 +200,10 @@ window.WSP = window.WSP || {};
       renderProvider();
     } catch (e) { toast(e.message); }
     await Promise.all(C.convs.map((c) => loadConv(c, ids.get(c) || [])));
+    // Conversations without a tab are kept for a while (one may start working again), the oldest are forgotten:
+    // their transcripts stay in the sessions window.
+    const hidden = C.convs.filter((c) => !shownConv(c));
+    if (hidden.length > 30) { const drop = new Set(hidden.slice(30)); C.convs = C.convs.filter((c) => !drop.has(c)); drop.forEach((c) => dropLog(c.id)); saveConvs(); }
     C.history = C.history.map((h, i) => (typeof h === "string" ? { prompt: h, at: Infinity, i } : { ...h, i }))
       .sort((a, b) => a.at - b.at || a.i - b.i).map((h) => h.prompt);
   };
@@ -331,7 +351,7 @@ window.WSP = window.WSP || {};
     if (d) c.runs.push(transcriptRun(sid, C.view.events, d.partial_history, c.title));
     C.drafts[c.id] = draft(sid); delete C.drafts[sid];
     if (C.closed.delete(sid)) saveClosed();
-    C.convs.unshift(c); C.tab = c.id; store.set(K + ".tab", c.id); saveConvs();
+    C.convs.unshift(c); C.tab = c.id; store.set(K + ".tab", c.id); touch(c.id); saveConvs();
     C.view = { sid: "", events: [], next: 0, d: null }; C.following = "";
     renderTabs(); renderCwd();
     return c;
@@ -637,7 +657,7 @@ window.WSP = window.WSP || {};
       catch (e) { return toast(e.message); }
       C.hist.items = C.hist.items.filter((x) => x.session_id !== sid); C.hist.total = Math.max(0, C.hist.total - 1);
       if (C.closed.delete(sid)) saveClosed();
-      if (c) dropConv(c); else if (C.tab === sid) selectTab(C.convs[0].id);
+      if (c) dropConv(c); else if (C.tab === sid) selectTab(nextShown());
       renderHist();
       return;
     }
@@ -672,7 +692,7 @@ window.WSP = window.WSP || {};
     const list = others().filter((s) => s.session_id === C.tab);  // only the host session being viewed
     if (!cur() && C.tab && !list.some((s) => s.session_id === C.tab)) list.push({ ...(C.names[C.tab] || { name: C.tab.slice(0, 8) }), session_id: C.tab, status: "ended" });
     const tab = (id, label, status, extra, title) => `<div role="tab" tabindex="0" data-tab="${esc(id)}" aria-selected="${C.tab === id}" class="wc-tab${C.tab === id ? " on" : ""}${status === "ended" ? " ended" : ""}" title="${esc(title)}"><span class="wc-dot${status === "busy" ? " busy" : status === "ended" ? " off" : ""}"></span><span class="wc-tab-name">${esc(label)}</span>${extra ? `<span class="wc-tab-kind">${esc(extra)}</span>` : ""}<button type="button" class="wtab-x" data-close="${esc(id)}" title="Close tab${conv(id) ? "" : " (the session keeps running)"}" aria-label="Close ${esc(label)}">×</button></div>`;
-    box.innerHTML = C.convs.map((c) => tab(c.id, convTitle(c), busy(c) ? "busy" : "idle", provOf(c) === "claude" ? "" : PROV[provOf(c)].label, `${convTitle(c)}\n${c.cwd || ROOT() || ""}${busy(c) ? "\nWorking" : ""}${c.session ? `\nsession ${c.session.slice(0, 8)}` : ""}`)).join("")
+    box.innerHTML = C.convs.filter(shownConv).map((c) => tab(c.id, convTitle(c), busy(c) ? "busy" : "idle", provOf(c) === "claude" ? "" : PROV[provOf(c)].label, `${convTitle(c)}\n${c.cwd || ROOT() || ""}${busy(c) ? "\nWorking" : ""}${c.session ? `\nsession ${c.session.slice(0, 8)}` : ""}`)).join("")
       + list.map((s) => tab(s.session_id, s.title || s.name, s.status, ENTRY[s.entrypoint] || s.entrypoint || "", `${s.title ? `${s.title}\n` : ""}${s.cwd || ""}\n${s.status === "busy" ? "Working" : s.status === "ended" ? "Ended" : "Idle"}${s.pid ? ` · pid ${s.pid}` : ""}${s.version ? ` · v${s.version}` : ""}`)).join("");
   }
   const showTab = () => C.el.querySelector("#wc-tabs .wc-tab.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -680,7 +700,7 @@ window.WSP = window.WSP || {};
     C.convs = C.convs.filter((x) => x !== c); delete C.drafts[c.id]; dropLog(c.id);
     if (!C.convs.length) C.convs.push(newConv());
     saveConvs();
-    if (C.tab === c.id) selectTab(C.convs[0].id); else renderTabs();
+    if (C.tab === c.id) selectTab(nextShown()); else renderTabs();
   }
   // Closing a conversation drops it from the panel (its transcript stays in the history); closing a
   // session tab only hides it here: the session itself (VS Code, terminal, SDK) keeps running.
@@ -694,14 +714,14 @@ window.WSP = window.WSP || {};
       return dropConv(c);
     }
     C.closed.add(id); saveClosed(); dropLog(id);
-    if (C.tab === id) selectTab(C.convs[0].id); else renderTabs();
+    if (C.tab === id) selectTab(nextShown()); else renderTabs();
   }
   function selectTab(id) {
     if (id === C.tab) return;
     const ta = C.el.querySelector("#wc-input");
     draft().text = ta.value;
     C.tab = id;
-    if (conv(id)) store.set(K + ".tab", id);
+    if (conv(id)) { store.set(K + ".tab", id); touch(id); }
     C.view = { sid: "", events: [], next: 0, d: null };
     ta.value = draft().text; ta.oninput(); renderAtt();
     const c = cur();

@@ -13,7 +13,7 @@ const P = {
   dashboard: "M3 3h8v8H3zM13 3h8v5h-8zM13 10h8v11h-8zM3 13h8v8H3z",
   workspace: "M3 4h18v16H3zM8 4v16M11.5 10l2.5 2-2.5 2M15.5 14h2.5",
   goals: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 4a6 6 0 1 0 0 12 6 6 0 0 0 0-12zm0 4a2 2 0 1 0 0 4 2 2 0 0 0 0-4z",
-  agents: "M16 11a4 4 0 1 0-8 0M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1M12 3v4",
+  agents: "M12 2v3M8 5h8a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zM9.5 10.5h.01M14.5 10.5h.01M9.5 14.5h5M2 10v4M22 10v4M9 18v3M15 18v3",
   models: "M12 2l9 5v10l-9 5-9-5V7zM12 22V12M21 7l-9 5-9-5",
   research: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-5-5",
   users: "M9 7a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM2 21v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1M16 3a4 4 0 0 1 0 8M22 21v-1a5 5 0 0 0-3-4.6",
@@ -55,6 +55,7 @@ const P = {
   admin: "M4 4h16v16H4zM8 9h8M8 13h8M8 17h5",
   machines: "M3 4h18v12H3zM8 20h8M12 16v4M7 8l3 2-3 2M12 12h4",
   specialist: "M12 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM4 22a8 8 0 0 1 16 0",
+  network: "M12 3a2 2 0 1 0 0 .01M5 17a2 2 0 1 0 0 .01M19 17a2 2 0 1 0 0 .01M12 10a2 2 0 1 0 0 .01M12 5v3M10.3 11.1l-3.6 4.6M13.7 11.1l3.6 4.6M7 17h10",
 };
 const ROLE_ICON = { general_manager: "general_manager", architect: "architect", developer: "developer", frontend: "frontend", qa: "qa", research: "research_role", external_data: "external_data", analyst: "analyst", comprehensive_analyst: "analyst", security: "security", network_security: "security", security_guard: "security", devops: "devops", tech_scout: "learning", tech_introducer: "learning", instructor: "learning", student: "learning", product: "business", sales: "business", administrator: "admin", agent_manager: "admin" };
 // An icon-only button: the label becomes the tooltip and the accessible name.
@@ -196,12 +197,14 @@ async function boot() {
   connectLive();
 }
 // --- rail: two groups (top, bottom) in the order an administrator set (Settings → Navigation) -----------
-const NAV_DEFAULT = { top: ["dashboard", "projects", "agents", "network", "models", "evolution", "research", "knowledge", "performance"],
-  bottom: ["workspace", "files", "machines", "notifications", "security", "audit", "system", "settings", "users"] };
+// Notifications, the audit log, settings and users are buttons at the top right instead (TOPBAR), never on the rail.
+const NAV_DEFAULT = { top: ["dashboard", "projects", "agents", "models", "evolution", "research", "knowledge", "performance"],
+  bottom: ["workspace", "machines", "security", "system"] };
+const TOPBAR = ["notifications", "audit", "settings", "users"];
 let navLayout = null, railEditing = false;
 function navGroups() {
   const lay = navLayout && (navLayout.top || navLayout.bottom) ? navLayout : NAV_DEFAULT;
-  const seen = new Set(), vis = VIEWS.filter((v) => !v.admin || me.is_admin), by = Object.fromEntries(vis.map((v) => [v.id, v]));
+  const seen = new Set(), vis = VIEWS.filter((v) => (!v.admin || me.is_admin) && !TOPBAR.includes(v.id)), by = Object.fromEntries(vis.map((v) => [v.id, v]));
   const pick = (ids) => ids.filter((id) => by[id] && !seen.has(id) && seen.add(id)).map((id) => by[id]);
   // A view the saved order does not name takes its default place (before the next default neighbour it has).
   const saved = new Set([...(lay.top || []), ...(lay.bottom || []), ...(lay.hidden || [])]);
@@ -214,7 +217,7 @@ function navGroups() {
     });
     return ids;
   };
-  const top = pick(withDefaults("top")), bottom = pick(withDefaults("bottom")), hidden = pick((lay.hidden || []).filter((id) => id !== "settings"));
+  const top = pick(withDefaults("top")), bottom = pick(withDefaults("bottom")), hidden = pick(lay.hidden || []);
   return { top, bottom: [...bottom, ...vis.filter((v) => !seen.has(v.id))], hidden };  // views with no default place go to the bottom
 }
 function railButton(v) {
@@ -222,8 +225,7 @@ function railButton(v) {
 }
 function renderRail() {
   const g = navGroups();
-  $("#rail").innerHTML = `<a class="brand" href="#" data-home title="Agent Company" aria-label="Agent Company: dashboard">${BRAND}</a>
-    <div class="rail-group" data-group="top">${g.top.map(railButton).join("")}</div><div class="rail-gap"></div>
+  $("#rail").innerHTML = `<div class="rail-group" data-group="top">${g.top.map(railButton).join("")}</div><div class="rail-gap"></div>
     <div class="rail-group" data-group="bottom">${g.bottom.map(railButton).join("")}</div>
     ${me.is_admin ? `<button class="rail-edit${railEditing ? " on" : ""}" id="rail-edit" title="${railEditing ? "Done: save the order" : "Edit: drag icons to reorder (also in Settings → Navigation)"}" aria-label="Edit navigation">${icon(railEditing ? "check" : "grip", 18)}</button>` : ""}`;
   $("#rail").classList.toggle("editing", railEditing);
@@ -232,9 +234,20 @@ function renderRail() {
     b.onpointerenter = b.onfocus = () => { if (!railEditing) prefetchView(b.dataset.v); };
     b.classList.toggle("pending", b.dataset.v === current && $("#view").classList.contains("loading"));
   });
-  $("#rail [data-home]").onclick = (e) => { e.preventDefault(); show("dashboard"); };
   $("#rail-edit") && ($("#rail-edit").onclick = () => { railEditing = !railEditing; if (!railEditing) saveNav(readNav($("#rail"))); renderRail(); });
   if (railEditing) wireNavDrag($("#rail"), () => {});
+  renderTopViews();
+}
+// The top-bar buttons: the same views as rail icons (active state, badges, prefetch), only placed top right.
+function renderTopViews() {
+  const box = $("#top-views");
+  if (!box || !me) return;
+  box.innerHTML = TOPBAR.map((id) => VIEWS.find((v) => v.id === id)).filter((v) => v && (!v.admin || me.is_admin))
+    .map((v) => `<button class="icon-btn top-view${v.id === current ? " active" : ""}${v.id === current && $("#view").classList.contains("loading") ? " pending" : ""}" data-v="${v.id}" title="${esc(v.title)}" aria-label="${esc(v.title)}">${icon(v.icon, 18)}${badges[v.id] ? `<span class="badge">${badges[v.id]}</span>` : ""}</button>`).join("");
+  box.querySelectorAll("button[data-v]").forEach((b) => {
+    b.onclick = () => show(b.dataset.v);
+    b.onpointerenter = b.onfocus = () => prefetchView(b.dataset.v);
+  });
 }
 // Drag and drop between the two groups of a navigation list (the rail or the Settings card).
 function wireNavDrag(root, changed) {
@@ -260,23 +273,20 @@ async function saveNav(lay) {
   try { navLayout = (await api("/api/ui/nav_layout", { method: "PUT", body: { value: lay } })).value; toast("Navigation saved for every user"); } catch (e) { toast(e.message); }
   renderRail();
 }
-// The home icon: a small enchanted emblem (gradient, a twinkling star and fairy dust).
-const BRAND = `<svg viewBox="0 0 40 40" width="34" height="34" aria-hidden="true"><defs><linearGradient id="bg-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c3aed"/><stop offset=".55" stop-color="#db2777"/><stop offset="1" stop-color="#f59e0b"/></linearGradient>
-  <radialGradient id="bg-s" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
-  <rect x="2" y="2" width="36" height="36" rx="11" fill="url(#bg-g)"/><path class="brand-castle" d="M10 30V19l3-2v-3h2v2l2-1.5L19 16v-4l1-2 1 2v4l2-1.5 2 1.5v-2h2v3l3 2v11z" fill="#fff" opacity=".95"/>
-  <path d="M18 30v-5a2 2 0 0 1 4 0v5z" fill="url(#bg-g)"/><path class="brand-star" d="M30 6l1.2 2.8L34 10l-2.8 1.2L30 14l-1.2-2.8L26 10l2.8-1.2z" fill="#fff"/>
-  <circle class="brand-dust d1" cx="8" cy="9" r="1.2" fill="url(#bg-s)"/><circle class="brand-dust d2" cx="34" cy="20" r="1" fill="#fff"/><circle class="brand-dust d3" cx="7" cy="22" r=".9" fill="#fff"/></svg>`;
 async function updateBadges() {
   try {
     const o = await api("/api/overview", { fresh: true });
     if (o.build && BUILD && o.build !== BUILD) newBuild = true;  // reloaded on the next page switch
-    badges = { users: o.pending_users || 0, notifications: o.unread || 0, projects: (o.pending_proposals || 0) + (o.goals.awaiting_approval || 0) + (o.goals.running || 0) };
+    // Audit records after the newest one this browser showed; counting starts on the first visit.
+    if (store.get("ac.auditSeen") === null || current === "audit") store.set("ac.auditSeen", String(o.audit_last || 0));
+    const audit = Math.max(0, (o.audit_last || 0) - Number(store.get("ac.auditSeen") || 0));
+    badges = { users: o.pending_users || 0, notifications: o.unread || 0, audit, projects: (o.pending_proposals || 0) + (o.goals.awaiting_approval || 0) + (o.goals.running || 0) };
     const es = $("#estop");
     if (es) { es.classList.toggle("on", !!o.stopped); es.title = o.stopped ? `A stop is active (${o.stop_level}): open System to see or lift it` : "Emergency stop: stop all autonomous work now"; }
     const sl = $("#stop-level");  // S15-R-01: every user sees that work is stopped, and how widely
     if (sl) { sl.hidden = !o.stop_level; sl.textContent = o.stop_level ? `${o.stop_level} stop` : ""; sl.title = o.stop_level ? `${o.stop_level} stop active (${STOP_SCOPE[o.stop_level]}): autonomous work is ${o.stop_level === "E5" ? "stopped company-wide" : "partly stopped"}` : ""; }
     renderRail(); setFavicon(o);
-  } catch { /* signed out */ }
+  } catch (e) { if (!e.status || e.status >= 502) setFavicon(null); /* else signed out */ }
 }
 // The page each view showed last: painted at once when the user comes back, while the fresh one loads
 // (a far-away browser waits a round trip or two for it). Views that keep their own windows are not kept.
@@ -308,7 +318,7 @@ function show(id) {
   const seq = ++showSeq;
   show.overwritten = false;
   view.classList.remove("stale"); view.classList.add("loading"); view.inert = !!snap; $("#loadbar").hidden = false;
-  $("#rail").querySelector(`button[data-v="${id}"]`)?.classList.add("pending");
+  document.querySelector(`#rail button[data-v="${id}"], #top-views button[data-v="${id}"]`)?.classList.add("pending");
   const vf = SELF_UPDATING.has(id) ? null : { urls: new Set(), stale: false };
   const done = async () => {
     if (vf && viewFetch === vf) viewFetch = null;
@@ -319,7 +329,7 @@ function show(id) {
       if (seq !== showSeq) return;
     }
     view.classList.remove("loading", "stale"); view.inert = false; $("#loadbar").hidden = true;
-    $("#rail").querySelectorAll("button.pending").forEach((b) => b.classList.remove("pending"));
+    document.querySelectorAll("#rail button.pending, #top-views button.pending").forEach((b) => b.classList.remove("pending"));
     iconize(view);  // now, not 300 ms later: buttons don't change shape after the page appears
     if (!snap) enter();
     if (vf) {
@@ -337,7 +347,7 @@ function show(id) {
   refreshTimer = setInterval(() => { if (!liveOk) refreshNow(); }, 5000);
 }
 // Views that manage their own updates (terminals, consoles, editors) are never re-rendered by live events.
-const SELF_UPDATING = new Set(["workspace", "files", "machines"]);
+const SELF_UPDATING = new Set(["workspace", "machines"]);
 function refreshNow() {
   if (document.hidden || !$("#modal").hidden || document.activeElement?.closest("form:not(#composer)")) return;
   if ($("#view").classList.contains("loading")) return;  // the page is still being built
@@ -657,15 +667,26 @@ async function viewUsers() {
   }));
 }
 
-// --- dynamic favicon: running goals (blue) or waiting approvals (amber) -----------
+// --- the browser tab's icon: status, current tasks, notifications and the audit log at a glance ------------
+// Tile: the brand colours, red while a stop is on, grey while the server is unreachable. Centre: the goals running
+// now (else the emblem). Dots: unread notifications (top right), goals waiting for approval (bottom left), audit
+// records not seen yet (bottom right). The tab's title spells the same out (it is the icon's tooltip).
 function setFavicon(o) {
-  const running = o.goals.running || 0, waiting = o.goals.awaiting_approval || 0;
-  const n = running || waiting, dot = running ? "%232563eb" : "%23d97706";
-  const base = "%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237c3aed'/%3E%3Cstop offset='.55' stop-color='%23db2777'/%3E%3Cstop offset='1' stop-color='%23f59e0b'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='2' y='2' width='36' height='36' rx='11' fill='url(%23g)'/%3E%3Cpath d='M10 30V19l3-2v-3h2v2l2-1.5L19 16v-4l1-2 1 2v4l2-1.5 2 1.5v-2h2v3l3 2v11z' fill='white'/%3E";
-  const badge = n ? `%3Ccircle cx='30' cy='10' r='9' fill='${dot}' stroke='white' stroke-width='2'/%3E%3Ctext x='30' y='14' font-size='11' font-family='sans-serif' font-weight='700' text-anchor='middle' fill='white'%3E${n > 9 ? "9+" : n}%3C/text%3E`
-    : "%3Cpath d='M30 6l1.2 2.8L34 10l-2.8 1.2L30 14l-1.2-2.8L26 10l2.8-1.2z' fill='white'/%3E";
-  document.querySelector("link[rel=icon]").href = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E${base}${badge}%3C/svg%3E`;
-  document.title = n ? `(${n}) Agent Company` : "Agent Company";
+  const offline = !o, running = o?.goals.running || 0, waiting = o?.goals.awaiting_approval || 0;
+  const unread = o?.unread || 0, audit = badges.audit || 0, stop = o?.stop_level || "";
+  const n = (v) => (v > 9 ? "9+" : String(v));
+  const dot = (cx, cy, r, fill, v) => `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}" stroke="#fff" stroke-width="2"/><text x="${cx}" y="${cy + r * 0.42}" font-size="${r * 1.25}" font-family="sans-serif" font-weight="700" text-anchor="middle" fill="#fff">${n(v)}</text>`;
+  const tile = offline ? "#6b7280" : stop ? "#dc2626" : "url(#g)";
+  const centre = offline ? '<path d="M20 10v13M20 29v1" stroke="#fff" stroke-width="5" stroke-linecap="round"/>'
+    : running ? `<text x="20" y="${running > 9 ? 27 : 29}" font-size="${running > 9 ? 19 : 25}" font-family="sans-serif" font-weight="800" text-anchor="middle" fill="#fff">${n(running)}</text>`
+    : '<path d="M10 30V19l3-2v-3h2v2l2-1.5L19 16v-4l1-2 1 2v4l2-1.5 2 1.5v-2h2v3l3 2v11z" fill="#fff"/>';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c3aed"/><stop offset=".55" stop-color="#db2777"/><stop offset="1" stop-color="#f59e0b"/></linearGradient></defs>`
+    + `<rect x="2" y="2" width="36" height="36" rx="11" fill="${tile}"/>${centre}`
+    + (unread ? dot(31, 9, 8.5, "#ef4444", unread) : "") + (waiting ? dot(8, 32, 7.5, "#d97706", waiting) : "") + (audit ? dot(32, 32, 7.5, "#2563eb", audit) : "") + "</svg>";
+  document.querySelector("link[rel=icon]").href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+  const parts = offline ? ["offline"] : [stop && `${stop} stop`, running && `${running} running`, waiting && `${waiting} awaiting approval`,
+    unread && `${unread} unread`, audit && `${audit} new in the audit log`].filter(Boolean);
+  document.title = parts.length ? `(${parts.join(" · ")}) Agent Company` : "Agent Company";
 }
 
 registerView({ id: "dashboard", title: "Dashboard", icon: "dashboard" }, viewDashboard);
