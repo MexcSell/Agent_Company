@@ -1,8 +1,9 @@
 """How browsers reach the dashboard: HTTPS (default) or plain HTTP, switched on the Settings page.
 
 nginx sits in front of the app (MANAGE_NGINX=1) on PUBLIC_PORT and talks to uvicorn on
-127.0.0.1:PORT. It is configured for speed: HTTP/2, TLS session cache and tickets, an
-ECDSA certificate, gzip, keep-alive to the app, and /static served from disk.
+127.0.0.1:PORT. It is configured for speed: HTTP/2, a TLS session cache (no tickets, whose
+key nginx never rotates), an ECDSA certificate, gzip, keep-alive to the app, and /static
+served from disk. TLS 1.2 is limited to forward-secret AEAD ciphers.
 
 - HTTPS: certificates come from the company's own CA (`data/tls/`). Each computer installs
   the CA once (Settings -> Connection); browsers then trust the site and keep their cache
@@ -47,14 +48,31 @@ COOKIE_PREFIX = "v1."
 # --- session cookie sealing -----------------------------------------------------------
 
 
+# AES-256-GCM stays: with AES-NI/VAES it costs ~0.6 us per cookie (ChaCha20 would be slower here).
+# What made sealing slow was reading secret.key from disk on every request, so the cipher is kept
+# in memory, per data directory (every test has its own).
+_aead: dict[str, AESGCM] = {}
+
+
 def _cookie_key() -> bytes:
     path = settings().data_dir / "secret.key"
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:  # another process created it first
+            return path.read_bytes()
         with os.fdopen(fd, "wb") as f:
             f.write(AESGCM.generate_key(bit_length=256))
     return path.read_bytes()
+
+
+def _cipher() -> AESGCM:
+    where = str(settings().data_dir)  # a str key: hashing a Path costs more than the decryption
+    aead = _aead.get(where)
+    if aead is None:
+        aead = _aead[where] = AESGCM(_cookie_key())
+    return aead
 
 
 def _ua_hash(user_agent: str | None) -> str:
@@ -64,7 +82,7 @@ def _ua_hash(user_agent: str | None) -> str:
 def encrypt_text(text: str, purpose: bytes) -> str:
     """Encrypt a stored secret (e.g. a user's GitHub token). `purpose` keeps kinds apart."""
     nonce = os.urandom(12)
-    ct = AESGCM(_cookie_key()).encrypt(nonce, text.encode(), purpose)
+    ct = _cipher().encrypt(nonce, text.encode(), purpose)
     return base64.urlsafe_b64encode(nonce + ct).decode().rstrip("=")
 
 
@@ -73,7 +91,7 @@ def decrypt_text(blob: str | None, purpose: bytes) -> str | None:
         return None
     try:
         raw = base64.urlsafe_b64decode(blob + "=" * (-len(blob) % 4))
-        return AESGCM(_cookie_key()).decrypt(raw[:12], raw[12:], purpose).decode()
+        return _cipher().decrypt(raw[:12], raw[12:], purpose).decode()
     except Exception:  # noqa: BLE001 - wrong key or tampered: treat as absent
         return None
 
@@ -84,7 +102,7 @@ def seal(token: str, user_agent: str | None, ip: str | None = None) -> str:
     if ip:
         payload["i"] = ip
     nonce = os.urandom(12)
-    ct = AESGCM(_cookie_key()).encrypt(nonce, json.dumps(payload, separators=(",", ":")).encode(), b"ac-cookie")
+    ct = _cipher().encrypt(nonce, json.dumps(payload, separators=(",", ":")).encode(), b"ac-cookie")
     return COOKIE_PREFIX + base64.urlsafe_b64encode(nonce + ct).decode().rstrip("=")
 
 
@@ -95,7 +113,7 @@ def unseal(value: str | None, user_agent: str | None, ip: str | None) -> str | N
     try:
         raw = value[len(COOKIE_PREFIX):]
         blob = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
-        payload = json.loads(AESGCM(_cookie_key()).decrypt(blob[:12], blob[12:], b"ac-cookie"))
+        payload = json.loads(_cipher().decrypt(blob[:12], blob[12:], b"ac-cookie"))
     except Exception:  # noqa: BLE001 - any decoding problem means "no valid session"
         return None
     if payload.get("u") != _ua_hash(user_agent):
@@ -282,10 +300,14 @@ def nginx_conf(mode: str) -> str:
     ssl_certificate {p['crt']};
     ssl_certificate_key {p['key']};
     ssl_protocols TLSv1.2 TLSv1.3;
+    # TLS 1.2: forward-secret AEAD suites only (no CBC, no SHA-1); TLS 1.3 suites are all AEAD.
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305;
+    ssl_ecdh_curve X25519:prime256v1:secp384r1;
     ssl_prefer_server_ciphers off;
+    # Resumption from the server-side cache; no tickets, whose key nginx never rotates (forward secrecy).
     ssl_session_cache shared:agent_company_tls:10m;
     ssl_session_timeout 1d;
-    ssl_session_tickets on;
+    ssl_session_tickets off;
     # Plain HTTP sent to this port: the app answers with a page that moves the browser to HTTPS.
     error_page 497 = @plain_http;"""
         plain = f"""

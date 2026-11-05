@@ -31,6 +31,17 @@ def test_cookie_is_sealed_and_bound():
     assert transport.unseal(https, "Firefox", "198.51.100.9") == "tok"
 
 
+def test_cipher_is_cached_per_data_dir(tmp_path, monkeypatch):
+    v = transport.seal("tok", "Firefox")
+    secret = transport.encrypt_text("ghp_x", b"git-token")
+    assert transport._cipher() is transport._cipher()  # the key file is read once
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "other"))
+    config.reset_settings()
+    assert transport.unseal(v, "Firefox", None) is None  # another data dir: another key
+    assert transport.decrypt_text(secret, b"git-token") is None
+    assert transport.unseal(transport.seal("tok", "Firefox"), "Firefox", None) == "tok"
+
+
 def test_session_cookie_over_http_is_ip_bound(app):
     assert app.get("/api/auth/me").status_code == 200
     cookie = app.cookies.get("ac_session")
@@ -92,6 +103,9 @@ def test_nginx_site_rendering():
     assert "listen 4900 ssl http2;" in https and "error_page 497 = @plain_http;" in https
     assert "X-Forwarded-Proto https;" in https and "X-Forwarded-Proto http;" in https
     assert "X-Forwarded-For $remote_addr;" in https and "ssl_session_cache" in https
+    assert "ssl_session_tickets off;" in https
+    ciphers = next(line for line in https.splitlines() if "ssl_ciphers" in line)
+    assert "-SHA;" not in ciphers and "CBC" not in ciphers and all("ECDHE" in c for c in ciphers.split()[1].split(":"))
     assert f"server 127.0.0.1:{config.settings().port};" in https
     assert 'max-age=604800' in https and "alias" not in https
     http = transport.nginx_conf("http")
