@@ -1976,6 +1976,7 @@ def create_app(start_background: bool = True) -> FastAPI:
         d["team"] = teams.history(goal_id)
         d["time"] = management.goal_time(goal_id)  # S05-R-05
         d["rca"] = rca.list_analyses(goal_id=goal_id)  # S07-R-02
+        d["digest"] = loop.digest(goal_id)  # G-R-09
         return d
 
     # --- knowledge items (SPEC-11): lessons with provenance; people review, agents never do ---

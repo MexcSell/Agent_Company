@@ -1188,9 +1188,51 @@ def _chat_outcome(goal_id: int, out: dict[str, Any]) -> None:
     text = {"awaiting_approval": "Passed the quality gate; waiting for an administrator to approve the merge.",
             "approved": "Passed the quality gate and was merged.",
             "failed": "Did not pass the quality gate.", "cancelled": "Cancelled."}.get(out["status"], out["status"])
-    post_for_goal(goal_id, f"Goal #{goal_id}: {text}\n\n{g.result}".strip(),
+    try:
+        line = digest_line(digest(goal_id))
+    except Exception as e:  # noqa: BLE001 - the digest never keeps the outcome from being posted
+        line = ""
+        log_event("error", f"mission digest failed: {e}", goal_id=goal_id)
+    post_for_goal(goal_id, f"Goal #{goal_id}: {text}\n{line}\n\n{g.result}".strip(),
                   kind="result" if out["status"] in {"approved", "awaiting_approval"} else "error",
                   agent_id=None, status=out["status"])
+
+
+MERGE_STATE = {"approved": "merged", "awaiting_approval": "waiting for approval to merge"}
+
+
+def digest(goal_id: int) -> dict[str, Any]:
+    """The mission digest posted after a goal (guides G-R-09): the last iteration's tasks done of total, the time
+    from the order to now and the time agents worked, tokens and cost of every run of the goal, and the merge state."""
+    from sqlalchemy import func
+
+    from agent_company.db import Run, now
+
+    with session() as s:
+        g = s.get(Goal, goal_id)
+        if g is None:
+            raise KeyError(f"goal {goal_id}")
+        statuses = list(s.scalars(select(Task.status).where(Task.goal_id == goal_id, Task.iteration == g.iteration)))
+        tokens, cost, worked = s.execute(select(
+            func.coalesce(func.sum(Run.input_tokens + Run.output_tokens), 0), func.coalesce(func.sum(Run.cost), 0.0),
+            func.coalesce(func.sum(Run.duration), 0.0)).where(Run.goal_id == goal_id)).one()
+        created = g.created_at if g.created_at.tzinfo else g.created_at.replace(tzinfo=now().tzinfo)
+        return {"goal_id": goal_id, "status": g.status, "iterations": g.iteration,
+                "tasks_done": sum(st == "done" for st in statuses), "tasks": len(statuses),
+                "duration": round(max(0.0, (now() - created).total_seconds()), 1), "active": round(float(worked), 1),
+                "tokens": int(tokens), "cost": round(float(cost), 6),
+                "merge": MERGE_STATE.get(g.status, "not merged")}
+
+
+def _span(seconds: float) -> str:
+    seconds = int(seconds)
+    return f"{seconds // 3600}h {seconds % 3600 // 60}m" if seconds >= 3600 else f"{seconds // 60}m {seconds % 60}s"
+
+
+def digest_line(d: dict[str, Any]) -> str:
+    return (f"Digest: {d['tasks_done']}/{d['tasks']} task(s) passed in iteration {d['iterations']} · "
+            f"{_span(d['duration'])} ({_span(d['active'])} of agent work) · {d['tokens']:,} tokens · "
+            f"${d['cost']:.4f} · {d['merge']}")
 
 
 def _run(goal_id: int) -> dict[str, Any]:

@@ -29,7 +29,7 @@ feature came from.
   for high-risk goals, staged command conditions the gate runs again), `usage.py`; `loop.py` (circular goal loop, budgets that pause, best-iteration
   rollback, handovers, checkpoint commits per writing task + worktree reconcile on resume, retry policy,
   re-plan, conflict review, escalation, behaviour rules, idempotent merge/push, trace; goals of one project topic
-  run in order, `lane_ahead`); `workflow.py` (goal
+  run in order, `lane_ahead`; G-R-09 mission digest `digest` in the result message); `workflow.py` (goal
   state machine, `goal_transitions`; task lifecycle stages `Task.stage` beside the execution status, S05-R-08); `strategies.py` (S04-R-11 workflow templates per goal kind
   bugfix|feature|refactor|research|docs, versioned: roles, writes, checks, iteration limit, execution mode, review
   policy; the order or the planner picks, a plan must fit it) + `teams.py` (a goal's team: joined/added/released

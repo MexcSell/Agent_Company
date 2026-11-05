@@ -123,6 +123,12 @@ defect is open; retry rate and cost per accepted goal are reported. An administr
 ### G-R-09 Mission digest — AgentForge website spec, step 5
 - After a goal, the GM posts one digest in the command window: tasks passed/total, duration,
   tokens, cost, merge state. (Verify the existing summary includes tokens; add if missing.)
+- **Status: done** (`loop.digest`, `digest_line`, posted by `_chat_outcome`; `GET /api/goals/{id}` → `digest`, the goal
+  page's "Digest" line; `tests/test_digest.py`). The result message's second line reads "Digest: 3/3 task(s) passed in
+  iteration 2 · 4m 10s (1m 5s of agent work) · 12,340 tokens · $0.0210 · waiting for approval to merge": the last
+  iteration's tasks done of total, the time since the order and the time in agent runs, tokens and cost of every run
+  of the goal (planning, research and reviews included), and the merge state (merged, waiting for approval to merge,
+  not merged).
 
 ## Not requirements
 - Download guide, CrewAI setup, VS Code extension lists, Hugging Face/Ollama/LM Studio links:
