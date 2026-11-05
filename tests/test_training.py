@@ -1,5 +1,6 @@
 """SPEC-13: capability gaps, learning plans, independent evaluation, experiments, learning metrics."""
 
+import json
 import secrets
 from datetime import timedelta
 from pathlib import Path
@@ -168,11 +169,17 @@ def test_exercises_run_in_scratch_repositories_and_final_checks_stay_hidden(monk
     text = (specs.folder(g) / "requirements.md").read_text()
     assert "Quality commands" not in text and "python3 -c" not in text
     seen = []
-    monkeypatch.setattr(loop, "_lesson_text", lambda aid_, title, ok, feedback, gid: seen.append(feedback) or "x")
+    monkeypatch.setattr(loop, "_lesson", lambda aid_, title, ok, feedback, gid, facts:
+                        seen.append(feedback) or ("x", {**facts, "limitations": ""}))
     with session() as s:
-        s.add(Task(goal_id=g.id, iteration=1, key="a", title="Do it", role="developer", agent_id=aid, status="failed"))
+        s.add(Task(goal_id=g.id, iteration=1, key="a", title="Do it", role="developer", agent_id=aid, status="failed",
+                   gate={"acceptance": [{"condition": {"type": "command", "value": "python3 -c 'x'"}, "passed": False,
+                                         "detail": "python3 -c 'x' exited 1"}], "findings": ["python3 -c x fails"]}))
     loop._learn_from(g.id, 1, False, "command `python3 -c ...` failed")
     assert seen == [""], "a final evaluation's findings never reach a lesson"
+    with session() as s:
+        report = s.scalars(select(Lesson).where(Lesson.goal_id == g.id)).one().report
+    assert report["failures"] and "python3" not in json.dumps(report), "nor its experience report"
     with pytest.raises(ValueError, match="only eval goals"):
         loop.create_goal("User work", trial={"trainee_id": aid})
 

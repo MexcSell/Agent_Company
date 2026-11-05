@@ -28,6 +28,54 @@ def test_lessons_from_a_goal_name_their_goal_task_and_commit():
     assert {i.kind for i in items} == {"episodic"} and all(i.evidence_class == "MEASURED" for i in items)
 
 
+def test_every_lesson_of_a_goal_carries_a_structured_experience_report():
+    gid = loop.create_goal("Reported", quality_commands=["test -f WORKLOG.md"])
+    loop.run_goal(gid)
+    with session() as s:
+        items = s.scalars(select(Lesson).where(Lesson.goal_id == gid)).all()
+    assert items
+    for i in items:
+        r = i.report
+        assert set(r) == set(learning.REPORT_KEYS), "the SPEC-11 §9.1 fields, nothing else"
+        assert r["reusable_lesson"] == i.text[:400] and r["outcome"] == "completed" and r["objective"]
+        assert {f"goal:{gid}", f"task:{i.task_id}"} <= set(r["evidence_refs"])
+        assert any(x.startswith("run:") for x in r["evidence_refs"]) and any(a.startswith("ran with") for a in r["actions"])
+        assert r["limitations"] and not r["failures"]
+    assert any(any(x.startswith("commit:") for x in i.report["evidence_refs"]) for i in items)
+    dev = items[0].agent_id
+    assert "(limits: " in learning.experience_context(dev, query="Reported"), "retrieved items carry their limits"
+
+
+def test_a_failed_task_reports_its_failures():
+    gid = loop.create_goal("Broken", quality_commands=["test -f MISSING.md"], max_iterations=1)
+    loop.run_goal(gid)
+    with session() as s:
+        items = s.scalars(select(Lesson).where(Lesson.goal_id == gid)).all()
+    assert items and all(i.report["outcome"] == "failed" and i.report["failures"] for i in items)
+
+
+def test_the_report_is_screened_withheld_when_secret_and_shown_by_the_api():
+    dev = agent_of("developer")
+    learning.learn(dev, None, "Use the settings module.", True, ["python"],
+                   report={"actions": ["put AKIAZ3MXQ7RTV2KD9WPL into settings.py"], "reasoning": "hidden thoughts"})
+    item = learning.knowledge(agent_id=dev)[0]
+    assert item["status"] == "quarantined" and "experience report" in item["status_reason"]
+    assert "Use the settings" not in learning.experience_context(dev)
+    learning.learn(dev, None, "Pin the parser version.", True, ["python"],
+                   report={"objective": "parse", "reasoning": "hidden thoughts", "limitations": "py3.12 only"})
+    clean = learning.knowledge(agent_id=dev)[0]
+    assert "reasoning" not in clean["report"] and clean["report"]["limitations"] == "py3.12 only"
+    p = projects.create("Sealed")["id"]
+    projects.update(p, {"classification": "secret"})
+    g = loop.create_goal("sealed work", project_id=p)
+    learning.learn(dev, g, "The vault opens with 1234.", True, [], report={"objective": "open the vault"})
+    assert learning.knowledge(agent_id=dev)[0]["report"] == {}
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
+        app.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
+        got = app.get(f"/api/knowledge/{clean['id']}").json()
+        assert got["report"]["objective"] == "parse"
+
+
 def test_failures_are_negative_items_and_poisoned_text_is_never_retrieved():
     dev = agent_of("developer")
     learning.learn(dev, None, "The build broke on Python 3.12.", False, ["python"])

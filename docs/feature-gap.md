@@ -106,6 +106,7 @@ Machines code):
 | Knowledge items with provenance; task-relevant, project-scoped retrieval | SPEC11 §3, §8 | done / partial (`learning.retrieve` with the contradiction penalty; FTS5 open) → S11-R-01, S11-R-03 |
 | Contradiction handling between stored lessons | SPEC11 §6.3 | done (`CONTRADICTS` edges, people resolve with a rationale, S11-R-04) |
 | Knowledge versions (supersede) and deletion with their links | SPEC11 §10.3 | done (`learning.supersede`, `delete`, S11-R-06) |
+| Structured experience reports after every task | SPEC11 §9.1 | done (`Lesson.report`, `loop._experience_facts`, `learning.clean_report`, S11-R-02) |
 | Dashboard: Knowledge view (search, review queue, contradictions side by side), Security view (stops, incidents, refused commands per agent, alerts), goal trace, stop level for every user | SPEC-15 | done (`static/knowledge.js`, `static/security.js`, S15-R-01..R-04) |
 | Memory-poisoning protection for learned lessons | SPEC11 §10.4 | done (`learning.screen`, people review, S11-R-05) |
 | Agent mentoring and knowledge transfer | SPEC12 §9 | done (`mentoring.py`: a mentor per learning plan reviews practice, never certifies, S12-R-04) |

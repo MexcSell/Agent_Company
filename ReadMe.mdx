@@ -28,8 +28,9 @@ tools, and a controlled orchestration system.
    quality commands run in the worktree.
 7. **Loop**: if the gate fails, the findings go back to research and planning,
    and the next iteration starts (up to `MAX_ITERATIONS`).
-8. **Learn**: every participating agent gets a lesson, XP and skill growth, and
-   its playbook is updated. Collaborators are linked, and related agents see each
+8. **Learn**: every participating agent gets a lesson with an experience report
+   (objective, what it ran and changed, outcome, failures, what worked, limits),
+   XP and skill growth, and its playbook is updated. Collaborators are linked, and related agents see each
    other's lessons.
 9. **Approve**: passing work waits for an administrator, then the branch is merged
    locally. Nothing is pushed or deployed.
@@ -524,7 +525,7 @@ they order are committed and merged under that identity and pushed to that branc
   tasks and no result classified above its clearance. Streaming and push
   notifications are not offered.
 - **Knowledge** (admins): what agents learned, with the goal, task and commit each
-  lesson came from. Search, approve or reject, write a new version, or delete an
+  lesson came from and its experience report. Search, approve or reject, write a new version, or delete an
   item. Lessons that contradict each other appear side by side; you decide which
   holds (or both) and give a reason, and until then both rank lower in prompts.
   The graph button (or a `type:id` such as `agent:3`, `goal:12`, `skill:testing`)

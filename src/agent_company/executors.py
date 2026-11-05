@@ -378,8 +378,14 @@ class OfflineExecutor(Executor):
         outcome = req.data.get("outcome", "success")
         title = req.data.get("title", "task")
         if outcome == "success":
-            return f"For tasks like '{title}', the approach used passed the quality gate; reuse it."
-        return f"'{title}' failed the gate: {req.data.get('feedback', 'see report')[:200]}. Check this first next time."
+            lesson = f"For tasks like '{title}', the approach used passed the quality gate; reuse it."
+        else:
+            lesson = f"'{title}' failed the gate: {req.data.get('feedback', 'see report')[:200]}. Check this first next time."
+        actions = (req.data.get("facts") or {}).get("actions", [])
+        return "```json\n" + json.dumps({
+            "reusable_lesson": lesson,
+            "successful_approach": "; ".join(actions[:2]) if outcome == "success" else "",
+            "limitations": "Observed on one task of the offline simulator."}) + "\n```"
 
     def _study(self, req: Request) -> str:
         kept = [ln for ln in str(req.data.get("current", "")).splitlines() if ln.startswith("- ")][:6]

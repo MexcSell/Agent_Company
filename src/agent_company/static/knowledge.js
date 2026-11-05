@@ -18,11 +18,24 @@ function kSource(ref) {
 }
 const kStatusPill = (s) => `<span class="pill ${s === "approved" ? "done" : s === "quarantined" || s === "rejected" ? "failed" : "pending"}">${esc(s)}</span>`;
 
+// The structured experience report (S11-R-02): observed facts from the harness, the teacher's approach and limits.
+function kReport(i) {
+  const r = i.report || {};
+  if (!Object.keys(r).length) return "";
+  const list = (xs) => (xs || []).length ? `<ul style="margin:2px 0 4px 18px;padding:0">${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+  const line = (label, v) => v ? `<div><span class="muted">${label}:</span> ${esc(v)}</div>` : "";
+  return `<details class="muted" style="margin-top:4px"><summary>Experience report · ${esc(r.outcome || "?")}</summary>
+    ${line("Objective", r.objective)}${(r.actions || []).length ? `<div class="muted">Actions:</div>${list(r.actions)}` : ""}
+    ${(r.failures || []).length ? `<div class="muted">Failures:</div>${list(r.failures)}` : ""}${line("What worked", r.successful_approach)}
+    ${line("Limitations", r.limitations)}${(r.context_refs || []).length ? `<div><span class="muted">Context:</span> ${r.context_refs.map(kSource).join(" · ")}</div>` : ""}
+    ${(r.evidence_refs || []).length ? `<div><span class="muted">Evidence:</span> ${r.evidence_refs.map(kSource).join(" · ")}</div>` : ""}</details>`;
+}
+
 function kCard(i, extra = "") {
   return `<div class="card" style="margin:0;padding:8px 10px"><div class="row"><strong>K${i.id}</strong>${kStatusPill(i.status)}<span class="pill">${esc(i.kind)}</span><span class="pill" title="evidence class">${esc(i.evidence_class)}</span>${i.version > 1 ? `<span class="pill info">v${i.version}</span>` : ""}<span class="grow"></span><span class="muted">${esc(i.agent || "?")} · ${ago(i.at)}</span></div>
     <div style="margin:6px 0">${esc(i.text)}</div>
     <div class="muted">${(i.sources || []).map(kSource).join(" · ") || "no source"}${(i.technologies || []).length ? ` · ${i.technologies.map((t) => `<span class="pill">${esc(t)}</span>`).join(" ")}` : ""} · ${esc(i.classification)}</div>
-    ${i.status_reason ? `<div class="muted">${esc(i.status_reason)}${i.reviewed_by ? ` (${esc(i.reviewed_by)})` : ""}</div>` : ""}${extra}</div>`;
+    ${i.status_reason ? `<div class="muted">${esc(i.status_reason)}${i.reviewed_by ? ` (${esc(i.reviewed_by)})` : ""}</div>` : ""}${kReport(i)}${extra}</div>`;
 }
 
 async function viewKnowledge() {
@@ -46,7 +59,7 @@ async function viewKnowledge() {
       <div class="card"><h2>Review queue <span class="muted">${queue.length}</span></h2><p class="muted">Drafts wait for approval; quarantined items hold credential-like text (delete them); rejected items stay out of prompts.</p>
         <div class="grid">${queue.map((i) => kCard(i, `<div class="row" style="margin-top:6px">${actions(i)}</div>`)).join("") || '<span class="muted">Nothing to review.</span>'}</div></div></div>
       <div class="card"><h2>Items <span class="muted">${items.length}${items.length >= 300 ? "+" : ""}</span></h2><div class="table-wrap"><table><tr><th>#</th><th>Item</th><th>Status</th><th>Source</th><th></th></tr>
-        ${items.map((i) => `<tr><td class="num">K${i.id}${i.version > 1 ? `<div class="muted">v${i.version}</div>` : ""}</td><td>${esc(i.text)}<div class="muted"><span class="pill">${esc(i.kind)}</span> ${esc(i.evidence_class)} · ${esc(i.agent || "?")} · ${ago(i.at)}${(i.technologies || []).length ? " · " + esc(i.technologies.join(", ")) : ""}</div>${i.contradicted_by.length ? `<div class="pill pending" title="an open contradiction">disputed by ${i.contradicted_by.map((c) => "K" + c).join(", ")}</div>` : ""}</td>
+        ${items.map((i) => `<tr><td class="num">K${i.id}${i.version > 1 ? `<div class="muted">v${i.version}</div>` : ""}</td><td>${esc(i.text)}<div class="muted"><span class="pill">${esc(i.kind)}</span> ${esc(i.evidence_class)} · ${esc(i.agent || "?")} · ${ago(i.at)}${(i.technologies || []).length ? " · " + esc(i.technologies.join(", ")) : ""}</div>${i.contradicted_by.length ? `<div class="pill pending" title="an open contradiction">disputed by ${i.contradicted_by.map((c) => "K" + c).join(", ")}</div>` : ""}${kReport(i)}</td>
           <td>${kStatusPill(i.status)}<div class="muted">${esc(i.classification)}</div></td><td class="muted">${(i.sources || []).map(kSource).join("<br>")}</td><td class="nowrap">${actions(i)}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No items match.</td></tr>'}</table></div></div></div>`;
   $("#k-gform").onsubmit = (e) => { e.preventDefault(); const ent = $("#k-gent").value.trim(); if (ent) kGraph(ent); };
   $("#k-search").onsubmit = (e) => { e.preventDefault(); kState.q = $("#k-q").value.trim(); kState.status = $("#k-status").value; kState.kind = $("#k-kind").value; viewKnowledge(); };

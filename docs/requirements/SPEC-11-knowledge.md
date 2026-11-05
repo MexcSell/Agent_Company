@@ -17,7 +17,7 @@ graph is an edge table and search is SQLite FTS5. Revisit only if retrieval eval
 
 ## Specific requirements
 
-Status (2026-11-05): S11-R-01 done · S11-R-02 open · S11-R-03 partial · S11-R-04 done · S11-R-05 done ·
+Status (2026-11-05): S11-R-01 done · S11-R-02 done · S11-R-03 partial · S11-R-04 done · S11-R-05 done ·
 S11-R-06 done · S11-R-07 done · S11-R-08 open.
 
 ### S11-R-01 Knowledge items with type, evidence class and provenance — §3.1, §6.1
@@ -39,6 +39,18 @@ S11-R-06 done · S11-R-07 done · S11-R-08 open.
   failures, successful approach, reusable lesson, limitations. Observable actions only, no
   hidden reasoning (§4.1). Stored on the knowledge item.
 - Acceptance: KT-011.
+- **Status: done** (`Lesson.report`; `loop._experience_facts`, `loop._lesson`, `learning.clean_report`,
+  `REPORT_KEYS`; Knowledge view → "Experience report"; `tests/test_knowledge.py`, `tests/test_training.py`).
+  The §9.1 fields: `objective`, `context_refs`, `actions`, `outcome`, `evidence_refs`, `failures`,
+  `successful_approach`, `reusable_lesson`, `limitations`. The harness fills the observable ones from what it
+  recorded (the contract's objective; the project and the K-numbers retrieved for the agent in this goal; each
+  run's model, executor, duration and error, the changed files, the commit, how many acceptance conditions held;
+  failed conditions and findings; goal, task, run and commit refs). The teacher (the instructor, else the agent)
+  sees those as data and answers a fenced JSON with only `reusable_lesson`, `successful_approach` and
+  `limitations`; a plain-text answer still gives the lesson. Other keys (reasoning) are dropped, fields are
+  capped. The report is screened like the lesson (a credential in it quarantines the item), stored empty for
+  secret work, and under a final evaluation names no condition or finding (LE-021). Retrieved items carry their
+  limitations into the prompt (S11-R-03).
 
 ### S11-R-03 Task-relevant, project-scoped retrieval — §8, §14
 - Replace recency-only selection in `learning.experience_context` with ranked retrieval over

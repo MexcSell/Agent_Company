@@ -22,7 +22,7 @@ feature came from.
   `decisions.py` (decision records; human ones block the merge); `projects.py` (projects, command window
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals, uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress;
   blockers and generated items are reconciled from goal state by `sync`); `kgraph.py` (SPEC-11 knowledge graph: `kg_edges` written as side effects, the paged neighbourhood API);
-  `learning.py` (knowledge items: provenance, screening, scoped ranked retrieval;
+  `learning.py` (knowledge items: provenance, experience reports, screening, scoped ranked retrieval;
   contradictions and versions as `kg_edges`, resolved by people)
   + `evolution.py` (playbook candidates are experiments); `experiments.py` (SPEC-13: baseline vs candidate on one eval
   suite, review by the E0-E6 policy, canary, rollback; routes only applied by an administrator); `training.py`

@@ -303,6 +303,9 @@ class Lesson(Base):
     supersedes_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     review_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     classification: Mapped[str] = mapped_column(String(16), default="internal")
+    # the structured experience report (S11-R-02): objective, context_refs, actions, outcome, evidence_refs,
+    # failures, successful_approach, reusable_lesson, limitations; observable facts only
+    report: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
