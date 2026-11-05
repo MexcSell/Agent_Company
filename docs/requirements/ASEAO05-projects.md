@@ -16,16 +16,16 @@ Mapping: project → `Project`; project manager agent → `Project.manager_id` (
 | S05-FR-02 | Unique project ID | done |
 | S05-FR-03 | Each project has an owner | done (`Project.created_by`) |
 | S05-FR-04 | Assigned PM agent or explicit pending state | done (`Project.manager_id`) |
-| S05-FR-05 | Select participating departments | open → S05-R-06 |
-| S05-FR-06 | Required skills and capabilities | open → S05-R-06 |
-| S05-FR-07 | Environment, repository, stack, working directory | partial: path and GitHub URL; stack open → S05-R-06 |
-| S05-FR-08 | Budgets, deadlines, priorities, security classification | open → S05-R-06 |
-| S05-FR-09 | Pause, resume, archive, cancel, complete | partial: `/stop` only → S05-R-06 |
+| S05-FR-05 | Select participating departments | done (`Project.rooms`, S05-R-06) |
+| S05-FR-06 | Required skills and capabilities | done (`Project.required_skills`, S05-R-06) |
+| S05-FR-07 | Environment, repository, stack, working directory | done (path, GitHub URL, `Project.stack`, S05-R-06) |
+| S05-FR-08 | Budgets, deadlines, priorities, security classification | done (S05-R-06, S14-R-05) |
+| S05-FR-09 | Pause, resume, archive, cancel, complete | done (`projects.set_status`, S05-R-06) |
 
 ## Specific requirements
 
 Status (2026-11-05): S05-R-01 done · S05-R-02 done · S05-R-03 done · S05-R-04 done · S05-R-05 partial ·
-S05-R-06 open · S05-R-07 done · S05-R-08, R-09 open · S05-R-10 done (SPEC-04).
+S05-R-06 done · S05-R-07 done · S05-R-08, R-09 open · S05-R-10 done (SPEC-04).
 
 ### S05-R-01 Milestones — §7 (AT-012)
 - Table `milestones`: `project_id`, name, description, target date, deliverables, required goal
@@ -93,6 +93,23 @@ S05-R-06 open · S05-R-07 done · S05-R-08, R-09 open · S05-R-10 done (SPEC-04)
   (`active|paused|archived|cancelled|completed`).
 - Paused/archived projects accept no new goals; cancel cancels running goals (exists as `/stop`).
 - Project budget caps the sum of its goals' budgets (SPEC-04 S04-R-09).
+- **Status: done** (`Project.stack`, `required_skills`, `rooms`, `budget_usd`, `deadline`, `priority`, `status`,
+  `status_reason`; `projects.update` validates them (known rooms, slug skills, ISO deadline), `set_status`,
+  `PROJECT_TRANSITIONS`, `refusal`, `project_spend`; `POST /api/projects/{id}/status` for an administrator or the
+  owner, audited; Projects → Edit and the status menu; `tests/test_project_lifecycle.py`). Transitions: active →
+  paused|completed|archived|cancelled, paused → active|archived|cancelled, archived → active, completed → archived;
+  cancelled is final; the platform project stays active. Pausing pauses its open goals (marked
+  `paused_by_project`; running ones stop at the next step) and resuming resumes only those; a goal of a paused
+  project cannot be resumed on its own. Cancelling cancels the open goals; completing and archiving need none.
+  Only an active project within its budget takes new goals (`loop.create_goal`, orders get an error reply; eval goals
+  are exempt). The budget is the cost of all its goals' runs: at the cap a running goal is paused like at its own
+  budget (`loop._budget_note`), and raising the budget lets it resume. The planner is told the stack, required
+  skills, rooms, deadline, priority and budget (`loop._project_context`) and only offered the roles of the
+  participating rooms; a plan naming a role of another room goes back once and otherwise fails the goal, as does a
+  standard plan outside them (`loop._in_rooms`; a role nobody has yet passes and is recruited as usual). The goal
+  queue is a priority queue: critical, high, normal (also goals without a project), low, then first come first
+  served (`loop.PRIORITY_RANK`). The deadline is shown and marked overdue in `/status` and the header; it does not
+  stop work.
 
 ### S05-R-07 Topics (conversation lanes) — §12 (AT-021..023), AgentForge website spec
 - `Message.topic` (default `general`); the command window shows topic tabs; agents assigned to a

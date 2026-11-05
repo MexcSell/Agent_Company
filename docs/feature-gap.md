@@ -91,6 +91,7 @@ Machines code):
 | Task contract fields: scope, risk, test plan, budget, deadline, requirement keys; findings and next actions | Designing guide §3 | done (`contracts.TaskContract`, G-R-01) |
 | Execution trace per goal | SPEC04 FR-30, SPEC14 | partial (`/api/goals/{id}/trace`; tool calls open) → S04-R-12 |
 | Goal-chain depth limit for proposals | SPEC04 §9.4 | done (`max_goal_depth`, S04-R-08 partial) |
+| Project registration fields (rooms, skills, stack, budget, deadline, priority) and lifecycle (pause, resume, archive, cancel, complete) | ASEAO05 FR-05..09 | done (`projects.set_status`, project budget caps its goals, priority queue, S05-R-06) |
 | Milestones, blockers and risks, insights, upcoming action items per project | ASEAO05 §7-10 | done (`management.py`, Projects → Plan, S05-R-01..R-04; time and weighted progress partial, S05-R-05) |
 | Continuous monitoring of registered sources (beyond the rotation) | ASEAO06 §13 | done (per-source intervals, page versions, intelligence events; S06-R-02) |
 | Research-to-innovation pipeline: findings become proposals | ASEAO06 §15 | open → S06-R-06 |

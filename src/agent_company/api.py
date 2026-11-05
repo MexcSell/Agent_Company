@@ -1922,6 +1922,20 @@ def create_app(start_background: bool = True) -> FastAPI:
         _audit(admin, "project_update", out["name"], after=changes)
         return out
 
+    @app.post("/api/projects/{project_id}/status")
+    def project_status(project_id: int, body: dict[str, Any], user: dict[str, Any] = Depends(current_user)
+                       ) -> dict[str, Any]:
+        """Pause, resume, archive, cancel or complete (ASEAO05 S05-R-06): an administrator or the project's owner."""
+        p = projects.get(project_id, user)
+        if not user["is_admin"] and p.created_by != user["id"]:
+            raise HTTPException(403, "only an administrator or the project's owner changes its status")
+        before = p.status or "active"
+        out = projects.set_status(project_id, str(body.get("status") or ""), user["name"], str(body.get("reason") or ""))
+        _audit(user, "project_status", out["name"], before={"status": before}, after={"status": out["status"],
+               "reason": out["status_reason"], "goals": out["goals_changed"]}, severity="high" if out["status"] ==
+               "cancelled" else "info")
+        return out
+
     @app.post("/api/projects/delete")
     def project_delete(body: IdsBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         done = projects.delete(body.ids)

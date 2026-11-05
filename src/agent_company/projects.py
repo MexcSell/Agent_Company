@@ -43,10 +43,151 @@ UPLOAD_TYPES = ("image/", "text/", "application/json", "application/pdf", "appli
 
 
 def project_dict(p: Project, counts: dict[str, int] | None = None) -> dict[str, Any]:
+    deadline = _aware(p.deadline)
     return {"id": p.id, "name": p.name, "path": p.path, "github_url": p.github_url, "description": p.description,
             "quality_commands": p.quality_commands, "protected": p.protected, "manager_id": p.manager_id,
-            "classification": p.classification or "internal",
+            "classification": p.classification or "internal", "created_by": p.created_by,
+            "stack": list(p.stack or []), "required_skills": list(p.required_skills or []), "rooms": list(p.rooms or []),
+            "budget_usd": p.budget_usd or 0.0, "spent_usd": round(project_spend(p.id), 4),
+            "deadline": deadline.isoformat() if deadline else None, "overdue": bool(deadline and deadline < now()
+                                                                                   and (p.status or "active") in OPEN),
+            "priority": p.priority or "normal", "status": p.status or "active", "status_reason": p.status_reason or "",
             "created_at": p.created_at.isoformat(), **(counts or {})}
+
+
+# --- registration fields and lifecycle (ASEAO05 S05-R-06) ---------------------------------------
+
+PRIORITIES = ("low", "normal", "high", "critical")
+OPEN = ("active", "paused")
+PROJECT_TRANSITIONS = {"active": {"paused", "archived", "cancelled", "completed"},
+                       "paused": {"active", "archived", "cancelled"},
+                       "archived": {"active"}, "completed": {"archived"}, "cancelled": set()}
+
+
+def _aware(t):  # noqa: ANN001, ANN202 - SQLite returns naive datetimes
+    from datetime import UTC
+
+    return t.replace(tzinfo=UTC) if t is not None and t.tzinfo is None else t
+
+
+def project_spend(project_id: int) -> float:
+    """What the project's goals have cost so far."""
+    from agent_company.db import Run
+
+    with session() as s:
+        return float(s.scalar(select(func.coalesce(func.sum(Run.cost), 0.0)).join(Goal, Goal.id == Run.goal_id)
+                              .where(Goal.project_id == project_id)) or 0.0)
+
+
+def refusal(p: Project | None) -> str | None:
+    """Why the project takes no new goals now, or None: only an active project within its budget does."""
+    if p is None:
+        return None
+    if (p.status or "active") != "active":
+        return f"project '{p.name}' is {p.status}" + (f" ({p.status_reason})" if p.status_reason else "")
+    if (p.budget_usd or 0) > 0:
+        spent = project_spend(p.id)
+        if spent >= p.budget_usd:
+            return f"project '{p.name}' used its budget of ${p.budget_usd:.2f} (${spent:.2f}); raise it first"
+    return None
+
+
+def _names(value: Any, what: str, slug: bool = False) -> list[str]:
+    if not isinstance(value, list) or len(value) > 30 or not all(isinstance(x, str) and 0 < len(x.strip()) <= 64
+                                                                  for x in value):
+        raise ValueError(f"{what} is a list of at most 30 names")
+    out = [re.sub(r"[^a-z0-9]+", "_", x.strip().lower()).strip("_") if slug else x.strip() for x in value]
+    return list(dict.fromkeys(x for x in out if x))
+
+
+def _fields(s, changes: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN001
+    """Validate and normalise the registration fields of an update."""
+    from datetime import datetime
+
+    from agent_company.db import Room
+
+    out = dict(changes)
+    if "stack" in out:
+        out["stack"] = _names(out["stack"], "stack")
+    if "required_skills" in out:
+        out["required_skills"] = _names(out["required_skills"], "required_skills", slug=True)
+    if "rooms" in out:
+        rooms = _names(out["rooms"], "rooms")
+        known = {r.key for r in s.scalars(select(Room))}
+        if set(rooms) - known:
+            raise ValueError(f"unknown room(s): {', '.join(sorted(set(rooms) - known))}")
+        out["rooms"] = rooms
+    if "budget_usd" in out:
+        try:
+            out["budget_usd"] = round(float(out["budget_usd"] or 0), 4)
+        except (TypeError, ValueError):
+            out["budget_usd"] = -1.0
+        if not 0 <= out["budget_usd"] <= 1_000_000:
+            raise ValueError("budget_usd is 0 (none) to 1000000")
+    if "deadline" in out:
+        d = out["deadline"]
+        try:
+            out["deadline"] = _aware(datetime.fromisoformat(str(d).replace("Z", "+00:00"))) if d else None
+        except ValueError as e:
+            raise ValueError("deadline is an ISO date, e.g. 2026-12-31") from e
+    if "priority" in out and out["priority"] not in PRIORITIES:
+        raise ValueError(f"priority is one of {', '.join(PRIORITIES)}")
+    return out
+
+
+def set_status(project_id: int, to: str, actor: str, reason: str = "") -> dict[str, Any]:
+    """Pause, resume, archive, cancel or complete a project. Pausing pauses its active goals (running ones stop at
+    the next step) and resuming resumes the ones the pause stopped; cancelling cancels them; archiving and completing
+    need a project without active goals. Paused, archived, cancelled and completed projects take no new goals."""
+    from agent_company import loop
+
+    with session() as s:
+        p = s.get(Project, project_id)
+        if p is None:
+            raise KeyError(project_id)
+        cur = p.status or "active"
+        if to == cur:
+            return project_dict(p)
+        if to not in PROJECT_TRANSITIONS.get(cur, set()):
+            allowed = ", ".join(sorted(PROJECT_TRANSITIONS.get(cur, set()))) or "nothing (final)"
+            raise ValueError(f"a {cur} project can become: {allowed}")
+        if p.protected and to != "active":
+            raise ValueError("the platform project stays active; stop its goals instead")
+        goals = [(g.id, g.status, dict(g.checkpoint or {}))
+                 for g in s.scalars(select(Goal).where(Goal.project_id == project_id, Goal.status.in_(ACTIVE)))]
+        if to in {"archived", "completed"} and goals:
+            raise ValueError(f"cancel or finish its {len(goals)} open goal(s) first: "
+                             + ", ".join(f"#{g[0]} {g[1]}" for g in goals[:10]))
+        p.status, p.status_reason = to, (reason or "").strip()[:500]
+        log_event("project", f"project {p.name}: {cur} → {to} by {actor}" + (f": {reason}" if reason else ""), s=s,
+                  project_id=project_id)
+    changed: list[int] = []
+    kept: dict[int, str] = {}
+    for gid, status, cp in goals:
+        try:
+            if to == "cancelled":
+                loop.cancel(gid, actor=actor)
+                changed.append(gid)
+            elif to == "paused" and status != "paused":
+                loop.pause(gid, actor, f"project paused{': ' + reason if reason else ''}")
+                with session() as s:
+                    g = s.get(Goal, gid)
+                    g.checkpoint = {**(g.checkpoint or {}), "paused_by_project": True}
+                changed.append(gid)
+            elif to == "active" and status == "paused" and cp.get("paused_by_project"):
+                with session() as s:
+                    g = s.get(Goal, gid)
+                    g.checkpoint = {k: v for k, v in (g.checkpoint or {}).items() if k != "paused_by_project"}
+                loop.resume(gid, actor)
+                changed.append(gid)
+        except ValueError as e:  # a goal over its own budget stays paused; the project changes anyway
+            kept[gid] = str(e)
+    verb = {"paused": "Paused", "active": "Resumed", "cancelled": "Cancelled"}.get(to, to.capitalize())
+    post(project_id, f"Project {to} by {actor}" + (f": {reason}" if reason else "") + "."
+         + (f" {verb} goal(s) {', '.join(f'#{g}' for g in changed)}." if changed else "")
+         + "".join(f" Goal #{g} stays paused: {why}" for g, why in kept.items()), kind="result")
+    with session() as s:
+        return project_dict(s.get(Project, project_id)) | {"goals_changed": changed, "goals_kept": kept}
 
 
 def seed() -> None:
@@ -151,7 +292,8 @@ def create(name: str, path: str = "", github_url: str = "", description: str = "
 def update(project_id: int, changes: dict[str, Any]) -> dict[str, Any]:
     from agent_company.learning import CLASSIFICATIONS
 
-    allowed = {"name", "github_url", "description", "quality_commands", "classification"}
+    allowed = {"name", "github_url", "description", "quality_commands", "classification", "stack", "required_skills",
+               "rooms", "budget_usd", "deadline", "priority"}
     bad = set(changes) - allowed
     if bad:
         raise ValueError(f"not editable: {', '.join(sorted(bad))}")
@@ -165,6 +307,7 @@ def update(project_id: int, changes: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("the platform project cannot be renamed")
         _check(changes.get("name", p.name), "", changes.get("github_url", p.github_url),
                changes.get("quality_commands", p.quality_commands))
+        changes = _fields(s, changes)
         old = p.classification or "internal"
         for k, v in changes.items():
             setattr(p, k, v.strip() if isinstance(v, str) else v)
@@ -611,6 +754,11 @@ def command(project_id: int, user: dict[str, Any], content: str, attachment_ids:
               else "Those decisions are already recorded.", "result")
         if not rest and not files:  # only decisions: no goal
             return {"message_id": mid, "decisions": [d["id"] for d in found]}
+    with session() as s:
+        why = refusal(s.get(Project, p.id))
+    if why:  # S05-R-06: the order is kept, no goal is started
+        reply(f"No new goals: {why}.", "error")
+        return {"message_id": mid}
     title = content.splitlines()[0][:200] if content else f"Look at {files[0]['name']}"
     if len(title) < 3:
         title = f"Order: {title}"
@@ -637,7 +785,13 @@ def status_text(project_id: int, topic: str = GENERAL) -> str:
             q = q.where(Goal.topic == topic)
         goals = s.scalars(q.order_by(Goal.id.desc()).limit(10)).all()
         lines = [f"#{g.id} [{g.status}] {g.title} (iteration {g.iteration}/{g.max_iterations})" for g in goals]
-    out = (["Open blockers:", *blockers, ""] if blockers else []) + (lines or ["No goals yet."])
+        d = project_dict(s.get(Project, project_id))
+    head = [x for x in [
+        f"Project {d['status']}" + (f": {d['status_reason']}" if d["status_reason"] else "") if d["status"] != "active"
+        else "",
+        f"Deadline {d['deadline'][:10]}" + (" — overdue" if d["overdue"] else "") if d["deadline"] else "",
+        f"Budget ${d['spent_usd']:.2f} of ${d['budget_usd']:.2f} used" if d["budget_usd"] else ""] if x]
+    out = ([*head, ""] if head else []) + (["Open blockers:", *blockers, ""] if blockers else []) + (lines or ["No goals yet."])
     return "\n".join(out + (["", "Next:", *nxt] if nxt else []))
 
 

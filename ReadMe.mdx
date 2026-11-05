@@ -105,6 +105,17 @@ messages collapse into one with a count. Slash commands:
 | `/sync` | Pushes approved work to the GitHub remote (administrators) |
 | `/help` | Lists the commands |
 
+**Edit the project** (administrators) also sets its stack and required skills
+(the planner is told them), its participating rooms (the planner only uses their
+roles; a plan outside them fails the goal), a budget that caps the cost of all its
+goals together (a goal pauses when it is used, and no new goal starts), a deadline
+(shown, and marked overdue) and a priority (goals of critical and high projects
+are taken from the queue first). The status menu next to **Stop** (administrators
+and the project's owner) pauses the project (its open goals pause and resume with
+it; no new goals meanwhile), completes, archives, restores or cancels it (its open
+goals are cancelled; final). Completing and archiving need a project without open
+goals.
+
 This repository is registered as the protected **Agent Company** project: it
 cannot be deleted or renamed and only administrators see it, so agents can work
 on the platform itself. Approved changes are merged into this checkout; restart

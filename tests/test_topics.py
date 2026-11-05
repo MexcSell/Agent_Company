@@ -118,8 +118,7 @@ def test_queue_holds_a_goal_behind_its_topic(no_run, monkeypatch):
     ran = []
     monkeypatch.setattr(loop, "run_goal", lambda gid: ran.append(gid))
     q = loop.GoalQueue(workers=1)
-    q.seen = {second}
-    q.q.put(second)
+    q.submit(second)
 
     class Done(Exception):
         pass
@@ -127,13 +126,15 @@ def test_queue_holds_a_goal_behind_its_topic(no_run, monkeypatch):
     def get():
         if q.q.empty():
             raise Done
-        return q.q.queue.popleft()
+        import heapq
+
+        return heapq.heappop(q.q.queue)
 
     monkeypatch.setattr(q.q, "get", get)
     with pytest.raises(Done):
         q._loop()
     assert ran == [] and second not in q.seen, "held, and offered again by the watcher"
-    q.q.put(first)
+    q.submit(first)
     with pytest.raises(Done):
         q._loop()
     assert ran == [first]

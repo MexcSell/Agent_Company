@@ -64,12 +64,19 @@ async function deleteProjects() {
 
 async function projectForm(p = null) {
   const base = p ? "" : await api("/api/projects-defaults").then((d) => d.base).catch(() => "");
+  const rooms = p && me.is_admin ? await api("/api/rooms").catch(() => []) : [];
   modal(`<h2>${icon("projects", 18)} ${p ? "Edit project" : "New project"}</h2><form id="pf">
     <label for="pf-name">Name</label><input id="pf-name" required value="${esc(p?.name || "")}" ${p?.protected ? "disabled" : ""}>
     ${p || !me.is_admin ? "" : `<label for="pf-path">Work folder (git repository; by default a new folder next to Agent Company)</label><div class="row nowrap"><input id="pf-path" class="grow" placeholder="${esc(base)}/my-project">${typeof pickFolder === "function" ? ib("folder", "Browse…", 'type="button" id="pf-browse"') : ""}</div>`}
     <label for="pf-gh">GitHub URL (recommended; approved work is pushed here)</label><input id="pf-gh" placeholder="https://github.com/owner/repo.git" value="${esc(p?.github_url || "")}">
     <label for="pf-desc">Description</label><textarea id="pf-desc">${esc(p?.description || "")}</textarea>
     ${me.is_admin ? `<label for="pf-checks">Quality commands (one per line)</label><textarea id="pf-checks" placeholder="uv run pytest -q">${esc((p?.quality_commands || []).join("\n"))}</textarea>` : ""}
+    ${me.is_admin && p ? `<div class="row"><div class="grow"><label for="pf-stack">Stack (comma-separated)</label><input id="pf-stack" placeholder="python, fastapi" value="${esc((p.stack || []).join(", "))}"></div>
+      <div class="grow"><label for="pf-skills">Required skills (comma-separated)</label><input id="pf-skills" placeholder="api, testing" value="${esc((p.required_skills || []).join(", "))}"></div></div>
+      <label>Participating rooms (none checked: every room; the planner only uses these rooms' roles)</label><div class="plug-picks">${rooms.map((r) => `<label class="plug"><input type="checkbox" data-room="${esc(r.key)}" ${(p.rooms || []).includes(r.key) ? "checked" : ""}><span>${esc(r.name)}</span></label>`).join("")}</div>
+      <div class="row"><div class="grow"><label for="pf-budget">Budget, $ (caps all its goals; 0 = none; $${(p.spent_usd || 0).toFixed(2)} used)</label><input id="pf-budget" type="number" min="0" step="0.01" value="${p.budget_usd || 0}"></div>
+      <div class="grow"><label for="pf-deadline">Deadline</label><input id="pf-deadline" type="date" value="${esc((p.deadline || "").slice(0, 10))}"></div>
+      <div class="grow"><label for="pf-prio">Priority (queue order)</label><select id="pf-prio">${["low", "normal", "high", "critical"].map((c) => `<option ${(p.priority || "normal") === c ? "selected" : ""}>${c}</option>`).join("")}</select></div></div>` : ""}
     ${me.is_admin && p ? `<label for="pf-class">Classification (what agents may carry to other projects: public and internal lessons only; secret ones are not stored)</label><select id="pf-class">${["public", "internal", "confidential", "restricted", "secret"].map((c) => `<option ${(p.classification || "internal") === c ? "selected" : ""}>${c}</option>`).join("")}</select>` : ""}
     <div class="row" style="margin-top:12px"><button class="btn icon primary" title="${p ? "Save" : "Create"}" aria-label="${p ? "Save" : "Create"}">${icon(p ? "save" : "check", 16)}</button></div></form>`);
   // The folder follows the name until it is edited: <folder above Agent Company>/<name>.
@@ -85,6 +92,12 @@ async function projectForm(p = null) {
     const body = { github_url: $("#pf-gh").value.trim(), description: $("#pf-desc").value };
     if ($("#pf-checks")) body.quality_commands = $("#pf-checks").value.split("\n").map((x) => x.trim()).filter(Boolean);
     if ($("#pf-class")) body.classification = $("#pf-class").value;
+    if ($("#pf-prio")) {
+      const list = (v) => v.split(",").map((x) => x.trim()).filter(Boolean);
+      Object.assign(body, { stack: list($("#pf-stack").value), required_skills: list($("#pf-skills").value), priority: $("#pf-prio").value,
+        rooms: [...document.querySelectorAll("[data-room]:checked")].map((c) => c.dataset.room), budget_usd: +$("#pf-budget").value || 0,
+        deadline: $("#pf-deadline").value || null });
+    }
     if (!p?.protected) body.name = $("#pf-name").value.trim();
     try {
       if (p) await api(`/api/projects/${p.id}`, { method: "PATCH", body });
@@ -93,6 +106,10 @@ async function projectForm(p = null) {
     } catch (err) { toast(err.message); }
   };
 }
+
+const LIFE = { active: [["paused", "Pause"], ["completed", "Complete"], ["archived", "Archive"], ["cancelled", "Cancel"]],
+  paused: [["active", "Resume"], ["archived", "Archive"], ["cancelled", "Cancel"]], archived: [["active", "Restore"]],
+  completed: [["archived", "Archive"]], cancelled: [] };
 
 const KIND_LABEL = { command: "", plan: "Plan", result: "Result", error: "Problem", proposal: "Proposal", standup: "Stand-up", chat: "" };
 
@@ -146,9 +163,9 @@ async function projectMain(id, incremental, early = null) {
   const gmKey = `${mode}:${d.gm?.kind}:${d.gm?.model}`;
   if (!incremental || main.dataset.pid !== String(id) || main.dataset.mode !== gmKey) {
     main.dataset.pid = id; main.dataset.mode = gmKey;
-    main.innerHTML = `<div class="row nowrap proj-head"><div class="grow"><h2 style="margin:0">${esc(d.name)} ${d.protected ? '<span class="pill">protected</span>' : ""}</h2><div class="muted mono ellipsis">${esc(d.path)}${d.github_url ? " · " + esc(d.github_url) : ""}</div></div>
+    main.innerHTML = `<div class="row nowrap proj-head"><div class="grow"><h2 style="margin:0">${esc(d.name)} ${d.protected ? '<span class="pill">protected</span>' : ""}${d.status !== "active" ? ` <span class="pill pending" title="${esc(d.status_reason || "")}">${esc(d.status)}</span>` : ""}${d.priority && d.priority !== "normal" ? ` <span class="pill info">${esc(d.priority)}</span>` : ""}${d.deadline ? ` <span class="pill ${d.overdue ? "failed" : ""}" title="deadline">${esc(d.deadline.slice(0, 10))}${d.overdue ? " overdue" : ""}</span>` : ""}${d.budget_usd ? ` <span class="pill ${d.spent_usd >= d.budget_usd ? "failed" : ""}" title="budget used">${money(d.spent_usd)} / ${money(d.budget_usd)}</span>` : ""}</h2><div class="muted mono ellipsis">${esc(d.path)}${d.github_url ? " · " + esc(d.github_url) : ""}</div></div>
         ${me.is_admin ? ib("edit", "Edit the project", 'id="p-edit"', "sm") + ib("download", "Write the company catalog into this project's .claude/ (agents, rules, skills, commands, hooks, .mcp.json)", 'id="p-config"', "sm") + ib("git", d.github_url ? "Sync to GitHub" : "Set a GitHub URL first", `id="p-sync" ${d.github_url ? "" : "disabled"}`, "sm") + ib("workspace", "Open the folder in the Workspace", 'id="p-wsp"', "sm") : ""}
-        ${ib("folder", projectFiles ? "Hide files" : "Show files", 'id="p-files"', `sm ${projectFiles ? "on" : ""}`)}${ib("stop", "Stop the project's running goals", 'id="p-stop"', "sm danger")}</div>
+        ${ib("folder", projectFiles ? "Hide files" : "Show files", 'id="p-files"', `sm ${projectFiles ? "on" : ""}`)}${ib("stop", "Stop the project's running goals", 'id="p-stop"', "sm danger")}${(me.is_admin || d.created_by === me.id) && !d.protected && LIFE[d.status]?.length ? `<select id="p-life" aria-label="Project status" title="Pause, resume, archive, complete or cancel the project" style="width:auto"><option value="">${esc(d.status)}…</option>${LIFE[d.status].map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select>` : ""}</div>
       <div class="ag-tabs small proj-modes" role="tablist">${gmOk ? `<button role="tab" data-pmode="gm" aria-selected="${mode === "gm"}">${icon("general_manager", 14)} General Manager</button>` : ""}<button role="tab" data-pmode="orders" aria-selected="${mode === "orders"}">${icon("send", 14)} Orders &amp; reports</button><button role="tab" data-pmode="plan" aria-selected="${mode === "plan"}">${icon("goals", 14)} Plan</button>
         <span class="grow"></span><span class="muted gm-is" title="${esc(d.gm?.reason || "")}">GM: ${esc(d.gm?.model || "–")}${cli ? "" : " · orders go to the agent loop"}</span></div>
       <div id="p-props"></div><div class="proj-body" id="proj-body"></div>`;
@@ -156,6 +173,12 @@ async function projectMain(id, incremental, early = null) {
     $("#p-edit") && ($("#p-edit").onclick = () => projectForm(d));
     $("#p-sync") && ($("#p-sync").onclick = () => sendCommand(id, "/sync"));
     $("#p-stop").onclick = () => sendCommand(id, "/stop");
+    $("#p-life") && ($("#p-life").onchange = async (e) => {
+      const to = e.target.value; if (!to) return;
+      const reason = prompt(`${to === "active" ? "Resume" : to[0].toUpperCase() + to.slice(1)} the project${to === "cancelled" ? " (its open goals are cancelled)" : to === "paused" ? " (its open goals are paused)" : ""}. Reason (optional):`, "");
+      if (reason === null) { e.target.value = ""; return; }
+      try { await api(`/api/projects/${id}/status`, { method: "POST", body: { status: to, reason } }); toast("Done"); projectMain(id); } catch (err) { toast(err.message); e.target.value = ""; }
+    });
     $("#p-files").onclick = () => { projectFiles = !projectFiles; store.set("ac.project.files", projectFiles ? "1" : ""); $(".proj").classList.toggle("with-files", projectFiles); applyProjectLayout(); projectMain(id); };
     $("#p-wsp") && ($("#p-wsp").onclick = async () => { show("workspace"); await new Promise((r) => setTimeout(r, 300)); WSP.openRoot?.(d.path).catch((e) => toast(e.message)); });
     $("#p-config") && ($("#p-config").onclick = async () => { if (!confirm(`Write the catalog into ${d.path}/.claude/ (existing files with the same names are replaced)?`)) return; try { const r = await api(`/api/projects/${id}/claude-config`, { method: "POST" }); toast(`${r.written.length} file(s) written`); } catch (e) { toast(e.message); } });

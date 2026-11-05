@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import functools
+import itertools
 import json
 import queue
 import random
@@ -72,6 +73,11 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
         check_level(classification)
     with session() as s:
         project = s.get(Project, project_id) if project_id is not None else None
+        from agent_company.projects import refusal
+
+        why = refusal(project) if origin != "eval" else None  # S05-R-06: paused, closed or over budget
+        if why:
+            raise ValueError(f"no new goals: {why}")
         ids = [a["id"] for a in attachments or [] if isinstance(a, dict) and a.get("id")]
         levels = [u.classification for u in s.scalars(select(Upload).where(Upload.id.in_(ids)))] if ids else []
         level = highest(classification, project.classification if project else None, *levels)
@@ -330,6 +336,18 @@ def _budget_note(goal: Goal, started: float) -> str:
         if elapsed >= cfg.goal_time_budget:
             raise BudgetExhausted(f"time budget of {cfg.goal_time_budget}s used")
         shares.append(("time", elapsed / cfg.goal_time_budget))
+    if row is not None and row.project_id is not None:  # the project's budget caps all its goals (S05-R-06)
+        from agent_company.db import Project
+        from agent_company.projects import project_spend
+
+        with session() as s:
+            p = s.get(Project, row.project_id)
+            cap = (p.budget_usd or 0.0) if p else 0.0
+        if cap > 0:
+            used = project_spend(row.project_id)
+            if used >= cap:
+                raise BudgetExhausted(f"the project's budget of ${cap:.2f} is used (${used:.2f})")
+            shares.append(("project cost", used / cap))
     worst = max(shares, key=lambda x: x[1], default=None)
     if worst and worst[1] >= 0.6:
         return (f"\n\nBudget: {worst[1]:.0%} of this goal's {worst[0]} budget is used. Converge: finish the "
@@ -441,10 +459,13 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
     """The task contracts for this iteration, and the id of the agent that planned them."""
     gm = registry.staff("general_manager", ["planning"], goal.id)
     try:
+        rooms, project_note = _project_context(goal)
         with session() as s:
-            roles = sorted({a.role for a in s.scalars(select(Agent).where(Agent.enabled))})
+            q = select(Agent).where(Agent.enabled)
+            roles = sorted({a.role for a in s.scalars(q.where(Agent.room_key.in_(rooms)) if rooms else q)})
         role_lines = "\n".join(f"- {r}: {ROLES[r].goal if r in ROLES else 'specialist'}" for r in roles)
         prompt = (f"Goal: {goal.title}\n{goal.description}\n\nIteration {iteration} of {goal.max_iterations}.\n"
+                  + project_note
                   + (f"\nThe previous iteration failed the quality gate. Fix these findings:\n{feedback}\n"
                      if feedback else "")
                   + (f"\nResearch notes:\n{notes}\n" if notes else "")
@@ -461,7 +482,9 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
             try:
                 data = contracts.extract_json(res.text)
                 tasks = data["tasks"] if isinstance(data, dict) else data
-                plan = _with_security_reviews(contracts.validate_plan(tasks))
+                plan = contracts.validate_plan(tasks)
+                _in_rooms(plan, rooms)
+                plan = _with_security_reviews(plan)
                 break
             except (ValueError, KeyError, TypeError) as e:
                 if attempt == 0 and res.ok:
@@ -473,6 +496,10 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                 log_event("plan", f"plan from {choice.name} was invalid ({e}); using the standard plan",
                           goal_id=goal.id, agent_id=gm.id)
                 plan = contracts.validate_plan(executors.standard_plan(goal.title)["tasks"])
+                try:
+                    _in_rooms(plan, rooms)
+                except ValueError as e:  # nothing to fall back to inside the project's rooms
+                    raise RuntimeError(f"no valid plan within the project's rooms: {e}") from e
                 _board_plan(goal, iteration, plan, "standard plan", gm.id)
                 _chat_plan(goal, iteration, plan, "standard plan (the model's plan was invalid)", gm.id)
                 return plan, gm.id
@@ -488,6 +515,47 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
         return plan, gm.id
     finally:
         registry.release(gm.id, goal.id)
+
+
+def _project_context(goal: Goal) -> tuple[list[str], str]:
+    """The project's participating rooms and a note for the planner: stack, required skills, deadline, priority,
+    budget (ASEAO05 S05-R-06)."""
+    from agent_company.db import Project, now
+    from agent_company.projects import _aware, project_spend
+
+    if goal.project_id is None:
+        return [], ""
+    with session() as s:
+        p = s.get(Project, goal.project_id)
+        if p is None:
+            return [], ""
+        rooms, stack, skills = list(p.rooms or []), list(p.stack or []), list(p.required_skills or [])
+        deadline, priority, budget = _aware(p.deadline), p.priority or "normal", p.budget_usd or 0.0
+    lines = ([f"Technology stack: {', '.join(stack)} (use it; do not switch technologies)"] if stack else []) + (
+        [f"Required skills: {', '.join(skills)} (name them in the tasks' skills)"] if skills else []) + (
+        [f"Participating rooms: {', '.join(rooms)} (only their roles are listed below)"] if rooms else []) + (
+        [f"Deadline: {deadline.date().isoformat()} ({(deadline - now()).days} day(s) left)"] if deadline else []) + (
+        [f"Priority: {priority}"] if priority != "normal" else []) + (
+        [f"Project budget: ${budget:.2f}, ${project_spend(goal.project_id):.2f} used"] if budget else [])
+    return rooms, ("\nProject:\n" + "\n".join(f"- {x}" for x in lines) + "\n") if lines else ""
+
+
+def _in_rooms(plan: list[contracts.TaskContract], rooms: list[str]) -> None:
+    """A plan for a project with participating rooms names only their roles (a role nobody has yet is recruited
+    under the usual rules)."""
+    if not rooms:
+        return
+    with session() as s:
+        outside = []
+        for c in plan:
+            role = registry.resolve_role(c.role)[0]
+            a = s.scalars(select(Agent).where(Agent.role == role, Agent.parent_id.is_(None)).order_by(Agent.id)).first()
+            room = a.room_key if a else ROLES[role].room if role in ROLES else None
+            if room is not None and room not in rooms:
+                outside.append(f"{c.key} ({role}, room {room})")
+    if outside:
+        raise ValueError("tasks for roles outside the project's participating rooms "
+                         f"({', '.join(rooms)}): {', '.join(outside)}")
 
 
 def _cleared_for(goal_id: int, plan: list[contracts.TaskContract]) -> None:
@@ -1570,6 +1638,13 @@ def resume(goal_id: int, actor: str = "system") -> None:
     g = _goal(goal_id)
     if g.status != "paused":
         raise ValueError("only a paused goal can be resumed")
+    if g.project_id is not None:
+        from agent_company.db import Project
+
+        with session() as s:
+            p = s.get(Project, g.project_id)
+            if p is not None and (p.status or "active") != "active":  # S05-R-06
+                raise ValueError(f"project '{p.name}' is {p.status}; resume the project first")
     paused_for = (g.checkpoint or {}).get("paused_for")
     if paused_for == "cost_overrun":
         spent = usage.goal_spend(goal_id)
@@ -1632,9 +1707,24 @@ def trace(goal_id: int) -> dict[str, Any]:
 
 # --- background queue (used by the server) ---------------------------------------
 
+PRIORITY_RANK = {"critical": 0, "high": 1, "normal": 2, "low": 3}
+
+
+def _queue_rank(goal_id: int) -> int:
+    """Goals of higher-priority projects are taken first (ASEAO05 S05-R-06); then first come, first served."""
+    from agent_company.db import Project
+
+    with session() as s:
+        g = s.get(Goal, goal_id)
+        p = s.get(Project, g.project_id) if g is not None and g.project_id is not None else None
+        return PRIORITY_RANK.get((p.priority if p else None) or "normal", 2)
+
+
 class GoalQueue:
     def __init__(self, workers: int = 2):
-        self.q: queue.Queue[int] = queue.Queue()
+        self.q: queue.PriorityQueue[tuple[int, int, int]] = queue.PriorityQueue()  # (rank, order, goal id)
+        self._order = itertools.count()
+        self.seen: set[int] = set()
         self.threads = [threading.Thread(target=self._loop, daemon=True, name=f"goal-worker-{i}")
                         for i in range(workers)]
 
@@ -1642,19 +1732,29 @@ class GoalQueue:
         set_queue(self)
         from agent_company import workflow
 
+        ids: list[int] = []
         with session() as s:  # resume goals interrupted by a restart
             for g in s.scalars(select(Goal).where(Goal.status.in_(["queued", *workflow.WORKING]))):
                 if g.status != "queued":
                     workflow.set_status(s, g, "recovering", "server restarted", "system")
-                self.q.put(g.id)
-        self.seen = {gid for gid in list(self.q.queue)}
+                ids.append(g.id)
+        for gid in ids:
+            self._put(gid)
+        self.seen = set(ids)
         for t in self.threads:
             t.start()
         threading.Thread(target=self._watch, daemon=True, name="goal-watcher").start()
 
     def submit(self, goal_id: int) -> None:
         self.seen.add(goal_id)
-        self.q.put(goal_id)
+        self._put(goal_id)
+
+    def _put(self, goal_id: int) -> None:
+        try:
+            rank = _queue_rank(goal_id)
+        except Exception:  # noqa: BLE001 - a lookup failure never loses the goal
+            rank = PRIORITY_RANK["normal"]
+        self.q.put((rank, next(self._order), goal_id))
 
     def _watch(self) -> None:
         """Goals queued by another process (the General Manager's `gm goal`) are picked up here."""
@@ -1682,7 +1782,7 @@ class GoalQueue:
         from agent_company.governance import emergency
 
         while True:
-            gid = self.q.get()
+            _, _, gid = self.q.get()
             if emergency():  # E5: accepted but not run; the watcher hands it out again once the stop is lifted
                 self.seen.discard(gid)
                 continue

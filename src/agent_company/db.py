@@ -428,6 +428,15 @@ class Project(Base):
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # public|internal|confidential|restricted|secret (SPEC-14 S14-R-05): what may leave the project
     classification: Mapped[str] = mapped_column(String(16), default="internal")
+    # registration fields and lifecycle (ASEAO05 S05-R-06)
+    stack: Mapped[list[Any]] = mapped_column(default=list)  # technologies, e.g. ["python", "fastapi"]
+    required_skills: Mapped[list[Any]] = mapped_column(default=list)
+    rooms: Mapped[list[Any]] = mapped_column(default=list)  # participating rooms; empty = every room
+    budget_usd: Mapped[float] = mapped_column(Float, default=0.0)  # caps the cost of all its goals; 0 = none
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    priority: Mapped[str] = mapped_column(String(16), default="normal")  # low|normal|high|critical
+    status: Mapped[str] = mapped_column(String(16), default="active")  # active|paused|archived|cancelled|completed
+    status_reason: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
