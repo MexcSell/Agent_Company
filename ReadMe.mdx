@@ -179,6 +179,15 @@ Decisions escalate by category: organizational ones to the room manager, financi
 ones and decisions about the platform's own code to the executive GM, critical ones
 to a person. Agents read escalations addressed to them in their next prompt.
 
+A project keeps its requirements (Plan tab → Requirements): a key such as `REQ-001`,
+the text, kind, acceptance criteria and a version; changing the text is a new version
+that needs approval again. A goal names the requirements it implements (by key in its
+text, or `gm goal --requirement`), the planner sees them and puts their keys on tasks,
+and the gate and the merge record which tasks implemented, which checks tested and
+which commit merged each one. Two requirements that contradict each other become a
+decision for a person. `python -m agent_company requirements import` loads
+`docs/requirements/` into the platform project.
+
 Every decision is a small report: the question, the options, the criteria they were
 compared on, the recommendation and its rationale, the evidence with its class (fact,
 measured, inference, hypothesis, prediction), the assumptions, the limitations and why
@@ -208,6 +217,7 @@ window, proposals), `checks.py` (secret, syntax and scope checks), `learning.py`
 agents with their evidence; the paged network view), `mentoring.py` (mentors for learning plans), `kgraph.py`
 (the knowledge graph),
 `performance.py` (defects, certification, metrics), `evaluation.py` (eval harness),
+`requirements.py` (project requirements with versions, conflicts and traceability),
 `research.py` (crawler, knowledge, source kinds, injection flags, reports, rotation),
 `governance.py` (audit log, notifications, command policy), `prefs.py` (settings),
 `gitsync.py` (pushes, Git identities), `files.py` (file manager), `supervisor.py` and

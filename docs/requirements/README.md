@@ -77,9 +77,10 @@ the order is safety and correctness of that pipeline first, then management, the
    S14-R-06; S14-R-07/R-08 partial) and S14-R-09 threat model done 2026-11-05.
    S05-R-06 project registration fields and lifecycle done 2026-11-05.
    S04-R-07 escalation levels, S04-R-08 loop prevention and S04-R-09 budget dimensions done 2026-11-05, then
-   S06-R-01 richer research requests and S07-R-03 hypotheses, then S07-R-01 decision reports.
+   S06-R-01 richer research requests and S07-R-03 hypotheses, then S07-R-01 decision reports and S08-R-01
+   requirements and traceability.
 5. **Still open** (2026-11-05), in a sensible order:
-   S08-R-01 requirements and traceability; S03-R-01,
+   S03-R-01,
    S03-R-03..R-05 recruitment records, qualification, probation and approval policy; S01-R-01..R-05 room
    editing, position history, delegation, organisation export, policy versions; S04-R-11 workflow templates and
    strategies; S05-R-05, S05-R-08, S05-R-09; S11-R-03 and S04-R-12 (partial); S14-R-07 L3 isolation and

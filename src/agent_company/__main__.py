@@ -127,6 +127,9 @@ def main(argv: list[str] | None = None) -> None:
                                             "start/cancel: <plan id>")
     a = sub.add_parser("approve")
     a.add_argument("goal_id", type=int)
+    rq = sub.add_parser("requirements", help="project requirements and traceability (ASEAO08 S08-R-01)")
+    rq.add_argument("action", choices=["list", "trace", "import"])
+    rq.add_argument("--project", type=int, default=None, help="project id (default: the platform project)")
     im = sub.add_parser("improve", help="verified self-evolution: improvement contracts for the platform's code")
     im.add_argument("action", choices=["list", "weaknesses", "benchmark", "create", "start", "deploy", "rollback",
                                        "cancel", "advance"])
@@ -288,6 +291,29 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(loop.approve(args.goal_id), indent=2))
     elif args.cmd == "improve":
         _improve(args)
+    elif args.cmd == "requirements":
+        _requirements(args)
+
+
+def _requirements(args: argparse.Namespace) -> None:
+    from sqlalchemy import select
+
+    from agent_company import requirements
+    from agent_company.db import Project, session
+
+    pid = args.project
+    if pid is None:
+        with session() as s:
+            pid = s.scalars(select(Project.id).where(Project.protected).order_by(Project.id)).first()
+        if pid is None:
+            raise SystemExit("no platform project; name one with --project")
+    if args.action == "import":
+        out: object = requirements.import_docs(pid, "cli")
+    elif args.action == "trace":
+        out = requirements.traceability(pid)
+    else:
+        out = requirements.list_requirements(pid)
+    print(json.dumps(out, indent=2, default=str))
 
 
 def _improve(args: argparse.Namespace) -> None:

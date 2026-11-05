@@ -20,6 +20,8 @@ feature came from.
   `network.py` (SPEC-12 relationship kinds with evidence: observed links from finished work,
   complementary specialists and a mentor candidate for new agents, administrator corrections, fair staffing
   inputs in `registry._rank`; `graph`/`overview` for the network view) + `mentoring.py` (a mentor per learning plan: reviews practice results, never certifies);
+  `requirements.py` (ASEAO08 S08-R-01: project requirements with versions, links from
+  tasks, checks and merges, `traceability`, conflicts as decisions, `import_docs` of `docs/requirements/`);
   `decisions.py` (decision records; human ones block the merge; S07-R-01 reports: criteria, limitations, evidence
   classes, independent reviews that send a disputed decision to a person); `escalation.py` (S04-R-07 levels 1-5 and their
   recipients: agent, goal GM, room manager, executive GM, a person; delivered as blackboard requests);
@@ -112,6 +114,7 @@ feature came from.
 - `uv run python -m agent_company improve list|weaknesses|benchmark [name]|create|start|deploy|rollback|cancel <id>` – verified self-evolution
 - `uv run python -m agent_company eval --suite smoke --label <name> [--repeats 3] [--model <name> --role <role>]` / `eval --compare a b`
 - `uv run python -m agent_company learn gaps|raise|plans|plan <agent> <skill>|start <id>|cancel <id>|experiments|metrics`
+- `uv run python -m agent_company requirements list|trace|import [--project <id>]` – requirements and traceability
 - `uv run python -m agent_company stop [--level E0..E5 --scope X] [--lift|--status]` – emergency stop; writes the DB
   directly, works while the server is stuck
 - `uv run python -m agent_company host status|install-docker|docker-start|cleanup [--yes]|install-lxd|launch <name> [--container]|stop|delete <name>`

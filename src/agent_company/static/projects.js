@@ -237,9 +237,11 @@ const day = (iso) => (iso ? iso.slice(0, 10) : "");
 
 async function projectPlan(id) {
   const box = $("#plan");
-  const d = await api(`/api/projects/${id}/plan`).catch((e) => ({ error: e.message }));
+  const [d, tr] = await Promise.all([api(`/api/projects/${id}/plan`).catch((e) => ({ error: e.message })),
+    api(`/api/projects/${id}/traceability`).catch(() => null)]);
   if (!box || !box.isConnected) return;
   if (d.error) { box.innerHTML = `<p class="muted">${esc(d.error)}</p>`; return; }
+  d.requirement_kinds = ["functional", "non_functional", "story", "use_case"];
   const admin = me.is_admin, pct = Math.round(d.progress.progress * 100);
   const risk = (r) => `<div class="list-item"><div class="row nowrap"><span class="pill ${SEV_PILL[r.severity]}">${esc(r.severity)}</span><strong class="grow ellipsis">${esc(r.title)}</strong><span class="muted">${r.kind} · ${esc(r.category.replace(/_/g, " "))}${r.automatic ? " · automatic" : ""}${r.probability != null ? ` · p ${Math.round(r.probability * 100)}%` : ""}</span>
       ${admin && !r.automatic ? (r.status === "open" ? ib("pause", "Mark mitigated", `data-risk="${r.id}" data-st="mitigated"`, "sm") : "") + ib("check", "Resolved", `data-risk="${r.id}" data-st="resolved"`, "sm") : ""}</div>
@@ -258,17 +260,29 @@ async function projectPlan(id) {
   const ins = (i) => `<div class="list-item"><div class="row nowrap"><strong class="grow ellipsis">${esc(i.title)}</strong>${pill(i.status)}<span class="muted">${esc(i.agent || "")} · confidence ${Math.round(i.confidence * 100)}%${i.goal_id ? ` · <a href="#" data-goal="${i.goal_id}">#${i.goal_id}</a>` : ""}</span>
       ${admin && INSIGHT_NEXT[i.status] ? ib(INSIGHT_NEXT[i.status] === "accepted" ? "check" : "play", `Mark ${INSIGHT_NEXT[i.status]}`, `data-ins="${i.id}" data-st="${INSIGHT_NEXT[i.status]}"`, "sm") : ""}${admin && ["recorded", "analyzed", "reviewed"].includes(i.status) ? ib("x", "Reject", `data-ins="${i.id}" data-st="rejected"`, "sm") : ""}</div>
     ${i.description ? `<div class="muted">${esc(i.description)}</div>` : ""}${i.evidence.length ? `<div class="muted">Evidence: ${i.evidence.map(esc).join("; ")}</div>` : ""}</div>`;
+  // Requirements and traceability (S08-R-01): implemented (a passing task), tested (a passing check), merged
+  const tick = (ok, what) => `<span class="pill ${ok ? "done" : ""}" title="${what} (current version)">${ok ? "✓" : "–"} ${what}</span>`;
+  const req = (r) => `<div class="list-item"><div class="row nowrap"><code>${esc(r.key)}</code>${pill(r.status)}<span class="muted grow">${esc(r.kind.replace("_", " "))} · v${r.version}</span>${tick(r.implemented, "implemented")}${tick(r.tested, "tested")}${tick(r.merged.length, "merged")}${r.conflicts.length ? `<span class="pill failed" title="decision(s) ${r.conflicts.map((c) => "#" + c.decision_id).join(", ")}">conflicts ${esc(r.conflicts.map((c) => c.key).join(", "))}</span>` : ""}
+      ${admin && r.status === "draft" ? ib("check", "Approve", `data-req="${r.id}" data-st="approved"`, "sm primary") : ""}${admin && r.status !== "retired" ? ib("x", "Retire", `data-req="${r.id}" data-st="retired"`, "sm") : ""}</div>
+    <div class="ellipsis" title="${esc(r.text)}">${esc(r.text.split("\n")[0])}</div>${r.failing.length ? `<div class="muted">Failing: ${esc(r.failing.join(" · "))}</div>` : ""}${r.goals.length ? `<div class="row">${r.goals.map((g) => `<a href="#" data-goal="${g}">#${g}</a>`).join(" ")}</div>` : ""}</div>`;
+  const reqOpen = box.querySelector("#req-sec")?.open;
+  const reqs = tr ? `<section class="plan-sec"><details id="req-sec" ${reqOpen ? "open" : ""}><summary class="row nowrap"><h3 class="grow" style="margin:0;display:inline">Requirements</h3>
+      <span class="muted">${tr.counts.total} · ${tr.counts.implemented} implemented · ${tr.counts.tested} tested · ${tr.counts.merged} merged${tr.counts.conflicts ? ` · ${tr.counts.conflicts} in conflict` : ""}</span>
+      ${admin ? ib("plus", "Add requirement", 'data-add="requirement"', "sm") + ib("download", "Import docs/requirements of the project", "data-req-import", "sm") : ""}</summary>
+      <div class="list">${tr.requirements.map(req).join("") || '<p class="muted">No requirements yet. Goals name them by key (REQ-001) in their text.</p>'}</div></details></section>` : "";
   const section = (title, add, rows, empty) => `<section class="plan-sec"><div class="row nowrap"><h3 class="grow" style="margin:0">${title}</h3>${admin && add ? ib("plus", `Add ${add}`, `data-add="${add}"`, "sm") : ""}</div><div class="list">${rows || `<p class="muted">${empty}</p>`}</div></section>`;
   const html = `<div class="row nowrap"><strong>Progress</strong><div class="plan-bar grow" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div><span class="muted">${pct}% over ${d.progress.parts} goal(s) and milestone(s)</span></div>
     ${section("Blockers &amp; risks", "risk", d.risks.map(risk).join(""), "No open blockers or risks.")}
     ${section("Next", "action item", d.action_items.map(item).join(""), "Nothing waiting.")}
     ${section("Milestones", "milestone", d.milestones.map(ms).join(""), "No milestones yet.")}
-    ${section("Insights", "", d.insights.map(ins).join(""), "Agents report insights in their task output.")}`;
+    ${section("Insights", "", d.insights.map(ins).join(""), "Agents report insights in their task output.")}${reqs}`;
   if (box.dataset.html === html) return;  // the 5-s refresh never rebuilds an unchanged plan
   box.innerHTML = html; box.dataset.html = html;
   const act = async (fn) => { try { await fn(); box.dataset.html = ""; projectPlan(id); } catch (e) { toast(e.message); } };
   box.querySelectorAll("[data-goal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); goalModal(Number(a.dataset.goal)); }));
-  box.querySelectorAll("[data-add]").forEach((b) => (b.onclick = () => planForm(id, b.dataset.add, d)));
+  box.querySelectorAll("[data-add]").forEach((b) => (b.onclick = (e) => { e.preventDefault(); planForm(id, b.dataset.add, d); }));
+  box.querySelectorAll("[data-req]").forEach((b) => (b.onclick = () => act(() => api(`/api/requirements/${b.dataset.req}/status`, { method: "POST", body: { status: b.dataset.st } }))));
+  box.querySelector("[data-req-import]") && (box.querySelector("[data-req-import]").onclick = (e) => { e.preventDefault(); act(() => api(`/api/projects/${id}/requirements/import`, { method: "POST" }).then((r) => toast(`${r.added} new, ${r.changed} changed, ${r.unchanged} unchanged`))); });
   box.querySelectorAll("[data-risk]").forEach((b) => (b.onclick = () => act(() => api(`/api/risks/${b.dataset.risk}`, { method: "PATCH", body: { status: b.dataset.st } }))));
   box.querySelectorAll("[data-item]").forEach((b) => (b.onclick = () => act(() => api(`/api/action-items/${b.dataset.item}`, { method: "PATCH", body: { status: b.dataset.st } }))));
   box.querySelectorAll("[data-crit]").forEach((c) => (c.onchange = () => act(() => api(`/api/milestones/${c.dataset.crit}/criteria/${c.dataset.i}`, { method: "POST", body: { met: c.checked } }))));
@@ -293,6 +307,10 @@ function planForm(id, what, d) {
       <label for="pl-cat">Category</label><select id="pl-cat">${d.categories.map((c) => `<option value="${c}">${c.replace(/_/g, " ")}</option>`).join("")}</select>
       <label for="pl-sev">Severity</label><select id="pl-sev">${d.severities.map((c) => `<option ${c === "medium" ? "selected" : ""}>${c}</option>`).join("")}</select>
       <label for="pl-prob">Probability (risks, 0-100 %)</label><input id="pl-prob" type="number" min="0" max="100"><label for="pl-impact">Impact</label><textarea id="pl-impact"></textarea><label for="pl-mit">Mitigation</label><textarea id="pl-mit"></textarea>`,
+    requirement: `<label for="pl-title">Requirement</label><textarea id="pl-title" required placeholder="The API answers within 200 ms"></textarea>
+      <label for="pl-kind">Kind</label><select id="pl-kind">${d.requirement_kinds.map((k) => `<option value="${k}">${k.replace("_", " ")}</option>`).join("")}</select>
+      <label for="pl-key">Key (optional; REQ-001 … by default)</label><input id="pl-key"><label for="pl-subj">Subject (optional; finds contradicting requirements)</label><input id="pl-subj">
+      <label for="pl-accept">Acceptance criteria (one per line)</label><textarea id="pl-accept"></textarea>`,
     "action item": `<label for="pl-title">Title</label><input id="pl-title" required><label for="pl-desc">Description</label><textarea id="pl-desc"></textarea>
       <label for="pl-prio">Priority (1 highest - 5)</label><input id="pl-prio" type="number" min="1" max="5" value="3"><label for="pl-date">Due date</label><input id="pl-date" type="date">
       <label for="pl-deps">Waits for action items (ids, comma-separated)</label><input id="pl-deps"><label for="pl-out">Expected output</label><input id="pl-out">`,
@@ -308,6 +326,9 @@ function planForm(id, what, d) {
       url = `/api/projects/${id}/milestones`;
       body = { name: v("#pl-title"), description: v("#pl-desc"), target_date: v("#pl-date") || null, deliverables: lines("#pl-deliv"), goal_ids: ids("#pl-goals"),
         criteria: [...lines("#pl-cmds").map((text) => ({ kind: "command", text })), ...lines("#pl-manual").map((text) => ({ kind: "manual", text }))] };
+    } else if (what === "requirement") {
+      url = `/api/projects/${id}/requirements`;
+      body = { text: v("#pl-title"), kind: v("#pl-kind"), key: v("#pl-key"), subject: v("#pl-subj"), acceptance: lines("#pl-accept") };
     } else if (what === "risk") {
       url = `/api/projects/${id}/risks`;
       body = { kind: v("#pl-kind"), title: v("#pl-title"), category: v("#pl-cat"), severity: v("#pl-sev"), impact: v("#pl-impact"), mitigation: v("#pl-mit"), probability: v("#pl-prob") === "" ? null : Number(v("#pl-prob")) / 100 };

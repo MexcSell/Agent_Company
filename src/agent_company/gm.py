@@ -13,6 +13,8 @@ the GM can:
 - start a study visit, which rewrites an agent's definition file (`gm study`);
 - record a hypothesis to test and move it along (`gm hypothesis`, `gm hypotheses`, `gm hypothesis-status`); as an
   agent it cannot mark one supported without a recorded test result (hypotheses.py, ASEAO07 S07-R-03);
+- write down the project's requirements as drafts a person approves, and name them on goals (`gm requirement`,
+  `gm requirements --trace`, `gm goal --requirement`; requirements.py, ASEAO08 S08-R-01);
 - read a decision report and review a decision it did not take (`gm decision`, `gm decision-review`; decisions.py,
   ASEAO07 S07-R-01).
 
@@ -61,7 +63,9 @@ How you run the company (shell commands; GM below stands for: {gm}):
   GM add <kind> <name> --description "…" --content "…"   add what is missing, then use it
   GM mcp                            MCP servers in Tools & MCP
   GM configure {project['id']}                  write the catalog into this project's .claude/
-  GM goal {project['id']} "<goal>" --details "…" [--check "uv run pytest -q"]
+  GM goal {project['id']} "<goal>" --details "…" [--check "uv run pytest -q"] [--requirement REQ-001]
+  GM requirement {project['id']} "<text>" [--kind functional|non_functional|story|use_case] [--accept "…"]   a draft
+  GM requirements {project['id']} [--trace]   the project's requirements; --trace: implemented, tested, merged
   GM study [<agent id>]             one learning visit: rewrites an agent's definition
   GM hypothesis "<statement>" --reason "…" --test "how to test it" --expect "…" [--project {project['id']}]
   GM hypotheses [--status proposed,testing]      hypotheses and their evidence
@@ -109,7 +113,8 @@ def status() -> dict[str, Any]:
             "mcp_servers": len(mcp.list_servers()["servers"])}
 
 
-def create_goal(project_id: int, title: str, details: str = "", checks: list[str] | None = None) -> int:
+def create_goal(project_id: int, title: str, details: str = "", checks: list[str] | None = None,
+                requirement_keys: list[str] | None = None) -> int:
     """A goal for the project, queued for the server's goal queue (which picks it up within seconds)."""
     from agent_company import loop
     from agent_company.projects import post
@@ -117,7 +122,7 @@ def create_goal(project_id: int, title: str, details: str = "", checks: list[str
     p = _project(project_id)
     gid = loop.create_goal(title[:200], details or title, repo_path=p["path"],
                            quality_commands=list(checks or p["quality_commands"]), project_id=project_id,
-                           extract_checks=True)
+                           extract_checks=True, requirement_keys=requirement_keys)
     post(project_id, f"The General Manager started goal #{gid}: {title}", "agent", goal_id=gid,
          agent_id=p["manager_id"])
     return gid
@@ -157,6 +162,16 @@ def main(argv: list[str]) -> None:
     go.add_argument("title")
     go.add_argument("--details", default="")
     go.add_argument("--check", action="append", default=[])
+    go.add_argument("--requirement", action="append", default=[])
+    rq = sub.add_parser("requirement")
+    rq.add_argument("project_id", type=int)
+    rq.add_argument("text")
+    rq.add_argument("--kind", default="functional")
+    rq.add_argument("--accept", action="append", default=[])
+    rq.add_argument("--subject", default="")
+    rl = sub.add_parser("requirements")
+    rl.add_argument("project_id", type=int)
+    rl.add_argument("--trace", action="store_true")
     st = sub.add_parser("study")
     st.add_argument("agent_id", type=int, nargs="?")
     hy = sub.add_parser("hypothesis")
@@ -212,7 +227,16 @@ def main(argv: list[str]) -> None:
             ids = list(s.scalars(select(Agent.id).where(Agent.enabled, Agent.lifecycle == "active", Agent.parent_id.is_(None))))
         out = {"written": catalog.export_claude(Path(proj["path"]), ids)}
     elif a.cmd == "goal":
-        out = {"goal_id": create_goal(a.project_id, a.title, a.details, a.check)}
+        out = {"goal_id": create_goal(a.project_id, a.title, a.details, a.check, a.requirement)}
+    elif a.cmd in ("requirement", "requirements"):
+        from agent_company import requirements
+
+        _project(a.project_id)
+        if a.cmd == "requirement":  # a draft: a person approves it (S08-FR-10)
+            out = requirements.create(a.project_id, a.text, a.kind, a.accept, subject=a.subject,
+                                      source="general manager", actor="agent:general_manager")
+        else:
+            out = requirements.traceability(a.project_id) if a.trace else requirements.list_requirements(a.project_id)
     elif a.cmd in ("hypothesis", "hypotheses", "hypothesis-status"):
         from agent_company import hypotheses
 

@@ -18,14 +18,14 @@ push only on `/sync`. The 13 engineering teams (§3) are **gated** (CLAUDE.md).
 | ID | Requirement | Status |
 | --- | --- | --- |
 | S08-FR-01 | Register product ideas | done as proposals; product register gated (ASEAO10) |
-| S08-FR-02 | Convert ideas into requirements | open → S08-R-01 |
-| S08-FR-03 | User stories and use cases | open → S08-R-01 |
+| S08-FR-02 | Convert ideas into requirements | done (S08-R-01; the GM writes drafts, a person approves) |
+| S08-FR-03 | User stories and use cases | partial (S08-R-01: kinds `story` and `use_case`; no story template or actors) |
 | S08-FR-04 | Define acceptance criteria | done (contract `acceptance`) |
-| S08-FR-05 | Functional and non-functional requirements | open → S08-R-01 |
+| S08-FR-05 | Functional and non-functional requirements | done (S08-R-01 `kind`) |
 | S08-FR-06 | Dependencies and constraints | done (`depends_on`, `allowed_paths`) |
-| S08-FR-07 | Requirement versions | open → S08-R-01 |
-| S08-FR-08 | Link requirements to architecture, tasks, code, tests | open → S08-R-01 |
-| S08-FR-09 | Detect conflicting requirements | open → S08-R-01 |
+| S08-FR-07 | Requirement versions | done (S08-R-01 `version`, `history`) |
+| S08-FR-08 | Link requirements to architecture, tasks, code, tests | done for tasks, checks, merge commits and decisions (S08-R-01); ADRs open → S08-R-02 |
+| S08-FR-09 | Detect conflicting requirements | done (S08-R-01: planner instruction plus a negation/word-overlap backstop → decision) |
 | S08-FR-10 | Human review and approval | done (merge approval) |
 
 ## Specific requirements
@@ -40,6 +40,29 @@ push only on `/sync`. The 13 engineering teams (§3) are **gated** (CLAUDE.md).
 - The planner flags requirements that contradict each other (same subject, opposite statements)
   as a decision record (SPEC-04 S04-R-02).
 - The files in `docs/requirements/` are the first content for the platform project itself.
+- **Status: done** (`requirements.py`, tables `requirements` and `requirement_links`, `Goal.requirement_keys`;
+  `tests/test_requirements.py`). Keys are `REQ-001…` per project or a document's own ID; kinds
+  `functional|non_functional|story|use_case`. A change of text, kind or acceptance is a new version (the earlier one in
+  `history`) and sends an approved, implemented or verified requirement back to `draft`. Only a person approves
+  (`PermissionError` for agents); `verified` needs a passing check on the current version. Goals take
+  `requirement_keys` (unknown keys are refused; the project's keys named in the title or description are added); the
+  planner's prompt lists the goal's requirements in full and at most eight related approved ones (never the whole
+  list) and asks for `requirement_keys` on tasks and a decision for contradicting requirements. After each gate
+  `on_gate` links every task to its requirements (passed or not) and every quality command to all of the
+  iteration's requirements (unknown keys in a plan are logged, not fatal); the merge (`on_merged`, idempotent)
+  records the commit, then approved becomes implemented, or verified when a check passed on the current version;
+  a draft is linked but not moved. `traceability(project_id)` gives per requirement (current version) implemented,
+  tested, merged, failing checks, goals and the counts. Conflict backstop: exactly one of two requirements negated
+  and the same explicit subject or at least 70% of their words in common → one decision per pair for a person
+  (no goal, so it notifies and does not hold a merge). `import_docs` reads `<project>/docs/requirements/*.md`
+  (the protected platform project falls back to this repository's): table rows and `### ID` sections; done →
+  implemented, partial/open → approved, gated or no status → draft, skip → retired; unchanged texts are left
+  alone, changed ones get a new version with the document's status; no conflict check on import. API:
+  `GET/POST /api/projects/{id}/requirements`, `GET /api/projects/{id}/traceability`,
+  `POST /api/projects/{id}/requirements/import` (admin), `GET/PATCH /api/requirements/{id}`,
+  `POST /api/requirements/{id}/status` (admin), all mutations audited; GM toolbox `gm requirement`,
+  `gm requirements [--trace]`, `gm goal --requirement`; CLI `requirements list|trace|import [--project]`; the
+  project's Plan tab lists requirements with implemented/tested/merged and conflicts.
 
 ### S08-R-02 Architecture Decision Records — §7.2 (AT-005)
 - The Architect writes ADRs for significant technology choices to `docs/adr/NNNN-title.md` in the

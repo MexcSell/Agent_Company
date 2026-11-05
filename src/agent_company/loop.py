@@ -22,8 +22,8 @@ from typing import Any
 
 from sqlalchemy import select
 
-from agent_company import (blackboard, budgets, contracts, decisions, executors, learning, network, quality, registry, research,
-                           router, specs, usage, worktrees)
+from agent_company import (blackboard, budgets, contracts, decisions, executors, learning, network, quality, registry,
+                           requirements, research, router, specs, usage, worktrees)
 from agent_company.config import settings
 from agent_company.db import Agent, Event, Goal, Task, log_event, session
 from agent_company.org import ROLES
@@ -39,13 +39,15 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                 protect_tests: bool = False, extract_checks: bool = False,
                 permits: list[str] | None = None, estimated_cost_usd: float = 0.0, topic: str = "general",
                 classification: str = "", trial: dict[str, Any] | None = None, budget_usd: float = 0.0,
-                budget_tokens: int = 0, max_active_agents: int = 0) -> int:
+                budget_tokens: int = 0, max_active_agents: int = 0, requirement_keys: list[str] | None = None) -> int:
     """Create a goal. `extract_checks` (only for trusted authors) adds the test/lint commands
     the description names in backticks when no quality commands are given. `classification` (S14-R-05) can
     only raise the level: the goal is at least as classified as its project and its attachments. `trial`
     (eval goals only, SPEC-13) carries experiment sides, model overrides, the trainee and hidden checks.
     `budget_usd`, `budget_tokens` and `max_active_agents` are the goal's own budget (S04-R-09); a child goal's cost
-    and tokens are capped to its parent's remainder, and no child is created when the parent has nothing left."""
+    and tokens are capped to its parent's remainder, and no child is created when the parent has nothing left.
+    `requirement_keys` (S08-R-01) name the project's requirements it implements; keys of the project named in the
+    title or description are added."""
     from agent_company.checks import extract_check_commands
     from agent_company.governance import check_command, stops
 
@@ -74,6 +76,14 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
 
     if classification:
         check_level(classification)
+    req_keys = sorted({str(k).strip().upper() for k in requirement_keys or [] if str(k).strip()})
+    if req_keys:
+        if project_id is None:
+            raise ValueError("requirement keys belong to a project; this goal has none")
+        known = set(requirements.keys_in(project_id, " ".join(req_keys)))
+        if set(req_keys) - known:
+            raise ValueError(f"unknown requirement(s) {', '.join(sorted(set(req_keys) - known))} in project {project_id}")
+    req_keys = sorted(set(req_keys) | set(requirements.keys_in(project_id, f"{title}\n{description}")))
     own = {"budget_usd": max(0.0, float(budget_usd or 0)), "budget_tokens": max(0, int(budget_tokens or 0))}
     if parent_goal_id is not None:
         own = budgets.for_child(parent_goal_id, own)
@@ -95,7 +105,7 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                  protect_tests=protect_tests, permits=sorted(set(permits or [])),
                  estimated_cost_usd=max(0.0, float(estimated_cost_usd or 0)), topic=topic or "general",
                  classification=level, trial=dict(trial or {}), max_active_agents=max(0, int(max_active_agents or 0)),
-                 **own)
+                 requirement_keys=req_keys, **own)
         s.add(g)
         s.flush()
         gid = g.id
@@ -555,7 +565,8 @@ def _project_context(goal: Goal) -> tuple[list[str], str]:
         [f"Deadline: {deadline.date().isoformat()} ({(deadline - now()).days} day(s) left)"] if deadline else []) + (
         [f"Priority: {priority}"] if priority != "normal" else []) + (
         [f"Project budget: ${budget:.2f}, ${project_spend(goal.project_id):.2f} used"] if budget else [])
-    return rooms, ("\nProject:\n" + "\n".join(f"- {x}" for x in lines) + "\n") if lines else ""
+    note = ("\nProject:\n" + "\n".join(f"- {x}" for x in lines) + "\n") if lines else ""
+    return rooms, note + requirements.planner_note(goal)  # S08-R-01: the goal's and related requirements
 
 
 def _in_rooms(plan: list[contracts.TaskContract], rooms: list[str]) -> None:
@@ -1195,6 +1206,7 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
             report = quality.evaluate(goal_id, iteration)
             _spec_step(specs.write_decision, goal, iteration, report)
             _record_history(goal_id, iteration, report)
+            requirements.on_gate(goal_id, iteration, report)  # S08-R-01 traceability
             if not report["passed"] and iteration < goal.max_iterations:
                 report["feedback"] += _escalate_repeated(goal_id, iteration)
             _update_goal(goal_id, checkpoint={"iteration": iteration, "planned": True, "evaluated": True,
@@ -1642,6 +1654,7 @@ def approve(goal_id: int, actor: str = "system") -> dict[str, Any]:
         raise ValueError(str(e)) from e
     _update_goal(goal_id, status="approved", reason=f"merged {sha[:10]}", actor=actor)
     selfevolve.on_merged(goal_id, sha, actor)
+    requirements.on_merged(goal_id, sha)
     from agent_company.projects import post_for_goal
 
     post_for_goal(goal_id, f"Goal #{goal_id} approved and merged ({sha[:10]}).", kind="result")

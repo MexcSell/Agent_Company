@@ -47,6 +47,7 @@ from agent_company import (
     prefs,
     projects,
     registry,
+    requirements,
     research,
     router,
     selfevolve,
@@ -412,6 +413,29 @@ class IncidentBody(BaseModel):
 
 class DecideBody(BaseModel):
     approve: bool
+    note: str = Field(default="", max_length=2000)
+
+
+class RequirementBody(BaseModel):
+    text: str = Field(min_length=3, max_length=8000)
+    kind: str = Field(default="functional", pattern="^(functional|non_functional|story|use_case)$")
+    acceptance: list[str] = Field(default_factory=list, max_length=20)
+    key: str = Field(default="", max_length=32)
+    subject: str = Field(default="", max_length=128)
+    source: str = Field(default="", max_length=256)
+
+
+class RequirementPatch(BaseModel):
+    text: str | None = Field(default=None, max_length=8000)
+    kind: str | None = Field(default=None, pattern="^(functional|non_functional|story|use_case)$")
+    acceptance: list[str] | None = Field(default=None, max_length=20)
+    subject: str | None = Field(default=None, max_length=128)
+    source: str | None = Field(default=None, max_length=256)
+    note: str = Field(default="", max_length=2000)
+
+
+class RequirementStatusBody(BaseModel):
+    status: str = Field(pattern="^(draft|approved|implemented|verified|retired)$")
     note: str = Field(default="", max_length=2000)
 
 
@@ -1788,6 +1812,79 @@ def create_app(start_background: bool = True) -> FastAPI:
         return [d for d in decisions.list_decisions(goal_id, status)
                 if seen is None or d["project_id"] is None or d["project_id"] in seen]
 
+    # --- requirements and traceability (ASEAO08 S08-R-01) ---
+    def _requirement_seen(requirement_id: int, user: dict[str, Any]) -> dict[str, Any]:
+        try:
+            r = requirements.get(requirement_id, links=True)
+        except KeyError as e:
+            raise HTTPException(404, f"requirement {requirement_id}") from e
+        projects.get(r["project_id"], user)
+        return r
+
+    @app.get("/api/projects/{project_id}/requirements")
+    def requirements_list(project_id: int, status: str = "", user: dict[str, Any] = Depends(current_user)
+                          ) -> list[dict[str, Any]]:
+        projects.get(project_id, user)
+        return requirements.list_requirements(project_id, status)
+
+    @app.post("/api/projects/{project_id}/requirements")
+    def requirement_create(project_id: int, body: RequirementBody, user: dict[str, Any] = Depends(allowed("run"))
+                           ) -> dict[str, Any]:
+        projects.get(project_id, user)
+        try:
+            out = requirements.create(project_id, body.text, body.kind, body.acceptance, key=body.key,
+                                      subject=body.subject, source=body.source or f"user:{user['name']}",
+                                      actor=f"user:{user['name']}")
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(user, "requirement_create", out["id"], after={"project": project_id, "key": out["key"]})
+        return out
+
+    @app.get("/api/projects/{project_id}/traceability")
+    def requirements_trace(project_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        projects.get(project_id, user)
+        return requirements.traceability(project_id)
+
+    @app.post("/api/projects/{project_id}/requirements/import")
+    def requirements_import(project_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = requirements.import_docs(project_id, f"user:{admin['name']}")
+        except KeyError as e:
+            raise HTTPException(404, str(e).strip("'")) from e
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "requirements_import", project_id, after=out)
+        return out
+
+    @app.get("/api/requirements/{requirement_id}")
+    def requirement_detail(requirement_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return _requirement_seen(requirement_id, user)
+
+    @app.patch("/api/requirements/{requirement_id}")
+    def requirement_update(requirement_id: int, body: RequirementPatch, user: dict[str, Any] = Depends(allowed("run"))
+                           ) -> dict[str, Any]:
+        before = _requirement_seen(requirement_id, user)
+        try:
+            out = requirements.update(requirement_id, f"user:{user['name']}", body.text, body.kind, body.acceptance,
+                                      body.subject, body.source, body.note)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(user, "requirement_update", requirement_id, before={"version": before["version"],
+                                                                   "status": before["status"]},
+               after={"version": out["version"], "status": out["status"]})
+        return out
+
+    @app.post("/api/requirements/{requirement_id}/status")
+    def requirement_status(requirement_id: int, body: RequirementStatusBody,
+                           admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        before = _requirement_seen(requirement_id, admin)["status"]
+        try:
+            out = requirements.set_status(requirement_id, body.status, f"user:{admin['name']}", body.note)
+        except (ValueError, PermissionError) as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "requirement_status", requirement_id, before={"status": before}, after={"status": out["status"]})
+        return out
+
     def _decision_seen(decision_id: int, user: dict[str, Any]) -> None:
         with session() as s:
             seen = _visible_project_ids(s, user)
@@ -2663,7 +2760,7 @@ def _goal_dict(g: Goal) -> dict[str, Any]:
             "protect_tests": g.protect_tests, "permits": g.permits or [], "baseline": g.baseline, "history": g.history,
             "estimated_cost_usd": g.estimated_cost_usd or 0.0, "budget_usd": g.budget_usd or 0.0,
             "budget_tokens": g.budget_tokens or 0, "max_active_agents": g.max_active_agents or 0,
-            "paused_for": (g.checkpoint or {}).get("paused_for", ""),
+            "paused_for": (g.checkpoint or {}).get("paused_for", ""), "requirement_keys": g.requirement_keys or [],
             "created_at": g.created_at.isoformat(), "updated_at": g.updated_at.isoformat()}
 
 

@@ -411,6 +411,7 @@ class Goal(Base):
     max_active_agents: Mapped[int] = mapped_column(Integer, default=0)  # tasks (agents) working at once
     # the project's conversation lane the order came from; its reports go there and its goals run in order
     topic: Mapped[str] = mapped_column(String(64), default="general")
+    requirement_keys: Mapped[list[Any]] = mapped_column(default=list)  # S08-R-01: project requirements it implements
     # the order's classification (its attachments, its project at creation); the project's current one may raise it
     classification: Mapped[str] = mapped_column(String(16), default="internal")
     # eval goals only (SPEC-13): experiment_id + side, role -> model overrides, trainee_id (the agent staffed for
@@ -744,6 +745,46 @@ class Hypothesis(Base):
     note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class Requirement(Base):
+    """A project requirement (ASEAO08 S08-R-01): key, text, kind, acceptance criteria, a version with the earlier
+    ones in `history`, and status draft -> approved -> implemented -> verified (retired from any). requirements.py."""
+
+    __tablename__ = "requirements"
+    __table_args__ = (UniqueConstraint("project_id", "key"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(Integer, index=True)
+    key: Mapped[str] = mapped_column(String(32))  # REQ-001, or the document's own ID (S07-R-01)
+    text: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(16), default="functional")  # functional|non_functional|story|use_case
+    acceptance: Mapped[list[Any]] = mapped_column(default=list)
+    subject: Mapped[str] = mapped_column(String(128), default="")  # what it is about, for conflict detection
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    history: Mapped[list[Any]] = mapped_column(default=list)  # earlier versions [{version, text, kind, acceptance, ...}]
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    source: Mapped[str] = mapped_column(String(256), default="")  # message, document or proposal it came from
+    conflicts: Mapped[list[Any]] = mapped_column(default=list)  # [{"key", "decision_id"}]
+    created_by: Mapped[str] = mapped_column(String(128), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class RequirementLink(Base):
+    """Traceability (S08-R-01): a task, check, merge or decision that worked on one version of a requirement."""
+
+    __tablename__ = "requirement_links"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    requirement_id: Mapped[int] = mapped_column(ForeignKey("requirements.id", ondelete="CASCADE"), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    kind: Mapped[str] = mapped_column(String(16))  # goal|task|check|merge|decision
+    ref: Mapped[str] = mapped_column(String(512), default="")  # task:5, the check's command, the merge commit
+    goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    iteration: Mapped[int] = mapped_column(Integer, default=0)
+    passed: Mapped[bool] = mapped_column(Boolean, default=True)
+    detail: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class Source(Base):
