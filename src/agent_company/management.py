@@ -404,7 +404,8 @@ def _wanted_items(s: Session, project_id: int, manager_id: int | None) -> dict[s
                                     "expected_output": "approved (a new goal) or rejected"}
     defects = s.execute(select(Defect, Goal.title).join(Goal, Goal.id == Defect.goal_id).where(
         Goal.project_id == project_id, Defect.status.in_(("detected", "reopened")),
-        Goal.status.not_in(("cancelled", "rejected")), Goal.origin != "eval")).all()
+        # a failed goal's leftovers come back as a new order, not as items that never close
+        Goal.status.not_in(("cancelled", "rejected", "failed")), Goal.origin != "eval")).all()
     for d, title in defects:
         want[f"defect:{d.id}"] = {"title": f"Fix {d.severity} defect: {d.check}"[:256],
                                   "description": f"Goal #{d.goal_id} {title}\n{d.detail[:1000]}",

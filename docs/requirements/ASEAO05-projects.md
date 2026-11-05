@@ -71,7 +71,8 @@ S05-R-06..R-09 open · S05-R-10 done (SPEC-04).
   the GM ranks them by dependencies, priority, due date and risk. Shown in the Projects view and
   in `/status`.
 - **Status: done** (`management.ranked_items`; generated items carry `source` = `proposal:`, `defect:`,
-  `risk:`, `criterion:<milestone>:<n>` and close as `done` when the source is settled). The ranking is
+  `risk:`, `criterion:<milestone>:<n>` and close as `done` when the source is settled; defects count
+  only on goals that are not failed, cancelled or rejected). The ranking is
   deterministic (no model call): items waiting for open dependencies last, then in progress, priority, due
   date, risk (severity of the blocker it resolves or the goal's worst open blocker).
 
