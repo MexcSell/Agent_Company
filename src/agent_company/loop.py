@@ -475,6 +475,28 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
         registry.release(gm.id)
 
 
+def _cleared_for(goal_id: int, plan: list[contracts.TaskContract]) -> None:
+    """Before any task runs: every planned role needs a model cleared for the goal's classification (S14-R-05).
+    Otherwise the goal fails now with the reason, instead of every task failing for max_iterations rounds and
+    counting against the agents' records. Checked with each role's original agent, as staffing usually picks it."""
+    from agent_company.learning import goal_level
+
+    with session() as s:
+        level = goal_level(s, s.get(Goal, goal_id))
+        if level in {"public", "internal"}:
+            return
+        prefs = {}
+        for c in plan:
+            role = registry.resolve_role(c.role)[0]
+            a = s.scalars(select(Agent).where(Agent.role == role, Agent.parent_id.is_(None)).order_by(Agent.id)).first()
+            prefs[role] = a.model_pref if a else None
+    for role, pref in prefs.items():
+        try:
+            router.resolve_chain(role, pref, classification=level)
+        except router.NotCleared as e:
+            raise RuntimeError(f"{role}: {e}") from e
+
+
 def _with_security_reviews(plan: list[contracts.TaskContract]) -> list[contracts.TaskContract]:
     """A high-risk task gets a security review after it, unless the plan already has one (ASEAO09 S09-R-02).
     Until the Security Room is enabled, registry.resolve_role gives the review to QA."""
@@ -961,6 +983,7 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                 if iteration == 1:
                     _configure(goal)
                 plan, planner_id = _plan(goal, iteration, feedback, notes)
+                _cleared_for(goal_id, plan)
                 ids = _persist(goal_id, iteration, plan)
                 _spec_step(specs.write_plan, goal, iteration, plan)
                 _update_goal(goal_id, checkpoint={"iteration": iteration, "planned": True, "notes": notes,

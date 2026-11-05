@@ -144,3 +144,36 @@ def test_classification_api():
         r = app.post(f"/api/projects/{p['id']}/command", json={"content": "DECISION: x :: y",
                                                                  "classification": "confidential"})
         assert r.status_code == 200
+
+
+def test_a_secret_order_keeps_its_topic_summary_away_from_hosted_models(models, monkeypatch):
+    from agent_company import executors
+
+    monkeypatch.setattr(loop, "enqueue", lambda gid: None)
+    _route("general_manager", "Hosted")
+    p = projects.create("Chatty")
+    projects.command(p["id"], ADMIN, "Look at the numbers", classification="secret")
+
+    def never(choice, timeout=0):
+        raise AssertionError(f"{choice.name} must not receive a secret topic")
+
+    monkeypatch.setattr(executors, "for_choice", never)
+    out = projects.summarize(p["id"], "general")
+    assert out.startswith("Summary of topic 'general'"), "the extractive draft answers"
+    assert projects.topic_level(p["id"], "general") == "secret"
+
+
+def test_a_planned_role_without_a_cleared_model_fails_the_goal_before_any_task(models):
+    _route("developer", "Hosted")
+    _route("qa", "Hosted")
+    p = projects.create("Half cleared")
+    projects.update(p["id"], {"classification": "confidential"})
+    gid = loop.create_goal("Change something", project_id=p["id"])
+    with pytest.raises(RuntimeError):
+        loop.run_goal(gid)
+    g = loop._goal(gid)
+    assert g.status == "failed" and "no model is cleared for confidential" in g.result
+    from agent_company.db import Task
+
+    with session() as s:
+        assert s.scalars(select(Task).where(Task.goal_id == gid)).first() is None, "no task ran"

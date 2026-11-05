@@ -130,7 +130,9 @@ no ML):
   its attachments' and its project's (the project's current one, so raising a project raises its running goals).
   When the level rules out every real model that would have run, the run fails with "no model is cleared for …"
   (no retry, not counted against the agent's health) and planning fails the goal; the simulator never stands in.
-  Summaries fall back to their draft; proposals go to a person. Documents are the knowledge items, already
+  After planning, every planned role is checked the same way (`loop._cleared_for`, with the role's original
+  agent), so a goal no worker may run fails before any task. Topic summaries use the topic's level (its project,
+  raised by classified orders and their goals) and fall back to their draft; proposals go to a person. Documents are the knowledge items, already
   classified. Research sources: skip, they are public web pages (private hosts need `ALLOW_PRIVATE_CRAWL`).
 
 ### S14-R-06 Tool permission contracts — §8.2, §8.3

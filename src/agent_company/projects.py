@@ -464,6 +464,22 @@ def summary_draft(project_id: int, topic: str) -> tuple[str, str]:
     return "\n".join(out), transcript
 
 
+def topic_level(project_id: int, topic: str) -> str:
+    """The most classified content in a topic: its project's level, raised by classified orders and their goals
+    (S14-R-05). A summary may only go to a model cleared for it."""
+    from agent_company.learning import goal_level, highest
+
+    with session() as s:
+        p = s.get(Project, project_id)
+        levels = [p.classification if p else None]
+        levels += [goal_level(s, g) for g in s.scalars(select(Goal).where(Goal.project_id == project_id,
+                                                                          Goal.topic == topic))]
+        levels += [(m.meta or {}).get("classification") for m in s.scalars(
+            select(Message).where(Message.project_id == project_id, Message.topic == topic,
+                                  Message.kind == "command"))]
+    return highest(*levels)
+
+
 def summarize(project_id: int, topic: str) -> str:
     """The GM's summary of a topic (its model; the extractive draft when no model answers). Decisions the model
     lists in a fenced ```json {"decisions": [...]}``` block become decision records; the summary is kept on the
@@ -476,7 +492,7 @@ def summarize(project_id: int, topic: str) -> str:
         p = s.get(Project, project_id)
         gm = s.get(Agent, p.manager_id) if p and p.manager_id else None
         gm_name, gm_pref, gm_id = (gm.name, gm.model_pref, gm.id) if gm else ("General Manager", None, None)
-        level = p.classification if p else "internal"
+    level = topic_level(project_id, topic)
     text, recorded = draft, []
     if transcript:
         req = executors.Request(
@@ -488,7 +504,7 @@ def summarize(project_id: int, topic: str) -> str:
                     "\"alternatives\", \"confidence\", \"category\"}]} after the summary.\n\n"
                     f"Draft:\n{draft}\n\nConversation:\n{transcript}"),
             data={"draft": draft})
-        try:  # only a model cleared for the project's classification (S14-R-05) reads the conversation
+        try:  # only a model cleared for the topic's classification (S14-R-05) reads the conversation
             choice = router.resolve("general_manager", gm_pref, classification=level)
             res = executors.for_choice(choice, settings().command_timeout).run(req)
         except Exception as e:  # noqa: BLE001 - the draft still answers (also when no model is cleared)
@@ -545,7 +561,7 @@ def command(project_id: int, user: dict[str, Any], content: str, attachment_ids:
     if not content and not files:
         raise ValueError("empty command")
     topic = _open_topic(p.id, topic)
-    from agent_company.learning import check_level, highest
+    from agent_company.learning import check_level, highest, rank
 
     level = highest(check_level(classification) if classification else None, p.classification)
     if files:
@@ -554,7 +570,7 @@ def command(project_id: int, user: dict[str, Any], content: str, attachment_ids:
                 u.classification = highest(u.classification, level)
     mid = post(p.id, content, "user", "command", user_id=user["id"],
                attachments=[{k: f[k] for k in ("id", "name", "content_type", "size")} for f in files],
-               topic=topic, author=user["name"], **({"classification": level} if level != "internal" else {}))
+               topic=topic, author=user["name"], **({"classification": level} if rank(level) > rank("internal") else {}))
     slash = content.split()[0].lower() if content.startswith("/") else ""
 
     def reply(text: str, kind: str = "chat", **kw: Any) -> None:
