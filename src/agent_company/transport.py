@@ -457,7 +457,7 @@ h1{font-size:20px;margin:0 0 8px}.muted{color:var(--muted)}code{word-break:break
 a.btn,button{display:inline-block;background:var(--accent);color:#fff;border:0;border-radius:8px;padding:9px 14px;
 font:inherit;text-decoration:none;cursor:pointer;margin:6px 8px 6px 0}button.ghost{background:transparent;color:var(--accent);border:1px solid var(--line)}
 details{margin-top:10px}li{margin:4px 0}
-</style></head><body><main><div class="card" id="m"><p class="muted">Connecting…</p></div></main>
+</style></head><body><main><div class="card" id="m"><p class="muted">Connecting securely…</p></div></main>
 <script>
 (function () {
   var T = "__TARGET__", FP = "__FP__";
@@ -468,11 +468,21 @@ details{margin-top:10px}li{margin:4px 0}
     location.replace(dest + (s ? "#ac-device=" + encodeURIComponent(s) : ""));
   }
   if (T !== "https") return go();
-  var done = false, timer = setTimeout(fail, 6000);
+  // This computer reached HTTPS with this CA before, so it is installed: skip the probe.
+  var KEY = "ac.https-ok";
+  try { if (localStorage.getItem(KEY) === FP) return go(); } catch (e) {}
+  // An untrusted certificate makes the probe fail at once. A slow handshake is not a failure
+  // (Windows can take several seconds to verify a user-installed CA), so a late success still
+  // moves the browser on, even after the install page is shown.
+  var shown = false, timer = setTimeout(show, 15000);
   fetch("https://" + location.host + "/api/health", { mode: "no-cors", cache: "no-store" })
-    .then(function () { if (done) return; done = true; clearTimeout(timer); go(); }, fail);
-  function fail() {
-    if (done) return; done = true; clearTimeout(timer);
+    .then(function () {
+      clearTimeout(timer);
+      try { localStorage.setItem(KEY, FP); } catch (e) {}
+      go();
+    }, show);
+  function show() {
+    if (shown) return; shown = true; clearTimeout(timer);
     document.getElementById("m").innerHTML =
       '<h1>This site now uses HTTPS</h1>' +
       '<p>Install the company certificate once on this computer, then restart the browser. ' +
