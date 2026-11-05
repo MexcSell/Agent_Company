@@ -121,6 +121,8 @@ def test_templates_are_versioned_and_goals_record_the_version_they_ran_under():
     assert docs["version"] == 3 and [v["goals"] for v in docs["versions"]] == [0, 1, 1]
     with pytest.raises(ValueError, match="missing"):
         strategies.save("docs", {"roles": ["qa"]}, "user:luca")
+    with pytest.raises(ValueError, match="keeps the checks"):
+        strategies.save("docs", {**body, "checks": "none"}, "user:luca")
     with pytest.raises(ValueError, match="names its roles"):
         strategies.save("research", {**body, "writes": False, "roles": ["*"]}, "user:luca")
     trace = loop.trace(v2)

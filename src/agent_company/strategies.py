@@ -113,6 +113,8 @@ def validate(body: dict[str, Any]) -> dict[str, Any]:
     out["allowed_paths"] = [str(p).strip() for p in out["allowed_paths"] or [] if str(p).strip()]
     for key in ("name", "description", "instructions"):
         out[key] = str(out[key] or "").strip()[:2000]
+    if out["writes"] and out["checks"] == "none":  # changed files always meet the quality commands
+        raise StrategyError("a template whose tasks change files keeps the checks (checks: inherit)")
     if out["writes"] is False and any(r == ANY for r in out["roles"]):
         raise StrategyError("a template without file changes names its roles (no '*')")
     return out
