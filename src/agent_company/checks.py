@@ -66,15 +66,24 @@ def extract_check_commands(text: str, limit: int = 4) -> list[str]:
     return found[:limit]
 
 
-def _added_lines(worktree: Path, base: str) -> list[tuple[str, str]]:
+def _diff_lines(worktree: Path, base: str) -> list[tuple[str, str, str]]:
+    """(path, '+' or '-', text) for every added or removed line of the change."""
     diff = worktrees.git(worktree, "diff", "--unified=0", "--no-color", f"{base}...HEAD", check=False)
-    out, current = [], ""
+    out, old, new = [], "", ""
     for line in diff.splitlines():
-        if line.startswith("+++ "):
-            current = line[6:] if line.startswith("+++ b/") else ""
-        elif line.startswith("+") and not line.startswith("+++") and current:
-            out.append((current, line[1:]))
+        if line.startswith("--- "):
+            old = line[6:] if line.startswith("--- a/") else ""
+        elif line.startswith("+++ "):
+            new = line[6:] if line.startswith("+++ b/") else ""
+        elif line.startswith("+") and new:
+            out.append((new, "+", line[1:]))
+        elif line.startswith("-") and (new or old):
+            out.append((new or old, "-", line[1:]))
     return out
+
+
+def _added_lines(worktree: Path, base: str) -> list[tuple[str, str]]:
+    return [(path, text) for path, sign, text in _diff_lines(worktree, base) if sign == "+"]
 
 
 def scan_secrets(worktree: Path, base: str) -> list[str]:
@@ -144,13 +153,57 @@ def scope_violations(worktree: Path, base: str, allowed: list[str], protect_test
     return problems
 
 
-def run_static(worktree: Path, base: str, allowed: list[str], protect_tests: bool) -> list[dict[str, Any]]:
+SKIP_MARKER = re.compile(
+    r"@pytest\.mark\.skip\b|\bpytest\.skip\(|@unittest\.skip|\bself\.skipTest\(|\b(it|describe|test)\.skip\("
+    r"|\b(xit|xdescribe|xtest)\(|\.only\(|t\.Skip\(")
+XFAIL = re.compile(r"@pytest\.mark\.xfail\b(?!\(.*\breason\s*=)")
+ASSERTION = re.compile(r"\bassert\b|\bexpect\(|\bself\.assert[A-Z]\w*\(|\bassert[A-Z]\w*\(|\bt\.(Error|Fatal)")
+MANIFESTS = re.compile(
+    r"(^|/)(pyproject\.toml|setup\.py|setup\.cfg|requirements[^/]*\.(txt|in)|Pipfile(\.lock)?|uv\.lock|poetry\.lock"
+    r"|package\.json|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.(toml|lock)|go\.(mod|sum)|Gemfile(\.lock)?"
+    r"|composer\.(json|lock))$")
+PROTECTED_CONFIG = re.compile(
+    r"(^|/)\.env(\.[^/]*)?$|^\.github/workflows/|^\.gitlab-ci\.yml$|^\.circleci/|^Jenkinsfile$|^\.travis\.yml$"
+    r"|^azure-pipelines\.yml$|^\.pre-commit-config\.yaml$")
+PERMITS = {"dependencies", "config", "skip_tests"}
+
+
+def boundary_violations(worktree: Path, base: str, permits: list[str] | None = None) -> list[str]:
+    """Change boundaries (ASEAO08 §12.2): no disabled or skipped tests, no removed assertions, no new
+    dependencies and no edits to protected configuration (.env, CI) unless the goal permits them."""
+    permits = set(permits or [])
+    problems: list[str] = []
+    changed = [p for _, p in _changed_with_status(worktree, base)]
+    if "dependencies" not in permits:
+        problems += [f"{p}: dependency manifest changed (needs the goal permit 'dependencies')"
+                     for p in changed if MANIFESTS.search(p)]
+    if "config" not in permits:
+        problems += [f"{p}: protected configuration changed (needs the goal permit 'config')"
+                     for p in changed if PROTECTED_CONFIG.search(p)]
+    if "skip_tests" not in permits:
+        asserts: dict[str, int] = {}
+        for path, sign, text in _diff_lines(worktree, base):
+            if not is_test_file(path):
+                continue
+            if sign == "+" and (SKIP_MARKER.search(text) or XFAIL.search(text)):
+                problems.append(f"{path}: disables or skips a test: {text.strip()[:120]}")
+            if ASSERTION.search(text):
+                asserts[path] = asserts.get(path, 0) + (1 if sign == "+" else -1)
+        problems += [f"{p}: {-n} assertion(s) removed from tests" for p, n in asserts.items() if n < 0]
+    return problems
+
+
+def run_static(worktree: Path, base: str, allowed: list[str], protect_tests: bool,
+               permits: list[str] | None = None) -> list[dict[str, Any]]:
     changed = [p for s, p in _changed_with_status(worktree, base) if s != "D"]
     secrets = scan_secrets(worktree, base)
     syntax = syntax_errors(worktree, changed)
     scope = scope_violations(worktree, base, allowed, protect_tests)
+    bounds = boundary_violations(worktree, base, permits)
     return [
         {"check": "secret scan", "passed": not secrets, "detail": "; ".join(secrets) or "no credentials added"},
         {"check": "syntax", "passed": not syntax, "detail": "\n".join(syntax) or f"{len(changed)} changed file(s) parse"},
         {"check": "scope", "passed": not scope, "detail": "\n".join(scope) or "all changes in scope"},
+        {"check": "boundaries", "passed": not bounds,
+         "detail": "\n".join(bounds) or "no skipped tests, removed assertions, new dependencies or config edits"},
     ]

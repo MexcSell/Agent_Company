@@ -23,6 +23,9 @@ def env(tmp_path, monkeypatch):
     db.reset_engine()
     scheduler._global_slots = None
     router._catalog = None
+    from agent_company import loop
+
+    monkeypatch.setattr(loop, "_sleep", lambda seconds: None)  # retry backoff never waits in tests
     from agent_company import api
     from agent_company.api import bootstrap
 

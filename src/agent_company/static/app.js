@@ -180,6 +180,15 @@ async function boot() {
   $("#auth").hidden = true; $("#app").hidden = false;
   $("#whoami").textContent = me.name + (me.is_admin ? " · admin" : "");
   $("#my-git").onclick = () => gitForm(me);
+  if (me.is_admin) {  // S14-R-01: the stop is one click from every page; while a stop is on it leads to System
+    $("#estop").hidden = false;
+    $("#estop").onclick = async () => {
+      if ($("#estop").classList.contains("on")) return show("system");
+      const reason = prompt("Emergency stop (E5): why stop all autonomous work now?");
+      if (!reason) return;
+      try { const r = await api("/api/emergency", { method: "POST", body: { on: true, reason } }); toast(`Emergency stop: ${r.cancelled_goals.length} goal(s) cancelled, ${r.terminated.length} process(es) ended`); updateBadges(); } catch (e) { toast(e.message); }
+    };
+  }
   try { navLayout = (await api("/api/ui/nav_layout")).value || null; } catch { navLayout = null; }
   renderRail(); show(VIEWS.some((v) => v.id === current && (!v.admin || me.is_admin)) ? current : "dashboard");
   connectLive();
@@ -260,6 +269,8 @@ async function updateBadges() {
     const o = await api("/api/overview", { fresh: true });
     if (o.build && BUILD && o.build !== BUILD) newBuild = true;  // reloaded on the next page switch
     badges = { users: o.pending_users || 0, notifications: o.unread || 0, projects: (o.pending_proposals || 0) + (o.goals.awaiting_approval || 0) + (o.goals.running || 0) };
+    const es = $("#estop");
+    if (es) { es.classList.toggle("on", !!o.stopped); es.title = o.stopped ? "A stop is active: open System to see or lift it" : "Emergency stop: stop all autonomous work now"; }
     renderRail(); setFavicon(o);
   } catch { /* signed out */ }
 }

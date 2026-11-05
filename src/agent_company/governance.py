@@ -191,9 +191,290 @@ def set_emergency(on: bool, actor: str, reason: str = "") -> dict[str, Any]:
             for g in s.scalars(select(Goal).where(Goal.status.in_(["queued", "running"]))):
                 g.status = "cancelled"
                 cancelled.append(g.id)
+    killed = _kill(everything=True) if on else []
     audit(actor, "emergency_stop" if on else "emergency_lift", "all autonomous execution",
-          after={"reason": reason, "cancelled_goals": cancelled}, severity="high")
+          after={"reason": reason, "cancelled_goals": cancelled, "terminated": killed}, severity="high")
     notify("Emergency stop" if on else "Emergency stop lifted",
            (f"{actor}: {reason}. {len(cancelled)} goal(s) cancelled." if on else f"Lifted by {actor}."),
-           level="error" if on else "success", source="emergency")
-    return {**value, "cancelled_goals": cancelled}
+           level="error" if on else "success", source="emergency", admin_only=True)
+    return {**value, "cancelled_goals": cancelled, "terminated": killed}
+
+
+def _kill(**which: Any) -> list[int]:
+    from agent_company import executors
+
+    try:
+        return executors.terminate(**which)
+    except Exception:  # noqa: BLE001 - the stop itself must never fail because a process is odd
+        return []
+
+
+# Scoped stops E0-E4 (S14-R-01). E2 (one goal) is loop.cancel, final and not stored; E5 is the key above.
+STOPS_KEY = "_stops"
+LEVELS = {"E0": "executor", "E1": "agent", "E2": "goal", "E3": "project", "E4": "room", "E5": "company"}
+EXECUTOR_KINDS = {"claude_code", "codex", "llm", "research"}
+
+
+def stops() -> list[dict[str, Any]]:
+    """Active scoped stops: [{level, scope, actor, reason, at, paused}]."""
+    from agent_company.db import Setting
+
+    with session() as s:
+        row = s.get(Setting, STOPS_KEY)
+        return list((row.value or {}).get("stops", [])) if row else []
+
+
+def _save_stops(s: Session, items: list[dict[str, Any]]) -> None:
+    from agent_company.db import Setting
+
+    row = s.get(Setting, STOPS_KEY)
+    if row is None:
+        s.add(Setting(key=STOPS_KEY, value={"stops": items}))
+    else:
+        row.value = {"stops": items}
+
+
+def stopped(agent_id: int | None = None, project_id: int | None = None, room: str | None = None,
+            executor: str | None = None) -> str | None:
+    """Why this work may not run now (an emergency stop that covers it), or None."""
+    e5 = emergency()
+    if e5:
+        return f"E5 emergency stop by {e5.get('actor')}: {e5.get('reason')}"
+    for st in stops():
+        hit = ((st["level"] == "E0" and executor is not None and st["scope"] == executor)
+               or (st["level"] == "E1" and agent_id is not None and str(st["scope"]) == str(agent_id))
+               or (st["level"] == "E3" and project_id is not None and str(st["scope"]) == str(project_id))
+               or (st["level"] == "E4" and room is not None and st["scope"] == room))
+        if hit:
+            return f"{st['level']} stop of {LEVELS[st['level']]} {st['scope']} by {st['actor']}: {st['reason']}"
+    return None
+
+
+def stop(level: str, scope: str | int, actor: str, reason: str) -> dict[str, Any]:
+    """Trigger a stop. Needs no model or agent: it writes the database and signals processes directly."""
+    from agent_company.db import Agent, Goal, now
+
+    if level == "E5":
+        return set_emergency(True, actor, reason)
+    if level not in LEVELS:
+        raise ValueError(f"unknown level {level!r}; one of {', '.join(LEVELS)}")
+    scope = str(scope).strip()
+    if level == "E0" and scope not in EXECUTOR_KINDS:
+        raise ValueError(f"E0 scope is an executor: {', '.join(sorted(EXECUTOR_KINDS))}")
+    killed: list[int] = []
+    cancelled: list[int] = []
+    paused: list[int] = []
+    current = stops()
+    with session() as s:
+        if level == "E2":
+            g = s.get(Goal, int(scope))
+            if g is None:
+                raise KeyError(f"goal {scope}")
+            if g.status in {"queued", "running"}:
+                g.status = "cancelled"
+                cancelled.append(g.id)
+        else:
+            if level in {"E1", "E4"}:
+                q = select(Agent).where(Agent.id == int(scope)) if level == "E1" else select(Agent).where(
+                    Agent.room_key == scope)
+                agents = list(s.scalars(q))
+                if not agents:
+                    raise KeyError(f"{LEVELS[level]} {scope}")
+                for a in agents:
+                    if a.lifecycle == "active":
+                        a.lifecycle = "paused"
+                        paused.append(a.id)
+            if level == "E3":
+                for g in s.scalars(select(Goal).where(Goal.project_id == int(scope),
+                                                      Goal.status.in_(["queued", "running"]))):
+                    g.status = "cancelled"
+                    cancelled.append(g.id)
+            items = [x for x in current if not (x["level"] == level and str(x["scope"]) == scope)]
+            items.append({"level": level, "scope": scope, "actor": actor, "reason": reason[:500],
+                          "at": now().isoformat(), "paused": paused})
+            _save_stops(s, items)
+    if level == "E1":
+        killed = _kill(agent_id=int(scope))
+    for gid in cancelled:
+        killed += _kill(goal_id=gid)
+    for aid in paused if level == "E4" else []:
+        killed += _kill(agent_id=aid)
+    after = {"reason": reason, "cancelled_goals": cancelled, "paused_agents": paused, "terminated": killed}
+    audit(actor, "emergency_stop", f"{level} {LEVELS[level]} {scope}", after=after, severity="high")
+    notify(f"Stop {level}: {LEVELS[level]} {scope}", f"{actor}: {reason}", level="error", source="emergency",
+           admin_only=True)
+    return {"level": level, "scope": scope, **after}
+
+
+def lift(level: str, scope: str | int, actor: str) -> dict[str, Any]:
+    """Lift a stop (administrators only, enforced by the API). Agents it paused become active again."""
+    from agent_company.db import Agent
+
+    if level == "E5":
+        return set_emergency(False, actor)
+    scope = str(scope).strip()
+    restored: list[int] = []
+    items = stops()
+    with session() as s:
+        hit = [x for x in items if x["level"] == level and str(x["scope"]) == scope]
+        if not hit:
+            raise KeyError(f"no {level} stop of {scope}")
+        _save_stops(s, [x for x in items if x not in hit])
+        for aid in hit[0].get("paused", []):
+            a = s.get(Agent, aid)
+            if a is not None and a.lifecycle == "paused":
+                a.lifecycle = "active"
+                restored.append(aid)
+    audit(actor, "emergency_lift", f"{level} {LEVELS[level]} {scope}", after={"restored_agents": restored},
+          severity="high")
+    notify(f"Stop {level} lifted: {LEVELS[level]} {scope}", f"Lifted by {actor}.", level="success",
+           source="emergency", admin_only=True)
+    return {"level": level, "scope": scope, "restored_agents": restored}
+
+
+# --- security incidents (S14-R-04) and behaviour rules (S14-R-03) --------------------------------
+
+INCIDENT_CATEGORIES = ["unauthorized_access", "credential_compromise", "prompt_injection", "data_leakage",
+                       "malicious_code", "privilege_escalation", "agent_compromise", "supply_chain",
+                       "audit_manipulation", "unauthorized_deployment", "policy_violation"]
+INCIDENT_FLOW = ["open", "contained", "investigating", "remediated", "closed"]
+SEVERITIES = ["SEV-1", "SEV-2", "SEV-3", "SEV-4"]
+
+
+def _incident_row(i: Any) -> dict[str, Any]:
+    return {"id": i.id, "category": i.category, "severity": i.severity, "status": i.status, "title": i.title,
+            "rule": i.rule, "goal_id": i.goal_id, "agent_id": i.agent_id, "project_id": i.project_id,
+            "evidence": i.evidence or [], "root_cause": i.root_cause, "actions": i.actions or [],
+            "opened_by": i.opened_by, "at": i.created_at.isoformat(), "updated_at": i.updated_at.isoformat()}
+
+
+def open_incident(category: str, severity: str, title: str, opened_by: str, rule: str = "",
+                  goal_id: int | None = None, agent_id: int | None = None, project_id: int | None = None,
+                  evidence: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Open an incident. Evidence references are copied (frozen) at this moment. One open incident per
+    rule and goal: a rule that fires again adds its evidence to the open one."""
+    from agent_company.db import Event, Goal, Incident
+
+    if category not in INCIDENT_CATEGORIES:
+        raise ValueError(f"category must be one of {', '.join(INCIDENT_CATEGORIES)}")
+    if severity not in SEVERITIES:
+        raise ValueError(f"severity must be one of {', '.join(SEVERITIES)}")
+    with session() as s:
+        if goal_id is not None and project_id is None:
+            g = s.get(Goal, goal_id)
+            project_id = g.project_id if g else None
+        refs = list(evidence or [])
+        if goal_id is not None:  # the goal's latest events, so the record survives later clean-ups
+            refs += [{"type": "event", "id": e.id, "kind": e.kind, "message": e.message[:300]}
+                     for e in s.scalars(select(Event).where(Event.goal_id == goal_id).order_by(Event.id.desc()).limit(10))]
+        existing = s.scalars(select(Incident).where(Incident.rule == rule, Incident.goal_id == goal_id,
+                                                    Incident.status != "closed")).first() if rule else None
+        if existing is not None:
+            existing.evidence = [*(existing.evidence or []), *refs][-50:]
+            return _incident_row(existing) | {"new": False}
+        inc = Incident(category=category, severity=severity, title=title[:256], rule=rule, goal_id=goal_id,
+                       agent_id=agent_id, project_id=project_id, evidence=refs, opened_by=opened_by[:128])
+        s.add(inc)
+        s.flush()
+        notify(f"Security incident {severity}: {title}"[:256], f"Category {category}. Opened by {opened_by}.",
+               level="error", source="security", goal_id=goal_id, project_id=project_id, admin_only=True, s=s)
+        out = _incident_row(inc) | {"new": True}
+    audit(opened_by, "incident_open", f"incident {out['id']}", after={"category": category, "severity": severity,
+                                                                     "rule": rule, "goal_id": goal_id},
+          severity="high")
+    return out
+
+
+def list_incidents(status: str = "", limit: int = 200) -> list[dict[str, Any]]:
+    from agent_company.db import Incident
+
+    with session() as s:
+        q = select(Incident)
+        if status:
+            q = q.where(Incident.status == status)
+        return [_incident_row(i) for i in s.scalars(q.order_by(Incident.id.desc()).limit(limit))]
+
+
+def update_incident(incident_id: int, actor: str, status: str | None = None, note: str = "",
+                    root_cause: str | None = None, contain: str = "") -> dict[str, Any]:
+    """Move an incident along open → contained → investigating → remediated → closed (forward only),
+    or run a containment action on it: pause_agent, cancel_goal, stop_project, stop_all."""
+    from agent_company.db import Incident, now
+
+    with session() as s:
+        inc = s.get(Incident, incident_id)
+        if inc is None:
+            raise KeyError(f"incident {incident_id}")
+        goal_id, agent_id, project_id, cur = inc.goal_id, inc.agent_id, inc.project_id, inc.status
+    if contain:
+        target = {"pause_agent": ("E1", agent_id), "cancel_goal": ("E2", goal_id),
+                  "stop_project": ("E3", project_id), "stop_all": ("E5", "all")}.get(contain)
+        if target is None:
+            raise ValueError("containment is pause_agent, cancel_goal, stop_project or stop_all")
+        if target[1] is None:
+            raise ValueError(f"incident {incident_id} names no {contain.split('_')[1]}")
+        stop(target[0], target[1], actor, f"containment of incident {incident_id}" + (f": {note}" if note else ""))
+    with session() as s:
+        inc = s.get(Incident, incident_id)
+        if root_cause is not None:
+            inc.root_cause = root_cause.strip()[:4000]
+        if status and status != cur:
+            if status not in INCIDENT_FLOW or INCIDENT_FLOW.index(status) < INCIDENT_FLOW.index(cur):
+                raise ValueError(f"an incident moves forward only: {' → '.join(INCIDENT_FLOW)}")
+            if status == "closed" and (not inc.root_cause.strip() or not note.strip()):
+                raise ValueError("closing needs a root cause and a remediation note")
+            inc.status = status
+        if contain and inc.status == "open":
+            inc.status = "contained"
+        inc.actions = [*(inc.actions or []), {"action": contain or f"status {inc.status}", "actor": actor,
+                                              "at": now().isoformat(), "note": note[:1000]}]
+        out = _incident_row(inc)
+    if out["status"] == "closed" and cur != "closed":
+        _incident_lesson(out)
+    audit(actor, "incident_update", f"incident {incident_id}", before={"status": cur},
+          after={"status": out["status"], "contain": contain}, severity="high")
+    return out
+
+
+def _incident_lesson(inc: dict[str, Any]) -> None:
+    """A closed incident becomes a lesson for the agent it concerned (SPEC-11)."""
+    from agent_company.db import Lesson
+
+    if inc["agent_id"] is None:
+        return
+    with session() as s:
+        s.add(Lesson(agent_id=inc["agent_id"], goal_id=inc["goal_id"], outcome="failure",
+                     text=f"Security incident ({inc['category']}): {inc['root_cause'][:300]}. "
+                          f"Remediation: {inc['actions'][-1]['note'][:300]}"))
+
+
+def security_alert(title: str, body: str = "", goal_id: int | None = None, agent_id: int | None = None,
+                   rule: str = "") -> None:
+    """A behaviour-rule alert: an administrator notification of source `security` and an events row."""
+    from agent_company.db import log_event
+
+    with session() as s:
+        notify(title, body, level="warning", source="security", goal_id=goal_id, admin_only=True, s=s)
+        log_event("security", title, goal_id=goal_id, agent_id=agent_id, s=s, rule=rule)
+
+
+REFUSALS_BEFORE_PAUSE = 3
+
+
+def on_command_refused(goal_id: int | None, agent_id: int | None, cmd: str, reason: str) -> None:
+    """Rule: a goal whose commands are refused by the policy 3 times pauses the responsible agent (E1)
+    and raises one alert."""
+    from agent_company.db import Event, log_event
+
+    if goal_id is None:
+        return
+    log_event("command_refused", f"refused ({reason}): {cmd[:200]}", goal_id=goal_id, agent_id=agent_id)
+    with session() as s:
+        n = s.scalar(select(func.count()).select_from(Event).where(Event.goal_id == goal_id,
+                                                                    Event.kind == "command_refused")) or 0
+    if n != REFUSALS_BEFORE_PAUSE:
+        return
+    if agent_id is not None and not any(x["level"] == "E1" and str(x["scope"]) == str(agent_id) for x in stops()):
+        stop("E1", agent_id, "rule:refused_commands", f"{n} commands refused by the policy in goal #{goal_id}")
+    security_alert(f"Goal #{goal_id}: {n} commands refused by the policy",
+                   f"Last: {cmd[:300]} ({reason}). The agent was paused.", goal_id, agent_id, "refused_commands")

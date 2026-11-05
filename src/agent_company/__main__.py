@@ -7,6 +7,7 @@
   python -m agent_company models                 model catalog, availability and routes
   python -m agent_company agents                 agents by room
   python -m agent_company approve <goal id>      merge a goal that passed the gate
+  python -m agent_company stop [--level E0..E5 --scope X] [--lift|--status]   emergency stop (SPEC-14 S14-R-01)
   python -m agent_company host status|cleanup|launch <name>|...   Docker and LXD VMs on this host
   python -m agent_company gm status|agents|create-agent|add|goal|configure|study ...   the GM's toolbox (gm.py)
 """
@@ -19,7 +20,8 @@ import sys
 
 from dotenv import load_dotenv
 
-COMMANDS = {"serve", "goal", "crawl", "models", "agents", "approve", "crew", "rotate", "eval", "supervise", "host", "gm"}
+COMMANDS = {"serve", "goal", "crawl", "models", "agents", "approve", "crew", "rotate", "eval", "supervise", "host", "gm",
+            "stop"}
 
 
 def _host(args: argparse.Namespace) -> None:
@@ -95,6 +97,15 @@ def main(argv: list[str] | None = None) -> None:
     g.add_argument("--max-iterations", type=int)
     g.add_argument("--allow", action="append", default=[], help="path glob the change may touch (repeatable)")
     g.add_argument("--protect-tests", action="store_true", help="refuse changes to existing test files")
+    g.add_argument("--permit", action="append", default=[], choices=["dependencies", "config", "skip_tests"],
+                   help="lift a change boundary: new dependencies, CI/.env edits, skipped tests (repeatable)")
+    st = sub.add_parser("stop", help="emergency stop: needs no model and no running server")
+    st.add_argument("--level", default="E5", choices=["E0", "E1", "E2", "E3", "E4", "E5"],
+                    help="E0 executor, E1 agent, E2 goal, E3 project, E4 room, E5 everything (default)")
+    st.add_argument("--scope", default="all", help="executor kind, agent id, goal id, project id or room key")
+    st.add_argument("--reason", default="stopped from the command line")
+    st.add_argument("--lift", action="store_true", help="lift the stop instead (administrators' decision)")
+    st.add_argument("--status", action="store_true", help="show the active stops")
     c = sub.add_parser("crawl")
     c.add_argument("url")
     c.add_argument("--depth", type=int, default=1)
@@ -149,6 +160,20 @@ def main(argv: list[str] | None = None) -> None:
         Supervisor(args.port, args.host).run()
         return
 
+    if args.cmd == "stop":  # writes the database directly: works while the server or its workers are stuck
+        import getpass
+
+        from agent_company import governance
+
+        actor = f"cli:{getpass.getuser()}"
+        if args.status:
+            out: dict = {"E5": governance.emergency(), "stops": governance.stops()}
+        elif args.lift:
+            out = governance.lift(args.level, args.scope, actor)
+        else:
+            out = governance.stop(args.level, args.scope, actor, args.reason)
+        print(json.dumps(out, indent=2, default=str))
+        return
     if args.cmd == "host":  # needs no model: runs before bootstrap
         _host(args)
         return
@@ -161,7 +186,7 @@ def main(argv: list[str] | None = None) -> None:
 
         gid = loop.create_goal(args.title, args.description, args.repo, args.url, args.check,
                                args.max_iterations, allowed_paths=args.allow, protect_tests=args.protect_tests,
-                               extract_checks=True)
+                               extract_checks=True, permits=args.permit)
         out = loop.run_goal(gid)
         g = loop._goal(gid)
         print(f"Goal {gid}: {out['status']} after {g.iteration} iteration(s)\n{g.result}\n"

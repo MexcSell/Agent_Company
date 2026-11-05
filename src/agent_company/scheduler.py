@@ -62,10 +62,12 @@ def run_dag(task_ids: list[int], worker: Callable[[int], bool], worktree: str,
             cancelled: Callable[[], bool] = lambda: False) -> dict[int, str]:
     """Run tasks respecting dependencies. `worker(task_id)` returns True on success."""
     with session() as s:
-        tasks = {t.id: (t.key, list(t.depends_on), t.priority, t.writes)
-                 for t in s.scalars(select(Task).where(Task.id.in_(task_ids)))}
+        rows = list(s.scalars(select(Task).where(Task.id.in_(task_ids))))
+        tasks = {t.id: (t.key, list(t.depends_on), t.priority, t.writes) for t in rows}
+        # a resumed iteration (S04-R-05): tasks that finished before the restart keep their result
+        state: dict[int, str] = {t.id: t.status if t.status in {"done", "failed", "skipped"} else "queued"
+                                 for t in rows}
     by_key = {v[0]: tid for tid, v in tasks.items()}
-    state: dict[int, str] = {tid: "queued" for tid in tasks}
     lock = write_lock(worktree)
     slots = global_slots()
 

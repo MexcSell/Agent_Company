@@ -171,10 +171,11 @@ def test_fallback_goes_to_the_next_real_model_never_to_the_simulator(monkeypatch
     gid = loop.create_goal("Plan only")
     req = executors.Request(purpose="plan", role="general_manager", system="s", prompt="p", data={"goal": "g"})
     res, choice = loop._execute(gm, req, "plan", goal_id=gid)
-    assert tried == ["Claude Sonnet 5.5", "Claude Opus 5.5"], "preference first, then the route"
+    # a 503 is transient: each model is retried (retry_max_attempts = 3) before the next one is tried
+    assert tried == ["Claude Sonnet 5.5"] * 3 + ["Claude Opus 5.5"] * 3, "preference first, then the route"
     assert not res.ok and choice.kind == "llm", "a real failure stands; no simulated stand-in"
     with session() as s:
-        assert [r.ok for r in s.scalars(select(Run).where(Run.goal_id == gid))] == [False, False]
+        assert [r.ok for r in s.scalars(select(Run).where(Run.goal_id == gid))] == [False] * 6
 
 
 def test_simulator_runs_only_when_nothing_real_is_usable():
@@ -237,11 +238,11 @@ def test_claude_code_runs_resume_the_agents_session(monkeypatch, env):
             self.stdout = _json.dumps({"result": "done", "session_id": "0f9c2b9e-1111-2222-3333-444455556666",
                                        "usage": {"input_tokens": 10, "output_tokens": 5}, "total_cost_usd": 0.01})
 
-    def fake_run(cmd, **kw):
+    def fake_spawn(self, cmd, req, cwd, env=None):
         calls.append(cmd)
         return Proc(cmd)
 
-    monkeypatch.setattr(executors.subprocess, "run", fake_run)
+    monkeypatch.setattr(executors.Executor, "_spawn", fake_spawn)
     wt = settings().worktrees_dir / "cc"
     wt.mkdir(parents=True)
     choice = router.Choice("Claude Code", "claude_code", "claude-opus-5-5", "test")

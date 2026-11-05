@@ -332,6 +332,8 @@ body:has(.view.loading) { cursor: progress; }
 .nav-cols.editing .nav-item { cursor: grab; }
 .nav-cols.editing .nav-item:hover { border-color: var(--accent); }
 .emergency .em-icon { color: var(--bad); display: grid; }
+.icon-btn.estop { color: var(--bad); }
+.icon-btn.estop.on { background: var(--bad); color: #fff; border-radius: 8px; }
 .emergency.on { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, var(--panel)); animation: none; }
 
 /* ---------- pages that fit the screen: only their lists scroll ---------- */

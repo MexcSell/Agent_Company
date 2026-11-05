@@ -32,6 +32,8 @@ class Request:
     workdir: Path | None = None
     writes: bool = False
     data: dict[str, Any] = field(default_factory=dict)  # structured hints for the offline executor
+    agent_id: int | None = None  # who runs it and for which goal: an emergency stop kills by these
+    goal_id: int | None = None
 
 
 @dataclass
@@ -62,6 +64,88 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+MAX_OUTPUT = 5_000_000  # characters of stdout an executor run may produce (SPEC-14 S14-R-07)
+
+
+def _track(pid: int, program: str, kind: str, req: Request) -> None:
+    from agent_company.db import LiveProcess, session
+
+    try:
+        with session() as s:
+            s.merge(LiveProcess(pid=pid, program=Path(program).name[:64], kind=kind, agent_id=req.agent_id,
+                                goal_id=req.goal_id))
+    except Exception:  # noqa: BLE001 - tracking must never stop the work
+        pass
+
+
+def _untrack(pid: int) -> None:
+    from agent_company.db import LiveProcess, session
+
+    try:
+        with session() as s:
+            row = s.get(LiveProcess, pid)
+            if row is not None:
+                s.delete(row)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _signal_group(pid: int, sig: int) -> None:
+    import os
+
+    try:
+        os.killpg(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def terminate(agent_id: int | None = None, goal_id: int | None = None, everything: bool = False,
+              grace: float = 3.0) -> list[int]:
+    """Terminate tracked executor processes (and their children) of an agent, a goal, or all of them.
+    Works from any process: the PIDs are in the database. Returns the PIDs signalled."""
+    import os
+    import signal
+
+    from sqlalchemy import select
+
+    from agent_company.db import LiveProcess, session
+
+    with session() as s:
+        q = select(LiveProcess)
+        if not everything:
+            if agent_id is None and goal_id is None:
+                return []
+            if agent_id is not None:
+                q = q.where(LiveProcess.agent_id == agent_id)
+            if goal_id is not None:
+                q = q.where(LiveProcess.goal_id == goal_id)
+        rows = [(r.pid, r.program) for r in s.scalars(q)]
+    hit = []
+    for pid, program in rows:
+        try:
+            argv0 = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")[0].decode(errors="replace")
+        except OSError:
+            _untrack(pid)  # already gone
+            continue
+        if Path(argv0).name != program:
+            _untrack(pid)  # the PID belongs to another program now
+            continue
+        _signal_group(pid, signal.SIGTERM)
+        hit.append(pid)
+    deadline = time.monotonic() + grace
+    for pid in hit:
+        while time.monotonic() < deadline and Path(f"/proc/{pid}").exists():
+            try:
+                if os.waitpid(pid, os.WNOHANG)[0]:  # our own child: reap it
+                    break
+            except ChildProcessError:
+                pass
+            time.sleep(0.05)
+        if Path(f"/proc/{pid}").exists():
+            _signal_group(pid, signal.SIGKILL)
+    return hit
+
+
 class Executor:
     kind = "base"
 
@@ -80,6 +164,29 @@ class Executor:
 
     def _run(self, req: Request) -> Result:
         raise NotImplementedError
+
+    def _spawn(self, cmd: list[str], req: Request, cwd: Path,
+               env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        """subprocess.run with a timeout, an output limit and a tracked PID (its own process group), so a
+        timeout or an emergency stop ends the CLI and everything it started."""
+        import signal
+
+        proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+                                start_new_session=True)
+        _track(proc.pid, cmd[0], self.kind, req)
+        try:
+            out, err = proc.communicate(timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            _signal_group(proc.pid, signal.SIGKILL)
+            proc.communicate()
+            raise
+        finally:
+            _untrack(proc.pid)
+        if proc.returncode is not None and proc.returncode < 0:
+            err = (err or "") + f"\nterminated by signal {-proc.returncode}"
+        if len(out) > MAX_OUTPUT:
+            out, err = out[:MAX_OUTPUT], (err or "") + f"\noutput cut at {MAX_OUTPUT} characters"
+        return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
 class LLMExecutor(Executor):
@@ -157,7 +264,7 @@ class ClaudeCodeExecutor(Executor):
             cmd += ["--mcp-config", mcp_file, "--strict-mcp-config"]
             cmd[cmd.index("--allowedTools") + 1] += "," + ",".join(mcp_tools)
         try:
-            proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=self.timeout, env=claude_env(self.choice))
+            proc = self._spawn(cmd, req, cwd, env=claude_env(self.choice))
         finally:
             if mcp_file:
                 Path(mcp_file).unlink(missing_ok=True)
@@ -188,8 +295,7 @@ class CodexExecutor(Executor):
                "--sandbox", "workspace-write" if req.writes else "read-only"]
         if self.choice.model_id:
             cmd += ["--model", self.choice.model_id]
-        proc = subprocess.run([*cmd, prompt], cwd=cwd, capture_output=True, text=True,
-                              timeout=self.timeout)
+        proc = self._spawn([*cmd, prompt], req, cwd)
         text = proc.stdout.strip()
         return Result(text=text, input_tokens=estimate_tokens(prompt), output_tokens=estimate_tokens(text),
                       ok=proc.returncode == 0, error=proc.stderr[-2000:] if proc.returncode else "")
@@ -206,7 +312,9 @@ def standard_plan(goal: str) -> dict[str, Any]:
          "depends_on": ["spec"], "writes": True,
          "skills": ["python"], "acceptance": [{"type": "file_exists", "path": "WORKLOG.md"}]},
         {"key": "review", "title": "Review the implementation", "role": "qa",
-         "description": "Review the change against the specification. End with VERDICT: PASS or VERDICT: FAIL.",
+         "description": ("Review the change against the specification: verify the logic first (trace the data flow "
+                         "of the normal, an edge and an error case), then the checklist. End with an OUTCOME line "
+                         "and VERDICT: PASS or VERDICT: FAIL."),
          "depends_on": ["build"], "skills": ["review"],
          "acceptance": [{"type": "regex", "pattern": "VERDICT: (PASS|FAIL)"}]},
     ]
@@ -236,8 +344,12 @@ class OfflineExecutor(Executor):
         title = req.data.get("title", "task")
         feedback = req.data.get("feedback") or ""
         if req.role == "qa" or req.purpose == "review":
-            return (f"Review of '{title}' (offline simulator).\n- Checked the worklog against the "
-                    "specification.\n- No blocking issues found.\nVERDICT: PASS")
+            return (f"Review of '{title}' (offline simulator).\n\n## Logic verification\n"
+                    "- Normal case: the worklog records the change and how to verify it.\n"
+                    "- Edge case: an empty specification still yields a worklog entry.\n"
+                    "- Error case: a missing worklog fails the file_exists condition.\n\n"
+                    "## Checklist\n- Contract satisfied; no interfaces, dependencies or security surface changed.\n\n"
+                    "OUTCOME: APPROVED\nVERDICT: PASS")
         if req.writes:
             proposal = ("\nPROPOSAL: Add regression tests for this change :: the change has no automated tests yet\n"
                         if "propose" in req.prompt.lower() else "")

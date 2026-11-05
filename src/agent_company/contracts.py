@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
@@ -141,16 +142,18 @@ def extract_json(text: str) -> Any:
     raise ValueError("no JSON found in output")
 
 
-def check(contract: TaskContract, output: str, workdir: Path | None, timeout: int = 600) -> list[dict[str, Any]]:
+def check(contract: TaskContract, output: str, workdir: Path | None, timeout: int = 600,
+          on_refused: Callable[[str, str], None] | None = None) -> list[dict[str, Any]]:
+    """`on_refused(cmd, reason)` hears about commands the policy refused (behaviour rules, S14-R-03)."""
     results = []
     for cond in contract.acceptance:
-        ok, detail = _check_one(cond, contract, output, workdir, timeout)
+        ok, detail = _check_one(cond, contract, output, workdir, timeout, on_refused)
         results.append({"condition": cond.model_dump(exclude_none=True), "passed": ok, "detail": detail})
     return results
 
 
 def _check_one(cond: Condition, contract: TaskContract, output: str, workdir: Path | None,
-               timeout: int) -> tuple[bool, str]:
+               timeout: int, on_refused: Callable[[str, str], None] | None = None) -> tuple[bool, str]:
     if cond.type == "contains":
         ok = str(cond.value or "").lower() in output.lower()
         return ok, "" if ok else f"output does not mention {cond.value!r}"
@@ -173,11 +176,12 @@ def _check_one(cond: Condition, contract: TaskContract, output: str, workdir: Pa
         ok = workdir.resolve() in target.parents and target.exists()
         return ok, "" if ok else f"{cond.path} does not exist"
     if cond.type == "command":
-        return run_command(cond.run or "true", workdir, timeout)
+        return run_command(cond.run or "true", workdir, timeout, on_refused)
     return False, f"unknown condition {cond.type}"
 
 
-def run_command(cmd: str, workdir: Path, timeout: int) -> tuple[bool, str]:
+def run_command(cmd: str, workdir: Path, timeout: int,
+                on_refused: Callable[[str, str], None] | None = None) -> tuple[bool, str]:
     from agent_company.worktrees import ensure_sandboxed
 
     from agent_company.governance import audit, check_command
@@ -186,6 +190,8 @@ def run_command(cmd: str, workdir: Path, timeout: int) -> tuple[bool, str]:
     refused = check_command(cmd)
     if refused:
         audit("quality-gate", "command_refused", cmd[:256], after={"reason": refused}, severity="high")
+        if on_refused is not None:
+            on_refused(cmd, refused)
         return False, f"`{cmd}` refused by the command policy: {refused}"
     try:
         import os

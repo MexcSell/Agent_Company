@@ -325,6 +325,10 @@ def rotation_roster() -> list[int]:
 def rotation_tick(min_age_seconds: int = 0, client: httpx.Client | None = None,
                   allow_private: bool | None = None) -> dict[str, Any] | None:
     """Give the next due source to the next agent on the roster. Returns what ran."""
+    from agent_company.governance import stopped
+
+    if stopped(executor="research"):  # E5, or E0 on web research
+        return None
     roster = rotation_roster()
     if not roster:
         return None

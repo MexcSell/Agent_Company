@@ -165,6 +165,8 @@ class Relationship(Base):
     b_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
     kind: Mapped[str] = mapped_column(String(32))  # similar|collaborated
     weight: Mapped[float] = mapped_column(Float, default=1.0)
+    evidence: Mapped[list[Any]] = mapped_column(default=list)  # goal ids that already changed the weight
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Lesson(Base):
@@ -226,6 +228,9 @@ class Goal(Base):
     protect_tests: Mapped[bool] = mapped_column(Boolean, default=False)
     baseline: Mapped[dict[str, Any]] = mapped_column(default=dict)  # command -> {"passed", "detail"}
     history: Mapped[list[Any]] = mapped_column(default=list)  # per iteration: commit, score, passed
+    # what a restart needs to resume the current iteration without re-running finished tasks (S04-R-05)
+    checkpoint: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    permits: Mapped[list[Any]] = mapped_column(default=list)  # change boundaries lifted: dependencies, config
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
@@ -513,6 +518,52 @@ class Notification(Base):
     admin_only: Mapped[bool] = mapped_column(Boolean, default=False)
     read_by: Mapped[list[Any]] = mapped_column(default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
+class LiveProcess(Base):
+    """An executor subprocess (Claude Code, Codex) while it runs, so an emergency stop from any process
+    (the server or the `stop` CLI) can terminate it (SPEC-14 S14-R-01)."""
+
+    __tablename__ = "live_processes"
+    pid: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    program: Mapped[str] = mapped_column(String(64))  # argv[0], checked before a kill (PIDs are reused)
+    kind: Mapped[str] = mapped_column(String(16))
+    agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Incident(Base):
+    """A security incident (SPEC-14 S14-R-04): opened by the behaviour rules or by an administrator."""
+
+    __tablename__ = "incidents"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    category: Mapped[str] = mapped_column(String(32))  # governance.INCIDENT_CATEGORIES
+    severity: Mapped[str] = mapped_column(String(8), default="SEV-3")  # SEV-1 (worst) .. SEV-4
+    status: Mapped[str] = mapped_column(String(16), default="open")
+    # open|contained|investigating|remediated|closed
+    title: Mapped[str] = mapped_column(String(256))
+    rule: Mapped[str] = mapped_column(String(64), default="")  # the behaviour rule that opened it, "" = manual
+    goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    evidence: Mapped[list[Any]] = mapped_column(default=list)  # frozen refs: {"type": "event|run|audit|task", "id"}
+    root_cause: Mapped[str] = mapped_column(Text, default="")
+    actions: Mapped[list[Any]] = mapped_column(default=list)  # [{"action", "actor", "at", "note"}]
+    opened_by: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class Operation(Base):
+    """Idempotency key of a non-repeatable step (`goal:<id>:<iteration>:merge`), SPEC-04 S04-R-05."""
+
+    __tablename__ = "operations"
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), default="started")  # started|done
+    result: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
 
 class AuditEvent(Base):

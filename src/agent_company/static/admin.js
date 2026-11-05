@@ -89,17 +89,42 @@ async function viewSettings(quiet) {
 }
 
 async function viewAudit() {
-  const a = await api("/api/audit");
-  $("#view").innerHTML = `<div class="card"><div class="row"><h2 class="grow" style="margin:0">Audit log</h2>${a.chain.ok ? pill("ok") + `<span class="muted">hash chain intact over ${a.chain.records} record(s)</span>` : `<span class="pill failed">chain broken at #${a.chain.broken_at}</span>`}</div>
+  const [a, inc] = await Promise.all([api("/api/audit"), api("/api/incidents")]);
+  const open = inc.items.filter((i) => i.status !== "closed");
+  const next = (s) => inc.flow[inc.flow.indexOf(s) + 1];
+  $("#view").innerHTML = `<div class="card" style="margin-bottom:12px"><div class="row"><h2 class="grow" style="margin:0">Security incidents</h2><span class="muted">${open.length} open · ${inc.items.length} total</span>${ib("plus", "Open an incident", 'id="inc-new"')}</div>
+    <p class="muted" style="margin:4px 0 8px">Opened by the behaviour rules (credentials in a change, writes outside a worktree, repeated refused commands) or by an administrator. An incident moves forward only (${inc.flow.join(" → ")}); closing needs a root cause and a remediation note, and becomes a lesson for the agent.</p>
+    ${inc.items.length ? `<div class="table-wrap"><table><tr><th>#</th><th>When</th><th>Severity</th><th>Category</th><th>Title</th><th>Goal</th><th>Status</th><th></th></tr>
+    ${inc.items.map((i) => `<tr><td class="num">${i.id}</td><td>${ago(i.at)}</td><td><span class="pill ${i.severity <= "SEV-2" ? "failed" : "pending"}">${esc(i.severity)}</span></td><td>${esc(i.category.replaceAll("_", " "))}</td><td>${esc(i.title)}${i.rule ? ` <span class="muted">(rule ${esc(i.rule)})</span>` : ""}</td><td>${i.goal_id ? `#${i.goal_id}` : ""}</td><td>${pill(i.status)}</td>
+      <td class="nowrap">${i.status !== "closed" ? `<button class="btn" data-inc-next="${i.id}" data-to="${next(i.status)}">${esc(next(i.status))}</button>${i.agent_id ? `<button class="btn" data-inc-contain="${i.id}" data-how="pause_agent">Pause agent</button>` : ""}${i.goal_id ? `<button class="btn" data-inc-contain="${i.id}" data-how="cancel_goal">Cancel goal</button>` : ""}` : `<span class="muted">${esc(i.root_cause.slice(0, 80))}</span>`}</td></tr>`).join("")}</table></div>` : '<span class="muted">No incidents.</span>'}</div>
+    <div class="card"><div class="row"><h2 class="grow" style="margin:0">Audit log</h2>${a.chain.ok ? pill("ok") + `<span class="muted">hash chain intact over ${a.chain.records} record(s)</span>` : `<span class="pill failed">chain broken at #${a.chain.broken_at}</span>`}</div>
     <div class="table-wrap" style="margin-top:8px"><table><tr><th>#</th><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Change</th><th>Hash</th></tr>
     ${a.records.map((r) => `<tr><td class="num">${r.id}</td><td>${ago(r.created_at)}</td><td>${esc(r.actor)}</td><td>${r.severity === "high" ? '<span class="pill failed">high</span> ' : ""}${esc(r.action)}</td><td>${esc(r.target)}</td><td class="mono">${esc(JSON.stringify(r.after))}</td><td class="mono muted">${esc(r.hash)}</td></tr>`).join("")}</table></div></div>`;
+  const send = async (id, body) => { try { await api(`/api/incidents/${id}`, { method: "POST", body }); viewAudit(); } catch (e) { toast(e.message); } };
+  document.querySelectorAll("[data-inc-next]").forEach((b) => (b.onclick = () => {
+    const to = b.dataset.to;
+    if (to === "closed") {
+      const root_cause = prompt("Root cause of the incident?"); if (!root_cause) return;
+      const note = prompt("Remediation: what was done so it does not happen again?"); if (!note) return;
+      return send(b.dataset.incNext, { status: to, root_cause, note });
+    }
+    send(b.dataset.incNext, { status: to, note: prompt(`Note for "${to}" (optional)`) || "" });
+  }));
+  document.querySelectorAll("[data-inc-contain]").forEach((b) => (b.onclick = () => { if (confirm(`${b.textContent} as containment?`)) send(b.dataset.incContain, { contain: b.dataset.how }); }));
+  $("#inc-new").onclick = async () => {
+    const title = prompt("Incident title"); if (!title) return;
+    const category = prompt(`Category (${inc.categories.join(", ")})`, "policy_violation"); if (!category) return;
+    const severity = prompt("Severity (SEV-1 worst … SEV-4)", "SEV-3") || "SEV-3";
+    const goal = prompt("Goal id it concerns (optional)") || "";
+    try { await api("/api/incidents", { method: "POST", body: { title, category, severity, goal_id: goal ? Number(goal) : null } }); viewAudit(); } catch (e) { toast(e.message); }
+  };
 }
 
 async function viewEvolution() {
   const [ev, agents] = await Promise.all([api("/api/evolution"), api("/api/agents")]);
   const roles = [...new Set(agents.filter((a) => a.parent_id && a.lifecycle !== "retired").map((a) => a.role))];
   $("#view").innerHTML = `<div class="grid two"><div class="grid">
-    <div class="card"><h2>How agents evolve</h2><p class="muted">Lessons are curated into versioned playbooks. An agent whose recent success rate drops below 50% tries a failure-aware playbook for 3 tasks; it is promoted only if it does at least as well as before, otherwise rolled back. After a goal, idle clones merge back into their original.</p>
+    <div class="card"><h2>How agents evolve</h2><p class="muted">Lessons are curated into versioned playbooks. An agent whose recent success rate drops below 50% tries a failure-aware playbook for 3 tasks; it is promoted only if it beats the old success rate by at least <code>min_improvement</code> points (Settings; a tie keeps the old one), otherwise rolled back. An agent failing more than 70% of its last 10 tasks is flagged for review. After a goal, idle clones merge back into their original.</p>
       ${me.is_admin ? `<div class="row"><button class="btn" id="ev-cycle">Diagnose all agents now</button>${roles.length ? `<select id="ev-role" style="width:auto">${roles.map((r) => `<option>${esc(r)}</option>`).join("")}</select><button class="btn" id="ev-cons">Merge idle clones</button>` : ""}</div>` : ""}</div>
     <div class="card"><div class="row nowrap"><h2 class="grow" style="margin:0">Learning rotation</h2>${me.is_admin || me.permissions?.manage_agents ? ib("book", "Study now: the next agent rewrites its definition from new knowledge and its lessons", 'id="ev-study"', "primary") : ""}</div>
       <p class="muted">Learning changes the agents themselves: each agent is a versioned definition file (Agents → an agent → Definition). One agent at a time reads what the research rooms collected and its own lessons, and rewrites its working method; every change is a commit. Runs every <code>study_interval</code> seconds (Settings; 0 = only on demand).</p>
@@ -114,7 +139,7 @@ async function viewEvolution() {
 }
 
 async function viewSystem() {
-  const [st, em] = await Promise.all([api("/api/system"), api("/api/emergency")]);
+  const [st, em, sc] = await Promise.all([api("/api/system"), api("/api/emergency"), api("/api/stops")]);
   const gb = (n) => (n ? `${(n / 1073741824).toFixed(1)} GB` : "–");
   const sup = st.supervisor;
   const row = (k, v) => `<tr><td class="muted">${k}</td><td>${v}</td></tr>`;
@@ -127,10 +152,20 @@ async function viewSystem() {
       : `<p class="muted">Not supervised. Start the service with <code>uv run python -m agent_company supervise</code> to get automatic, safe restarts when the code changes (for example after approving a platform goal).</p>`}</div></div>
     <div class="card emergency ${em.on ? "on" : ""}" style="margin-top:12px"><div class="row"><span class="em-icon">${icon("emergency", 22)}</span><div class="grow"><h2 style="margin:0">Emergency stop</h2>
       <p class="muted" style="margin:2px 0 0">${em.on ? `On since ${ago(em.at)} by ${esc(em.actor)}: ${esc(em.reason)}. No agent run starts; new goals are cancelled. The Workspace still works.` : "Stops all autonomous work at once: running and queued goals are cancelled and no agent run starts until you lift it. The Workspace (your own tools) is not affected."}</p></div>
-      ${em.on ? ib("play", "Lift the emergency stop", 'id="em-lift"', "primary") : ib("emergency", "Emergency stop", 'id="em-stop"', "danger")}</div></div>
+      ${em.on ? ib("play", "Lift the emergency stop", 'id="em-lift"', "primary") : ib("emergency", "Emergency stop", 'id="em-stop"', "danger")}</div>
+      <h3 style="margin:12px 0 4px">Narrower stops</h3>
+      <p class="muted" style="margin:0 0 6px">E0 one executor (${sc.executors.join(", ")}), E1 one agent (paused, its runs ended), E2 one goal (cancelled), E3 one project (its goals cancelled, new ones refused), E4 one room (its agents paused). The command line works without the server: <code>python -m agent_company stop --level E1 --scope &lt;agent id&gt;</code>.</p>
+      ${sc.stops.map((x) => `<div class="row"><span class="pill failed">${esc(x.level)}</span><span class="grow">${esc(sc.levels[x.level])} <b>${esc(x.scope)}</b> · ${esc(x.reason)} <span class="muted">${esc(x.actor)}, ${ago(x.at)}</span></span><button class="btn" data-lift="${esc(x.level)}" data-scope="${esc(x.scope)}">Lift</button></div>`).join("") || '<span class="muted">None active.</span>'}
+      <div class="row" style="margin-top:6px"><select id="st-level" style="width:auto">${["E0", "E1", "E2", "E3", "E4"].map((l) => `<option value="${l}">${l} ${esc(sc.levels[l])}</option>`).join("")}</select><input id="st-scope" placeholder="executor, agent id, goal id, project id or room key" class="grow"><button class="btn danger" id="st-add">Stop</button></div></div>
     <div class="grid halves" id="sys-host" style="margin-top:12px"><div class="card"><h2>Docker and virtual machines</h2><span class="muted">Checking…</span></div></div>`;
   $("#em-stop") && ($("#em-stop").onclick = async () => { const reason = prompt("Why stop all autonomous work?"); if (!reason) return; try { const r = await api("/api/emergency", { method: "POST", body: { on: true, reason } }); toast(`Emergency stop: ${r.cancelled_goals.length} goal(s) cancelled`); viewSystem(); } catch (e) { toast(e.message); } });
   $("#em-lift") && ($("#em-lift").onclick = async () => { if (!confirm("Lift the emergency stop?")) return; await api("/api/emergency", { method: "POST", body: { on: false } }); viewSystem(); });
+  $("#st-add").onclick = async () => {
+    const scope = $("#st-scope").value.trim(); if (!scope) return toast("Name what to stop");
+    const reason = prompt("Why?"); if (!reason) return;
+    try { const r = await api("/api/stops", { method: "POST", body: { level: $("#st-level").value, scope, reason } }); toast(`${r.level} stop: ${r.paused_agents.length} agent(s) paused, ${r.cancelled_goals.length} goal(s) cancelled`); viewSystem(); } catch (e) { toast(e.message); }
+  };
+  document.querySelectorAll("[data-lift]").forEach((b) => (b.onclick = async () => { if (!confirm(`Lift the ${b.dataset.lift} stop of ${b.dataset.scope}?`)) return; try { await api("/api/stops/lift", { method: "POST", body: { level: b.dataset.lift, scope: b.dataset.scope } }); viewSystem(); } catch (e) { toast(e.message); } }));
   $("#sys-restart") && ($("#sys-restart").onclick = async () => { try { await api("/api/system/restart", { method: "POST" }); toast("Restart requested"); } catch (e) { toast(e.message); } });
   hostCards();
 }

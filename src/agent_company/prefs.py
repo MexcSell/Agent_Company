@@ -28,11 +28,17 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "enable_claude_code": (bool, "Let agents (and the General Manager) run the Claude Code CLI on the server's Claude login"),
     "enable_codex": (bool, "Let agents run the Codex CLI on the server's ChatGPT login"),
     "study_interval": (int, "Seconds between visits of the learning rotation, which rewrites one agent's definition (0 = manual)"),
+    "retry_max_attempts": (int, "Attempts per model when a run fails with a transient error (429, 5xx, timeout)"),
+    "retry_base_seconds": (float, "First retry delay in seconds; it doubles on each retry"),
+    "retry_max_seconds": (float, "Longest delay between two retries, in seconds"),
+    "min_improvement": (int, "Percentage points a trial playbook must beat the baseline by to be promoted"),
 }
 LIMITS: dict[str, tuple[float, float]] = {
     "max_iterations": (1, 10), "max_parallel": (1, 16), "command_timeout": (10, 7200),
     "rotation_interval": (0, 86400), "max_proposal_goals": (0, 20), "goal_budget_usd": (0, 10_000),
     "goal_time_budget": (0, 7 * 86400), "study_interval": (0, 7 * 86400),
+    "retry_max_attempts": (1, 10), "retry_base_seconds": (0, 600), "retry_max_seconds": (0, 3600),
+    "min_improvement": (0, 100),
 }
 CHOICES: dict[str, set[str]] = {"proposal_policy": {"user", "superiors"}, "executor": {"auto", "offline"},
                                 "transport": {"https", "http"}}

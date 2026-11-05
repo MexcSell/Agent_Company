@@ -51,6 +51,13 @@ class Settings:
     manage_nginx: bool = False  # write the nginx site and reload nginx (only the real server)
     nginx_dir: str = "/etc/nginx"
     study_interval: int = 0  # seconds between study visits of the learning rotation (0 = manual)
+    # Transient executor errors (429, 5xx, timeouts) are retried with backoff before the next model (S04-R-06).
+    retry_max_attempts: int = 3
+    retry_base_seconds: float = 2.0
+    retry_max_seconds: float = 60.0
+    # A candidate playbook replaces the current one only if its success rate beats the baseline by this
+    # many percentage points (S13-D-01); a tie keeps the current version.
+    min_improvement: int = 10
 
     @property
     def worktrees_dir(self) -> Path:
@@ -91,6 +98,10 @@ def load_settings() -> Settings:
         manage_nginx=_bool("MANAGE_NGINX", False),
         nginx_dir=os.environ.get("NGINX_DIR") or "/etc/nginx",
         study_interval=_int("STUDY_INTERVAL", 0),
+        retry_max_attempts=_int("RETRY_MAX_ATTEMPTS", 3),
+        retry_base_seconds=float(os.environ.get("RETRY_BASE_SECONDS") or 2),
+        retry_max_seconds=float(os.environ.get("RETRY_MAX_SECONDS") or 60),
+        min_improvement=_int("MIN_IMPROVEMENT", 10),
     )
 
 

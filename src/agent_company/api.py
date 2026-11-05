@@ -156,6 +156,7 @@ class GoalBody(BaseModel):
     max_iterations: int | None = Field(default=None, ge=1, le=10)
     allowed_paths: list[str] = Field(default_factory=list)
     protect_tests: bool = False
+    permits: list[str] = Field(default_factory=list)  # change boundaries lifted (admins): dependencies, config
 
 
 class CrawlBody(BaseModel):
@@ -324,6 +325,29 @@ class DefinitionBody(BaseModel):
 class EmergencyBody(BaseModel):
     on: bool
     reason: str = ""
+
+
+class StopBody(BaseModel):
+    level: str = Field(pattern=r"^E[0-5]$")
+    scope: str = Field(default="all", max_length=64)
+    reason: str = Field(default="", max_length=500)
+
+
+class IncidentBody(BaseModel):
+    category: str
+    severity: str = "SEV-3"
+    title: str = Field(min_length=3, max_length=256)
+    goal_id: int | None = None
+    agent_id: int | None = None
+    project_id: int | None = None
+    note: str = Field(default="", max_length=2000)
+
+
+class IncidentUpdateBody(BaseModel):
+    status: str | None = None
+    note: str = Field(default="", max_length=2000)
+    root_cause: str | None = Field(default=None, max_length=4000)
+    contain: str = ""  # pause_agent | cancel_goal | stop_project | stop_all
 
 
 class UiBody(BaseModel):
@@ -548,7 +572,8 @@ def create_app(start_background: bool = True) -> FastAPI:
                                  .where(projects.Proposal.status == "pending")) if user["is_admin"] else 0
         return {"goals": by_status, "agents": agents, "pending_users": pending, "documents": docs,
                 "usage": usage.summary()["totals"], "unread": governance.unread_count(user),
-                "pending_proposals": proposals, "build": static_build()}
+                "pending_proposals": proposals, "build": static_build(),
+                "stopped": (bool(governance.emergency()) or bool(governance.stops())) if user["is_admin"] else False}
 
     # --- agents ---
     @app.get("/api/rooms")
@@ -1145,15 +1170,19 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.post("/api/goals")
     def goal_create(body: GoalBody, request: Request, user: dict[str, Any] = Depends(allowed("run"))
                     ) -> dict[str, Any]:
-        if (body.repo_path or body.quality_commands) and not user["is_admin"]:
-            raise HTTPException(403, "only administrators can set a repository or quality commands")
-        gid = loop.create_goal(body.title, body.description, body.repo_path, body.urls,
-                               body.quality_commands, body.max_iterations, created_by=user["id"],
-                               allowed_paths=body.allowed_paths, protect_tests=body.protect_tests,
-                               extract_checks=user["is_admin"])
-        if body.repo_path or body.quality_commands:
+        if (body.repo_path or body.quality_commands or body.permits) and not user["is_admin"]:
+            raise HTTPException(403, "only administrators can set a repository, quality commands or permits")
+        try:
+            gid = loop.create_goal(body.title, body.description, body.repo_path, body.urls,
+                                   body.quality_commands, body.max_iterations, created_by=user["id"],
+                                   allowed_paths=body.allowed_paths, protect_tests=body.protect_tests,
+                                   extract_checks=user["is_admin"], permits=body.permits)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        if body.repo_path or body.quality_commands or body.permits:
             _audit(user, "goal_create_privileged", gid,
-                   after={"repo_path": body.repo_path, "quality_commands": body.quality_commands})
+                   after={"repo_path": body.repo_path, "quality_commands": body.quality_commands,
+                          "permits": body.permits})
         q = request.app.state.queue
         if q is not None:
             q.submit(gid)
@@ -1669,6 +1698,55 @@ def create_app(start_background: bool = True) -> FastAPI:
             raise HTTPException(400, "give a reason")
         return governance.set_emergency(body.on, f"user:{admin['name']}", body.reason)
 
+    # --- scoped stops E0-E4 (S14-R-01); governance.stop/lift write the audit record themselves ---
+    @app.get("/api/stops")
+    def stops_get(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return {"E5": governance.emergency(), "stops": governance.stops(), "levels": governance.LEVELS,
+                "executors": sorted(governance.EXECUTOR_KINDS)}
+
+    @app.post("/api/stops")
+    def stops_set(body: StopBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        if len(body.reason.strip()) < 3:
+            raise HTTPException(400, "give a reason")
+        try:
+            return governance.stop(body.level, body.scope, f"user:{admin['name']}", body.reason)
+        except (KeyError, ValueError) as e:
+            raise HTTPException(400, str(e).strip("'")) from e
+
+    @app.post("/api/stops/lift")
+    def stops_lift(body: StopBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            return governance.lift(body.level, body.scope, f"user:{admin['name']}")
+        except KeyError as e:
+            raise HTTPException(404, str(e).strip("'")) from e
+
+    # --- security incidents (S14-R-04) ---
+    @app.get("/api/incidents")
+    def incidents_list(status: str = "", _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return {"items": governance.list_incidents(status), "categories": governance.INCIDENT_CATEGORIES,
+                "severities": governance.SEVERITIES, "flow": governance.INCIDENT_FLOW}
+
+    @app.post("/api/incidents")
+    def incidents_open(body: IncidentBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        evidence = [{"type": "note", "text": body.note}] if body.note else []
+        try:
+            return governance.open_incident(body.category, body.severity, body.title, f"user:{admin['name']}",
+                                            goal_id=body.goal_id, agent_id=body.agent_id,
+                                            project_id=body.project_id, evidence=evidence)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+
+    @app.post("/api/incidents/{incident_id}")
+    def incidents_update(incident_id: int, body: IncidentUpdateBody, admin: dict[str, Any] = Depends(admin_user)
+                         ) -> dict[str, Any]:
+        try:
+            return governance.update_incident(incident_id, f"user:{admin['name']}", body.status, body.note,
+                                              body.root_cause, body.contain)
+        except KeyError as e:
+            raise HTTPException(404, str(e).strip("'")) from e
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+
     # --- dashboard layout shared by every user (rail order: Settings → Navigation) ---
     @app.get("/api/ui/{key}")
     def ui_get(key: str, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
@@ -1748,7 +1826,7 @@ def _goal_dict(g: Goal) -> dict[str, Any]:
             "branch": g.branch, "base_branch": g.base_branch, "worktree": g.worktree, "urls": g.urls,
             "quality_commands": g.quality_commands, "result": g.result, "project_id": g.project_id,
             "origin": g.origin, "parent_goal_id": g.parent_goal_id, "allowed_paths": g.allowed_paths,
-            "protect_tests": g.protect_tests, "baseline": g.baseline, "history": g.history,
+            "protect_tests": g.protect_tests, "permits": g.permits or [], "baseline": g.baseline, "history": g.history,
             "created_at": g.created_at.isoformat(), "updated_at": g.updated_at.isoformat()}
 
 

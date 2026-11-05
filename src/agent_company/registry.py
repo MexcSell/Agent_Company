@@ -90,16 +90,28 @@ def related(s: Session, agent_id: int, limit: int = 5) -> list[tuple[Agent, floa
     return [(agents[i], out[i]) for i in ids if i in agents]
 
 
-def connect(s: Session, a_id: int, b_id: int, kind: str = "collaborated", inc: float = 0.1) -> None:
+def connect(s: Session, a_id: int, b_id: int, kind: str = "collaborated", inc: float = 0.1,
+            evidence: str | None = None) -> None:
+    """Strengthen (or, with a negative `inc`, weaken) a link. With `evidence`, the same evidence never
+    changes the link twice (duplicate records are ignored, SPEC-12 AR-015)."""
     if a_id == b_id:
         return
     lo, hi = sorted((a_id, b_id))
     rel = s.scalars(select(Relationship).where(
         Relationship.a_id == lo, Relationship.b_id == hi, Relationship.kind == kind)).first()
     if rel is None:
-        s.add(Relationship(a_id=lo, b_id=hi, kind=kind, weight=min(1.0, 0.3 + inc)))
-    else:
-        rel.weight = min(1.0, rel.weight + inc)
+        if inc <= 0:
+            return  # nothing to weaken
+        s.add(Relationship(a_id=lo, b_id=hi, kind=kind, weight=min(1.0, 0.3 + inc),
+                           evidence=[evidence] if evidence else [], updated_at=now()))
+        return
+    seen = list(rel.evidence or [])
+    if evidence:
+        if evidence in seen:
+            return
+        rel.evidence = [*seen, evidence][-200:]
+    rel.weight = max(0.0, min(1.0, rel.weight + inc))
+    rel.updated_at = now()
 
 
 def _slug(text: str) -> str:
@@ -166,6 +178,10 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
         elif pool:
             agent = _clone(s, max(pool, key=lambda a: _skill_score(a, skills, team)))
             action = "cloned"
+        elif s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "paused")).first():
+            # an emergency stop (E1/E4) or an administrator paused this role's agents: recruiting a
+            # replacement would walk around the stop
+            raise RuntimeError(f"every {role} agent is paused; lift the stop or resume one first")
         else:
             agent = _recruit(s, role, skills, writes)
             action = "recruited"

@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import json
 import queue
+import random
+import re
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -30,12 +33,20 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                 created_by: int | None = None, project_id: int | None = None,
                 attachments: list[dict[str, Any]] | None = None, origin: str = "user",
                 parent_goal_id: int | None = None, allowed_paths: list[str] | None = None,
-                protect_tests: bool = False, extract_checks: bool = False) -> int:
+                protect_tests: bool = False, extract_checks: bool = False,
+                permits: list[str] | None = None) -> int:
     """Create a goal. `extract_checks` (only for trusted authors) adds the test/lint commands
     the description names in backticks when no quality commands are given."""
     from agent_company.checks import extract_check_commands
-    from agent_company.governance import check_command
+    from agent_company.governance import check_command, stops
 
+    if project_id is not None and any(x["level"] == "E3" and str(x["scope"]) == str(project_id) for x in stops()):
+        raise ValueError(f"project {project_id} is stopped (E3); an administrator must lift the stop first")
+    from agent_company.checks import PERMITS
+
+    bad = set(permits or []) - PERMITS
+    if bad:
+        raise ValueError(f"unknown permit(s) {', '.join(sorted(bad))}; one of {', '.join(sorted(PERMITS))}")
     if extract_checks and not quality_commands:
         quality_commands = [c for c in extract_check_commands(f"{title}\n{description}") if not check_command(c)]
     for cmd in quality_commands or []:
@@ -53,7 +64,7 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                  max_iterations=max_iterations or settings().max_iterations, created_by=created_by,
                  project_id=project_id, attachments=list(attachments or []), origin=origin,
                  parent_goal_id=parent_goal_id, allowed_paths=[p.strip() for p in allowed_paths or [] if p.strip()],
-                 protect_tests=protect_tests)
+                 protect_tests=protect_tests, permits=sorted(set(permits or [])))
         s.add(g)
         s.flush()
         gid = g.id
@@ -112,16 +123,47 @@ class BudgetExhausted(RuntimeError):
     pass
 
 
+TRANSIENT = re.compile(r"(?i)(\b(429|50[0-4]|529)\b|rate.?limit|overloaded|timed? ?out|timeout|temporar"
+                       r"|connection (reset|refused|error|aborted)|network is unreachable|service unavailable"
+                       r"|APIConnectionError|ECONNRESET)")
+# Policy refusals and stops are final: retrying them would only repeat the refusal (S04-R-06).
+NO_RETRY = re.compile(r"(?i)refused by the command policy|emergency stop|\bE[0-5] stop\b|WorktreeError|outside the worktree")
+_sleep = time.sleep  # tests replace it
+
+
+def transient(error: str) -> bool:
+    return bool(error) and not NO_RETRY.search(error) and bool(TRANSIENT.search(error))
+
+
+def backoff(attempt: int) -> float:
+    """d_n = min(d_max, d_0 * 2^n) + jitter (up to 10 %)."""
+    cfg = settings()
+    d = min(cfg.retry_max_seconds, cfg.retry_base_seconds * 2 ** attempt)
+    return d + random.uniform(0, d * 0.1)
+
+
+def _stopped_result(why: str) -> tuple[executors.Result, router.Choice]:
+    return (executors.Result(text="", ok=False, error=why),
+            router.Choice(name="(emergency stop)", kind="offline", model_id="", reason="emergency stop"))
+
+
 def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | None = None,
              goal_id: int | None = None, escalate: bool = False,
              avoid_provider: str | None = None) -> tuple[executors.Result, router.Choice]:
-    """Run the request on the role's best model; on an error, fall back to the next one."""
-    from agent_company.governance import emergency
+    """Run the request on the role's best model. Transient errors are retried with backoff; then the next
+    model in the chain is tried. Nothing starts while an emergency stop covers the agent, its room, its
+    goal's project or the executor (S14-R-01)."""
+    from agent_company.governance import stopped, stops
 
-    stop = emergency()
-    if stop:  # S14-R-01 E5: no agent run starts while the emergency stop is on
-        res = executors.Result(text="", ok=False, error=f"emergency stop by {stop.get('actor')}: {stop.get('reason')}")
-        return res, router.Choice(name="(emergency stop)", kind="offline", model_id="", reason="emergency stop")
+    project_id = None
+    if goal_id is not None:
+        with session() as s:
+            g = s.get(Goal, goal_id)
+            project_id = g.project_id if g else None
+    why = stopped(agent_id=agent.id, project_id=project_id, room=agent.room_key)
+    if why:
+        return _stopped_result(why)
+    req.agent_id, req.goal_id = agent.id, goal_id
     chain = router.resolve_chain(agent.role, agent.model_pref, escalate, avoid_provider)
     if req.workdir is None:  # CLI agents only run inside a worktree
         chain = [c for c in chain if c.kind not in {"claude_code", "codex"}]
@@ -129,6 +171,12 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
         # The simulator stands in only when no real model is usable. Once a real model is tried,
         # its failure must stand: placeholder work must never pass the gate in place of real work.
         chain = [c for c in chain if c.kind != "offline"]
+    off = {str(x["scope"]) for x in stops() if x["level"] == "E0"}
+    if off:  # E0: one executor is stopped
+        kept = [c for c in chain if c.kind not in off]
+        if not kept:
+            return _stopped_result(f"E0 stop of executor(s) {', '.join(sorted(off))}")
+        chain = kept
     if any(c.kind == "claude_code" for c in chain) and "mcp" not in req.data:
         from agent_company import mcp
 
@@ -137,17 +185,41 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
         except Exception:  # noqa: BLE001 - a broken server entry must not stop the work
             req.data["mcp"] = ({}, [])
     res, choice = None, chain[0]
+    attempts = max(1, settings().retry_max_attempts)
     for choice in chain[:MAX_FALLBACKS]:
-        res = executors.for_choice(choice, settings().command_timeout).run(req)
-        usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
-                     output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
-                     error=res.error, task_id=task_id, agent_id=agent.id, purpose=purpose, goal_id=goal_id)
-        if res.ok:
+        fresh_session_tried = False
+        attempt = 0
+        while True:
+            res = executors.for_choice(choice, settings().command_timeout).run(req)
+            usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
+                         output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
+                         error=res.error, task_id=task_id, agent_id=agent.id, purpose=purpose, goal_id=goal_id)
+            if res.ok:
+                break
+            log_event("error", f"{agent.name} ({choice.name}) failed: {res.error[:300]}", goal_id=goal_id,
+                      agent_id=agent.id)
+            if req.writes and req.workdir is not None and res.files:
+                break  # it already changed files: no model may start over on top of a half-done edit
+            if NO_RETRY.search(res.error or ""):
+                return res, choice  # a refusal or a stop: no retry, no other model
+            if transient(res.error) and attempt + 1 < attempts:
+                delay = backoff(attempt)
+                attempt += 1
+                log_event("retry", f"{choice.name}: transient error, retry {attempt} in {delay:.1f}s",
+                          goal_id=goal_id, agent_id=agent.id, delay=delay)
+                _sleep(delay)
+                why = stopped(agent_id=agent.id, project_id=project_id, room=agent.room_key)
+                if why:
+                    return _stopped_result(why)
+                continue
+            if req.data.get("resume") and not fresh_session_tried:  # a crash on a resumed session: once, fresh
+                fresh_session_tried = True
+                req.data["resume"] = ""
+                log_event("retry", f"{choice.name}: restarting on a fresh session", goal_id=goal_id, agent_id=agent.id)
+                continue
             break
-        log_event("error", f"{agent.name} ({choice.name}) failed: {res.error[:300]}", goal_id=goal_id,
-                  agent_id=agent.id)
-        if req.writes and req.workdir is not None and res.files:
-            break  # it already changed files; another model must not start over on top of a half-done edit
+        if res.ok or (req.writes and req.workdir is not None and res.files):
+            break
     assert res is not None
     return res, choice
 
@@ -204,7 +276,11 @@ def _system_for(agent: Agent) -> str:
 # --- research -------------------------------------------------------------------
 
 def _research(goal: Goal, iteration: int, feedback: str) -> str:
-    if iteration == 1:
+    from agent_company.governance import stopped
+
+    if iteration == 1 and stopped(executor="research"):
+        log_event("research", "web research is stopped (E0); not collecting the goal's URLs", goal_id=goal.id)
+    elif iteration == 1:
         for url in goal.urls or []:
             try:
                 research.collect(url, depth=1, max_pages=20, goal_id=goal.id)
@@ -251,12 +327,14 @@ PLAN_INSTRUCTIONS = """Split the goal into task contracts. Answer with JSON only
   "acceptance": [{"type": "file_exists", "path": "..."} | {"type": "command", "run": "..."} |
                  {"type": "contains", "value": "..."} | {"type": "regex", "pattern": "..."} |
                  {"type": "min_length", "value": 100}]}]}
-Prefer few, well-scoped tasks. Include a QA review task whose output ends with
-"VERDICT: PASS" or "VERDICT: FAIL". Use an existing role when one fits; name a new
+Prefer few, well-scoped tasks. Include a QA review task: it verifies the logic (data flow of the normal,
+an edge and an error case), lists FINDING lines, and ends with an OUTCOME and "VERDICT: PASS" or
+"VERDICT: FAIL". Use an existing role when one fits; name a new
 role only when the work needs a specialist none of them covers."""
 
 
-def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> list[contracts.TaskContract]:
+def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[contracts.TaskContract], int]:
+    """The task contracts for this iteration, and the id of the agent that planned them."""
     gm = registry.staff("general_manager", ["planning"], goal.id)
     try:
         with session() as s:
@@ -280,13 +358,13 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> list[contrac
             log_event("plan", f"{gm.name} planned {len(plan)} task(s) with {choice.name}: {summary}"[:500],
                       goal_id=goal.id, agent_id=gm.id)
             _chat_plan(goal, iteration, plan, summary, gm.id)
-            return plan
+            return plan, gm.id
         except (ValueError, KeyError, TypeError) as e:
             log_event("plan", f"plan from {choice.name} was invalid ({e}); using the standard plan",
                       goal_id=goal.id, agent_id=gm.id)
             plan = contracts.validate_plan(executors.standard_plan(goal.title)["tasks"])
             _chat_plan(goal, iteration, plan, "standard plan (the model's plan was invalid)", gm.id)
-            return plan
+            return plan, gm.id
     finally:
         registry.release(gm.id)
 
@@ -339,7 +417,8 @@ PROPOSAL_HELP = ("If you notice valuable follow-up work outside this task, add a
 
 # --- task execution -------------------------------------------------------------
 
-def _make_worker(goal: Goal, notes: str, feedback: str, started: float):  # noqa: ANN202
+def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa: ANN202
+                 planner_id: int | None = None):
     def work(task_id: int) -> bool:
         with session() as s:
             t = s.get(Task, task_id)
@@ -347,6 +426,8 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float):  # noqa
             contract = contracts.TaskContract.model_validate(t.contract)
             deps = {d.key: d.output for d in s.scalars(select(Task).where(
                 Task.goal_id == t.goal_id, Task.iteration == t.iteration, Task.key.in_(contract.depends_on)))}
+        from agent_company.quality import REVIEW_CHECKLIST, REVIEW_ROLES
+
         role, note = registry.resolve_role(contract.role)
         if note:
             log_event("staff", note, goal_id=goal.id)
@@ -375,18 +456,27 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float):  # noqa
                       + _attachment_note(goal)
                       + ("\n\nYou may change files in the working directory." if writes
                          else "\n\nDo not change files; answer in text.")
+                      + ("\n\n" + REVIEW_CHECKLIST if role in REVIEW_ROLES else "")
                       + "\n\n" + PROPOSAL_HELP + budget)
             req = executors.Request(purpose="task", role=role, system=_system_for(agent), prompt=prompt,
                                     workdir=Path(goal.worktree), writes=writes,
                                     data={"title": contract.title, "description": contract.description,
                                           "feedback": feedback, "resume": _resumable_session(goal.id, agent.id)})
-            from agent_company.quality import REVIEW_ROLES
-
             avoid = _developer_provider(goal.id, goal.iteration) if role in REVIEW_ROLES else None
             res, choice = _execute(agent, req, "task", task_id=task_id, goal_id=goal.id,
                                    escalate=goal.iteration >= 2, avoid_provider=avoid)
             output = res.text if res.ok else f"{res.text}\n\nERROR: {res.error}"
-            acceptance = contracts.check(contract, output, Path(goal.worktree), settings().command_timeout)
+            if "WorktreeError" in (res.error or ""):  # rule: writing outside the goal's worktree (S14-R-03)
+                from agent_company.governance import open_incident
+
+                open_incident("unauthorized_access", "SEV-2", f"{agent.name} tried to write outside goal #{goal.id}'s "
+                              "worktree", "rule:path_escape", rule="path_escape", goal_id=goal.id, agent_id=agent.id,
+                              evidence=[{"type": "task", "id": task_id, "error": res.error[:500]}])
+            from agent_company.governance import on_command_refused
+
+            # the planner wrote the acceptance commands: a refusal counts against it
+            acceptance = contracts.check(contract, output, Path(goal.worktree), settings().command_timeout,
+                                         on_refused=lambda cmd, why: on_command_refused(goal.id, planner_id, cmd, why))
             ok = res.ok and all(c["passed"] for c in acceptance)
             set_status(task_id, "done" if ok else "failed", output=output[-50_000:], model_name=choice.name,
                        gate={"acceptance": acceptance, "files": res.files}, session_id=res.session_id)
@@ -504,15 +594,19 @@ def _learn_from(goal_id: int, iteration: int, passed: bool, feedback: str) -> No
         ok = passed and status == "done"
         learning.learn(agent_id, goal_id, _lesson_text(agent_id, title, ok, "" if ok else feedback, goal_id),
                        ok, skills)
-    learning.link_team([r[0] for r in rows])
+    learning.link_team(goal_id, [(r[0], r[2]) for r in rows], passed)
 
 
 # --- the loop -------------------------------------------------------------------
 
 def run_goal(goal_id: int) -> dict[str, Any]:
+    from agent_company.governance import emergency
+
     goal = _goal(goal_id)
     if goal.status not in {"queued", "running"}:
         return {"status": goal.status}
+    if emergency():  # E5: the goal stays queued until the stop is lifted
+        return {"status": "queued", "held": "emergency stop"}
     try:
         out = _run(goal_id)
     finally:
@@ -558,42 +652,63 @@ def _run(goal_id: int) -> dict[str, Any]:
             failing = [c for c, r in base.items() if not r["passed"]]
             if failing:
                 log_event("gate", "already failing before any change: " + ", ".join(failing), goal_id=goal_id)
-        import time
-
         started = time.monotonic()
         feedback, report = "", {}
-        for iteration in range(max(1, goal.iteration), goal.max_iterations + 1):
+        first = max(1, goal.iteration)
+        cp = dict(goal.checkpoint or {})
+        resume = cp.get("iteration") == first and cp.get("planned")
+        if resume and cp.get("evaluated") and not cp.get("passed"):  # that iteration was judged: go on
+            first, feedback, resume = first + 1, cp.get("feedback", ""), False
+        for iteration in range(first, goal.max_iterations + 1):
             if cancelled(goal_id):
                 return {"status": "cancelled"}
-            _discard_iteration(goal_id, iteration)  # leftovers of a run cut short by a restart
             _update_goal(goal_id, iteration=iteration)
             goal = _goal(goal_id)
             try:
                 _budget_note(goal, started)
             except BudgetExhausted as e:
                 return _out_of_budget(goal_id, str(e), report)
-            log_event("iteration", f"iteration {iteration} started", goal_id=goal_id)
-            notes = _research(goal, iteration, feedback)
-            if iteration == 1:
-                _configure(goal)
-            plan = _plan(goal, iteration, feedback, notes)
-            ids = _persist(goal_id, iteration, plan)
-            _spec_step(specs.write_plan, goal, iteration, plan)
+            if resume:  # S04-R-05: a restart continues the planned iteration; finished tasks are not re-run
+                notes, feedback, planner_id = cp.get("notes", ""), cp.get("feedback", ""), cp.get("planner_id")
+                ids = _requeue_unfinished(goal_id, iteration)
+                log_event("iteration", f"iteration {iteration} resumed after a restart", goal_id=goal_id)
+                resume = False
+            else:
+                _discard_iteration(goal_id, iteration)  # leftovers of a run cut short before it was planned
+                log_event("iteration", f"iteration {iteration} started", goal_id=goal_id)
+                notes = _research(goal, iteration, feedback)
+                if iteration == 1:
+                    _configure(goal)
+                plan, planner_id = _plan(goal, iteration, feedback, notes)
+                ids = _persist(goal_id, iteration, plan)
+                _update_goal(goal_id, checkpoint={"iteration": iteration, "planned": True, "notes": notes,
+                                                  "feedback": feedback, "planner_id": planner_id})
+                _spec_step(specs.write_plan, goal, iteration, plan)
             from agent_company.scheduler import run_dag
 
-            run_dag(ids, _make_worker(goal, notes, feedback, started), goal.worktree, lambda: cancelled(goal_id))
+            run_dag(ids, _make_worker(goal, notes, feedback, started, planner_id), goal.worktree,
+                    lambda: cancelled(goal_id))
             if cancelled(goal_id):
                 return {"status": "cancelled"}
             _spec_step(specs.write_outputs, goal, iteration, None)
             report = quality.evaluate(goal_id, iteration)
             _spec_step(specs.write_decision, goal, iteration, report)
             _record_history(goal_id, iteration, report)
+            _update_goal(goal_id, checkpoint={"iteration": iteration, "planned": True, "evaluated": True,
+                                              "passed": report["passed"], "feedback": report["feedback"]})
             from agent_company.performance import track_defects
 
             track_defects(goal_id, iteration, report["checks"])
             log_event("gate", f"iteration {iteration}: quality gate {'passed' if report['passed'] else 'failed'}",
                       goal_id=goal_id, **{k: report[k] for k in ("passed", "checks", "commit")})
             _learn_from(goal_id, iteration, report["passed"], report["feedback"])
+            halt = _behaviour_rules(goal_id, iteration, report)
+            if halt:
+                kept = _keep_best(goal_id)
+                _update_goal(goal_id, status="failed",
+                             result=f"Stopped: {halt}.\n" + _summary(goal_id, iteration, report) + kept)
+                _notify_goal(goal_id, "failed")
+                return {"status": "failed", "iterations": iteration, "report": report, "stopped": halt}
             if report["passed"]:
                 if goal.origin == "eval":  # benchmark runs pass, but never merge, push or notify
                     _update_goal(goal_id, status="approved", result=_summary(goal_id, iteration, report))
@@ -603,9 +718,7 @@ def _run(goal_id: int) -> dict[str, Any]:
                 _notify_goal(goal_id, status)
                 if status == "approved":
                     _merge(goal_id)
-                    from agent_company.gitsync import auto_push
-
-                    auto_push(goal.project_id, goal.created_by)
+                    _push(goal_id)
                 return {"status": status, "iterations": iteration, "report": report}
             feedback = report["feedback"]
         kept = _keep_best(goal_id)
@@ -620,10 +733,60 @@ def _run(goal_id: int) -> dict[str, Any]:
 
 
 def _record_history(goal_id: int, iteration: int, report: dict[str, Any]) -> None:
+    failed = {c["check"] for c in report.get("checks", []) if not c["passed"]}
     with session() as s:
         g = s.get(Goal, goal_id)
-        g.history = [*(g.history or []), {"iteration": iteration, "commit": report.get("head"),
-                                          "score": report.get("score", 0.0), "passed": report["passed"]}]
+        g.history = [*(h for h in g.history or [] if h.get("iteration") != iteration),
+                     {"iteration": iteration, "commit": report.get("head"), "score": report.get("score", 0.0),
+                      "passed": report["passed"], "scope_failed": "scope" in failed}]
+
+
+def _requeue_unfinished(goal_id: int, iteration: int) -> list[int]:
+    """After a restart: tasks that were running go back to the queue; finished ones keep their result."""
+    with session() as s:
+        tasks = list(s.scalars(select(Task).where(Task.goal_id == goal_id, Task.iteration == iteration)))
+        for t in tasks:
+            if t.status == "running":
+                t.status, t.started_at = "queued", None
+        return [t.id for t in tasks]
+
+
+def _behaviour_rules(goal_id: int, iteration: int, report: dict[str, Any]) -> str:
+    """Deterministic behaviour rules on a gate result (SPEC-14 S14-R-03). Returns why the goal must stop, or ""."""
+    from agent_company.governance import open_incident, security_alert
+
+    checks = {c["check"]: c for c in report.get("checks", [])}
+    secret = checks.get("secret scan")
+    if secret and not secret["passed"]:
+        open_incident("credential_compromise", "SEV-2", f"Credentials added to goal #{goal_id}'s change",
+                      "rule:secret_in_change", rule="secret_in_change", goal_id=goal_id,
+                      evidence=[{"type": "gate", "iteration": iteration, "detail": secret["detail"][:500],
+                                 "commit": report.get("head")}])
+        return "credentials were added to the change (incident opened)"
+    hist = [h for h in _goal(goal_id).history or [] if h.get("iteration") in {iteration - 1, iteration}]
+    if len(hist) == 2 and all(h.get("scope_failed") for h in hist):
+        security_alert(f"Goal #{goal_id}: changes outside the allowed paths in two iterations in a row",
+                       checks.get("scope", {}).get("detail", "")[:1000], goal_id, rule="repeated_scope")
+        return "changes outside the allowed paths in two iterations in a row"
+    return ""
+
+
+def _once(key: str, fn: Any) -> Any:
+    """Run a non-repeatable step once per idempotency key; a repeat returns the recorded result (S04-R-05)."""
+    from agent_company.db import Operation
+
+    with session() as s:
+        op = s.get(Operation, key)
+        if op is not None and op.status == "done":
+            log_event("goal", f"{key} already done; not repeated")
+            return (op.result or {}).get("v")
+        if op is None:
+            s.add(Operation(key=key))
+    value = fn()
+    with session() as s:
+        op = s.get(Operation, key)
+        op.status, op.result = "done", {"v": value}
+    return value
 
 
 def _keep_best(goal_id: int) -> str:
@@ -710,9 +873,20 @@ def _merge(goal_id: int) -> str:
     from agent_company.gitsync import identity_for
 
     g = _goal(goal_id)
-    sha = worktrees.merge(g.repo_path, g.branch, g.base_branch, author=identity_for(g.created_by))
-    log_event("goal", f"merged {g.branch} into {g.base_branch} ({sha[:10]})", goal_id=goal_id)
-    return sha
+
+    def merge() -> str:
+        sha = worktrees.merge(g.repo_path, g.branch, g.base_branch, author=identity_for(g.created_by))
+        log_event("goal", f"merged {g.branch} into {g.base_branch} ({sha[:10]})", goal_id=goal_id)
+        return sha
+
+    return _once(f"goal:{goal_id}:{g.iteration}:merge", merge)
+
+
+def _push(goal_id: int) -> None:
+    from agent_company.gitsync import auto_push
+
+    g = _goal(goal_id)
+    _once(f"goal:{goal_id}:{g.iteration}:push", lambda: (auto_push(g.project_id, g.created_by), True)[1])
 
 
 def approve(goal_id: int) -> dict[str, Any]:
@@ -721,11 +895,10 @@ def approve(goal_id: int) -> dict[str, Any]:
         raise ValueError(f"goal is {g.status}, not awaiting approval")
     sha = _merge(goal_id)
     _update_goal(goal_id, status="approved")
-    from agent_company.gitsync import auto_push
     from agent_company.projects import post_for_goal
 
     post_for_goal(goal_id, f"Goal #{goal_id} approved and merged ({sha[:10]}).", kind="result")
-    auto_push(g.project_id, g.created_by)
+    _push(goal_id)
     return {"status": "approved", "merge_commit": sha}
 
 
@@ -793,8 +966,8 @@ class GoalQueue:
 
         while True:
             gid = self.q.get()
-            if emergency():
-                cancel(gid)
+            if emergency():  # E5: accepted but not run; the watcher hands it out again once the stop is lifted
+                self.seen.discard(gid)
                 continue
             try:
                 run_goal(gid)

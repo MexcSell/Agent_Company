@@ -5,7 +5,9 @@
   diagnose  an agent whose recent success rate is low gets a failure-aware candidate
             playbook (warnings first) instead of a direct change
   evaluate  the candidate runs for EVAL_WINDOW tasks; it is promoted to a new version
-            only if its success rate is at least the baseline, else rolled back
+            only if its success rate beats the baseline by `min_improvement` points
+            (a tie keeps the current version), else rolled back
+  flag      an agent failing more than 70 % of its last 10 tasks is flagged for review
   merge     after a goal, its idle clones fold their XP, skills, counts and lessons
             back into the original and retire, so the registry does not sprawl
 
@@ -20,6 +22,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from agent_company.config import settings
 from agent_company.db import Agent, EvolutionEvent, Lesson, PlaybookVersion, Task, log_event, session
 
 EVAL_WINDOW = 3
@@ -74,10 +77,14 @@ def after_task(agent_id: int, success: bool) -> None:
             exp["outcomes"] = [*exp.get("outcomes", []), success]
             if len(exp["outcomes"]) >= EVAL_WINDOW:
                 rate = sum(exp["outcomes"]) / len(exp["outcomes"])
-                _event(s, "evaluate", a.id, f"{a.name}: candidate {rate:.0%} vs baseline {exp['baseline']:.0%}",
-                       candidate=rate, baseline=exp["baseline"])
-                if rate >= exp["baseline"]:
-                    _new_version(s, a, exp["playbook"], f"experiment won ({rate:.0%} >= {exp['baseline']:.0%})")
+                need = exp["baseline"] + settings().min_improvement / 100
+                n = len(exp["outcomes"])
+                _event(s, "evaluate", a.id, f"{a.name}: candidate {rate:.0%} vs baseline {exp['baseline']:.0%} "
+                       f"(n={n}, needs {min(need, 1):.0%})", candidate=rate, baseline=exp["baseline"], samples=n,
+                       needed=need)
+                # S13-D-01: strictly better by min_improvement; a tie or a small edge keeps the current version
+                if rate >= need - 1e-9 and rate > exp["baseline"]:
+                    _new_version(s, a, exp["playbook"], f"experiment won ({rate:.0%} vs {exp['baseline']:.0%}, n={n})")
                     _event(s, "promote", a.id, f"{a.name}: playbook v{a.playbook_version} promoted")
                 else:
                     _event(s, "rollback", a.id, f"{a.name}: candidate rolled back, v{a.playbook_version} kept")
@@ -85,6 +92,7 @@ def after_task(agent_id: int, success: bool) -> None:
             else:
                 a.experiment = exp
             return
+        _flag_unreliable(s, a)
         since = s.scalar(select(func.max(PlaybookVersion.created_at)).where(PlaybookVersion.agent_id == a.id))
         q = select(func.count()).select_from(Lesson).where(Lesson.agent_id == a.id, Lesson.outcome != "research")
         if since is not None:
@@ -97,6 +105,32 @@ def after_task(agent_id: int, success: bool) -> None:
             if playbook and playbook != a.playbook:
                 _new_version(s, a, playbook, f"curated from {fresh} new lesson(s)")
                 _event(s, "generate", a.id, f"{a.name}: playbook v{a.playbook_version}")
+
+
+FLAG_WINDOW, FLAG_FAILURE_RATE = 10, 0.7
+
+
+def _flag_unreliable(s: Session, a: Agent) -> None:
+    """Behaviour rule (SPEC-14 S14-R-03): an agent that failed more than 70 % of its last 10 tasks is flagged
+    for review (evolution and certification), once per window of 10 new outcomes."""
+    from agent_company.governance import notify
+
+    rate, n = success_rate(s, a.id, FLAG_WINDOW)
+    if n < FLAG_WINDOW or 1 - rate <= FLAG_FAILURE_RATE:
+        return
+    last = s.scalar(select(func.max(EvolutionEvent.created_at)).where(EvolutionEvent.agent_id == a.id,
+                                                                     EvolutionEvent.stage == "flag"))
+    if last is not None:
+        newer = s.scalar(select(func.count()).select_from(Lesson).where(
+            Lesson.agent_id == a.id, Lesson.outcome.in_(["success", "failure"]), Lesson.created_at > last)) or 0
+        if newer < FLAG_WINDOW:
+            return
+    _event(s, "flag", a.id, f"{a.name}: failed {1 - rate:.0%} of its last {n} tasks; flagged for review",
+           failure_rate=1 - rate, samples=n)
+    notify(f"{a.name} flagged for review", f"It failed {1 - rate:.0%} of its last {n} tasks.", level="warning",
+           source="security", admin_only=True, s=s)
+    log_event("security", f"{a.name} flagged for review: failed {1 - rate:.0%} of its last {n} tasks",
+              agent_id=a.id, s=s, rule="failure_rate")
 
 
 def active_playbook(a: Agent) -> tuple[str, bool]:
@@ -160,6 +194,10 @@ def _diagnose(s: Session, a: Agent) -> bool:
 
 def cycle() -> int:
     """Diagnose every active agent now (normally this happens after each task). Returns trials started."""
+    from agent_company.governance import emergency
+
+    if emergency():  # E5 stops the evolution cycle too
+        return 0
     started = 0
     with session() as s:
         for a in s.scalars(select(Agent).where(Agent.lifecycle == "active")):

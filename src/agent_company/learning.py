@@ -70,9 +70,19 @@ def learn(agent_id: int, goal_id: int, lesson: str, success: bool, skills: list[
         pass
 
 
-def link_team(agent_ids: list[int]) -> None:
-    ids = sorted(set(agent_ids))
+COLLAB_GAIN, COLLAB_LOSS = 0.1, 0.05
+
+
+def link_team(goal_id: int, outcomes: list[tuple[int, str]], passed: bool) -> None:
+    """Collaboration evidence from verified outcomes only (SPEC-12 S12-D-01, §18.1): a pair gains weight when
+    the iteration passed the gate, loses some (floor 0) when the gate failed and one of the pair's own tasks
+    failed, and is unchanged otherwise. Each goal counts once per outcome, however often the pair met in it."""
+    failed = {a for a, status in outcomes if status != "done"}
+    ids = sorted({a for a, _ in outcomes})
     with session() as s:
         for i, a in enumerate(ids):
             for b in ids[i + 1:]:
-                registry.connect(s, a, b, "collaborated", 0.1)
+                if passed:
+                    registry.connect(s, a, b, "collaborated", COLLAB_GAIN, evidence=f"goal:{goal_id}:passed")
+                elif a in failed or b in failed:
+                    registry.connect(s, a, b, "collaborated", -COLLAB_LOSS, evidence=f"goal:{goal_id}:failed")
