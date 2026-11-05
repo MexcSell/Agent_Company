@@ -240,6 +240,10 @@ def report() -> dict[str, Any]:
             runs_by[r.agent_id].append(r)
         agents = [_agent_metrics(s, a, tasks_by[a.id], runs_by[a.id], goal_passed)
                   for a in s.scalars(select(Agent).order_by(Agent.id)) if tasks_by[a.id] or runs_by[a.id]]
+        from agent_company.selfevolve import agent_score
+
+        for m in agents:  # the guide's §7 weighted Agent Score, weights by role
+            m["score"] = agent_score(m)
         rooms = []
         for room in s.scalars(select(Room).order_by(Room.id)):
             members = [m for m in agents if m["room"] == room.key]

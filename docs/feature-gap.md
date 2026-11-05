@@ -118,6 +118,22 @@ Machines code):
 | MCP tool servers for agents | 1.txt, CDAF guide §11 | done (`mcp.py`, Tools & MCP, G-R-05) |
 | A2A protocol for agent-to-agent messages | 1.txt | open → G-R-06 |
 
+## From docs/advanced_self_improving_agent_guide.pdf (verified self-evolution)
+
+| Feature | Guide | Status |
+| --- | --- | --- |
+| Improvement contracts for the platform's own code: one capability, allowed paths, research proposal, fixed benchmark and acceptance | §5, §18, §19 | done (`selfevolve.py`, Evolution → Code evolution, SE-R-04, SE-R-05) |
+| Protected control plane: security, evaluation, deployment, data and host tools are never a contract target; a candidate touching them is rejected | §6, §12 | done (SE-R-01) |
+| Failure layer diagnosis (model, prompt, code, orchestration, tools, data, environment) and weaknesses by layer and component | §3, §4 | done (SE-R-02, SE-R-03) |
+| Baseline vs candidate on the same fixed benchmark, run by the platform in detached worktrees; weighted score with guarded metrics | §7, §11 | done (SE-R-06, SE-R-09, SE-R-10) |
+| Several candidates per contract; the best verified one deploys | §14 | done (SE-R-12) |
+| Approval, deployment through the safe restart, automatic revert of a refused restart, benchmark of the deployed commit, one-click rollback | §12, §15, §16 | done (SE-R-13..R-15) |
+| Agent Score per agent with role weights | §7 | done (Performance view, SE-R-11) |
+| Fixed research-retrieval benchmark by query class | §9, §18 | done (`benchmarks/retrieval.py`, SE-R-17) |
+| Retrieval strategy learned per query class | §9 v4 | open → SE-R-21 |
+| Candidates in containers with network and resource limits | §12 | partial → SE-R-22 |
+| Fine-tuning, training models | §13 | skip (no training infrastructure) |
+
 ## Requested directly (Workspace home page, VS Code + Claude Code style)
 
 | Feature | Status |

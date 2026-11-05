@@ -180,6 +180,40 @@ class EvalRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class ImprovementContract(Base):
+    """Verified self-evolution of the platform's own code (selfevolve.py): one capability, a fixed benchmark taken
+    at creation, candidate goals measured against the baseline commit, approval, deployment, monitoring and
+    rollback."""
+
+    __tablename__ = "improvement_contracts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(256))
+    objective: Mapped[str] = mapped_column(Text, default="")
+    component: Mapped[str] = mapped_column(String(32))
+    layer: Mapped[str] = mapped_column(String(16), default="code")  # model|prompt|code|orchestration|tools|data|environment
+    kind: Mapped[str] = mapped_column(String(16), default="algorithmic")  # behavioral|algorithmic|architectural
+    # the research proposal (§5): limitation, solution, affected files, benefits, risks, tests, targets
+    proposal: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    repo_path: Mapped[str] = mapped_column(Text, default="")
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    base_branch: Mapped[str] = mapped_column(String(128), default="")
+    allowed_paths: Mapped[list[Any]] = mapped_column(default=list)
+    benchmark: Mapped[dict[str, Any]] = mapped_column(default=dict)  # manifest + the script's text and sha256
+    acceptance: Mapped[dict[str, Any]] = mapped_column(default=dict)  # min_score, max_regression (fixed at creation)
+    baseline_commit: Mapped[str] = mapped_column(String(64), default="")
+    baseline: Mapped[dict[str, Any]] = mapped_column(default=dict)  # metrics, classes, runs
+    candidates: Mapped[list[Any]] = mapped_column(default=list)  # goal_id, decision_id, commit, report, verdict
+    status: Mapped[str] = mapped_column(String(16), default="draft")
+    # draft|baseline|building|verifying|verified|rejected|failed|monitoring|stable|rolled_back|cancelled
+    deployment: Mapped[dict[str, Any]] = mapped_column(default=dict)  # goal_id, sha, at, actor, check
+    monitor: Mapped[dict[str, Any]] = mapped_column(default=dict)  # post-deploy benchmark, alerts
+    rollback_sha: Mapped[str] = mapped_column(String(64), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 class Relationship(Base):
     __tablename__ = "relationships"
     __table_args__ = (UniqueConstraint("a_id", "b_id", "kind"),)
@@ -264,7 +298,7 @@ class Goal(Base):
     result: Mapped[str] = mapped_column(Text, default="")
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     project_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-    origin: Mapped[str] = mapped_column(String(16), default="user")  # user|proposal|eval
+    origin: Mapped[str] = mapped_column(String(16), default="user")  # user|proposal|eval|improvement
     parent_goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     attachments: Mapped[list[Any]] = mapped_column(default=list)
     allowed_paths: Mapped[list[Any]] = mapped_column(default=list)  # globs; empty = anywhere

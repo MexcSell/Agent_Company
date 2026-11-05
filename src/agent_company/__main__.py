@@ -21,7 +21,7 @@ import sys
 from dotenv import load_dotenv
 
 COMMANDS = {"serve", "goal", "crawl", "models", "agents", "approve", "crew", "rotate", "eval", "supervise", "host", "gm",
-            "stop"}
+            "stop", "improve"}
 
 
 def _host(args: argparse.Namespace) -> None:
@@ -121,6 +121,17 @@ def main(argv: list[str] | None = None) -> None:
     ev.add_argument("--compare", nargs=2, metavar=("A", "B"))
     a = sub.add_parser("approve")
     a.add_argument("goal_id", type=int)
+    im = sub.add_parser("improve", help="verified self-evolution: improvement contracts for the platform's code")
+    im.add_argument("action", choices=["list", "weaknesses", "benchmark", "create", "start", "deploy", "rollback",
+                                       "cancel", "advance"])
+    im.add_argument("id", nargs="?", help="contract id (start, deploy, rollback, cancel); benchmark name (benchmark)")
+    im.add_argument("--title", default="")
+    im.add_argument("--objective", default="")
+    im.add_argument("--component", default="memory")
+    im.add_argument("--benchmark", default="retrieval")
+    im.add_argument("--layer", default="code")
+    im.add_argument("--kind", default="algorithmic")
+    im.add_argument("--reason", default="")
     h = sub.add_parser("host", help="Docker and LXD virtual machines on this host")
     h.add_argument("action", choices=["status", "install-docker", "docker-start", "docker-stop", "docker-restart",
                                       "cleanup", "install-lxd", "launch", "start", "stop", "restart", "delete"])
@@ -239,6 +250,53 @@ def main(argv: list[str] | None = None) -> None:
         from agent_company import loop
 
         print(json.dumps(loop.approve(args.goal_id), indent=2))
+    elif args.cmd == "improve":
+        _improve(args)
+
+
+def _improve(args: argparse.Namespace) -> None:
+    from agent_company import selfevolve
+    from agent_company.config import REPO_ROOT
+
+    act, cid = args.action, args.id
+    if act in ("start", "deploy", "rollback", "cancel") and not (cid or "").isdigit():
+        raise SystemExit(f"improve {act} needs a contract id")
+    try:
+        if act == "list":
+            for c in selfevolve.contracts():
+                best = max((x["report"]["score_pct"] for x in c["candidates"] if x.get("report")), default=None)
+                print(f"#{c['id']:<3} {c['status']:<11} {c['component']:<12} {c['title']}"
+                      + (f"  (best score {best:+.2f}%)" if best is not None else ""))
+        elif act == "weaknesses":
+            for w in selfevolve.weaknesses():
+                print(f"{w['count']:>3}x {w['layer']:<13} {w['component'] or '-':<12} {'; '.join(w['reasons'])}\n"
+                      f"      -> {w['action']}")
+        elif act == "benchmark":  # the fixed benchmark on the current checkout, once
+            bench = selfevolve.load_benchmark(REPO_ROOT, cid or "retrieval")
+            work = selfevolve.settings().data_dir / "improvement" / "adhoc"
+            work.mkdir(parents=True, exist_ok=True)
+            out = selfevolve.run_benchmark(REPO_ROOT, bench, work)
+            print(json.dumps({"metrics": out["metrics"], "classes": out.get("classes", {})}, indent=2))
+        elif act == "create":
+            print(json.dumps(selfevolve.create(args.title, args.objective, args.component, args.benchmark,
+                                               args.layer, args.kind), indent=2))
+        elif act == "start":  # in the foreground, as `goal` does: baseline, candidate goal, verification
+            from agent_company import loop
+
+            selfevolve._spawn = lambda fn: fn()
+            loop.enqueue = loop.run_goal
+            selfevolve.start(int(cid))
+            print(json.dumps(selfevolve.get(int(cid)), indent=2))
+        elif act == "deploy":
+            print(json.dumps(selfevolve.deploy(int(cid), "cli"), indent=2))
+        elif act == "rollback":
+            print(json.dumps(selfevolve.rollback(int(cid), "cli", args.reason), indent=2))
+        elif act == "cancel":
+            print(json.dumps(selfevolve.cancel(int(cid), "cli"), indent=2))
+        elif act == "advance":
+            print(f"{selfevolve.advance()} step(s) started")
+    except (KeyError, ValueError, RuntimeError) as e:
+        raise SystemExit(str(e).strip("'")) from e
 
 
 if __name__ == "__main__":

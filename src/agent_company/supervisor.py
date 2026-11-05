@@ -140,7 +140,7 @@ class Supervisor:
         self.save()
         problem = self.check_candidate()
         if problem:
-            self.state.update(last_error=f"{reason}: {problem}", pending=None)
+            self.state.update(last_error=f"{reason}: {problem}", last_error_at=time.time(), pending=None)
             self.save()
             print(f"[supervisor] not restarting: {problem}", flush=True)
             return
@@ -155,6 +155,8 @@ class Supervisor:
         ok = healthy(self.port, 60)
         self.state.update(restarts=self.state["restarts"] + 1, last_restart=time.time(), pending=None,
                           last_error=None if ok else f"{reason}: the new server did not become healthy")
+        if not ok:  # selfevolve reverts a deployment that came up unhealthy
+            self.state["last_error_at"] = time.time()
         self.save()
         print(f"[supervisor] restarted ({reason}){'' if ok else ' but it is not healthy'}", flush=True)
 

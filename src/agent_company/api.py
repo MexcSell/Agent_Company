@@ -40,6 +40,7 @@ from agent_company import (
     registry,
     research,
     router,
+    selfevolve,
     terminal,
     transport,
     usage,
@@ -198,6 +199,21 @@ class NoticeBody(BaseModel):
 def _audit(user: dict[str, Any], action: str, target: Any = "", before: dict[str, Any] | None = None,
            after: dict[str, Any] | None = None, severity: str = "info") -> None:
     governance.audit(f"user:{user['name']}", action, str(target), before, after, severity)
+
+
+class ContractBody(BaseModel):
+    title: str
+    objective: str
+    component: str
+    benchmark: str
+    layer: str = "code"
+    kind: str = "algorithmic"
+    proposal: dict[str, str] = {}
+    allowed_paths: list[str] = []
+
+
+class ReasonBody(BaseModel):
+    reason: str = ""
 
 
 class CleanupBody(BaseModel):
@@ -471,12 +487,16 @@ def create_app(start_background: bool = True) -> FastAPI:
                 app.state.rotation.start()
             app.state.study = agentdefs.StudyThread()
             app.state.study.start()
+            app.state.selfevolve = selfevolve.Monitor()
+            app.state.selfevolve.start()
             threading.Thread(target=lambda: agentdefs.sync_all("registered"), daemon=True).start()
         yield
         if app.state.rotation:
             app.state.rotation.stop.set()
         if getattr(app.state, "study", None):
             app.state.study.stop.set()
+        if getattr(app.state, "selfevolve", None):
+            app.state.selfevolve.stop.set()
         terminal.close_all()
         workspace.stop_all()
 
@@ -1236,6 +1256,58 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.post("/api/evolution/cycle")
     def evolution_cycle(admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
         return {"experiments_started": evolution.cycle()}
+
+    # --- verified self-evolution of the platform's code (selfevolve.py) ---
+    def _contract_call(fn: Any, *args: Any) -> dict[str, Any]:
+        try:
+            return fn(*args)
+        except KeyError as e:
+            raise HTTPException(404, str(e).strip("'")) from e
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+
+    @app.get("/api/improvement")
+    def improvement_overview(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return selfevolve.overview()
+
+    @app.get("/api/improvement/contracts/{cid}")
+    def improvement_contract(cid: int, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return _contract_call(selfevolve.get, cid)
+
+    @app.post("/api/improvement/contracts")
+    def improvement_create(body: ContractBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _contract_call(lambda: selfevolve.create(
+            body.title, body.objective, body.component, body.benchmark, body.layer, body.kind, body.proposal,
+            body.allowed_paths or None, created_by=admin["id"]))
+        _audit(admin, "improvement_create", out["id"], after={"title": out["title"], "component": out["component"],
+                                                               "benchmark": out["benchmark"].get("name"),
+                                                               "allowed_paths": out["allowed_paths"]})
+        return out
+
+    @app.post("/api/improvement/contracts/{cid}/start")
+    def improvement_start(cid: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _contract_call(selfevolve.start, cid)
+        _audit(admin, "improvement_start", cid, after={"status": out["status"]})
+        return out
+
+    @app.post("/api/improvement/contracts/{cid}/deploy")
+    def improvement_deploy(cid: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _contract_call(selfevolve.deploy, cid, admin["name"])
+        _audit(admin, "improvement_deploy", cid, after={"merge_commit": out["merge_commit"]}, severity="high")
+        return out
+
+    @app.post("/api/improvement/contracts/{cid}/rollback")
+    def improvement_rollback(cid: int, body: ReasonBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _contract_call(selfevolve.rollback, cid, admin["name"], body.reason)
+        _audit(admin, "improvement_rollback", cid, after={"revert": out["rollback_sha"], "reason": body.reason},
+               severity="high")
+        return out
+
+    @app.post("/api/improvement/contracts/{cid}/cancel")
+    def improvement_cancel(cid: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _contract_call(selfevolve.cancel, cid, admin["name"])
+        _audit(admin, "improvement_cancel", cid)
+        return out
 
     # --- goals ---
     @app.get("/api/goals")

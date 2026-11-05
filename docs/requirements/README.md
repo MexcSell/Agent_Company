@@ -24,6 +24,7 @@ detail an implementer works from.
 | [SPEC-14-security.md](SPEC-14-security.md) | SPEC14.docx, ASEAO_SPEC-14_Enterprise_Security_Governance.pdf |
 | [SPEC-15-dashboard.md](SPEC-15-dashboard.md) | master specification (.rtf) only |
 | [guides-and-other-sources.md](guides-and-other-sources.md) | 1.txt, guides, AgentForge website spec, AWS frameworks guide, 2.pdf |
+| [SELF-EVOLUTION.md](SELF-EVOLUTION.md) | `docs/advanced_self_improving_agent_guide.pdf`: verified self-evolution of the platform's own code; IDs `SE-R-nn` |
 | [WORKSPACE.md](WORKSPACE.md) | the code of 2026-11-05 (no document): the Workspace and File Manager, specified so they can be set up again on another computer; IDs `WS-R-nn` |
 | [images/SOURCES.md](images/SOURCES.md) | which images were kept, which were not, and their sources |
 

@@ -1,0 +1,10 @@
+{
+  "name": "retrieval",
+  "component": "memory",
+  "description": "Research retrieval accuracy, redundancy and latency of learning.retrieve on a fixed corpus (guide §9, §18)",
+  "script": "retrieval.py",
+  "repeats": 3,
+  "weights": {"hit_at_3": 3, "mrr": 2, "precision_at_5": 1, "duplicate_rate": -1, "latency_ms": -0.5},
+  "guard": ["hit_at_3", "mrr"],
+  "floors": {"duplicate_rate": 0.05, "latency_ms": 5}
+}

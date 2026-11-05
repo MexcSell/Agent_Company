@@ -38,6 +38,9 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "candidate_smoke": (bool, "A candidate playbook must pass the smoke suite before it is tried on users' goals"),
     "approval_blocker_hours": (int, "Hours a goal may wait for approval before it becomes a project blocker (0 = never)"),
     "inactive_days": (int, "Days without work after which an agent is listed for retirement review"),
+    "improvement_min_score": (float, "Percent a code-improvement candidate's weighted benchmark score must beat the baseline by"),
+    "improvement_max_regression": (int, "Percent any single benchmark metric of a candidate may get worse before it is rejected"),
+    "improvement_auto_rollback": (bool, "Revert a deployed code improvement automatically when the safe restart refuses it"),
 }
 LIMITS: dict[str, tuple[float, float]] = {
     "max_iterations": (1, 10), "max_parallel": (1, 16), "command_timeout": (10, 7200),
@@ -46,6 +49,7 @@ LIMITS: dict[str, tuple[float, float]] = {
     "retry_max_attempts": (1, 10), "retry_base_seconds": (0, 600), "retry_max_seconds": (0, 3600),
     "min_improvement": (0, 100), "max_goal_depth": (1, 10), "escalate_after": (1, 10),
     "approval_blocker_hours": (0, 720), "inactive_days": (1, 3650),
+    "improvement_min_score": (0, 100), "improvement_max_regression": (0, 100),
 }
 CHOICES: dict[str, set[str]] = {"proposal_policy": {"user", "superiors"}, "executor": {"auto", "offline"},
                                 "transport": {"https", "http"}, "budget_exhausted_action": {"pause", "stop"}}

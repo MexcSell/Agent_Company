@@ -1347,6 +1347,10 @@ def _notify_goal(goal_id: int, status: str) -> None:
     g = _goal(goal_id)
     if g.origin == "eval":
         return
+    if g.origin == "improvement":  # the platform verifies the candidate with its fixed benchmark (selfevolve)
+        from agent_company import selfevolve
+
+        selfevolve.on_goal_finished(goal_id)
     text = {"awaiting_approval": ("success", f"Goal #{g.id} passed the gate and waits for approval"),
             "approved": ("success", f"Goal #{g.id} passed the gate and was merged"),
             "failed": ("error", f"Goal #{g.id} failed after {g.iteration} iteration(s)")}[status]
@@ -1426,12 +1430,18 @@ def approve(goal_id: int, actor: str = "system") -> dict[str, Any]:
     critical = [d for d in list_defects("open", goal_id) if d["severity"] == "critical"]
     if critical:  # S09-R-01: an open critical defect blocks the merge
         raise ValueError("open critical defect(s): " + ", ".join(d["check"] for d in critical))
+    from agent_company import selfevolve
+
+    unverified = selfevolve.merge_block(goal_id)
+    if unverified:  # verified self-evolution: only a candidate the benchmark accepted merges
+        raise ValueError(unverified)
     try:
         sha = _merge(goal_id)
     except worktrees.WorktreeError as e:  # the goal stays awaiting approval; the repository is unchanged
         log_event("goal", f"merge refused: {e}", goal_id=goal_id)
         raise ValueError(str(e)) from e
     _update_goal(goal_id, status="approved", reason=f"merged {sha[:10]}", actor=actor)
+    selfevolve.on_merged(goal_id, sha, actor)
     from agent_company.projects import post_for_goal
 
     post_for_goal(goal_id, f"Goal #{goal_id} approved and merged ({sha[:10]}).", kind="result")

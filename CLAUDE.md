@@ -19,7 +19,9 @@ feature came from.
   `decisions.py` (decision records; human ones block the merge); `projects.py` (projects, command window
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals, uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress;
   blockers and generated items are reconciled from goal state by `sync`); `learning.py` (knowledge items: provenance, screening, scoped ranked retrieval)
-  + `evolution.py`; `performance.py` (defects, certification,
+  + `evolution.py`; `selfevolve.py` (verified self-evolution of the platform's own code: improvement contracts, protected
+  control plane, failure layers, a fixed benchmark from `benchmarks/` run on the base and candidate commits, approval,
+  deploy via the safe restart, monitoring, rollback; docs/requirements/SELF-EVOLUTION.md); `performance.py` (defects, certification,
   metrics); `evaluation.py` (eval harness); `research.py` (crawl, knowledge, sources with monitoring rules: versions on change, intelligence events); `governance.py` (audit, notifications,
   command policy, emergency stops E0-E5, incidents, behaviour-rule alerts); `prefs.py` (DB settings); `gitsync.py` (push with each user's own GitHub token or SSH key, `data/git-keys/`); `files.py`; `supervisor.py` + `system.py`;
   `containers.py` (Docker and LXD VMs on the host: install, start, clean up; admin-only);
@@ -39,6 +41,8 @@ feature came from.
   `workspace.js` + `viewer.js` + `console.js` + `claude.js` are the Workspace home page, sharing
   `window.WSP`; `vendor/` holds xterm.js, pdf.js, mammoth and noVNC); `crew.py` (classic crew); `__main__.py` (CLI)
 - `evals/` – benchmark suites (JSON)
+- `benchmarks/` – fixed code benchmarks for improvement contracts (`<name>.json` manifest with metric weights and
+  guards + `<name>.py` printing JSON metrics for the `agent_company` first on PYTHONPATH); protected
 - `tests/` – pytest; every test gets its own temp DATA_DIR and runs offline
 - `data/` – SQLite DB, workspaces, worktrees, uploads (git-ignored)
 - `docs/feature-gap.md` – features taken from AgentForge, /home/thomas/bit and /home/luca/update
@@ -83,6 +87,7 @@ feature came from.
   nginx site, MANAGE_NGINX=1). The first (admin) account can only be registered from localhost.
   `systemctl restart|status agent-company`, log in `data/logs/agent-company.log`
 - `uv run python -m agent_company goal "<goal>" --check "<cmd>" [--allow 'src/*'] [--protect-tests] [--permit dependencies|config|skip_tests]`
+- `uv run python -m agent_company improve list|weaknesses|benchmark [name]|create|start|deploy|rollback|cancel <id>` – verified self-evolution
 - `uv run python -m agent_company eval --suite smoke --label <name> [--repeats 3]` / `eval --compare a b`
 - `uv run python -m agent_company stop [--level E0..E5 --scope X] [--lift|--status]` – emergency stop; writes the DB
   directly, works while the server is stuck

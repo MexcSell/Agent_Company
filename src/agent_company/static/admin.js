@@ -137,6 +137,95 @@ async function viewEvolution() {
   api("/api/events").then((evs) => { const box = $("#ev-learning"); if (box) box.innerHTML = evs.filter((x) => x.kind === "learning").slice(-12).reverse().map((x) => `<div><span class="k">learning</span>${esc(x.message)} <span class="muted">${ago(x.at)}</span></div>`).join("") || '<span class="muted">No study visit yet.</span>'; }).catch(() => {});
   $("#ev-cycle") && ($("#ev-cycle").onclick = async () => { const r = await api("/api/evolution/cycle", { method: "POST" }); toast(`${r.experiments_started} trial(s) started`); viewEvolution(); });
   $("#ev-cons") && ($("#ev-cons").onclick = async () => { const r = await api("/api/agents/consolidate", { method: "POST", body: { role: $("#ev-role").value } }); toast(`${r.length} clone(s) merged`); viewEvolution(); });
+  if (me.is_admin) codeEvolution();
+}
+
+// Verified self-evolution of the platform's own code (selfevolve.py): contracts, old-vs-new benchmark, deploy, rollback.
+async function codeEvolution() {
+  const view = $("#view");
+  let box = $("#ce");
+  if (!box) { view.insertAdjacentHTML("afterbegin", '<div id="ce" class="grid" style="margin-bottom:12px"></div>'); box = $("#ce"); }
+  let o;
+  try { o = await api("/api/improvement"); } catch (e) { box.innerHTML = `<div class="card"><h2>Code evolution</h2><span class="muted">${esc(e.message)}</span></div>`; return; }
+  const n = (v) => (typeof v === "number" ? (Math.abs(v) >= 100 ? v.toFixed(0) : +v.toFixed(4)) : esc(v ?? "–"));
+  const verdict = (v) => pill({ accepted: "done", deployed: "approved", building: "running", verifying: "running", rejected: "rejected", failed: "failed" }[v] || "pending").replace(/>[^<]+</, `>${esc(v)}<`);
+  const report = (r) => !r ? "" : `<div class="table-wrap"><table><tr><th>Metric</th><th class="num">Baseline</th><th class="num">Candidate</th><th class="num">Change</th><th class="num">Weight</th></tr>
+    ${r.metrics.map((m) => `<tr><td>${esc(m.metric)}${m.guard ? ' <span class="muted" title="guarded: must not get worse">🛡</span>' : ""}</td><td class="num">${n(m.baseline)}</td><td class="num">${n(m.candidate)}</td><td class="num" style="color:var(--${m.status === "better" ? "ok" : m.status === "worse" ? "bad" : "muted"})">${m.change_pct > 0 ? "+" : ""}${m.change_pct}%</td><td class="num">${m.weight}</td></tr>`).join("")}</table></div>
+    <p><strong>Weighted score ${r.score_pct > 0 ? "+" : ""}${r.score_pct}%</strong> <span class="muted">(needs ${r.required_pct}% · ${r.runs} run(s) per side · ${r.changed_files.length} file(s): ${esc(r.changed_files.slice(0, 6).join(", "))})</span></p>
+    ${r.problems.length ? `<ul>${r.problems.map((p) => `<li class="muted">${esc(p)}</li>`).join("")}</ul>` : ""}`;
+  const contract = (c) => {
+    const busy = ["baseline", "building", "verifying"].includes(c.status);
+    const last = [...c.candidates].reverse().find((x) => x.report);
+    const actions = [
+      ["draft", "verified", "rejected", "failed"].includes(c.status) ? `<button class="btn sm${c.status === "draft" ? " primary" : ""}" data-ce="start" data-id="${c.id}">${c.candidates.length ? "Build another candidate" : "Measure baseline and build"}</button>` : "",
+      c.status === "verified" ? `<button class="btn sm primary" data-ce="deploy" data-id="${c.id}">Approve and deploy</button>` : "",
+      ["monitoring", "stable"].includes(c.status) ? `<button class="btn sm danger" data-ce="rollback" data-id="${c.id}">Roll back</button>` : "",
+      !["monitoring", "stable", "rolled_back", "cancelled"].includes(c.status) ? `<button class="btn sm ghost" data-ce="cancel" data-id="${c.id}">Cancel</button>` : "",
+    ].join("");
+    return `<details ${busy || ["verified", "monitoring"].includes(c.status) ? "open" : ""}><summary class="row"><strong class="grow">#${c.id} ${esc(c.title)}</strong><span class="muted">${esc(c.component_label)} · ${esc(c.layer)} · ${esc(c.kind)}</span>${pill({ verified: "done", stable: "approved", monitoring: "running", rolled_back: "rejected", draft: "pending" }[c.status] || c.status).replace(/>[^<]+</, `>${esc(c.status.replace("_", " "))}<`)}</summary>
+      <div style="padding:6px 0 10px 12px"><p>${esc(c.objective)}</p>
+      <p class="muted">Benchmark <code>${esc(c.benchmark.name)}</code> (sha ${esc((c.benchmark.sha256 || "").slice(0, 10))}, ${c.benchmark.repeats} run(s)) · allowed: <code>${esc(c.allowed_paths.join(" "))}</code>${c.high_risk ? ' · <span class="pill failed">high risk</span>' : ""}</p>
+      ${Object.keys(c.baseline.metrics || {}).length ? `<p class="muted">Baseline at ${esc(c.baseline_commit.slice(0, 10))}: ${Object.entries(c.baseline.metrics).map(([k, v]) => `${esc(k)} ${n(v)}`).join(" · ")}</p>` : ""}
+      ${c.candidates.map((x) => `<div class="row">${verdict(x.verdict)}<span>candidate ${x.n}</span><a href="#" data-goal="${x.goal_id}">goal #${x.goal_id}</a>${x.report ? `<span class="muted">score ${x.report.score_pct > 0 ? "+" : ""}${x.report.score_pct}%</span>` : ""}${x.reason ? `<span class="muted ellipsis">${esc(x.reason.split("\n")[0])}</span>` : ""}</div>`).join("")}
+      ${last ? `<h3 style="margin:8px 0 4px">Old vs new (candidate ${last.n})</h3>${report(last.report)}` : ""}
+      ${c.deployment.sha ? `<p>Deployed <code>${esc(c.deployment.sha.slice(0, 10))}</code> by ${esc(c.deployment.actor)} · ${esc(c.deployment.check || "")}</p>` : ""}
+      ${(c.monitor.problems || []).length ? `<p style="color:var(--bad)">After deployment: ${c.monitor.problems.map(esc).join("; ")}</p>` : c.monitor.metrics ? `<p class="muted">After deployment: ${Object.entries(c.monitor.metrics).map(([k, v]) => `${esc(k)} ${n(v)}`).join(" · ")}</p>` : ""}
+      ${c.rollback_sha ? `<p class="muted">Reverted by <code>${esc(c.rollback_sha.slice(0, 10))}</code></p>` : ""}${c.note ? `<p class="muted">${esc(c.note)}</p>` : ""}
+      <div class="row">${actions}</div></div></details>`;
+  };
+  const weak = o.weaknesses.map((w, i) => `<div class="row">${pill(w.layer === "code" ? "failed" : "pending").replace(/>[^<]+</, `>${esc(w.layer)}<`)}<span class="grow"><strong>${w.count}×</strong> ${esc(w.component || "no component")} <span class="muted">${esc(w.reasons.join("; "))} — ${esc(w.action)}</span><div class="muted ellipsis">${w.examples.map((x) => `${esc(x.source)}: ${esc(x.text)}`).join(" · ")}</div></span>${w.contract_possible ? `<button class="btn sm" data-weak="${i}">Write contract</button>` : ""}</div>`).join("") || '<span class="muted">No failures in the last 30 days.</span>';
+  box.innerHTML = `<div class="card"><div class="row nowrap"><h2 class="grow" style="margin:0">Code evolution</h2><button class="btn primary" id="ce-new">New improvement contract</button></div>
+      <p class="muted">Verified self-evolution of this platform's own source code. A contract names one capability, the files that may change and a fixed benchmark. The baseline is measured, a candidate goal changes the code in a worktree (tests protected), then the platform itself — not the coding agent — runs the same benchmark on the old and new commit. A candidate is accepted only with a weighted score at least ${o.acceptance.min_score}% better, no guarded metric worse and no metric more than ${o.acceptance.max_regression}% worse. Deploying needs your approval; the safe restart swaps the code in${o.acceptance.auto_rollback ? " and a refused restart is reverted automatically" : ""}; the benchmark is re-run on the deployed commit.</p>
+      ${o.contracts.map(contract).join("") || '<span class="muted">No contracts yet. Start with one capability, such as research retrieval (benchmark <code>retrieval</code>).</span>'}</div>
+    <div class="grid two"><div class="card"><h2>Weaknesses by layer</h2><p class="muted">Recent failures, defects and errors sorted into the layer that caused them. Model and environment problems are not fixed by changing code.</p><div class="events">${weak}</div></div>
+    <div class="card"><h2>Control plane</h2><p class="muted">Protected components are never named in a contract; a candidate touching them is rejected.</p>${o.components.map((c) => `<div class="row">${pill(c.protected ? "disabled" : c.high_risk ? "pending" : "active").replace(/>[^<]+</, `>${c.protected ? "protected" : c.high_risk ? "high risk" : "evolvable"}<`)}<span class="grow">${esc(c.label)} <span class="muted">${esc(c.improves || c.paths.map((p) => p.replace("src/agent_company/", "")).join(", "))}</span></span></div>`).join("")}</div></div>`;
+  const act = async (b) => {
+    const id = b.dataset.id, what = b.dataset.ce;
+    let body;
+    if (what === "deploy" && !confirm("Merge the best verified candidate into the platform and restart safely?")) return;
+    if (what === "cancel" && !confirm("Cancel this contract and its running candidate?")) return;
+    if (what === "rollback") { const reason = prompt("Why roll back? (the merge is reverted with a new commit)"); if (reason === null) return; body = { reason }; }
+    b.classList.add("busy");
+    try { await api(`/api/improvement/contracts/${id}/${what}`, { method: "POST", body }); toast({ start: "Started", deploy: "Deployed", rollback: "Rolled back", cancel: "Cancelled" }[what]); } catch (e) { toast(e.message); }
+    codeEvolution();
+  };
+  box.querySelectorAll("[data-ce]").forEach((b) => (b.onclick = () => act(b)));
+  box.querySelectorAll("[data-goal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); goalModal(Number(a.dataset.goal)); }));
+  $("#ce-new").onclick = () => contractForm(o);
+  box.querySelectorAll("[data-weak]").forEach((b) => (b.onclick = () => { const w = o.weaknesses[Number(b.dataset.weak)]; contractForm(o, { component: w.component, layer: w.layer, limitation: `${w.count} recent failure(s): ${w.reasons.join("; ")}. ${w.examples.map((x) => `${x.source}: ${x.text}`).join(" | ")}` }); }));
+  if (o.contracts.some((c) => ["baseline", "building", "verifying"].includes(c.status))) setTimeout(() => $("#ce") === box && codeEvolution(), 10000);
+}
+
+function contractForm(o, pre = {}) {
+  const opts = (xs, sel) => xs.map(([v, l]) => `<option value="${esc(v)}" ${v === sel ? "selected" : ""}>${esc(l)}</option>`).join("");
+  const field = (id, label, ph = "") => `<label>${label}<textarea id="cf-${id}" rows="2" placeholder="${esc(ph)}">${esc(pre[id] || "")}</textarea></label>`;
+  const comps = o.components.filter((c) => !c.protected);
+  modal(`<h2>New improvement contract</h2><form id="cf" class="grid">
+    <label>Title<input id="cf-title" required placeholder="Improve research retrieval accuracy and reduce redundant searches"></label>
+    <label>Objective (one capability)<textarea id="cf-objective" rows="2" required placeholder="Raise hit@3 and precision on concept and complex queries without returning duplicates"></textarea></label>
+    <div class="row"><label class="grow">Component<select id="cf-component">${opts(comps.map((c) => [c.name, `${c.label}${c.high_risk ? " (high risk)" : ""}`]), pre.component || "memory")}</select></label>
+      <label>Layer<select id="cf-layer">${opts(o.layers.filter((l) => !["model", "environment"].includes(l)).map((l) => [l, l]), pre.layer || "code")}</select></label>
+      <label>Kind<select id="cf-kind">${opts(o.kinds.map((k) => [k, k]), "algorithmic")}</select></label>
+      <label>Benchmark<select id="cf-benchmark">${opts(o.benchmarks.map((b) => [b.name, b.name]), "retrieval")}</select></label></div>
+    <p class="muted" id="cf-bench"></p>
+    <h3 style="margin:4px 0">Research proposal</h3>
+    ${field("limitation", "Limitation", "Exact keyword overlap; no synonyms, no duplicate removal, zero-score items fill the results")}
+    ${field("solution", "Proposed solution", "Normalise and stem terms, drop near-duplicates, skip items with no relevance, rank by BM25")}
+    ${field("affected_files", "Affected files", "src/agent_company/learning.py, tests/test_retrieval_bm25.py")}
+    ${field("benefits", "Expected benefits")}${field("risks", "Risks")}${field("tests", "Tests to add")}${field("targets", "Performance targets", "hit@3 ≥ 0.95, duplicate rate 0, latency within 25%")}
+    <label>Allowed paths (optional, space-separated; default: the component's files and new tests)<input id="cf-paths"></label>
+    <div class="row"><span class="grow muted">The benchmark and the acceptance criteria are fixed when the contract is written.</span><button class="btn primary">Write contract</button></div></form>`);
+  const showBench = () => { const b = o.benchmarks.find((x) => x.name === $("#cf-benchmark").value); $("#cf-bench").textContent = b ? `${b.description} · weights ${Object.entries(b.weights).map(([k, w]) => `${k} ${w}`).join(", ")} · guarded ${b.guard.join(", ") || "none"}` : "No benchmark in benchmarks/."; };
+  $("#cf-benchmark").onchange = showBench;
+  showBench();
+  $("#cf").onsubmit = async (e) => {
+    e.preventDefault();
+    const proposal = Object.fromEntries(["limitation", "solution", "affected_files", "benefits", "risks", "tests", "targets"].map((k) => [k, $(`#cf-${k}`).value.trim()]).filter(([, v]) => v));
+    try {
+      await api("/api/improvement/contracts", { method: "POST", body: { title: $("#cf-title").value.trim(), objective: $("#cf-objective").value.trim(), component: $("#cf-component").value, layer: $("#cf-layer").value, kind: $("#cf-kind").value, benchmark: $("#cf-benchmark").value, proposal, allowed_paths: $("#cf-paths").value.split(/\s+/).filter(Boolean) } });
+      $("#modal").hidden = true; toast("Contract written"); codeEvolution();
+    } catch (err) { toast(err.message); }
+  };
 }
 
 async function viewSystem() {
