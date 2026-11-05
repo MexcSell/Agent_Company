@@ -1924,6 +1924,7 @@ def create_app(start_background: bool = True) -> FastAPI:
             d = _goal_dict(g)
             d["tasks"] = [{"id": t.id, "iteration": t.iteration, "key": t.key, "title": t.title, "role": t.role,
                            "agent_id": t.agent_id, "status": t.status, "model": t.model_name,
+                           "stage": workflow.task_stage(t), "stage_log": t.stage_log or [],
                            "depends_on": t.depends_on, "output": t.output[-8000:], "gate": t.gate,
                            "contract": t.contract}
                           for t in s.scalars(select(Task).where(Task.goal_id == goal_id).order_by(Task.id))]

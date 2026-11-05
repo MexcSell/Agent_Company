@@ -36,12 +36,18 @@ def write_lock(worktree: str) -> threading.Lock:
         return _write_locks.setdefault(worktree, threading.Lock())
 
 
-def set_status(task_id: int, status: str, **fields: object) -> None:
+def set_status(task_id: int, status: str, stage: str = "", **fields: object) -> None:
+    """Set a task's execution status and the lifecycle stage that goes with it (`stage` overrides the mapping)."""
+    from agent_company.workflow import STATUS_STAGE, set_stage
+
     with session() as s:
         t = s.get(Task, task_id)
         if t is None:
             return
         t.status = status
+        output = str(fields.get("output") or "")
+        set_stage(t, stage or ("cancelled" if output == "skipped: goal cancelled" else STATUS_STAGE[status]),
+                  output.split("\n", 1)[0][:200] if status in ("failed", "skipped") else "")
         if status == "running":
             t.started_at = now()
         if status in {"done", "failed", "skipped"}:
@@ -56,6 +62,15 @@ def set_status(task_id: int, status: str, **fields: object) -> None:
         hooks.emit("TaskCreated", **info)
     elif status in {"done", "failed", "skipped"}:
         hooks.emit("TaskCompleted", **info)
+
+
+def set_task_stage(task_id: int, stage: str, reason: str = "") -> None:
+    from agent_company.workflow import set_stage
+
+    with session() as s:
+        t = s.get(Task, task_id)
+        if t is not None:
+            set_stage(t, stage, reason)
 
 
 def run_dag(task_ids: list[int], worker: Callable[[int], bool], worktree: str,

@@ -245,6 +245,7 @@ def limits(contract: TaskContract, changed: list[str], cost: float | None) -> li
 _FINDING_LINE = re.compile(r"(?im)^[\s*-]*FINDING:\s*(.+?)\s*$")
 _NEXT_LINE = re.compile(r"(?im)^[\s*-]*NEXT(?:[ _]ACTION)?:\s*(.+?)\s*$")
 _RECOMMENDATION_LINE = re.compile(r"(?im)^[\s*-]*RECOMMENDATION:\s*(.+?)\s*$")
+_BLOCKER_LINE = re.compile(r"(?im)^[\s*-]*BLOCKER:\s*(.+?)\s*$")
 
 
 def findings(output: str, limit: int = 20) -> list[str]:
@@ -255,6 +256,12 @@ def findings(output: str, limit: int = 20) -> list[str]:
 def next_actions(output: str, limit: int = 10) -> list[str]:
     """`NEXT:` (or `NEXT ACTION:`) lines of a task's output: follow-up work it names (G-R-01)."""
     return _NEXT_LINE.findall(output or "")[:limit]
+
+
+def blockers(output: str, limit: int = 3) -> list[str]:
+    """`BLOCKER:` lines of a task's output: what stops the work (ASEAO05 S05-R-08); open goals list them as
+    project blockers (management.sync)."""
+    return [b[:256] for b in _BLOCKER_LINE.findall(output or "")[:limit]]
 
 
 def recommendation(output: str) -> str:

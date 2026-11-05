@@ -23,7 +23,7 @@ feature came from.
   rollback, handovers, checkpoint commits per writing task + worktree reconcile on resume, retry policy,
   re-plan, conflict review, escalation, behaviour rules, idempotent merge/push, trace; goals of one project topic
   run in order, `lane_ahead`); `workflow.py` (goal
-  state machine, `goal_transitions`); `strategies.py` (S04-R-11 workflow templates per goal kind
+  state machine, `goal_transitions`; task lifecycle stages `Task.stage` beside the execution status, S05-R-08); `strategies.py` (S04-R-11 workflow templates per goal kind
   bugfix|feature|refactor|research|docs, versioned: roles, writes, checks, iteration limit, execution mode, review
   policy; the order or the planner picks, a plan must fit it) + `teams.py` (a goal's team: joined/added/released
   history, released agents not staffed for that goal); `blackboard.py` (versioned shared goal context, agent messages);

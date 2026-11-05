@@ -24,7 +24,7 @@ from sqlalchemy import select
 
 from agent_company import (blackboard, budgets, contracts, decisions, executors, learning, network, quality,
                            recruitment, registry, requirements, research, router, specs, strategies, teams, usage,
-                           worktrees)
+                           workflow, worktrees)
 from agent_company.config import settings
 from agent_company.db import Agent, Event, Goal, Task, log_event, session
 from agent_company.org import ROLES
@@ -743,7 +743,8 @@ PROPOSAL_HELP = ("If you notice valuable follow-up work outside this task, add a
                  "Report a discovery worth keeping (a better approach, a recurring problem) as a fenced ```json block "
                  '{"insights": [{"title": "...", "description": "...", "evidence": ["..."], '
                  '"expected_benefit": "...", "confidence": 0.6}]}.\n'
-                 "Name problems you found as FINDING: <what> lines and the next steps for this goal as NEXT: <step> lines.")
+                 "Name problems you found as FINDING: <what> lines and the next steps for this goal as NEXT: <step> lines. "
+                 "If something outside your control stops the work, name it as a BLOCKER: <what> line.")
 
 
 def _contract_note(contract: contracts.TaskContract) -> str:
@@ -841,16 +842,19 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             agent = registry.staff(role, contract.skills, goal.id, writes=contract.writes,
                                    critical=contract.risk_level == "high", task_id=task_id)
         except registry.QuotaExceeded as e:  # S02-R-03: the task waits; the goal pauses after the iteration
-            set_status(task_id, "skipped", output=f"{QUOTA_SKIP}{e}")
+            set_status(task_id, "skipped", stage="blocked", output=f"{QUOTA_SKIP}{e}")
             return False
         except recruitment.RecruitmentPending as e:  # SPEC-03 S03-R-05: the goal pauses until a person decides
-            set_status(task_id, "skipped", output=f"{RECRUIT_SKIP}{e}")
+            set_status(task_id, "skipped", stage="blocked", output=f"{RECRUIT_SKIP}{e}")
             return False
         except recruitment.RecruitmentRefused as e:  # the planner re-plans with the roles the company has
             set_status(task_id, "failed", output=f"ERROR: {e}")
             return False
         writes = contract.writes and "write" in (agent.permissions or []) and executors.level(agent.autonomy) >= 2
         teams.joined(goal.id, agent.id, role, task_id)  # S04-R-11: the goal's team history
+        from agent_company.scheduler import set_task_stage
+
+        set_task_stage(task_id, "assigned", agent.name)  # S05-R-08
 
         set_status(task_id, "running", agent_id=agent.id, role=role)
         try:
@@ -858,7 +862,7 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             try:
                 budget = _budget_note(goal, started)
             except BudgetExhausted as e:
-                set_status(task_id, "skipped", output=f"{BUDGET_SKIP}{e}")
+                set_status(task_id, "skipped", stage="blocked", output=f"{BUDGET_SKIP}{e}")
                 return False
             dep_text = "\n\n".join(f"### Output of '{k}'\n{v[-OUTPUT_CAP:]}" for k, v in deps.items())
             accept = "\n".join(f"- {json.dumps(c.model_dump(exclude_none=True))}" for c in contract.acceptance)
@@ -900,6 +904,7 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                               evidence=[{"type": "task", "id": task_id, "error": res.error[:500]}])
             from agent_company.governance import on_command_refused
 
+            set_task_stage(task_id, "review", "acceptance conditions and contract limits")
             # the planner wrote the acceptance commands: a refusal counts against it
             acceptance = contracts.check(contract, output, Path(goal.worktree), settings().command_timeout,
                                          on_refused=lambda cmd, why: on_command_refused(goal.id, planner_id, cmd, why))
@@ -908,6 +913,7 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             set_status(task_id, "done" if ok else "failed", output=output[-50_000:], model_name=choice.name,
                        gate={"acceptance": acceptance, "files": changed or res.files, "commit": commit,
                              "findings": contracts.findings(output), "next_actions": contracts.next_actions(output),
+                             "blockers": contracts.blockers(output),
                              "recommendation": contracts.recommendation(output) if contract.decision_topic else ""},
                        session_id=res.session_id)
             log_event("task", f"{agent.name} {'finished' if ok else 'failed'} '{contract.title}' "
@@ -1570,6 +1576,9 @@ def _requeue_unfinished(goal_id: int, iteration: int) -> list[int]:
         for t in tasks:
             if t.status in {"running", "skipped"}:
                 t.status, t.started_at = "queued", None
+                workflow.set_stage(t, "reopened", "resumed")
+            elif t.status == "queued" and t.stage == "blocked":
+                workflow.set_stage(t, "planned", "resumed")
         return [t.id for t in tasks]
 
 
@@ -1688,11 +1697,15 @@ def _discard_iteration(goal_id: int, iteration: int) -> None:
 
 def _persist(goal_id: int, iteration: int, plan: list[contracts.TaskContract]) -> list[int]:
     with session() as s:
+        failed = set(s.scalars(select(Task.key).where(Task.goal_id == goal_id, Task.iteration == iteration - 1,
+                                                      Task.status.in_(("failed", "skipped")))))
         rows = []
         for c in plan:
             t = Task(goal_id=goal_id, iteration=iteration, key=c.key, title=c.title, role=c.role,
                      contract=c.model_dump(mode="json"), depends_on=c.depends_on, priority=c.priority,
                      writes=c.writes)
+            workflow.set_stage(t, "reopened" if c.key in failed else "planned",
+                               f"iteration {iteration - 1} did not finish it" if c.key in failed else "")
             s.add(t)
             rows.append(t)
         s.flush()
@@ -1848,11 +1861,13 @@ def trace(goal_id: int) -> dict[str, Any]:
         names = dict(s.execute(select(Agent.id, Agent.name)).all())
         tasks = [{"id": t.id, "iteration": t.iteration, "key": t.key, "title": t.title, "role": t.role,
                   "agent": names.get(t.agent_id), "agent_id": t.agent_id, "model": t.model_name, "status": t.status,
+                  "stage": workflow.task_stage(t),
                   "started_at": t.started_at.isoformat() if t.started_at else None,
                   "finished_at": t.finished_at.isoformat() if t.finished_at else None,
                   "acceptance": (t.gate or {}).get("acceptance", []), "files": (t.gate or {}).get("files", []),
                   "commit": (t.gate or {}).get("commit", ""), "findings": (t.gate or {}).get("findings", []),
                   "next_actions": (t.gate or {}).get("next_actions", []),
+                  "blockers": (t.gate or {}).get("blockers", []),
                   "recommendation": (t.gate or {}).get("recommendation", "")}
                  for t in s.scalars(select(Task).where(Task.goal_id == goal_id).order_by(Task.id))]
         runs = [{"id": r.id, "task_id": r.task_id, "agent": names.get(r.agent_id), "agent_id": r.agent_id,

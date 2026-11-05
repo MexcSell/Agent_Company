@@ -660,6 +660,9 @@ class Task(Base):
     priority: Mapped[int] = mapped_column(Integer, default=5)  # lower runs first
     writes: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(16), default="queued")  # queued|running|done|failed|skipped
+    # the task's lifecycle beside its execution status (ASEAO05 S05-R-08, workflow.TASK_STAGES) and its changes
+    stage: Mapped[str] = mapped_column(String(16), default="created")
+    stage_log: Mapped[list[Any]] = mapped_column(default=list)
     output: Mapped[str] = mapped_column(Text, default="")
     gate: Mapped[dict[str, Any]] = mapped_column(default=dict)
     model_name: Mapped[str] = mapped_column(String(128), default="")

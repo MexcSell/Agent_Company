@@ -25,7 +25,7 @@ Mapping: project → `Project`; project manager agent → `Project.manager_id` (
 ## Specific requirements
 
 Status (2026-11-05): S05-R-01 done · S05-R-02 done · S05-R-03 done · S05-R-04 done · S05-R-05 done ·
-S05-R-06 done · S05-R-07 done · S05-R-08 open · S05-R-09 done · S05-R-10 done (SPEC-04).
+S05-R-06 done · S05-R-07 done · S05-R-08 done (adapted) · S05-R-09 done · S05-R-10 done (SPEC-04).
 
 ### S05-R-01 Milestones — §7 (AT-012)
 - Table `milestones`: `project_id`, name, description, target date, deliverables, required goal
@@ -137,6 +137,21 @@ S05-R-06 done · S05-R-07 done · S05-R-08 open · S05-R-09 done · S05-R-10 don
   `blocked|failed|cancelled|reopened|skipped`, mapping existing values
   (`queued`→`assigned`, `running`→`in_progress`, `done`→`completed`).
 - Tasks record blockers, insights and next actions from the agent's output.
+- **Status: done, adapted** (`workflow.TASK_STAGES`, `set_stage`, `task_stage`; `Task.stage`, `Task.stage_log`;
+  `tests/test_task_stages.py`). The stored `Task.status` values are not renamed: the scheduler, the quality gate
+  and about twenty modules execute on queued|running|done|failed|skipped. The chain is a second field, `Task.stage`,
+  with every change in `stage_log`: planned (or reopened when the previous iteration's task with the same key
+  failed or was skipped, or a resume put a started task back) → assigned (staffed) → in_progress → review
+  (acceptance conditions and contract limits) → approved (they passed) | failed → completed when the goal is
+  approved. A quota, budget or recruitment skip is `blocked`, a dependency skip `skipped`, a cancelled goal's
+  waiting tasks `cancelled`; a goal that pauses or fails blocks its waiting tasks, a resume plans them again;
+  a cancelled or rejected goal cancels every task not yet closed. Only the latest iteration follows the goal;
+  earlier iterations keep their last stage. `created` is only the default before a task is planned; rows from
+  before this change read as the stage of their status (queued → planned, running → in_progress, done →
+  approved). Agents name blockers as `BLOCKER:` lines (`contracts.blockers`, at most three per task, in the
+  task's `gate` beside `findings` and `next_actions`); while the goal is open they are project blockers
+  (`management.sync`, cause `task:<id>:blocker:<n>`), resolved when it ends or re-plans. Insights keep their
+  `task_id` (S05-R-03). The goal view shows the stage (its log on hover) and the blockers; the trace has both.
 
 ### S05-R-09 PM replacement and shared-agent conflicts — §4.3, §13 (AT-024, AT-025)
 - Replacing `Project.manager_id` writes a handover (SPEC-12) with open goals, blockers, action items.

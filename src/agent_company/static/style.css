@@ -81,6 +81,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .pill.ok, .pill.done, .pill.approved, .pill.active, .pill.idle { color: var(--ok); }
 .pill.running, .pill.busy, .pill.awaiting_approval, .pill.pending, .pill.queued, .pill.planning, .pill.recovering, .pill.paused { color: var(--warn); }
 .pill.failed, .pill.rejected, .pill.disabled, .pill.skipped, .pill.cancelled { color: var(--bad); }
+.pill.completed { color: var(--ok); }
+.pill.planned, .pill.assigned, .pill.in_progress, .pill.review, .pill.blocked, .pill.reopened { color: var(--warn); }
 
 .list { display: flex; flex-direction: column; gap: 4px; }
 .list-item { padding: 8px 10px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
