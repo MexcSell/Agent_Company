@@ -778,10 +778,16 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                     return {"status": "approved", "iterations": iteration, "report": report}
                 waiting = decisions.blocking(goal_id)
                 status = "awaiting_approval" if report["needs_approval"] or waiting else "approved"
-                _update_goal(goal_id, status=status, result=_summary(goal_id, iteration, report))
+                note = ""
+                if status == "approved":  # merge before the final state: a refused merge leaves it for a person
+                    try:
+                        _merge(goal_id)
+                    except worktrees.WorktreeError as e:
+                        status, note = "awaiting_approval", f"\nThe automatic merge was refused: {e}"
+                        log_event("goal", f"automatic merge refused: {e}", goal_id=goal_id)
+                _update_goal(goal_id, status=status, result=_summary(goal_id, iteration, report) + note)
                 _notify_goal(goal_id, status)
                 if status == "approved":
-                    _merge(goal_id)
                     _push(goal_id)
                 return {"status": status, "iterations": iteration, "report": report}
             feedback = report["feedback"]
@@ -965,7 +971,11 @@ def approve(goal_id: int, actor: str = "system") -> dict[str, Any]:
     waiting = decisions.blocking(goal_id)
     if waiting:  # S04-R-02: checked at merge time, so a revoked approval blocks too
         raise ValueError("decision(s) waiting for a person: " + ", ".join(f"#{d['id']} {d['topic']}" for d in waiting))
-    sha = _merge(goal_id)
+    try:
+        sha = _merge(goal_id)
+    except worktrees.WorktreeError as e:  # the goal stays awaiting approval; the repository is unchanged
+        log_event("goal", f"merge refused: {e}", goal_id=goal_id)
+        raise ValueError(str(e)) from e
     _update_goal(goal_id, status="approved", reason=f"merged {sha[:10]}", actor=actor)
     from agent_company.projects import post_for_goal
 

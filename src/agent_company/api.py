@@ -1162,7 +1162,7 @@ def create_app(start_background: bool = True) -> FastAPI:
 
     @app.get("/api/evolution")
     def evolution_overview(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-        return evolution.overview()
+        return evolution.overview() | {"duplicates": registry.duplicates()}
 
     @app.post("/api/evolution/cycle")
     def evolution_cycle(admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:

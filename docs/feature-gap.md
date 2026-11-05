@@ -80,7 +80,8 @@ Machines code):
 | Defect records from failed checks, closed when fixed, reopened on regression | ASEAO09 §11 | done (`performance.track_defects`) |
 | Performance intelligence: agent, room and company metrics | ASEAO07 §15 | done (`performance.report`, Performance view) |
 | Agent lifecycle states (active, paused, retired) | SPEC02 §6 | done (`Agent.lifecycle`) |
-| Capability-gap calculation, agent template catalog, duplicate-agent prevention | SPEC03 §5, §8, §11.2 | open → S03-R-01..R-03 |
+| Duplicate-agent prevention: role synonyms, reuse of an agent covering the skills, near-duplicate list | SPEC03 §6, §11.2 | done (S03-R-02) |
+| Capability-gap calculation, recruitment records and job descriptions | SPEC03 §5, §7, §8 | open → S03-R-01, S03-R-03 |
 | Blackboard: shared context per goal, with versioning; agent-to-agent messages on it | SPEC04 §9-10 | done (`blackboard.py`, S04-R-01, S04-R-10) |
 | Decision records (approval blocks the merge) | SPEC04 §12.2 | done (`decisions.py`, S04-R-02) |
 | Conflict resolution between agents' results | SPEC04 §12.1 | open → S04-R-03 |

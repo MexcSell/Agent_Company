@@ -146,9 +146,27 @@ def _team_weights(s: Session, goal_id: int | None) -> dict[int, float]:
     return out
 
 
+# Planner role names mapped onto existing roles before staffing (SPEC-03 S03-R-02).
+ROLE_SYNONYMS = {
+    "dev": "developer", "backend_dev": "developer", "backend_developer": "developer", "backend": "developer",
+    "software_engineer": "developer", "software_developer": "developer", "engineer": "developer",
+    "programmer": "developer", "coder": "developer", "implementer": "developer", "python_developer": "developer",
+    "tester": "qa", "test_engineer": "qa", "qa_engineer": "qa", "quality_assurance": "qa", "reviewer": "qa",
+    "code_reviewer": "qa", "verifier": "qa",
+    "researcher": "research", "research_analyst": "research",
+    "software_architect": "architect", "system_architect": "architect", "solution_architect": "architect",
+    "designer": "architect",
+    "planner": "general_manager", "manager": "general_manager", "project_manager": "general_manager",
+    "pm": "general_manager", "gm": "general_manager",
+}
+REUSE_COVERAGE = 0.7  # an existing agent covering this share of a task's skills is reused, not recruited
+
+
 def resolve_role(role: str) -> tuple[str, str | None]:
     """Map a planner role onto the catalog. Returns (role, note)."""
     role = _slug(role)
+    if role in ROLE_SYNONYMS and role not in org.ROLES:
+        return ROLE_SYNONYMS[role], f"role '{role}' is '{ROLE_SYNONYMS[role]}'"
     spec = org.ROLES.get(role)
     if spec is None or spec.enabled:
         return role, None
@@ -168,6 +186,7 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
     to similar agents so it can draw on their experience.
     """
     skills = [_slug(x) for x in (skills or [])]
+    why = ""
     with _staff_lock, session() as s:
         pool = s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active")).all()
         idle = [a for a in pool if a.status == "idle"]
@@ -183,14 +202,51 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
             # replacement would walk around the stop
             raise RuntimeError(f"every {role} agent is paused; lift the stop or resume one first")
         else:
-            agent = _recruit(s, role, skills, writes)
-            action = "recruited"
+            found = _covering(s, skills, writes)
+            if found is not None:  # discovery before recruitment (SPEC-03 S03-R-02): no duplicate specialist
+                base, share = found
+                agent = base if base.status == "idle" else _clone(s, base)
+                action = "reused" if agent is base else "cloned"
+                why = f"{base.role} {base.name} covers {share:.0%} of {', '.join(skills)}: no new '{role}' recruited"
+            else:
+                agent = _recruit(s, role, skills, writes)
+                action = "recruited"
         agent.status = "busy"
         agent.last_active_at = now()
         s.flush()
         s.expunge(agent)
-    log_event("staff", f"{action} {agent.name} as {role}", goal_id=goal_id, agent_id=agent.id)
+    log_event("staff", f"{action} {agent.name} as {role}" + (f" ({why})" if why else ""), goal_id=goal_id,
+              agent_id=agent.id)
     return agent
+
+
+def _covering(s: Session, skills: list[str], writes: bool | None) -> tuple[Agent, float] | None:
+    """The active agent whose skills cover the most of `skills`, if it covers at least REUSE_COVERAGE."""
+    if not skills:
+        return None
+    best: tuple[Agent, float] | None = None
+    for a in s.scalars(select(Agent).where(Agent.enabled, Agent.lifecycle == "active", Agent.parent_id.is_(None))):
+        if writes and "write" not in (a.permissions or []):
+            continue
+        share = len(set(skills) & set(a.skills or {})) / len(set(skills))
+        if share >= REUSE_COVERAGE and (best is None or share > best[1]
+                                        or (share == best[1] and _skill_score(a, skills) > _skill_score(best[0], skills))):
+            best = (a, share)
+    return best
+
+
+def duplicates(threshold: float = 0.9) -> list[dict[str, Any]]:
+    """Pairs of active original agents with near-identical role and skills: candidates to consolidate."""
+    with session() as s:
+        agents = list(s.scalars(select(Agent).where(Agent.lifecycle == "active", Agent.parent_id.is_(None))))
+        out = []
+        for i, a in enumerate(agents):
+            for b in agents[i + 1:]:
+                score = similarity(a, b)
+                if score >= threshold:
+                    out.append({"a": {"id": a.id, "name": a.name}, "b": {"id": b.id, "name": b.name},
+                                "role": a.role if a.role == b.role else f"{a.role}/{b.role}", "similarity": score})
+        return sorted(out, key=lambda x: -x["similarity"])
 
 
 def _clone(s: Session, src: Agent) -> Agent:

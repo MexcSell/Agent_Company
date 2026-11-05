@@ -115,7 +115,13 @@ def merge(repo: Path | str, branch: str, base: str, author: dict[str, str] | Non
         raise WorktreeError(f"{repo} is on {current}, not {base}; switch it to {base} to merge")
     if git(repo, "status", "--porcelain", "--untracked-files=no"):
         raise WorktreeError(f"{repo} has uncommitted changes; commit or stash them first")
-    git(repo, "merge", "--no-ff", "-q", "-m", f"Merge {branch}", branch, env=identity_env(author))
+    try:
+        git(repo, "merge", "--no-ff", "-q", "-m", f"Merge {branch}", branch, env=identity_env(author))
+    except WorktreeError as e:
+        # A conflict must never leave the person's repository half-merged: put it back as it was.
+        git(repo, "merge", "--abort", check=False)
+        raise WorktreeError(f"merging {branch} into {base} failed and was rolled back; the repository is "
+                            f"unchanged. Resolve it on the branch first. ({e})") from e
     return git(repo, "rev-parse", "HEAD")
 
 

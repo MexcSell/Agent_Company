@@ -42,6 +42,10 @@ outcomes, not activity.
 ### G-R-03 Failure-mode tests — Designing guide §8
 `tests/` covers: executor timeout, provider rate limit (429), worker crash mid-goal (restart
 resume, SPEC-04 S04-R-05), malformed planner JSON, failing dependency task, merge rollback.
+**Status: done** (`tests/test_failure_modes.py`, `test_safety.py`, `test_loop.py`). Writing them found a
+defect, now fixed: a conflicting merge left the person's repository mid-merge; `worktrees.merge` now
+aborts and leaves it unchanged, `approve` answers 400, and an automatic merge that is refused leaves the
+goal awaiting approval instead of failing.
 
 ### G-R-04 Measured gate for enabling more roles — Subscription guide §7, `.rtf` §6
 "Pipeline reliable" (CLAUDE.md) is defined as: smoke suite pass rate ≥ 80 % over 3 repeats with

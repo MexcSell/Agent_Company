@@ -36,7 +36,7 @@ registration.*
 | ID | Requirement | Pri | Status |
 | --- | --- | --- | --- |
 | S03-FR-01 | Detect missing workforce capabilities | P0 | partial: missing role only → S03-R-01 |
-| S03-FR-02 | Search existing agents for candidates | P0 | partial: same role only → S03-R-02 |
+| S03-FR-02 | Search existing agents for candidates | P0 | done: any active agent covering ≥ 70 % of the skills (S03-R-02) |
 | S03-FR-03 | Create recruitment requests | P0 | open → S03-R-03 |
 | S03-FR-04 | Generate job descriptions | P0 | partial: generic text → S03-R-03 |
 | S03-FR-05 | Required and preferred skills | P0 | partial → S03-R-03 |
@@ -55,7 +55,7 @@ registration.*
 | S03-FR-18 | Forecast workforce requirements | P1 | gated |
 | S03-FR-19 | Track recruitment costs | P1 | open → S03-R-03 |
 | S03-FR-20 | Recommend restructuring | P2 | gated |
-| S03-FR-21 | Detect duplicate or redundant agents | P1 | open → S03-R-02 |
+| S03-FR-21 | Detect duplicate or redundant agents | P1 | done (`registry.duplicates`, Evolution page) |
 | S03-FR-22 | Track recruitment effectiveness | P1 | open → S03-R-04 |
 | S03-FR-23 | Recruitment cancellation | P0 | n/a while recruitment is immediate |
 | S03-FR-24 | Preserve recruitment history | P0 | done (agents retained, `events`) |
@@ -84,6 +84,8 @@ registration.*
 - A periodic check lists agents with near-identical role and skills for consolidation
   (`evolution.consolidate` exists).
 - Acceptance: a plan naming `backend_dev` with skills `python, api` staffs an existing developer.
+- **Status: done** (`registry.ROLE_SYNONYMS`, `_covering` before `_recruit`, `registry.duplicates()` on the
+  Evolution page). Coverage counts skill keys; `registry.similarity` is used for the duplicate list.
 
 ### S03-R-03 Recruitment record and job description — §7, §8
 - Table `recruitments`: goal, requested role, required/preferred skills, job description
