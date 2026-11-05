@@ -45,7 +45,8 @@ feature came from.
   classes, independent reviews that send a disputed decision to a person); `escalation.py` (S04-R-07 levels 1-5 and their
   recipients: agent, goal GM, room manager, executive GM, a person; delivered as blackboard requests);
   `budgets.py` (S04-R-09 goal budgets: cost, tokens, agents at once; child goals capped by the parent's remainder); `projects.py` (projects with stack, skills, rooms, budget, deadline, priority and a lifecycle `set_status`; command window
-  with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals, uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress and goal times;
+  with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals (S10-R-01: a
+  `PROPOSAL[product]` becomes a project only with its documented case, decided by a person), uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress and goal times;
   blockers and generated items are reconciled from goal state by `sync`; a new project GM gets a handover package); `kgraph.py` (SPEC-11 knowledge graph: `kg_edges` written as side effects, the paged neighbourhood API);
   `learning.py` (knowledge items: provenance, experience reports, screening, scoped ranked retrieval over an FTS5
   index with `retrieval_w_*` weights guarded by `evals/retrieval.json` recall@5; SE-R-21 ranking procedure per query

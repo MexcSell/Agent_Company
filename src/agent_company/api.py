@@ -293,6 +293,11 @@ def _audit(user: dict[str, Any], action: str, target: Any = "", before: dict[str
     governance.audit(f"user:{user['name']}", action, str(target), before, after, severity)
 
 
+class ProposalCaseBody(BaseModel):
+    kind: str | None = None
+    case: dict[str, str] = Field(default_factory=dict)
+
+
 class ContractBody(BaseModel):
     title: str
     objective: str
@@ -2720,6 +2725,14 @@ def create_app(start_background: bool = True) -> FastAPI:
     def proposals_list(status: str = "", user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         return projects.list_proposals(user, status)
 
+    @app.post("/api/proposals/{proposal_id}/case")
+    def proposal_case(proposal_id: int, body: ProposalCaseBody, admin: dict[str, Any] = Depends(admin_user)
+                      ) -> dict[str, Any]:
+        """ASEAO10 S10-R-01: write or complete the documented case of a product or project proposal."""
+        out = projects.set_case(proposal_id, body.kind, body.case)
+        _audit(admin, "proposal_case", proposal_id, after={"kind": out["kind"], "missing": out["case_missing"]})
+        return out
+
     @app.post("/api/proposals/{proposal_id}/{decision}")
     def proposal_decide(proposal_id: int, decision: str, admin: dict[str, Any] = Depends(admin_user)
                         ) -> dict[str, Any]:
@@ -2727,7 +2740,8 @@ def create_app(start_background: bool = True) -> FastAPI:
             raise HTTPException(404, "unknown decision")
         out = projects.decide(proposal_id, decision == "approve", admin["name"])
         _audit(admin, f"proposal_{decision}", proposal_id, after={"status": out["status"],
-                                                                 "goal": out.get("spawned_goal_id")})
+                                                                 "goal": out.get("spawned_goal_id"),
+                                                                 "project": out.get("spawned_project_id")})
         return out
 
     # --- project management: milestones, risks and blockers, insights, action items (ASEAO05) ---

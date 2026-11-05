@@ -18,6 +18,11 @@ deleted and only administrators see it, so agents can develop the platform itsel
 Agents may end a task with `PROPOSAL: <title> :: <why>` lines. Proposals wait for an
 administrator, or the GM decides them (`proposal_policy = superiors`). An approved
 proposal becomes a new goal; one goal may spawn at most `max_proposal_goals`.
+
+A new product or project (ASEAO10 S10-R-01) is `PROPOSAL[product]: …` or `PROPOSAL[new_project]: …`, followed by
+its documented case as `- Concept: …`, `- Target user: …`, `- Expected value: …`, `- Feasibility: …`,
+`- Requirements: …`, `- Estimated cost: …` lines. Only a person decides one, and only a complete case becomes a
+project (its requirements as a draft requirement); an incomplete one stays a proposal until the case is written.
 """
 
 from __future__ import annotations
@@ -864,25 +869,120 @@ def standup(project_id: int, topic: str = GENERAL) -> str:
 
 PROPOSAL_RE = re.compile(r"^\s*PROPOSAL:\s*(.+?)(?:\s*::\s*(.+))?\s*$", re.M)
 PROPOSALS_PER_TASK = 2
+# ASEAO10 S10-R-01: a proposed product or project and the case it needs before it may become a project
+CASE_KINDS = ("product", "new_project")
+PROPOSAL_KINDS = ("follow_up", *CASE_KINDS)
+CASE_FIELDS = {"concept": "Concept", "target_user": "Target user", "expected_value": "Expected value",
+               "feasibility": "Feasibility", "requirements": "Requirements", "estimated_cost": "Estimated cost"}
+CASE_RE = re.compile(r"^\s*PROPOSAL\[(product|new_project)\]:\s*(.+?)(?:\s*::\s*(.+))?\s*$", re.M | re.I)
+_CASE_LINE = re.compile(r"^\s*[-*]?\s*(" + "|".join(v.lower() for v in CASE_FIELDS.values())
+                        + r")\s*:\s*(.+?)\s*$", re.I)
+CASE_LIMIT = 2000  # characters per field
+
+
+def _case_after(output: str, end: int) -> dict[str, str]:
+    """The case lines right below a PROPOSAL[product] line, up to a blank line or the next PROPOSAL."""
+    by_label = {v.lower(): k for k, v in CASE_FIELDS.items()}
+    case: dict[str, str] = {}
+    for line in output[end:].splitlines()[1:]:
+        if not line.strip() or line.strip().upper().startswith("PROPOSAL"):
+            break
+        m = _CASE_LINE.match(line)
+        if m:
+            case[by_label[m.group(1).lower()]] = m.group(2)[:CASE_LIMIT]
+    return case
+
+
+def case_missing(kind: str, case: dict[str, Any] | None) -> list[str]:
+    """The case fields a product or project proposal still lacks (none for a follow-up)."""
+    if kind not in CASE_KINDS:
+        return []
+    return [k for k in CASE_FIELDS if not str((case or {}).get(k) or "").strip()]
 
 
 def extract_proposals(goal_id: int, agent_id: int, output: str) -> int:
-    found = PROPOSAL_RE.findall(output or "")[:PROPOSALS_PER_TASK]
+    output = output or ""
+    found: list[tuple[int, str, str, str, dict[str, str]]] = [
+        (m.start(), "follow_up", m.group(1), m.group(2) or "", {}) for m in PROPOSAL_RE.finditer(output)]
+    found += [(m.start(), m.group(1).lower(), m.group(2), m.group(3) or "", _case_after(output, m.start()))
+              for m in CASE_RE.finditer(output)]
+    found = sorted(found)[:PROPOSALS_PER_TASK]
     if not found:
         return 0
     with session() as s:
         g = s.get(Goal, goal_id)
-        for title, why in found:
+        for _, kind, title, why, case in found:
             s.add(Proposal(goal_id=goal_id, project_id=g.project_id if g else None, agent_id=agent_id,
-                           title=title.strip()[:256], description=(why or "").strip()))
+                           title=title.strip()[:256], description=why.strip(), kind=kind, case=case))
     return len(found)
 
 
 def proposal_dict(p: Proposal, names: dict[int, str]) -> dict[str, Any]:
+    kind = p.kind or "follow_up"
     return {"id": p.id, "goal_id": p.goal_id, "project_id": p.project_id, "agent": names.get(p.agent_id),
             "title": p.title, "description": p.description, "status": p.status, "decided_by": p.decided_by,
             "spawned_goal_id": p.spawned_goal_id, "tag": p.tag or "", "report_id": p.report_id,
-            "at": p.created_at.isoformat()}
+            "kind": kind, "case": dict(p.case or {}), "case_missing": case_missing(kind, p.case),
+            "spawned_project_id": p.spawned_project_id, "at": p.created_at.isoformat()}
+
+
+def set_case(proposal_id: int, kind: str | None = None, case: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A person writes (or completes) the documented case of a pending proposal, or changes its kind (S10-R-01).
+    Given fields replace the stored ones; an empty value removes one."""
+    with session() as s:
+        p = s.get(Proposal, proposal_id)
+        if p is None:
+            raise KeyError(proposal_id)
+        if p.status != "pending":
+            raise ValueError(f"proposal is already {p.status}")
+        if kind is not None:
+            if kind not in PROPOSAL_KINDS:
+                raise ValueError(f"kind must be one of {', '.join(PROPOSAL_KINDS)}")
+            p.kind = kind
+        if case:
+            unknown = sorted(set(case) - set(CASE_FIELDS))
+            if unknown:
+                raise ValueError(f"unknown case field(s): {', '.join(unknown)}")
+            merged = dict(p.case or {})
+            for k, v in case.items():
+                v = str(v or "").strip()[:CASE_LIMIT]
+                if v:
+                    merged[k] = v
+                else:
+                    merged.pop(k, None)
+            p.case = merged
+        return proposal_dict(p, dict(s.execute(select(Agent.id, Agent.name)).all()))
+
+
+def _case_text(title: str, why: str, case: dict[str, Any]) -> str:
+    return "\n".join([why.strip() or title, "", *(f"{label}: {case[k]}" for k, label in CASE_FIELDS.items()
+                                                   if k != "requirements")]).strip()
+
+
+def _to_project(proposal_id: int, decided_by: str) -> dict[str, Any]:
+    """Turn a complete product or project proposal into a project: the case is its description, the requirements
+    draft its first (draft) requirement. Called after the checks in `decide`, outside any session."""
+    from agent_company import requirements
+
+    with session() as s:
+        p = s.get(Proposal, proposal_id)
+        origin = s.get(Goal, p.goal_id)
+        title, why, case = p.title, p.description, dict(p.case or {})
+        created_by = origin.created_by if origin else None
+    name = re.sub(r"\s+", " ", title).strip()[:128]
+    made = create(name, description=_case_text(title, why, case), created_by=created_by)
+    requirements.create(made["id"], case["requirements"], kind="functional", source=f"proposal:{proposal_id}",
+                        actor=decided_by, status="draft", check_conflicts=False)
+    with session() as s:
+        p = s.get(Proposal, proposal_id)
+        p.status, p.decided_by, p.spawned_project_id = "approved", decided_by, made["id"]
+        out = proposal_dict(p, dict(s.execute(select(Agent.id, Agent.name)).all()))
+    if out["project_id"]:
+        post(out["project_id"], f"Proposal approved by {decided_by}: '{out['title']}' is now project "
+                                f"'{made['name']}' (#{made['id']}).", kind="proposal")
+    log_event("proposal", f"proposal {proposal_id} approved by {decided_by} as project #{made['id']}",
+              goal_id=out["goal_id"])
+    return out
 
 
 def list_proposals(user: dict[str, Any], status: str = "") -> list[dict[str, Any]]:
@@ -944,7 +1044,8 @@ def restricted(title: str, description: str = "") -> bool:
 
 def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = True) -> dict[str, Any]:
     """Approve (spawning a goal, within the loop guards) or reject a proposal. An agent (`by_human=False`)
-    cannot approve a restricted proposal."""
+    cannot approve a restricted proposal. A product or project proposal (S10-R-01) is approved only by a person and
+    only with its documented case complete; it becomes a project, not a goal."""
     from agent_company import loop
 
     spawn: dict[str, Any] | None = None
@@ -959,12 +1060,27 @@ def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = Tr
         limit = settings().max_proposal_goals
         if approve and not by_human and restricted(p.title, p.description):
             raise PermissionError("this proposal touches authority, budgets or safety controls: a person decides it")
-        if approve and origin is not None and _spawned_from(s, _root(s, origin).id) >= limit:
+        kind = p.kind or "follow_up"
+        if approve and kind in CASE_KINDS:  # S10-R-01: a project only from a documented case, decided by a person
+            if not by_human:
+                raise PermissionError("a new product or project is a person's decision")
+            missing = case_missing(kind, p.case)
+            if missing:
+                raise ValueError("the documented case is incomplete (missing "
+                                 + ", ".join(CASE_FIELDS[k] for k in missing) + "): it stays a proposal")
+            name = re.sub(r"\s+", " ", p.title).strip()[:128]
+            if s.scalars(select(Project.id).where(func.lower(Project.name) == name.lower())).first():
+                raise ValueError(f"a project named '{name}' exists; rename the proposal's title first")
+            kind = "project"
+        if kind == "project":  # the goal-chain guards limit spawned goals; a project is a person's own decision
+            pass
+        elif approve and origin is not None and _spawned_from(s, _root(s, origin).id) >= limit:
             approve, note = False, f" (limit of {limit} proposal goals reached)"
         elif approve and origin is not None and _depth(s, origin) >= settings().max_goal_depth:
             approve, note = False, f" (goal chain depth {settings().max_goal_depth} reached)"  # S04-R-08
-        p.status, p.decided_by = ("approved" if approve else "rejected"), decided_by + note
-        if approve:
+        if kind != "project":
+            p.status, p.decided_by = ("approved" if approve else "rejected"), decided_by + note
+        if approve and kind != "project":
             spawn = {"title": p.title, "description": p.description or p.title,
                      "repo": origin.repo_path if origin else "",
                      "checks": list(origin.quality_commands) if origin else [], "project_id": p.project_id,
@@ -972,6 +1088,8 @@ def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = Tr
                      "topic": origin.topic if origin else GENERAL,
                      "classification": origin.classification if origin else ""}
         out = proposal_dict(p, dict(s.execute(select(Agent.id, Agent.name)).all()))
+    if kind == "project":
+        return _to_project(proposal_id, decided_by)
     if spawn is not None:
         try:
             gid = loop.create_goal(spawn["title"], spawn["description"], spawn["repo"],
@@ -1008,16 +1126,19 @@ def settle_proposals(goal_id: int, only: list[int] | None = None) -> None:
         pending = [(p.id, p.title, p.description) for p in s.scalars(
             select(Proposal).where(Proposal.goal_id == goal_id, Proposal.status == "pending"))
             if only is None or p.id in only]
+        projects_ = {p.id for p in s.scalars(select(Proposal).where(Proposal.goal_id == goal_id,
+                                                                     Proposal.kind.in_(CASE_KINDS)))}
         g = s.get(Goal, goal_id)
         gm = s.scalars(select(Agent).where(Agent.role == "general_manager", Agent.parent_id.is_(None))).first()
         goal_title = g.title if g else ""
     if not pending:
         return
     if settings().proposal_policy == "superiors" and gm is not None:  # the GM decides only unrestricted ones
-        human = [x for x in pending if restricted(x[1], x[2])]
-        pending = [x for x in pending if not restricted(x[1], x[2])]
+        human = [x for x in pending if restricted(x[1], x[2]) or x[0] in projects_]
+        pending = [x for x in pending if x not in human]
         for pid, title, why in human:
-            post_for_goal(goal_id, f"Proposal (needs a person: it touches authority or safety controls): {title}"
+            reason = "a new product or project" if pid in projects_ else "it touches authority or safety controls"
+            post_for_goal(goal_id, f"Proposal (needs a person: {reason}): {title}"
                           + (f"\n{why}" if why else ""), kind="proposal", proposal_id=pid)
         if human:
             notify(f"{len(human)} proposal(s) need a person's decision", goal_title, level="warning",

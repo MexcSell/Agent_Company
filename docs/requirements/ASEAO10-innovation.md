@@ -16,6 +16,16 @@ existing, minimal innovation path (`projects.extract_proposals`).
 - A proposal of kind `product` or `new_project` must contain: concept, target user, expected
   value, feasibility notes, requirements draft, estimated cost. Missing fields → it stays a
   proposal (not convertible). Ordinary follow-up proposals inside a project are unaffected.
+- **Status: done** (`Proposal.kind` `follow_up|product|new_project`, `Proposal.case`, `spawned_project_id`;
+  `projects.CASE_FIELDS`, `case_missing`, `set_case`, `decide` → `_to_project`; `POST /api/proposals/{id}/case`
+  (admin, audited); Projects → Proposals waiting → Documented case; `tests/test_innovation.py`). An agent writes
+  `PROPOSAL[product]: <title> :: <why>` (or `[new_project]`) followed by `- Concept:`, `- Target user:`,
+  `- Expected value:`, `- Feasibility:`, `- Requirements:`, `- Estimated cost:` lines (the task prompt says so). Approving
+  one with a field missing answers 400 naming the missing fields, and it stays `pending`; an administrator completes the
+  case (or changes the kind) on the proposal. Only a person approves one — the GM's triage (`proposal_policy =
+  superiors`) always leaves it to a person — and a complete case becomes a **project**, not a goal: the case is its
+  description, the requirements draft its first `draft` requirement (S08-R-01, source `proposal:<id>`). The goal-chain
+  guards (`max_proposal_goals`, depth) limit spawned goals and do not apply. Follow-up proposals are unchanged.
 
 ### S10-R-02 Experiments are SPEC-13 experiments — §10–§12
 - Innovation experiments use the `experiments` table from SPEC-13 S13-R-05 (baseline, candidate,

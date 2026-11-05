@@ -118,6 +118,7 @@ Machines code):
 | Test-strategy selection by test category and risk | ASEAO09 §6-7 | done (`teststrategy.py`, S09-R-02) |
 | Independent verification: the gate re-runs every command and records commit, exit code, duration, output tail and toolchain versions | ASEAO09 §12 | done (`quality.evaluate`, `quality.environment`, goal history `verification`, S09-R-04) |
 | Agent evaluation by separate dimensions (completion, contract compliance, tool use, reliability, security behaviour, efficiency) with sample sizes; adversarial suite (prompt injection, a test tempting to be disabled, a failing tool) | ASEAO09 §8 | done (`evaluation.dimensions`, `evals/adversarial.json`, S09-R-05) |
+| A proposed product or project becomes a project only with its documented case (concept, target user, value, feasibility, requirements, cost) | ASEAO10 master criterion | done (`projects.set_case`, `decide`) → S10-R-01 |
 | Innovation experiments, portfolio and technology radar | ASEAO10 §10-14, §21 | open → S10-R-02, S10-G-01..G-06 |
 | Knowledge graph of agents, projects, technologies and lessons | SPEC11 §7, 1.txt (Neo4j) | done (`kgraph.py`: edges as side effects, paged graph API, Knowledge → graph explorer; S11-R-07) |
 | Knowledge items with provenance; task-relevant, project-scoped retrieval | SPEC11 §3, §8 | done (`learning.retrieve`: FTS5, weights as settings guarded by the retrieval eval, standards and research documents in a task's package) → S11-R-01, S11-R-03, S11-R-08 |

@@ -765,6 +765,9 @@ def _chat_plan(goal: Goal, iteration: int, plan: list[contracts.TaskContract], s
 
 PROPOSAL_HELP = ("If you notice valuable follow-up work outside this task, add at most two lines at the end: "
                  "PROPOSAL: <short title> :: <why it matters>\n"
+                 "An idea for a new product or project is PROPOSAL[product]: <title> :: <why>, followed by the lines "
+                 "'- Concept:', '- Target user:', '- Expected value:', '- Feasibility:', '- Requirements:' and "
+                 "'- Estimated cost:'; a person decides it, and without all six it cannot become a project.\n"
                  "Report a discovery worth keeping (a better approach, a recurring problem) as a fenced ```json block "
                  '{"insights": [{"title": "...", "description": "...", "evidence": ["..."], '
                  '"expected_benefit": "...", "confidence": 0.6}]}.\n'

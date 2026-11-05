@@ -543,6 +543,10 @@ class Proposal(Base):
     spawned_goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tag: Mapped[str] = mapped_column(String(16), default="")  # research = from an approved report (S06-R-06)
     report_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # ASEAO10 S10-R-01: follow_up (becomes a goal) | product | new_project (becomes a project, only with its case)
+    kind: Mapped[str] = mapped_column(String(16), default="follow_up")
+    case: Mapped[dict[str, Any]] = mapped_column(default=dict)  # projects.CASE_FIELDS
+    spawned_project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

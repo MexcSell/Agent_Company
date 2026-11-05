@@ -237,8 +237,11 @@ async function projectMain(id, incremental, early = null) {
   }
   if (mode === "plan" && $("#plan")) await projectPlan(id);
   const pending = d.proposals.filter((p) => p.status === "pending");
-  $("#p-props").innerHTML = pending.length ? `<div class="props"><strong>Proposals waiting</strong>${pending.map((p) => `<div class="row"><span class="grow">${esc(p.title)} <span class="muted">${esc(p.agent || "")} · from #${p.goal_id}</span></span>${me.is_admin ? ib("check", "Approve", `data-prop="${p.id}" data-d="approve"`, "sm primary") + ib("x", "Reject", `data-prop="${p.id}" data-d="reject"`, "sm") : ""}</div>`).join("")}</div>` : "";
+  // ASEAO10 S10-R-01: a product or project proposal shows its case; it becomes a project only once the case is complete
+  const caseNote = (p) => p.kind === "follow_up" ? "" : ` · <span title="Becomes a project, not a goal">${p.kind === "product" ? "product" : "new project"}</span>${p.case_missing.length ? ` · <span class="muted" title="A product or project needs its documented case before it can become a project">case incomplete: ${p.case_missing.length} of 6 missing</span>` : " · case complete"}`;
+  $("#p-props").innerHTML = pending.length ? `<div class="props"><strong>Proposals waiting</strong>${pending.map((p) => `<div class="row"><span class="grow">${esc(p.title)} <span class="muted">${esc(p.agent || "")} · from #${p.goal_id}${caseNote(p)}</span></span>${me.is_admin ? (p.kind !== "follow_up" ? ib("book", "Documented case", `data-pcase="${p.id}"`, "sm") : "") + ib("check", p.kind === "follow_up" ? "Approve" : "Approve as a project", `data-prop="${p.id}" data-d="approve" ${p.case_missing.length ? "disabled" : ""}`, "sm primary") + ib("x", "Reject", `data-prop="${p.id}" data-d="reject"`, "sm") : ""}</div>`).join("")}</div>` : "";
   $("#p-props").querySelectorAll("[data-prop]").forEach((b) => (b.onclick = async () => { try { await api(`/api/proposals/${b.dataset.prop}/${b.dataset.d}`, { method: "POST" }); projectMain(id, true); } catch (e) { toast(e.message); } }));
+  $("#p-props").querySelectorAll("[data-pcase]").forEach((b) => (b.onclick = () => proposalCase(pending.find((p) => p.id === Number(b.dataset.pcase)), id)));
   projectRail(d);
   if (projectFiles) projectFilesPanel(d);
 }
@@ -465,3 +468,18 @@ async function sendCommand(id, text) {
 }
 
 registerView({ id: "projects", title: "Projects", icon: "projects" }, viewProjects, 1);
+
+const CASE_FIELDS = [["concept", "Concept"], ["target_user", "Target user"], ["expected_value", "Expected value"], ["feasibility", "Feasibility"], ["requirements", "Requirements (draft; becomes the project's first requirement)"], ["estimated_cost", "Estimated cost"]];
+
+function proposalCase(p, id) {
+  if (!p) return;
+  modal(`<h2>${icon("book", 18)} Case for '${esc(p.title)}'</h2><p class="muted">A proposed product or project becomes a project only when its requirements, feasibility and intended value are documented (ASEAO10).</p><form id="pcf">
+    <label for="pc-kind">Kind</label><select id="pc-kind"><option value="product" ${p.kind === "product" ? "selected" : ""}>Product</option><option value="new_project" ${p.kind === "new_project" ? "selected" : ""}>New project</option><option value="follow_up">Follow-up work (becomes a goal)</option></select>
+    ${CASE_FIELDS.map(([k, label]) => `<label for="pc-${k}">${esc(label)}</label><textarea id="pc-${k}" maxlength="2000">${esc(p.case[k] || "")}</textarea>`).join("")}
+    <div class="row" style="margin-top:12px"><button class="btn icon primary" title="Save" aria-label="Save">${icon("save", 16)}</button></div></form>`);
+  $("#pcf").onsubmit = async (e) => {
+    e.preventDefault();
+    const body = { kind: $("#pc-kind").value, case: Object.fromEntries(CASE_FIELDS.map(([k]) => [k, $(`#pc-${k}`).value])) };
+    try { await api(`/api/proposals/${p.id}/case`, { method: "POST", body }); $("#modal").hidden = true; projectMain(id, true); } catch (err) { toast(err.message); }
+  };
+}
