@@ -192,8 +192,19 @@ function navGroups() {
   const lay = navLayout && (navLayout.top || navLayout.bottom) ? navLayout : NAV_DEFAULT;
   const seen = new Set(), vis = VIEWS.filter((v) => !v.admin || me.is_admin), by = Object.fromEntries(vis.map((v) => [v.id, v]));
   const pick = (ids) => ids.filter((id) => by[id] && !seen.has(id) && seen.add(id)).map((id) => by[id]);
-  const top = pick(lay.top || []), bottom = pick(lay.bottom || []), hidden = pick((lay.hidden || []).filter((id) => id !== "settings"));
-  return { top, bottom: [...bottom, ...vis.filter((v) => !seen.has(v.id))], hidden };  // views added later go to the bottom
+  // A view the saved order does not name takes its default place (before the next default neighbour it has).
+  const saved = new Set([...(lay.top || []), ...(lay.bottom || []), ...(lay.hidden || [])]);
+  const withDefaults = (g) => {
+    const ids = [...(lay[g] || [])];
+    NAV_DEFAULT[g].forEach((id, i) => {
+      if (saved.has(id)) return;
+      const next = NAV_DEFAULT[g].slice(i + 1).find((x) => ids.includes(x));
+      ids.splice(next ? ids.indexOf(next) : ids.length, 0, id);
+    });
+    return ids;
+  };
+  const top = pick(withDefaults("top")), bottom = pick(withDefaults("bottom")), hidden = pick((lay.hidden || []).filter((id) => id !== "settings"));
+  return { top, bottom: [...bottom, ...vis.filter((v) => !seen.has(v.id))], hidden };  // views with no default place go to the bottom
 }
 function railButton(v) {
   return `<button data-v="${v.id}" title="${v.title}" aria-label="${v.title}" class="${v.id === current ? "active" : ""}" draggable="${railEditing}">${icon(v.icon)}<span class="rail-label">${v.title}</span>${badges[v.id] ? `<span class="badge">${badges[v.id]}</span>` : ""}</button>`;

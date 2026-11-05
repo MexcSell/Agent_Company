@@ -7,11 +7,13 @@ window.WSP = window.WSP || {};
 (() => {
   const W = window.WSP;
   const read = (k, d) => { try { return JSON.parse(store.get(k) || "null") ?? d; } catch { return d; } };
+  // A list kept in this browser; anything else stored under the key must not stop the Workspace from registering.
+  const readList = (k) => { const v = read(k, []); return Array.isArray(v) ? v : []; };
   const S = (W.state = {
-    root: store.get("ac.wsp.root") || "", roots: [], dirs: new Map(), items: new Map(), open: new Set(read("ac.wsp.open", [])),
+    root: store.get("ac.wsp.root") || "", roots: [], dirs: new Map(), items: new Map(), open: new Set(readList("ac.wsp.open")),
     sel: new Set(), anchor: null, clip: null, tabs: [], active: null, el: null,
     sizes: { left: 260, right: 400, term: 260, ...read("ac.wsp.sizes", {}) }, termHidden: store.get("ac.wsp.termHidden") === "1",
-    win: { min: new Set(read("ac.wsp.min", [])), max: store.get("ac.wsp.max") || null }, git: {}, filter: "", panes: [], noClaude: false,
+    win: { min: new Set(readList("ac.wsp.min")), max: store.get("ac.wsp.max") || null }, git: {}, filter: "", panes: [], noClaude: false,
   });
   const saveOpen = () => store.set("ac.wsp.open", JSON.stringify([...S.open].slice(-300)));
   const parentOf = (p) => p.slice(0, p.lastIndexOf("/")) || "/";
@@ -738,7 +740,7 @@ window.WSP = window.WSP || {};
     });
     S.el.addEventListener("click", (e) => { const b = e.target.closest("[data-win]"); if (b) { e.stopPropagation(); W.win(b.dataset.pane, b.dataset.win); } });
     await loadRoots();
-    for (const r of read("ac.wsp.panes", [])) if (S.roots.some((x) => x.path === r)) addPane(r);
+    for (const r of readList("ac.wsp.panes")) if (S.roots.some((x) => x.path === r)) addPane(r);
     const saved = read("ac.wsp.tabs", { open: [] });
     for (const p of saved.open || []) await W.openPath(p);
     if (saved.active && S.tabs.some((t) => t.path === saved.active)) activate(S.tabs.find((t) => t.path === saved.active));
