@@ -106,6 +106,24 @@ def test_stopped_runs_do_not_degrade_and_a_model_change_resets():
     assert registry.agent_detail(aid)["health"] == "ok"
 
 
+def test_recovered_agents_stay_healthy_and_admins_are_told_once():
+    aid = _agent()
+    def told():
+        with session() as s:
+            return len(s.scalars(select(Notification).where(Notification.source == "agents")).all())
+
+    _fail(aid, 3, error="429 rate limit")
+    assert registry.agent_detail(aid)["health"] == "degraded"
+    usage.record(model_name="Offline simulator", kind="offline", ok=True, agent_id=aid)  # the 4th attempt worked
+    assert registry.agent_detail(aid)["health"] == "ok", "the latest run succeeded"
+    _fail(aid, 2, error="refused by the command policy: rm -rf /")
+    assert registry.agent_detail(aid)["health"] == "ok", "policy refusals are behaviour, not executor errors"
+    before = told()
+    _fail(aid, 6)
+    assert registry.agent_detail(aid)["health"] == "degraded"
+    assert told() == before + 1, "one notification per degradation, not one per failing run"
+
+
 def test_a_failing_model_test_degrades_the_agents_that_ask_for_it(monkeypatch):
     aid = _agent()
     registry.update_agent(aid, {"model_pref": "Claude Haiku 5.5"})
@@ -131,6 +149,8 @@ def test_a_failing_model_test_degrades_the_agents_that_ask_for_it(monkeypatch):
         qa_route = s.get(Route, "qa")
         assert qa_route is None or qa_route.model_name != "Claude Haiku 5.5"
     assert registry.agent_detail(_agent("qa"))["health"] == "ok", "agents on other models are untouched"
+    with pytest.raises(RuntimeError, match="fails its test"):
+        registry.staff("developer")  # a clone would ask for the same broken model
 
 
 def test_inactive_agents_are_listed_for_review():

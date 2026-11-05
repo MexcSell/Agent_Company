@@ -77,10 +77,13 @@ Provisioning/Starting/Stopping collapse into a run's start and end.
   recorded run (`usage.record`), `recheck_model` after a model test, `reset_health`, `inactive`,
   `health_overview`; `GET /api/agents/health`, `POST /api/agents/{id}/health/reset`; Agents → the
   "degraded · inactive" button, the card's notice; setting `inactive_days`). Errors are executor failures
-  (`Run.ok` false) among the last 5 runs; runs ended by a stop or cancel ("terminated by signal") do not count.
+  (`Run.ok` false) among the last 5 runs, and the latest run must have failed too (an agent whose retry or next
+  run succeeds is healthy again); runs ended by a stop or cancel ("terminated by signal") and command-policy
+  refusals do not count. Administrators are notified once per degradation.
   The model test counts for the model the agent asks for first (its preference or its role's route), not the
   fallback the router would pick. `staff` skips degraded idle agents and clones instead (a clone starts
-  healthy); discovery does not reuse a degraded agent. A degraded agent stays benched until an administrator
+  healthy); discovery does not reuse a degraded agent. When every agent of the role is degraded by its model's
+  failed test, staffing fails instead (a clone would ask for the same model). A degraded agent stays benched until an administrator
   resets it or its model is changed; both start a new window. Inactive: active original agents other than the
   company GM whose last run (or creation) is older than `inactive_days`; listed only, never retired
   automatically.

@@ -104,7 +104,8 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 | # | Problem | Status |
 |---|---------|--------|
 | R1 | Skill levels grown by experience (`learning`) are not configuration versions, so rolling back to an older version also resets the skill levels to that version's. | by design (S02-R-01) |
-| R2 | A degraded agent is never staffed, so it gets no runs that could make it healthy again: it stays degraded until an administrator resets its health (agent card) or changes its model. Staffing uses a clone in the meantime. | by design (S02-R-02) |
+| R2 | A degraded agent is never staffed, so it gets no runs that could make it healthy again: it stays degraded until an administrator resets its health (agent card) or changes its model (a task it is still running can heal it by succeeding). Staffing uses a clone in the meantime; each retry is a run, so one outage that fails three retries in a row degrades the agent. | by design (S02-R-02) |
 | R3 | Runs that end with "terminated by signal" (an emergency stop or a cancel) do not count as executor errors; neither does a failed quality gate. A provider that crashes its CLI with a signal is therefore not detected by the error count. | by design |
 | R4 | `model_pref` must now name a catalog model or an existing agent; an edit setting any other text gets 400. Preferences stored before keep working until the agent is edited. | by design (AT-008) |
 | R5 | A rollback restores the model preference of that version; if that model was deleted since, the rollback is refused. | by design |
+| R6 | During a provider outage, staffing clones the degraded agent once per task; the clone asks for the same model, so it may degrade too. Clones are merged and retired when their goal ends. When the cause is the model's failed test, staffing fails instead of cloning. | mitigated |

@@ -106,11 +106,13 @@ def _set_health(s: Session, a: Agent, state: str, reason: str, reset: bool = Fal
     """Set the health; `reset` also starts a new window (earlier runs and model tests no longer count)."""
     if reset:
         a.health_since = now()
-    if (a.health or "ok") == state and (a.health_reason or "") == reason:
+    was = a.health or "ok"
+    a.health_reason = reason[:1000]  # the latest cause, even while it stays degraded
+    if was == state:
         return False
-    a.health, a.health_reason = state, reason[:1000]
+    a.health = state
     log_event("agent_health", f"{a.name} is {state}" + (f": {reason}" if reason else ""), agent_id=a.id, s=s)
-    if state == "degraded":
+    if state == "degraded":  # once per degradation, not for every failing run after it
         from agent_company.governance import notify
 
         notify(f"Agent degraded: {a.name}"[:256], f"{reason} It is not staffed until an administrator resets its "
@@ -136,22 +138,35 @@ def first_model(role: str, model_pref: str | None) -> str | None:
         return r.model_name if r else None
 
 
+def _counts(r) -> bool:  # noqa: ANN001
+    """Stops and cancels, and refusals by the command policy (behaviour rules handle those), are not
+    executor errors."""
+    from agent_company.loop import NO_RETRY
+
+    return not (STOPPED in (r.error or "") or NO_RETRY.search(r.error or ""))
+
+
+MODEL_TEST = "failed its test"
+
+
 def _health_reason(s: Session, a: Agent, first: str | None) -> str:
     from agent_company.db import Run
 
     q = select(Run).where(Run.agent_id == a.id, Run.purpose != "test")
     if _since(a) is not None:
         q = q.where(Run.started_at > _since(a))
-    runs = s.scalars(q.order_by(Run.id.desc()).limit(HEALTH_WINDOW)).all()
-    errors = [r for r in runs if not r.ok and STOPPED not in (r.error or "")]
-    if len(errors) >= DEGRADED_ERRORS:
+    runs = [r for r in s.scalars(q.order_by(Run.id.desc()).limit(3 * HEALTH_WINDOW)) if r.ok or _counts(r)]
+    runs = runs[:HEALTH_WINDOW]
+    errors = [r for r in runs if not r.ok]
+    # the latest run must have failed too: an agent that recovered (a retry or the next task succeeded) is fine
+    if len(errors) >= DEGRADED_ERRORS and not runs[0].ok:
         return (f"{len(errors)} of its last {len(runs)} runs failed in the executor (last: "
                 f"{(errors[0].error or 'no detail').strip()[:200]}).")
     if not first:
         return ""
     test = s.scalars(select(Run).where(Run.purpose == "test", Run.model_name == first).order_by(Run.id.desc())).first()
     if test is not None and not test.ok and (_since(a) is None or test.started_at.replace(tzinfo=None) > _since(a)):
-        return f"its model {first} failed its test ({(test.error or 'no detail').strip()[:200]})."
+        return f"its model {first} {MODEL_TEST} ({(test.error or 'no detail').strip()[:200]})."
     return ""
 
 
@@ -397,7 +412,12 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
             agent = max(idle, key=lambda a: _skill_score(a, skills, team))
             action = "assigned"
         elif pool:  # all busy or degraded: a fresh clone (a clone starts healthy, with its own runs)
-            healthy = [a for a in pool if a.health != "degraded"] or pool
+            healthy = [a for a in pool if a.health != "degraded"]
+            if not healthy and all(MODEL_TEST in (a.health_reason or "") for a in pool):
+                # a clone would ask for the same failing model: cloning cannot help
+                raise RuntimeError(f"every {role} agent is degraded because its model fails its test; fix the "
+                                   "model, give the agent another one, or reset its health")
+            healthy = healthy or pool
             agent = _clone(s, max(healthy, key=lambda a: _skill_score(a, skills, team)))
             action = "cloned"
             if any(a.status == "idle" and a.health == "degraded" for a in pool):
