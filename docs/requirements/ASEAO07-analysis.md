@@ -20,9 +20,9 @@ reliable. The requirements below are the parts the core pipeline needs now.
 | S07-FR-05 | Select analytical methods | gated |
 | S07-FR-06 | Assign specialized analysts | gated |
 | S07-FR-07 | Parallel analysis | gated (scheduler supports it) |
-| S07-FR-08 | Track evidence and assumptions | open → S07-R-01 |
-| S07-FR-09 | Independent review | open → S07-R-01 |
-| S07-FR-10 | Structured recommendations | open → SPEC-04 S04-R-02 (decision records) |
+| S07-FR-08 | Track evidence and assumptions | done (S07-R-01: evidence classes on decisions, assumptions apart) |
+| S07-FR-09 | Independent review | done (S07-R-01: `decisions.review`, never by the author) |
+| S07-FR-10 | Structured recommendations | done (S04-R-02 decision records with the S07-R-01 report fields) |
 | S07-FR-11 | Budgets and deadlines | gated |
 | S07-FR-12 | Reproducible results | partial (S07-R-03): hypotheses record their test method, expected and actual outcome and the test's source; experiments keep suite, repeats and sample sizes |
 
@@ -34,6 +34,24 @@ reliable. The requirements below are the parts the core pipeline needs now.
   required, status. A recommendation is not authorisation to implement.
 - Facts, hypotheses and assumptions are labelled separately (AT-007) using the SPEC-11 evidence
   classes.
+- **Status: done** (`decisions.py`, columns `question`, `criteria`, `limitations`, `confidence_note`, `reviews` on
+  `decisions`; `tests/test_decision_reports.py`). Each evidence entry may carry a SPEC-11 class
+  (`{"ref": …, "class": "MEASURED"}`); entries are stored as given (kgraph reads them), unknown classes are dropped,
+  unlabelled ones count as `UNKNOWN` (a `hypothesis` reference as `HYPOTHESIS`, an eval or experiment as
+  `MEASURED`); rows carry `evidence_labelled`. `decisions.report` groups the evidence by class with the assumptions
+  as `ASSUMPTION`, and gives a Markdown report and `missing`: the empty parts (rationale, alternatives, criteria,
+  evidence, limitations, confidence explanation) plus, for an important decision (a person approves it, financial
+  or critical, or escalation level 3-5), the responsible approver until a person decided and an independent review.
+  Missing parts are shown, not enforced: decisions from topic summaries and older records stay valid.
+  `authorised` is true only for an approved decision. Independent review (S07-FR-09): `decisions.review` by anyone
+  but the author (`PermissionError`), once per reviewer, `agree|concerns|disagree` (the last two need a note); a
+  dispute of an automatically approved or open decision makes it `under_review` with `requires_human_approval`, so
+  it blocks the merge and notifies the administrators; a person's approval stands and the dispute is only recorded.
+  The planner's JSON and the conflict review (`CRITERIA:`, `LIMITATIONS:`, `CONFIDENCE_NOTE:` lines, the tasks'
+  recommendations as `INFERENCE`) fill the fields; the self-evolution deploy decision names its alternative,
+  criteria and limitations. API: `GET /api/decisions/{id}` (the report), `POST /api/decisions/{id}/review` (run
+  permission, audited); GM toolbox `gm decision <id>`, `gm decision-review <id> <verdict> --note`; the goal page
+  shows criteria, labelled evidence, limitations, reviews and what is missing, with review buttons.
 
 ### S07-R-02 Root-cause analysis of failing goals — §10 (AT-012)
 - When a goal fails (all iterations used) or the same check fails in 3 consecutive goals of a

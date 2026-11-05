@@ -546,8 +546,13 @@ def _build(c: dict[str, Any]) -> tuple[int, int]:
                          "Merge only after the platform's benchmark has verified this candidate against the baseline "
                          "(Evolution -> Code evolution).", reasoning="Verified self-evolution: the coding agent is "
                          "not the judge of its own change (guide §10-§12).",
+                         alternatives=["keep the current code (the baseline)"],
                          category="critical" if COMPONENTS[c["component"]].get("high_risk") else "technical",
-                         requires_human_approval=True)
+                         requires_human_approval=True,
+                         criteria=["benchmark score of the candidate against the baseline commit",
+                                   "the benchmark's guards", "the goal's quality gate"],
+                         limitations=["the fixed benchmark covers only what its manifest measures",
+                                      "behaviour after the deploy is checked by monitoring, not by the benchmark"])
     return gid, d["id"]
 
 

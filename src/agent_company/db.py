@@ -957,6 +957,13 @@ class Decision(Base):
     evidence: Mapped[list[Any]] = mapped_column(default=list)  # blackboard/task/source references
     assumptions: Mapped[list[Any]] = mapped_column(default=list)
     confidence: Mapped[float] = mapped_column(Float, default=0.5)  # an estimate, labelled as such
+    # ASEAO07 S07-R-01: the decision report's question, criteria, limitations, why the confidence is what it is,
+    # and independent reviews [{by, agent_id, verdict, note, at}]
+    question: Mapped[str] = mapped_column(Text, default="")
+    criteria: Mapped[list[Any]] = mapped_column(default=list)
+    limitations: Mapped[list[Any]] = mapped_column(default=list)
+    confidence_note: Mapped[str] = mapped_column(Text, default="")
+    reviews: Mapped[list[Any]] = mapped_column(default=list)
     category: Mapped[str] = mapped_column(String(16), default="technical")
     requires_human_approval: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(16), default="submitted")

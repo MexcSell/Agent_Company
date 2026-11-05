@@ -20,7 +20,8 @@ feature came from.
   `network.py` (SPEC-12 relationship kinds with evidence: observed links from finished work,
   complementary specialists and a mentor candidate for new agents, administrator corrections, fair staffing
   inputs in `registry._rank`; `graph`/`overview` for the network view) + `mentoring.py` (a mentor per learning plan: reviews practice results, never certifies);
-  `decisions.py` (decision records; human ones block the merge); `escalation.py` (S04-R-07 levels 1-5 and their
+  `decisions.py` (decision records; human ones block the merge; S07-R-01 reports: criteria, limitations, evidence
+  classes, independent reviews that send a disputed decision to a person); `escalation.py` (S04-R-07 levels 1-5 and their
   recipients: agent, goal GM, room manager, executive GM, a person; delivered as blackboard requests);
   `budgets.py` (S04-R-09 goal budgets: cost, tokens, agents at once; child goals capped by the parent's remainder); `projects.py` (projects with stack, skills, rooms, budget, deadline, priority and a lifecycle `set_status`; command window
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals, uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress;

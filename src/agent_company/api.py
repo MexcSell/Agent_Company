@@ -58,7 +58,7 @@ from agent_company import (
     workspace,
 )
 from agent_company.config import settings
-from agent_company.db import Agent, Event, Goal, Task, session
+from agent_company.db import Agent, Decision, Event, Goal, Task, session
 
 STATIC = Path(__file__).parent / "static"
 COOKIE = "ac_session"
@@ -412,6 +412,11 @@ class IncidentBody(BaseModel):
 
 class DecideBody(BaseModel):
     approve: bool
+    note: str = Field(default="", max_length=2000)
+
+
+class DecisionReviewBody(BaseModel):
+    verdict: str = Field(pattern="^(agree|concerns|disagree)$")
     note: str = Field(default="", max_length=2000)
 
 
@@ -1782,6 +1787,32 @@ def create_app(start_background: bool = True) -> FastAPI:
             seen = _visible_project_ids(s, user)
         return [d for d in decisions.list_decisions(goal_id, status)
                 if seen is None or d["project_id"] is None or d["project_id"] in seen]
+
+    def _decision_seen(decision_id: int, user: dict[str, Any]) -> None:
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+            d = s.get(Decision, decision_id)
+            if d is None or (seen is not None and d.project_id is not None and d.project_id not in seen):
+                raise HTTPException(404, f"decision {decision_id}")
+
+    @app.get("/api/decisions/{decision_id}")
+    def decision_report(decision_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        """The decision report (ASEAO07 S07-R-01): evidence by class, limitations, reviews, missing parts."""
+        _decision_seen(decision_id, user)
+        return decisions.report(decision_id)
+
+    @app.post("/api/decisions/{decision_id}/review")
+    def decision_review(decision_id: int, body: DecisionReviewBody, user: dict[str, Any] = Depends(allowed("run"))
+                        ) -> dict[str, Any]:
+        """An independent review (S07-FR-09); disagreeing sends an automatically approved decision to a person."""
+        _decision_seen(decision_id, user)
+        try:
+            out = decisions.review(decision_id, f"user:{user['name']}", body.verdict, body.note)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(user, "decision_review", decision_id, after={"verdict": body.verdict, "status": out["status"]},
+               severity="high" if body.verdict == "disagree" else "info")
+        return out
 
     @app.post("/api/decisions/{decision_id}/decide")
     def decision_decide(decision_id: int, body: DecideBody, admin: dict[str, Any] = Depends(admin_user)

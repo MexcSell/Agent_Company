@@ -459,10 +459,13 @@ Optional task fields: "in_scope"/"out_of_scope" (path globs; changing an out_of_
 "risk_level": "low|medium|high" (high adds a security review), "test_plan": "...",
 "budget": {"cost_usd": 0.5, "turns": 30}, "deadline": seconds, "requirement_keys": ["..."],
 "decision_topic": "..." (tasks that must each recommend on one question; disagreements are reviewed).
-Optionally add "estimated_cost_usd" (the whole goal's expected model cost) and "decisions": [{"topic": "...", "alternatives": ["..."], "recommendation": "...",
-  "reasoning": "...", "assumptions": ["..."], "confidence": 0-1, "category": "operational|technical|
-  organizational|financial|critical", "requires_human_approval": true|false}] for significant choices
-(technology, architecture, anything costly or hard to undo); critical ones always wait for a person.
+Optionally add "estimated_cost_usd" (the whole goal's expected model cost) and "decisions": [{"topic": "...", "question": "...", "alternatives": ["..."],
+  "criteria": ["what the options are compared on"], "recommendation": "...", "reasoning": "...",
+  "evidence": [{"ref": "file, source URL, task or K<id>", "class": "FACT|MEASURED|INFERENCE|HYPOTHESIS|PREDICTION"}],
+  "assumptions": ["..."], "limitations": ["where this may be wrong or what it does not cover"],
+  "confidence": 0-1, "confidence_note": "why", "category": "operational|technical|organizational|financial|critical",
+  "requires_human_approval": true|false}] for significant choices (technology, architecture, anything costly or
+hard to undo); critical ones always wait for a person. Label facts, measurements, inferences and hypotheses as such.
 Prefer few, well-scoped tasks. Include a QA review task: it verifies the logic (data flow of the normal,
 an edge and an error case), lists FINDING lines, and ends with an OUTCOME and "VERDICT: PASS" or
 "VERDICT: FAIL". Use an existing role when one fits; name a new
@@ -1281,7 +1284,9 @@ def _review_conflicts(goal_id: int, iteration: int) -> list[int]:
                          f"Their acceptance conditions:\n{criteria}\n\nCompare the recommendations against the goal "
                          "and these conditions, using the tasks' outputs below. Choose one (or a combination) and say "
                          "why the others fall short. Write the lines DECISION: <the chosen recommendation>, "
-                         "CONFIDENCE: <0-1> and CATEGORY: operational|technical|organizational|financial|critical "
+                         "CRITERIA: <what you compared them on>, LIMITATIONS: <where the choice may be wrong>, "
+                         "CONFIDENCE: <0-1>, CONFIDENCE_NOTE: <why> and "
+                         "CATEGORY: operational|technical|organizational|financial|critical "
                          "(financial or critical when a wrong choice is costly or hard to undo). If the work of this "
                          "iteration followed a recommendation you did not choose, end with VERDICT: FAIL and a "
                          "FINDING naming what must change."),
@@ -1316,13 +1321,16 @@ def _decide_conflicts(goal_id: int, iteration: int, review_ids: list[int]) -> No
         except ValueError:
             confidence = 0.5
 
-        evidence = ([{"type": "task", "id": i, "key": k, "recommendation": r} for i, k, r in recs]
-                    + [{"type": "review", "id": tid}])
+        # what each task recommended and the review's comparison are agents' conclusions (SPEC-11 INFERENCE)
+        evidence = ([{"type": "task", "id": i, "key": k, "recommendation": r, "class": "INFERENCE"} for i, k, r in recs]
+                    + [{"type": "review", "id": tid, "class": "INFERENCE"}])
         record = functools.partial(
             decisions.record, goal_id, str(inputs.get("topic", "")), line("DECISION", output),
             alternatives=[r[2] for r in recs], reasoning=_brief(output, 2000), confidence=confidence,
             category=category, evidence=evidence, requires_human_approval=category in {"financial", "critical"},
-            agent_id=agent_id)
+            agent_id=agent_id, question=f"Which recommendation on '{inputs.get('topic', '')}' should the goal follow?",
+            criteria=[x for x in [line("CRITERIA", output)] if x] or ["the goal and the tasks' acceptance conditions"],
+            limitations=[x for x in [line("LIMITATIONS", output)] if x], confidence_note=line("CONFIDENCE_NOTE", output))
         _once(f"goal:{goal_id}:{iteration}:conflict:{tid}", lambda record=record: record()["id"])
 
 

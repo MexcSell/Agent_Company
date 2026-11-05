@@ -12,7 +12,9 @@ the GM can:
 - start the goal loop, where the agents plan, build, review and fix until the goal passes (`gm goal`);
 - start a study visit, which rewrites an agent's definition file (`gm study`);
 - record a hypothesis to test and move it along (`gm hypothesis`, `gm hypotheses`, `gm hypothesis-status`); as an
-  agent it cannot mark one supported without a recorded test result (hypotheses.py, ASEAO07 S07-R-03).
+  agent it cannot mark one supported without a recorded test result (hypotheses.py, ASEAO07 S07-R-03);
+- read a decision report and review a decision it did not take (`gm decision`, `gm decision-review`; decisions.py,
+  ASEAO07 S07-R-01).
 
 `python -m agent_company gm ...` is the toolbox. A goal it creates is queued in the database; the server's
 goal queue picks it up within seconds (loop.GoalQueue's watcher), so it runs in the server, in a worktree,
@@ -64,6 +66,8 @@ How you run the company (shell commands; GM below stands for: {gm}):
   GM hypothesis "<statement>" --reason "…" --test "how to test it" --expect "…" [--project {project['id']}]
   GM hypotheses [--status proposed,testing]      hypotheses and their evidence
   GM hypothesis-status <id> <investigating|testing|rejected|inconclusive|archived> [--note "…"]
+  GM decision <id>                  a decision report: options, criteria, evidence by class, limitations, reviews
+  GM decision-review <id> <agree|concerns|disagree> --note "…"   review a decision you did not take
 
 Rules:
 - Small requests (questions, explanations, a quick config edit) you handle yourself here.
@@ -75,6 +79,8 @@ Rules:
 - Prefer existing agents, skills and plugins; when one is missing, add it with `gm create-agent` / `gm add`.
 - Label what you know: facts with their source, hypotheses as hypotheses (`gm hypothesis`), assumptions as
   assumptions. A hypothesis is supported only by a recorded test result, never by your own judgement.
+- A decision report names the question, the options, the criteria, the evidence with its class, the limitations
+  and why the confidence is what it is. A recommendation is not authorisation: only an approved decision is.
 - Never deploy, never touch production servers, never print or commit secrets.
 - Report briefly what you decided and did."""
 
@@ -165,6 +171,12 @@ def main(argv: list[str]) -> None:
     hs.add_argument("hypothesis_id", type=int)
     hs.add_argument("status")
     hs.add_argument("--note", default="")
+    dr = sub.add_parser("decision")
+    dr.add_argument("decision_id", type=int)
+    dv = sub.add_parser("decision-review")
+    dv.add_argument("decision_id", type=int)
+    dv.add_argument("verdict", choices=["agree", "concerns", "disagree"])
+    dv.add_argument("--note", default="")
     a = p.parse_args(argv)
     out: Any
     if a.cmd == "status":
@@ -212,6 +224,17 @@ def main(argv: list[str]) -> None:
             out = hypotheses.list_hypotheses(a.status)
         else:
             out = hypotheses.set_status(a.hypothesis_id, a.status, actor, a.note)
+    elif a.cmd == "decision":
+        from agent_company import decisions
+
+        print(decisions.report(a.decision_id)["markdown"])
+        return
+    elif a.cmd == "decision-review":
+        from agent_company import decisions
+
+        with session() as s:
+            gm_id = s.scalars(select(Agent.id).where(Agent.role == "general_manager", Agent.parent_id.is_(None))).first()
+        out = decisions.review(a.decision_id, "agent:general_manager", a.verdict, a.note, agent_id=gm_id)
     else:
         out = agentdefs.study(a.agent_id)
     print(json.dumps(out, indent=2, default=str))
