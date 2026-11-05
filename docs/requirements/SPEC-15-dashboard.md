@@ -19,7 +19,7 @@ those technologies are `skip` unless a requirement here cannot be met without th
 | Agent management | Agents | — (versions and rollback on the agent card, health flags; SPEC-02) |
 | Project management | Projects | — (Plan tab; topics in Orders & reports) |
 | Task management | Goals | decisions, workflow history, blackboard done; stage-wise gate → ASEAO09 S09-R-01; trace has an API but no view |
-| Research center | Research | request fields, monitoring rules, claims review → ASEAO06 |
+| Research center | Research | request fields, claims review → ASEAO06 (monitoring rules done) |
 | Knowledge center | — | new view: knowledge items, review queue, contradictions → SPEC-11 |
 | Agent relationships | — | network view (P2) → SPEC-12 S12-R-07 |
 | Learning center | Evolution, Performance | gaps, learning plans, experiments → SPEC-13 |

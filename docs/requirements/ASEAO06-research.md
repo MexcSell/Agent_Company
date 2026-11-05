@@ -49,8 +49,9 @@ registered sources (`rotation_tick`), robots.txt and public-host checks (`_robot
   `tests/test_research.py`). The hash ignores whitespace. The last 5 earlier versions of a page are kept. A first
   fetch is new knowledge, not an event. "Relevant subject": the changed page mentions one of the subject's words
   (any change when the source has no subject). An event is an `events` row (`intelligence`, with +/- line counts
-  and up to 3 added lines), a research lesson for every active agent of the source's room (they read it with
-  their experience), and an administrators' notification. A source with no interval keeps the global rotation
+  and up to 3 added lines), a note for every active agent of the source's room (a research lesson; the latest 3
+  of the last 14 days are in the agent's experience context, marked as web data; added lines of a page flagged
+  as possible prompt injection are left out), and one administrators' notification per source run. A source with no interval keeps the global rotation
   interval; `manual` sources run only from their Run button. 429/503 stop the crawl and hold the source for
   `Retry-After` (at most a week; 1 hour when the header is missing or unreadable).
 

@@ -312,7 +312,7 @@ def store_pages(pages: list[dict[str, Any]], source_url: str, agent_id: int | No
                                        **diff_summary(doc.text, text), "text": text})
                 doc.version = (doc.version or 1) + 1
             doc.title, doc.text, doc.content_hash, doc.fetched_at = title, text, digest, now()
-            doc.source_url, doc.collected_by, doc.created_at = source_url, agent_id, now()
+            doc.source_url, doc.collected_by = source_url, agent_id  # created_at stays the first collection
             doc.category = classify_source(page["url"])
             doc.flags = injection_flags(f"{doc.title}\n{doc.text}")
             s.flush()
@@ -473,13 +473,16 @@ def _intelligence(src_url: str, subject: str, room: str, agent_id: int, changes:
     research lessons, read with their experience) and a notification."""
     from agent_company.governance import notify
 
-    n = 0
+    n, titles = 0, []
     for c in changes:
         if not relevant(subject, c.get("title", ""), c.get("text", "")):
             continue
         n += 1
+        titles.append(c.get("title") or c["url"])
+        # lines from a page flagged as possible prompt injection never reach an agent's prompt
+        sample = [] if injection_flags(f"{c.get('title', '')}\n{c.get('text', '')}") else c["sample"]
         summary = (f"{c.get('title') or c['url']} changed (v{c['version']}: +{c['added']} / -{c['removed']} lines)"
-                   + (": " + " | ".join(c["sample"]) if c["sample"] else ""))
+                   + (": " + " | ".join(sample) if sample else ""))
         with session() as s:
             log_event("intelligence", summary[:1000], agent_id=agent_id, s=s, url=c["url"], source=src_url,
                       document_id=c.get("document_id"), version=c["version"], added=c["added"],
@@ -488,8 +491,9 @@ def _intelligence(src_url: str, subject: str, room: str, agent_id: int, changes:
                 if room else []
             for aid in ids:
                 s.add(Lesson(agent_id=aid, text=f"Source change: {summary}"[:1000], outcome="research"))
-            notify(f"Changed: {c.get('title') or c['url']}"[:256], summary[:4000], level="info", source="research",
-                   admin_only=True, s=s)
+    if n:  # one notification per source run, however many of its pages changed
+        notify(f"{n} watched page(s) changed on {src_url}"[:256], "\n".join(titles[:20])[:4000], level="info",
+               source="research", admin_only=True)
     return n
 
 
