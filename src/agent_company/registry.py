@@ -569,8 +569,11 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
                 rec = recruitment.open_request(s, role, skills, writes, goal_id, task_id, "recruit",
                                                f"no active agent covers {REUSE_COVERAGE:.0%} of "
                                                f"{', '.join(skills) or role}")
-                agent = _recruit(s, rec)
-                recruitment.on_recruited(s, rec, agent)
+                if rec.agent_id is None:
+                    agent = _recruit(s, rec)
+                    recruitment.on_recruited(s, rec, agent)
+                else:  # approve() registered it already
+                    agent = s.get(Agent, rec.agent_id)
                 action = "recruited"
             why = f"{why} (recruitment #{rec.id})".strip()
         agent.active_goals = [*(agent.active_goals or []), goal_id or 0]

@@ -299,3 +299,52 @@ def test_a_project_gap_counts_the_open_tasks_needing_each_skill():
     rows = {r["skill"]: r for r in out["skills"]}
     assert rows["postgres"]["required"] == 3 and rows["postgres"]["gap"] == 3 and "postgres" in out["missing"]
     assert rows["python"]["required"] == 3
+
+
+# --- follow-ups: a failed review counts, a retired recruit is not replaced silently, an early decision -----
+
+def test_a_failed_review_of_a_finished_task_counts_as_the_probationers_failure():
+    gid = loop.create_goal("Reviewed", quality_commands=[])
+    a = registry.staff("rust_expert", ["rust"], gid, writes=True)
+    registry.release(a.id, gid)
+    with session() as s:
+        build = Task(goal_id=gid, iteration=1, key="build", title="b", role="rust_expert", agent_id=a.id,
+                     status="done", writes=True)
+        s.add(build)
+        s.add(Task(goal_id=gid, iteration=1, key="review", title="r", role="qa", status="done", depends_on=["build"]))
+        s.flush()
+        build_id = build.id
+        s.get(Goal, gid).history = [{"iteration": 1, "failed_checks": ["command x"]}]
+    assert recruitment.after_task(a.id, build_id, False) == "", "another check failed: not the recruit's fault"
+    with session() as s:
+        s.get(Goal, gid).history = [{"iteration": 1, "failed_checks": ["review review"]}]
+    assert recruitment.after_task(a.id, build_id, False) == "failed", "its reviewer rejected the work"
+
+
+def test_a_retired_recruit_is_not_replaced_under_the_old_approval():
+    gid = loop.create_goal("Needs rust", quality_commands=[])
+    first = registry.staff("rust_expert", ["rust"], gid, writes=True)
+    registry.release(first.id, gid)
+    registry.set_lifecycle(first.id, "retired", "user:admin")
+    policy("permanent_only")
+    try:
+        registry.staff("rust_expert", ["rust"], gid, writes=True)
+        raise AssertionError("a replacement goes through the policy again")
+    except recruitment.RecruitmentPending:
+        pass
+    recs = recruitment.list_recruitments(goal_id=gid)
+    assert [r["status"] for r in recs] == ["pending", "approved"] and count_agents("rust_expert") == 1
+
+
+def test_a_decision_before_the_goal_paused_requeues_it(monkeypatch):
+    monkeypatch.setattr(loop, "enqueue", lambda gid: None)
+    policy("always")
+    gid = loop.create_goal("Needs rust", quality_commands=[])
+    try:
+        registry.staff("rust_expert", ["rust"], gid, writes=True)
+    except recruitment.RecruitmentPending:
+        pass
+    rid = records()[0]["id"]
+    assert recruitment.approve(rid, "user:admin")["resumed"] is False, "the goal has not paused yet"
+    out = loop._out_for_recruitment(gid, "recruitment waits", {})
+    assert out["status"] == "queued" and loop._goal(gid).status == "queued"

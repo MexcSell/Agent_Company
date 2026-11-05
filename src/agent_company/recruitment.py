@@ -15,7 +15,8 @@
   probation  S03-R-04: a recruit starts with PROBATION_TASKS tasks on probation. Each of its writing tasks is
              reviewed by another agent (the loop adds a QA review; reviews avoid the writer's provider), and the
              gate fails a probationer's change without a passing review. A verified pass counts down; after
-             PROBATION_MAX_FAILURES failed tasks of its own the recruit is retired (its lessons stay).
+             PROBATION_MAX_FAILURES failed tasks of its own (its task failed, or a review of it failed) the recruit
+             is retired (its lessons stay).
 """
 
 from __future__ import annotations
@@ -197,6 +198,10 @@ def open_request(s: Session, role: str, skills: list[str], writes: bool | None, 
 
     rec = s.scalars(select(Recruitment).where(Recruitment.goal_id == goal_id, Recruitment.requested_role == role)
                     .order_by(Recruitment.id.desc())).first() if goal_id is not None else None
+    if rec is not None and rec.agent_id is not None:  # its recruit was retired or disabled since: ask again
+        a = s.get(Agent, rec.agent_id)
+        if a is None or a.lifecycle != "active" or not a.enabled:
+            rec = None
     if rec is None:
         task = s.get(Task, task_id) if task_id is not None else None
         lifecycle = "permanent" if decision == "recruit" else "temporary"
@@ -403,7 +408,7 @@ def after_task(agent_id: int, task_id: int | None, success: bool) -> str:
                 log_event("recruitment", f"{base.name} passed probation", agent_id=base.id, s=s)
                 return "passed"
             return "counted"
-        if t is None or t.status == "done":
+        if t is None or (t.status == "done" and not _review_failed(s, t)):
             return ""
         base.probation_failures = (base.probation_failures or 0) + 1
         if base.probation_failures < PROBATION_MAX_FAILURES:
@@ -420,6 +425,18 @@ def after_task(agent_id: int, task_id: int | None, success: bool) -> str:
                f"{base.probation_failures} of its tasks failed before it finished probation.", level="warning",
                source="recruitment", admin_only=True, s=s)
         return "retired"
+
+
+def _review_failed(s: Session, t: Task) -> bool:
+    """A review of this iteration that depends on the task failed on the gate: its finished work was rejected."""
+    from agent_company.quality import REVIEW_ROLES
+
+    g = s.get(Goal, t.goal_id)
+    hist = next((h for h in (g.history or []) if h.get("iteration") == t.iteration), None) if g else None
+    failed = set((hist or {}).get("failed_checks") or [])
+    return any(f"review {r.key}" in failed and t.key in (r.depends_on or [])
+               for r in s.scalars(select(Task).where(Task.goal_id == t.goal_id, Task.iteration == t.iteration,
+                                                     Task.role.in_(REVIEW_ROLES))))
 
 
 def probation_tasks(goal_id: int, iteration: int) -> list[dict[str, Any]]:

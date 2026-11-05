@@ -119,8 +119,9 @@ registration.*
 - **Status: partial.** Done: recruits start with 3 probation tasks; a clone of a probationer counts for its
   original; the loop adds a QA review (`probation-review`, avoiding the writer's provider) when the iteration has
   none, and the gate fails a probationer's change without a passing review by an agent not on probation (check
-  `probation review`). A verified pass counts down; a failure counts only when the recruit's own task failed (not
-  when another task failed the gate); 2 retire it, its lessons stay. Effectiveness in Performance. Open: the
+  `probation review`). A verified pass counts down; a failure counts only when the recruit's own task failed or a
+  review depending on it failed (not when another check failed the gate); 2 retire it, its lessons stay. A retired
+  or disabled recruit is not replaced under its old approval: the replacement is a new record under the policy. Effectiveness in Performance. Open: the
   `qualify_recruits` run, because eval suites staff by role (`registry._trainee` only substitutes a trainee within
   its own role), so a recruit of a new role cannot be measured on `smoke` yet.
 
@@ -140,7 +141,8 @@ recruitment record).
 - **Status: done.** `never` (default) approves every record by policy; `permanent_only` holds a new agent (a clone
   is temporary and goes through); `always` also holds a clone made for a role nobody holds. A held task is skipped
   and the goal pauses (`paused_for = "recruitment"`, a staffing blocker on its project, an admin notification);
-  approving registers the agent once (approving again changes nothing, AT-020) and resumes the goal; rejecting or
+  approving registers the agent once (approving again changes nothing, AT-020) and resumes the goal (a
+  decision made before the goal paused requeues it right away); rejecting or
   cancelling resumes it and the task fails with the refusal, so the planner re-plans. Only administrators decide; a
   refused attempt is audited (`recruitment_approve_denied`, AT-011). A recruit of a role outside the catalog gets
   the template's permissions without `shell`/`network`; approval grants them (`grant`), also after a policy approval.

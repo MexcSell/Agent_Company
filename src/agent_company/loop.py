@@ -1435,7 +1435,15 @@ def _out_for_recruitment(goal_id: int, why: str, report: dict[str, Any]) -> dict
     with session() as s:
         row = s.get(Goal, goal_id)
         row.checkpoint = {**(row.checkpoint or {}), "paused_for": "recruitment", "paused_why": why}
+        pending = s.scalars(select(recruitment.Recruitment.id).where(
+            recruitment.Recruitment.goal_id == goal_id, recruitment.Recruitment.status == "pending")).first()
     log_event("goal", f"waiting for a recruitment: {why}", goal_id=goal_id)
+    if pending is None:  # decided while the iteration was still running: nobody would resume it
+        try:
+            resume(goal_id, "recruitment decided")
+            return {"status": "queued", "iterations": g.iteration, "report": report, "recruitment": why}
+        except ValueError:  # the decision resumed it already
+            pass
     return {"status": "paused", "iterations": g.iteration, "report": report, "recruitment": why}
 
 
