@@ -28,7 +28,9 @@ feature came from.
   `learning.py` (knowledge items: provenance, experience reports, screening, scoped ranked retrieval;
   contradictions and versions as `kg_edges`, resolved by people)
   + `evolution.py` (playbook candidates are experiments); `experiments.py` (SPEC-13: baseline vs candidate on one eval
-  suite, review by the E0-E6 policy, canary, rollback; routes only applied by an administrator); `training.py`
+  suite, review by the E0-E6 policy, canary, rollback; routes only applied by an administrator); `hypotheses.py`
+  (ASEAO07 S07-R-03: statements under test with evidence; an experiment's comparison concludes its hypothesis; an agent
+  never marks one supported without a recorded test result); `training.py`
   (capability gaps, learning plans: practice + hidden final eval suites run by the trainee in scratch repos,
   certification only from the harness; learning metrics); `selfevolve.py` (verified self-evolution of the platform's own code: improvement contracts, protected
   control plane, failure layers, a fixed benchmark from `benchmarks/` run on the base and candidate commits, approval,

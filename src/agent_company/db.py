@@ -720,6 +720,32 @@ class ResearchReport(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class Hypothesis(Base):
+    """A statement to test (ASEAO07 S07-R-03): why it is believed, the evidence for and against, how it is tested,
+    what was expected and what happened. proposed -> investigating -> testing -> supported|rejected|inconclusive
+    -> archived (hypotheses.py). An experiment's hypothesis is one of these (SPEC-13)."""
+
+    __tablename__ = "hypotheses"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    statement: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    supporting: Mapped[list[Any]] = mapped_column(default=list)  # [{"type", "id", "note", "by", "at"}]
+    contradicting: Mapped[list[Any]] = mapped_column(default=list)
+    test_method: Mapped[str] = mapped_column(Text, default="")
+    expected_outcome: Mapped[str] = mapped_column(Text, default="")
+    actual_outcome: Mapped[str] = mapped_column(Text, default="")
+    test_result: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"source", "passed", ...}; empty = untested
+    status: Mapped[str] = mapped_column(String(16), default="proposed", index=True)
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    experiment_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(128), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 class Source(Base):
     """A site the external-data room visits on rotation."""
 

@@ -86,6 +86,12 @@ def record(s: Session, target: str, *, agent_id: int | None = None, role: str = 
                    created_by=created_by)
     s.add(e)
     s.flush()
+    from agent_company import hypotheses  # ASEAO07 S07-R-03: the experiment's hypothesis, under test
+
+    hypotheses.for_experiment(s, e.id, hypothesis, f"{target} experiment #{e.id}: baseline vs candidate on the "
+                              f"'{suite}' suite, {repeats} repeat(s)",
+                              f"the candidate beats the baseline by at least {settings().min_improvement} points",
+                              agent_id=agent_id)
     return e
 
 
@@ -100,6 +106,10 @@ def update(s: Session, exp_id: int | None, status: str | None = None, decision: 
         e.status = status
     if decision is not None:
         e.decision = decision[:2000]
+    if isinstance(results.get("comparison"), dict):  # the comparison is the hypothesis's test result (S07-R-03)
+        from agent_company import hypotheses
+
+        hypotheses.conclude_experiment(s, e.id, results["comparison"], decision or "")
 
 
 def side_metrics(summary: dict[str, Any]) -> dict[str, Any]:

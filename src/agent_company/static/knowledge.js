@@ -40,7 +40,7 @@ function kCard(i, extra = "") {
 
 async function viewKnowledge() {
   const qs = new URLSearchParams({ q: kState.q, status: kState.status, kind: kState.kind, limit: "300" });
-  const [items, pairs, queue] = await Promise.all([api(`/api/knowledge?${qs}`), api("/api/knowledge/contradictions"), api("/api/knowledge?status=draft,quarantined,rejected&limit=50")]);
+  const [items, pairs, queue, hyps] = await Promise.all([api(`/api/knowledge?${qs}`), api("/api/knowledge/contradictions"), api("/api/knowledge?status=draft,quarantined,rejected&limit=50"), api("/api/hypotheses")]);
   const actions = (i) => [
     i.status !== "approved" && i.status !== "quarantined" && i.status !== "superseded" ? ib("check", "Approve", `data-kok="${i.id}"`, "sm primary") : "",
     i.status === "approved" ? ib("x", "Reject", `data-kno="${i.id}"`, "sm") : "",
@@ -57,7 +57,8 @@ async function viewKnowledge() {
         ${pairs.map((p) => `<div style="margin:10px 0"><div class="grid two">${p.old ? kCard(p.old) : '<span class="muted">(deleted)</span>'}${p.new ? kCard(p.new) : '<span class="muted">(deleted)</span>'}</div>
           <div class="row" style="margin-top:6px"><span class="muted grow">#${p.id} · found ${ago(p.at)}</span><button class="btn sm keep-text" data-kres="${p.id}" data-how="keep_old">Older holds</button><button class="btn sm keep-text" data-kres="${p.id}" data-how="keep_both">Both hold</button><button class="btn sm keep-text" data-kres="${p.id}" data-how="keep_new">Newer holds</button></div></div>`).join("") || '<span class="muted">No open contradictions.</span>'}</div>
       <div class="card"><h2>Review queue <span class="muted">${queue.length}</span></h2><p class="muted">Drafts wait for approval; quarantined items hold credential-like text (delete them); rejected items stay out of prompts.</p>
-        <div class="grid">${queue.map((i) => kCard(i, `<div class="row" style="margin-top:6px">${actions(i)}</div>`)).join("") || '<span class="muted">Nothing to review.</span>'}</div></div></div>
+        <div class="grid">${queue.map((i) => kCard(i, `<div class="row" style="margin-top:6px">${actions(i)}</div>`)).join("") || '<span class="muted">Nothing to review.</span>'}</div></div>
+      ${hypCard(hyps)}</div>
       <div class="card"><h2>Items <span class="muted">${items.length}${items.length >= 300 ? "+" : ""}</span></h2><div class="table-wrap"><table><tr><th>#</th><th>Item</th><th>Status</th><th>Source</th><th></th></tr>
         ${items.map((i) => `<tr><td class="num">K${i.id}${i.version > 1 ? `<div class="muted">v${i.version}</div>` : ""}</td><td>${esc(i.text)}<div class="muted"><span class="pill">${esc(i.kind)}</span> ${esc(i.evidence_class)} · ${esc(i.agent || "?")} · ${ago(i.at)}${(i.technologies || []).length ? " · " + esc(i.technologies.join(", ")) : ""}</div>${i.contradicted_by.length ? `<div class="pill pending" title="an open contradiction">disputed by ${i.contradicted_by.map((c) => "K" + c).join(", ")}</div>` : ""}${kReport(i)}</td>
           <td>${kStatusPill(i.status)}<div class="muted">${esc(i.classification)}</div></td><td class="muted">${(i.sources || []).map(kSource).join("<br>")}</td><td class="nowrap">${actions(i)}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No items match.</td></tr>'}</table></div></div></div>`;
@@ -78,9 +79,42 @@ async function viewKnowledge() {
       <div class="row" style="margin-top:12px"><button class="btn icon primary" title="Save" aria-label="Save">${icon("save", 16)}</button></div></form>`);
     $("#ksf").onsubmit = async (e) => { e.preventDefault(); try { await api(`/api/knowledge/${i.id}/supersede`, { method: "POST", body: { text: $("#ksf-t").value, note: $("#ksf-n").value } }); $("#modal").hidden = true; viewKnowledge(); } catch (err) { toast(err.message); } };
   }));
+  hypBind(v, call);
   v.querySelectorAll("[data-kres]").forEach((b) => (b.onclick = () => {
     const rationale = prompt(`${b.textContent}: why?`);
     if (rationale && rationale.trim()) call(`/api/knowledge/contradictions/${b.dataset.kres}/resolve`, { method: "POST", body: { resolution: b.dataset.how, rationale } });
+  }));
+}
+
+// Hypotheses (ASEAO07 S07-R-03): statements under test, with evidence for and against. Experiments test their own;
+// only a recorded test result (or a person's stated reason) makes one supported.
+const HYP_CLASS = { supported: "done", rejected: "failed", inconclusive: "pending", testing: "info", investigating: "info" };
+function hypCard(hyps) {
+  const live = hyps.filter((h) => h.status !== "archived");
+  const row = (h) => `<div class="card" style="margin:6px 0;padding:8px 10px"><div class="row"><span class="pill ${HYP_CLASS[h.status] || ""}">${esc(h.status)}</span><strong class="grow">H${h.id} ${esc(h.statement)}</strong>${h.experiment_id ? `<span class="muted">experiment #${Number(h.experiment_id)}</span>` : ""}</div>
+    ${h.reason ? `<div class="muted">Why: ${esc(h.reason)}</div>` : ""}${h.test_method ? `<div class="muted">Test: ${esc(h.test_method)}${h.expected_outcome ? ` · expects ${esc(h.expected_outcome)}` : ""}</div>` : ""}
+    <div class="muted">${h.supporting.length} for · ${h.contradicting.length} against${h.actual_outcome ? ` · result: ${esc(h.actual_outcome)}${h.test_result?.source ? ` (${esc(h.test_result.source)})` : ""}` : " · no test result yet"}${h.note ? ` · ${esc(h.note)}` : ""} · ${esc(h.created_by)} · ${ago(h.created_at)}</div>
+    ${me.is_admin ? `<div class="row" style="margin-top:6px">${h.status !== "archived" ? `<button class="btn sm keep-text" data-hev="${h.id}">Evidence</button>` : ""}${["investigating", "testing", "inconclusive"].includes(h.status) ? `<button class="btn sm keep-text" data-hres="${h.id}">Result</button>` : ""}${h.next.map((to) => `<button class="btn sm keep-text" data-hst="${h.id}" data-to="${to}">${esc(to)}</button>`).join("")}</div>` : ""}</div>`;
+  return `<div class="card"><h2>Hypotheses <span class="muted">${live.length} open or concluded</span></h2><p class="muted">Statements to test. Experiments test their own hypothesis; an agent can never mark one supported without a recorded test result.</p>
+    ${me.is_admin ? `<form id="h-new" class="row"><input id="h-st" class="grow" minlength="5" required placeholder="Hypothesis: smaller tasks pass the gate more often"><input id="h-why" placeholder="why (optional)" style="max-width:200px"><button class="btn">Add</button></form>` : ""}
+    ${live.map(row).join("") || '<span class="muted">No hypotheses yet.</span>'}</div>`;
+}
+function hypBind(v, call) {
+  const form = v.querySelector("#h-new");
+  if (form) form.onsubmit = (e) => { e.preventDefault(); call("/api/hypotheses", { method: "POST", body: { statement: $("#h-st").value, reason: $("#h-why").value } }); };
+  v.querySelectorAll("[data-hst]").forEach((b) => (b.onclick = () => {
+    const note = prompt(`${b.dataset.to}: note${b.dataset.to === "supported" ? " (required without a test result)" : " (optional)"}`);
+    if (note !== null) call(`/api/hypotheses/${b.dataset.hst}/status`, { method: "POST", body: { status: b.dataset.to, note } });
+  }));
+  v.querySelectorAll("[data-hres]").forEach((b) => (b.onclick = () => {
+    const outcome = prompt("What did the test show?"); if (!outcome) return;
+    const held = confirm("Did the hypothesis hold? OK = yes, Cancel = no");
+    call(`/api/hypotheses/${b.dataset.hres}/result`, { method: "POST", body: { actual_outcome: outcome, passed: held } });
+  }));
+  v.querySelectorAll("[data-hev]").forEach((b) => (b.onclick = () => {
+    const note = prompt("Evidence (a URL, goal #, or a sentence)"); if (!note) return;
+    const side = confirm("Does it support the hypothesis? OK = supports, Cancel = contradicts") ? "supporting" : "contradicting";
+    call(`/api/hypotheses/${b.dataset.hev}/evidence`, { method: "POST", body: { side, type: /^https?:/.test(note) ? "url" : "note", id: /^https?:/.test(note) ? note : null, note } });
   }));
 }
 

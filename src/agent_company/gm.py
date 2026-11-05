@@ -10,7 +10,9 @@ the GM can:
   skills, plugins, models and memory through the catalog;
 - add a missing skill, plugin, rule or command to the management page (`gm add`), then use it;
 - start the goal loop, where the agents plan, build, review and fix until the goal passes (`gm goal`);
-- start a study visit, which rewrites an agent's definition file (`gm study`).
+- start a study visit, which rewrites an agent's definition file (`gm study`);
+- record a hypothesis to test and move it along (`gm hypothesis`, `gm hypotheses`, `gm hypothesis-status`); as an
+  agent it cannot mark one supported without a recorded test result (hypotheses.py, ASEAO07 S07-R-03).
 
 `python -m agent_company gm ...` is the toolbox. A goal it creates is queued in the database; the server's
 goal queue picks it up within seconds (loop.GoalQueue's watcher), so it runs in the server, in a worktree,
@@ -59,6 +61,9 @@ How you run the company (shell commands; GM below stands for: {gm}):
   GM configure {project['id']}                  write the catalog into this project's .claude/
   GM goal {project['id']} "<goal>" --details "…" [--check "uv run pytest -q"]
   GM study [<agent id>]             one learning visit: rewrites an agent's definition
+  GM hypothesis "<statement>" --reason "…" --test "how to test it" --expect "…" [--project {project['id']}]
+  GM hypotheses [--status proposed,testing]      hypotheses and their evidence
+  GM hypothesis-status <id> <investigating|testing|rejected|inconclusive|archived> [--note "…"]
 
 Rules:
 - Small requests (questions, explanations, a quick config edit) you handle yourself here.
@@ -68,6 +73,8 @@ Rules:
   model and effort), rules/, skills/, commands/, hooks/, settings.json, .mcp.json; specs go in
   .claude/specs/<slug>/ (requirements.md, spec.md, design.md, tasks.md, review.md, sa-review.md, decisions.md).
 - Prefer existing agents, skills and plugins; when one is missing, add it with `gm create-agent` / `gm add`.
+- Label what you know: facts with their source, hypotheses as hypotheses (`gm hypothesis`), assumptions as
+  assumptions. A hypothesis is supported only by a recorded test result, never by your own judgement.
 - Never deploy, never touch production servers, never print or commit secrets.
 - Report briefly what you decided and did."""
 
@@ -146,6 +153,18 @@ def main(argv: list[str]) -> None:
     go.add_argument("--check", action="append", default=[])
     st = sub.add_parser("study")
     st.add_argument("agent_id", type=int, nargs="?")
+    hy = sub.add_parser("hypothesis")
+    hy.add_argument("statement")
+    hy.add_argument("--reason", default="")
+    hy.add_argument("--test", default="")
+    hy.add_argument("--expect", default="")
+    hy.add_argument("--project", type=int, default=None)
+    hl = sub.add_parser("hypotheses")
+    hl.add_argument("--status", default="")
+    hs = sub.add_parser("hypothesis-status")
+    hs.add_argument("hypothesis_id", type=int)
+    hs.add_argument("status")
+    hs.add_argument("--note", default="")
     a = p.parse_args(argv)
     out: Any
     if a.cmd == "status":
@@ -182,6 +201,17 @@ def main(argv: list[str]) -> None:
         out = {"written": catalog.export_claude(Path(proj["path"]), ids)}
     elif a.cmd == "goal":
         out = {"goal_id": create_goal(a.project_id, a.title, a.details, a.check)}
+    elif a.cmd in ("hypothesis", "hypotheses", "hypothesis-status"):
+        from agent_company import hypotheses
+
+        actor = "agent:general_manager"  # an agent: no "supported" without a recorded test result
+        if a.cmd == "hypothesis":
+            out = hypotheses.create(a.statement, a.reason, actor=actor, test_method=a.test, expected_outcome=a.expect,
+                                    project_id=a.project)
+        elif a.cmd == "hypotheses":
+            out = hypotheses.list_hypotheses(a.status)
+        else:
+            out = hypotheses.set_status(a.hypothesis_id, a.status, actor, a.note)
     else:
         out = agentdefs.study(a.agent_id)
     print(json.dumps(out, indent=2, default=str))

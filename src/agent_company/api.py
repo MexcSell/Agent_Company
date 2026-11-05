@@ -34,6 +34,7 @@ from agent_company import (
     files,
     gitsync,
     governance,
+    hypotheses,
     kgraph,
     learning,
     loop,
@@ -458,6 +459,33 @@ class EvalBody(BaseModel):
     label: str = Field(pattern=r"^[\w.-]{1,64}$")
     repeats: int = Field(default=1, ge=1, le=10)
     tasks: list[str] = Field(default_factory=list)
+
+
+class HypothesisBody(BaseModel):
+    statement: str = Field(min_length=5, max_length=2000)
+    reason: str = Field(default="", max_length=4000)
+    test_method: str = Field(default="", max_length=2000)
+    expected_outcome: str = Field(default="", max_length=2000)
+    project_id: int | None = None
+    goal_id: int | None = None
+
+
+class HypothesisEvidenceBody(BaseModel):
+    side: str  # supporting|contradicting
+    type: str = "note"
+    id: Any = None
+    note: str = Field(default="", max_length=1000)
+
+
+class HypothesisResultBody(BaseModel):
+    actual_outcome: str = Field(min_length=1, max_length=4000)
+    passed: bool | None = None
+    source: str = ""
+
+
+class HypothesisStatusBody(BaseModel):
+    status: str
+    note: str = Field(default="", max_length=2000)
 
 
 class ExperimentBody(BaseModel):
@@ -1434,6 +1462,71 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.post("/api/evolution/cycle")
     def evolution_cycle(admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
         return {"experiments_started": evolution.cycle()}
+
+    # --- hypotheses (ASEAO07 S07-R-03): people propose and conclude them; experiments test theirs ---
+    @app.get("/api/hypotheses")
+    def hypotheses_list(status: str = "", experiment_id: int | None = None, goal_id: int | None = None,
+                        project_id: int | None = None, user: dict[str, Any] = Depends(current_user)
+                        ) -> list[dict[str, Any]]:
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        rows = hypotheses.list_hypotheses(status, experiment_id, goal_id, project_id)
+        return [h for h in rows if seen is None or h["project_id"] is None or h["project_id"] in seen]
+
+    @app.post("/api/hypotheses")
+    def hypothesis_create(body: HypothesisBody, user: dict[str, Any] = Depends(allowed("run"))) -> dict[str, Any]:
+        pid = body.project_id
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+            g = s.get(Goal, body.goal_id) if body.goal_id is not None else None
+            if body.goal_id is not None and g is None:
+                raise HTTPException(400, f"no goal {body.goal_id}")
+            pid = pid if pid is not None else (g.project_id if g else None)
+        if seen is not None and pid is not None and pid not in seen:
+            raise HTTPException(404, "no such project")
+        try:
+            h = hypotheses.create(body.statement, body.reason, actor=f"user:{user['name']}",
+                                  test_method=body.test_method, expected_outcome=body.expected_outcome,
+                                  project_id=pid, goal_id=body.goal_id)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(user, "hypothesis_create", h["id"], after={"statement": h["statement"]})
+        return h
+
+    @app.post("/api/hypotheses/{hypothesis_id}/evidence")
+    def hypothesis_evidence(hypothesis_id: int, body: HypothesisEvidenceBody,
+                            user: dict[str, Any] = Depends(allowed("run"))) -> dict[str, Any]:
+        try:
+            h = hypotheses.add_evidence(hypothesis_id, body.side, {"type": body.type, "id": body.id, "note": body.note},
+                                        f"user:{user['name']}")
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(user, "hypothesis_evidence", hypothesis_id, after=body.model_dump())
+        return h
+
+    @app.post("/api/hypotheses/{hypothesis_id}/result")
+    def hypothesis_result(hypothesis_id: int, body: HypothesisResultBody,
+                          admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        actor = f"user:{admin['name']}"
+        try:
+            h = hypotheses.record_result(hypothesis_id, body.actual_outcome,
+                                         {"source": body.source or actor, "passed": body.passed}, actor)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "hypothesis_result", hypothesis_id, after=body.model_dump())
+        return h
+
+    @app.post("/api/hypotheses/{hypothesis_id}/status")
+    def hypothesis_status(hypothesis_id: int, body: HypothesisStatusBody,
+                          admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            before = hypotheses.get(hypothesis_id)["status"]
+            h = hypotheses.set_status(hypothesis_id, body.status, f"user:{admin['name']}", body.note)
+        except (ValueError, PermissionError) as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "hypothesis_status", hypothesis_id, before={"status": before},
+               after={"status": h["status"], "note": body.note})
+        return h
 
     # --- experiments, capability gaps, learning plans (SPEC-13) ---
     @app.get("/api/experiments")

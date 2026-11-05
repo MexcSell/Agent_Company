@@ -24,7 +24,7 @@ reliable. The requirements below are the parts the core pipeline needs now.
 | S07-FR-09 | Independent review | open → S07-R-01 |
 | S07-FR-10 | Structured recommendations | open → SPEC-04 S04-R-02 (decision records) |
 | S07-FR-11 | Budgets and deadlines | gated |
-| S07-FR-12 | Reproducible results | open → S07-R-03 |
+| S07-FR-12 | Reproducible results | partial (S07-R-03): hypotheses record their test method, expected and actual outcome and the test's source; experiments keep suite, repeats and sample sizes |
 
 ## Specific requirements
 
@@ -50,6 +50,18 @@ reliable. The requirements below are the parts the core pipeline needs now.
   (`proposed→investigating→testing→supported|rejected|inconclusive→archived`).
 - Used by SPEC-13 experiments (each experiment states its hypothesis). An agent cannot mark a
   hypothesis supported without a recorded test result.
+- **Status: done** (table `hypotheses`, `hypotheses.py`, `tests/test_hypotheses.py`). Transitions exactly as above,
+  plus archiving a proposed or investigating hypothesis (dropped) and inconclusive → investigating (tested again).
+  Evidence for and against is a list of `{type, id, note, by, at}`. `record_result` stores the actual outcome and the
+  test's source; `set_status(..., "supported")` raises `PermissionError` for an agent (`agent:*`, `system`) without
+  a recorded result, and asks a person for a note instead. `experiments.record` turns a stated hypothesis into one
+  in `testing` (test method: the suite and repeats; expected: beating the baseline by `min_improvement`), and the
+  comparison written by `experiments.update` concludes it (better → supported, not better → rejected, a side
+  with no runs → inconclusive; evolution smoke trials use `passed`). API: `GET/POST /api/hypotheses`,
+  `POST /api/hypotheses/{id}/evidence|result|status` (result and status for administrators; all audited); the
+  GM's toolbox `gm hypothesis|hypotheses|hypothesis-status` acts as an agent; Knowledge → Hypotheses. Not done:
+  hypotheses as knowledge items of class `HYPOTHESIS` (they are their own table; knowledge items keep the class
+  for lessons).
 
 ### S07-R-04 Predictions with calibration — §11 (AT-014..016) — P2
 - Planner time/cost estimates are predictions; record them with the actual outcome
