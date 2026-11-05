@@ -1366,7 +1366,7 @@ def _escalate_repeated(goal_id: int, iteration: int) -> str:
                                                        Task.writes, Task.agent_id.is_not(None))
                            .order_by(Task.id)).first()
     escalation.escalate(level, f"failing in {streak} iterations in a row: {', '.join(repeated)}",
-                        goal_id=goal_id, agent_id=writer, deliver=level > 2, checks=repeated, streak=streak)
+                        goal_id=goal_id, agent_id=writer, deliver=level == 3, checks=repeated, streak=streak)
     return (f"\n\nEscalation: {', '.join(repeated)} failed in the last {streak} iterations in a row. Repeating the "
             "same approach will not fix it: re-plan with a different approach, or split the failing part into "
             "smaller tasks with their own checks.")

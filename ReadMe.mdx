@@ -163,9 +163,21 @@ Each iteration gets a score (the share of checks that passed). If the last
 iteration fails and scored worse than an earlier one, the goal's branch is reset
 to the best iteration, so a late regression doesn't throw away better work.
 
-Budgets (Settings): `goal_budget_usd` caps the model spend per goal and
-`goal_time_budget` its wall-clock time. At 60% the agents are told to converge;
-at 100% the goal stops (and keeps its best iteration).
+Budgets (Settings): `goal_budget_usd` caps the model spend per goal,
+`goal_token_budget` its model tokens, `goal_time_budget` its wall-clock time and
+`goal_agent_limit` how many of its tasks run at once. An administrator can give one
+goal its own values (the settings button in the goal view). At 60% the agents are
+told to converge; at 100% the goal pauses for an administrator (or fails, with
+`budget_exhausted_action = stop`). A goal's budget also covers the goals its
+proposals spawn: a child goal gets at most what its parent has left, and what it
+does not use returns to the parent when it ends.
+
+When the same check keeps failing, the goal escalates one level per
+`escalate_after` iterations: back to the planner, then to the manager of the room
+whose agent wrote the code, then the executive GM, then a person (a notification).
+Decisions escalate by category: organizational ones to the room manager, financial
+ones and decisions about the platform's own code to the executive GM, critical ones
+to a person. Agents read escalations addressed to them in their next prompt.
 
 ## Services (CDAF)
 
@@ -435,7 +447,12 @@ instructions.
 question and optional URLs. The research lead collects the URLs, searches the
 knowledge store and writes a report with objective, numbered findings citing their
 sources, gaps, a recommendation and the source list; the report is filed as
-knowledge too.
+knowledge too. Optional: keywords, preferred kinds of source (official, academic,
+open source), priority, a deadline, a budget, a repeat interval (hourly to monthly)
+and the project or goal it serves (its report then lands on that goal's
+blackboard). A question that an open or recent request already asks gets that
+request instead of a second one. Queued and recurring requests run in the
+background, the most urgent first.
 
 ## Users
 
