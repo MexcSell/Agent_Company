@@ -425,3 +425,40 @@ def test_the_study_rotation_never_takes_confidential_lessons_or_reports_into_a_d
     agentdefs.study(dev)
     assert prompts and "pin the parser" in prompts[0]
     assert "half-even" not in prompts[0] and "Closed python pricing" not in prompts[0]
+
+
+def test_the_instructors_verdict_is_recorded_and_decide_closes_compatible_pairs(monkeypatch):
+    """S11-R-04: the model judge advises; in 'decide' mode a compatible pair is closed as both hold, never rejected."""
+    from agent_company import executors, prefs
+
+    answers = iter(["VERDICT: CONTRADICTS — opposite advice for the same setup.",
+                    "VERDICT: COMPATIBLE — one is about tests, the other about production."])
+
+    def fake(self, req):
+        assert req.purpose == "contradiction" and "<item>" in req.prompt
+        return executors.Result(text=next(answers))
+
+    monkeypatch.setattr(executors.OfflineExecutor, "_run", fake)
+    dev = agent_of("developer")
+    g1, g2, g3 = loop.create_goal("a"), loop.create_goal("b"), loop.create_goal("c")
+    learning.learn(dev, g1, "Use an in-memory SQLite database for the test suite runs.", True, ["sqlite"])
+    learning.learn(dev, g2, "Never use an in-memory SQLite database for the test suite runs.", True, ["sqlite"])
+    [pair] = learning.contradictions()
+    assert pair["judge"]["verdict"] == "contradicts" and pair["state"] == "open"  # advise: a person decides
+    prefs.set_value("contradiction_judge", "decide", actor="user:admin")
+    learning.learn(dev, g3, "Do not use an in-memory SQLite database for the test suite runs.", True, ["sqlite"])
+    closed = [p for p in learning.contradictions(state="") if p["judge"]["verdict"] == "compatible"]
+    assert closed and all(p["state"] == "resolved" and p["resolution"] == "keep_both" for p in closed)
+    assert {learning.item(i)["status"] for p in closed for i in (p["new"]["id"], p["old"]["id"])} == {"approved"}
+    prefs.set_value("contradiction_judge", "off", actor="user:admin")
+    with pytest.raises(ValueError):
+        prefs.set_value("contradiction_judge", "always", actor="user:admin")
+
+
+def test_without_a_model_verdict_the_pair_waits_for_a_person():
+    dev = agent_of("developer")
+    g1, g2 = loop.create_goal("a"), loop.create_goal("b")
+    learning.learn(dev, g1, "Cache the rendered invoice template.", True, ["jinja"])
+    learning.learn(dev, g2, "Never cache the rendered invoice template.", True, ["jinja"])
+    [pair] = learning.contradictions()
+    assert pair["state"] == "open" and pair["judge"]["verdict"] == "unsure"

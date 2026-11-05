@@ -125,7 +125,7 @@ Machines code):
 | Innovation portfolio, opportunity register and technology radar | ASEAO10 §6-14, §21 | gated with the innovation rooms → S10-G-01..G-06 |
 | Knowledge graph of agents, projects, technologies and lessons | SPEC11 §7, 1.txt (Neo4j) | done (`kgraph.py`: edges as side effects, paged graph API, Knowledge → graph explorer; S11-R-07) |
 | Knowledge items with provenance; task-relevant, project-scoped retrieval | SPEC11 §3, §8 | done (`learning.retrieve`: FTS5, weights as settings guarded by the retrieval eval, standards and research documents in a task's package) → S11-R-01, S11-R-03, S11-R-08 |
-| Contradiction handling between stored lessons | SPEC11 §6.3 | done (`CONTRADICTS` edges, people resolve with a rationale, S11-R-04) |
+| Contradiction handling between stored lessons | SPEC11 §6.3 | done (`CONTRADICTS` edges, the instructor's verdict per pair (`contradiction_judge` advise/decide), people resolve with a rationale, S11-R-04) |
 | Knowledge versions (supersede) and deletion with their links | SPEC11 §10.3 | done (`learning.supersede`, `delete`, S11-R-06) |
 | Structured experience reports after every task | SPEC11 §9.1 | done (`Lesson.report`, `loop._experience_facts`, `learning.clean_report`, S11-R-02) |
 | Dashboard: Knowledge view (search, review queue, contradictions side by side), Security view (stops, incidents, refused commands per agent, alerts), goal trace, stop level for every user | SPEC-15 | done (`static/knowledge.js`, `static/security.js`, S15-R-01..R-04) |

@@ -72,6 +72,9 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "dependency_audit": (str, "Changed dependency manifests are audited with pip-audit / npm audit when installed: "
                               "'block' fails the gate on a known vulnerability in an added or changed dependency, "
                               "'warn' only lists it, 'off' runs no audit"),
+    "contradiction_judge": (str, "Knowledge contradictions: the instructor's verdict is recorded for the person who "
+                                 "resolves the pair ('advise'), also closes a pair it finds compatible as 'both hold' "
+                                 "('decide'; it never rejects an item), or no model is asked ('off')"),
 }
 RETRIEVAL_KEYS = {k for k in SCHEMA if k.startswith("retrieval_w_")}
 LIMITS: dict[str, tuple[float, float]] = {
@@ -90,7 +93,8 @@ LIMITS: dict[str, tuple[float, float]] = {
 CHOICES: dict[str, set[str]] = {"proposal_policy": {"user", "superiors"}, "executor": {"auto", "offline"},
                                 "transport": {"https", "http"}, "budget_exhausted_action": {"pause", "stop"},
                                 "recruit_requires_approval": {"never", "permanent_only", "always"},
-                                "sandbox": {"off", "auto", "required"}, "dependency_audit": {"off", "warn", "block"}}
+                                "sandbox": {"off", "auto", "required"}, "dependency_audit": {"off", "warn", "block"},
+                                "contradiction_judge": {"off", "advise", "decide"}}
 
 
 def _coerce(key: str, value: Any) -> Any:

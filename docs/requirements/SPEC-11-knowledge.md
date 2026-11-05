@@ -93,8 +93,13 @@ S11-R-06 done · S11-R-07 done · S11-R-08 done.
   two; lessons of the same goal are progress, not contradiction. A pair gets a `CONTRADICTS` edge in `kg_edges`
   and an administrator notification; both items stay approved but lose 1.0 in ranking and are marked *disputed
   by K…* in prompts. A person resolves it in the Knowledge view (*older holds*, *both hold*, *newer holds*, with a
-  required rationale); the losing item is rejected with the reason, the edge keeps the resolution. A model judge
-  (the instructor) is open.
+  required rationale); the losing item is rejected with the reason, the edge keeps the resolution. The model judge:
+  `learning.judge_contradiction` asks the instructor (role `instructor`, on a model cleared for the higher of the
+  two items' classifications) for `VERDICT: CONTRADICTS|COMPATIBLE|UNSURE — why`, with both items wrapped as data;
+  the verdict, reason, model and agent are kept on the edge (`judge`) and shown beside the pair. Setting
+  `contradiction_judge`: `advise` (default) only records it, `decide` also closes a COMPATIBLE pair as *both hold*
+  (by "<instructor> (judge)"), `off` asks no model. A model never rejects an item; without an instructor, a cleared
+  model or a verdict the pair waits as before (`unsure`; the offline simulator answers UNSURE).
 
 ### S11-R-05 Memory-poisoning protection — §10.4
 - Before storing: secret scan (reuse `checks.scan_secrets` patterns) → quarantine on hit (KT-016);

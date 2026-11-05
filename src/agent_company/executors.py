@@ -633,6 +633,9 @@ class OfflineExecutor(Executor):
                 f"{req.data.get('description', '')}\n\nKey points:\n1. Keep the scope small.\n"
                 "2. Define acceptance tests first.\n3. Report evidence, not claims.\n")
 
+    def _contradiction(self, req: Request) -> str:
+        return "VERDICT: UNSURE — the offline simulator does not judge knowledge; a person decides."
+
     def _triage(self, req: Request) -> str:
         return f"APPROVE\n'{req.data.get('title', 'the proposal')}' is small and serves the project."
 

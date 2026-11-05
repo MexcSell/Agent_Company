@@ -102,6 +102,8 @@ class Settings:
     sandbox: str = "auto"
     # S08-R-05: pip-audit / npm audit of changed manifests at the gate: off | warn | block
     dependency_audit: str = "block"
+    # S11-R-04: the instructor's verdict on a flagged contradiction: off | advise | decide
+    contradiction_judge: str = "advise"
     sandbox_memory_mb: int = 4096
     sandbox_tasks: int = 512
     sandbox_cpus: float = 2.0
@@ -178,6 +180,7 @@ def load_settings() -> Settings:
         retrieval_strategies=[x.strip() for x in (os.environ.get("RETRIEVAL_STRATEGIES") or "").split(",") if x.strip()],
         sandbox=(os.environ.get("SANDBOX") or "auto").lower(),
         dependency_audit=(os.environ.get("DEPENDENCY_AUDIT") or "block").lower(),
+        contradiction_judge=(os.environ.get("CONTRADICTION_JUDGE") or "advise").lower(),
         sandbox_memory_mb=_int("SANDBOX_MEMORY_MB", 4096),
         sandbox_tasks=_int("SANDBOX_TASKS", 512),
         sandbox_cpus=float(os.environ.get("SANDBOX_CPUS") or 2.0),
