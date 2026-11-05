@@ -259,7 +259,21 @@ window.WSP = window.WSP || {};
 
   // --- views ------------------------------------------------------------------------
   const TEXT_MODES = { markdown: ["preview", "source"], csv: ["table", "source"], json: ["pretty", "source"], svg: ["image", "source"] };
-  const MODE_LABEL = { preview: "Preview", source: "Source", table: "Table", pretty: "Formatted", image: "Image", edit: "Edit" };
+  const MODE_LABEL = { code: "Code", preview: "Preview", source: "Source", table: "Table", pretty: "Formatted", image: "Image", edit: "Edit" };
+  // The toolbar's icons (24px stroke paths); each button keeps its name as tooltip and accessible label.
+  const ICON = {
+    code: "M8 6l-6 6 6 6M16 6l6 6-6 6", source: "M8 6l-6 6 6 6M16 6l6 6-6 6", edit: "M4 20h4L19 9l-4-4L4 16zM14 6l4 4",
+    preview: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+    table: "M3 5h18v14H3zM3 10h18M3 15h18M9 5v14M15 5v14", image: "M3 5h18v14H3zM3 16l5-5 4 4 3-3 6 6M15 9h.01",
+    pretty: "M8 4H7a2 2 0 0 0-2 2v4l-2 2 2 2v4a2 2 0 0 0 2 2h1M16 4h1a2 2 0 0 1 2 2v4l2 2-2 2v4a2 2 0 0 1-2 2h-1",
+    find: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-5-5", wrap: "M3 6h18M3 12h15a3 3 0 0 1 0 6h-4M16 16l-2 2 2 2M3 18h7",
+    "zoom-out": "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-5-5M8 11h6", "zoom-in": "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-5-5M8 11h6M11 8v6",
+    "zoom-fit": "M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5", "copy-path": "M8 8h12v12H8zM4 16V4h12", reload: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7",
+    download: "M12 13v8M8 17l4 4 4-4M4.4 15.3A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.4 8.3",
+    up: "M6 15l6-6 6 6", down: "M6 9l6 6 6-6", close: "M6 6l12 12M18 6L6 18",
+  };
+  const ico = (k) => W.svg(ICON[k]);
+  const ibtn = (act, label, extra = "") => `<button type="button" class="icon-btn sm" data-act="${act}" title="${label}" aria-label="${label.replace(/ \(.*\)$/, "")}"${extra}>${ico(act)}</button>`;
   const BINARY_KINDS = new Set(["image", "pdf", "docx", "audio", "video", "archive", "sheet", "slides"]);
 
   W.defaultMode = (kind) => (TEXT_MODES[kind] ? TEXT_MODES[kind][0] : "code");
@@ -278,23 +292,30 @@ window.WSP = window.WSP || {};
     const editable = textual && !binaryText;
     const crumbs = (W.rel ? W.rel(tab.path) : tab.path).split("/").filter(Boolean);
     host.innerHTML = `<div class="wv-bar"><div class="wv-crumbs mono" title="${esc(tab.path)}">${crumbs.map((c, k) => `<span${k === crumbs.length - 1 ? ' class="last"' : ""}>${esc(c)}</span>`).join('<i>›</i>')}</div>
-      <div class="wv-actions">${editable ? [...modes, "edit"].map((m) => `<button class="seg${tab.mode === m ? " on" : ""}" data-mode="${m}">${MODE_LABEL[m] || "Code"}</button>`).join("") : ""}
+      <div class="wv-actions">${editable ? [...modes, "edit"].map((m) => `<button type="button" class="seg${tab.mode === m ? " on" : ""}" data-mode="${m}" title="${MODE_LABEL[m]}" aria-label="${MODE_LABEL[m]}" aria-pressed="${tab.mode === m}">${ico(m)}</button>`).join("") : ""}
       ${tab.mode === "edit" ? `<button class="btn sm primary" data-act="save" ${tab.dirty ? "" : "disabled"}>Save</button>` : ""}
-      ${["code", "source"].includes(tab.mode) ? `<button class="icon-btn sm" data-act="wrap" title="Word wrap">↩</button>` : ""}
-      ${["image", "pdf"].includes(tab.kind) || (tab.kind === "svg" && tab.mode === "image") ? `<button class="icon-btn sm" data-act="zoom-out" title="Zoom out">−</button><span class="muted zoom">${tab.zoom ? `${Math.round(tab.zoom * 100)}%` : "Fit"}</span><button class="icon-btn sm" data-act="zoom-in" title="Zoom in">+</button><button class="icon-btn sm" data-act="zoom-fit" title="Fit">⤢</button>` : ""}
-      <button class="icon-btn sm" data-act="copy-path" title="Copy path">⧉</button><button class="icon-btn sm" data-act="reload" title="Reload">⟳</button><a class="icon-btn sm" href="${rawUrl(tab.path, true)}" title="Download" download>⤓</a></div></div>
-      <div class="wv-body"></div>`;
+      ${searchable(tab) ? ibtn("find", "Find in this file (Ctrl+F)", ` aria-pressed="${!!tab.find?.open}"`) : ""}
+      ${["code", "source"].includes(tab.mode) ? ibtn("wrap", "Word wrap") : ""}
+      ${["image", "pdf"].includes(tab.kind) || (tab.kind === "svg" && tab.mode === "image") ? `${ibtn("zoom-out", "Zoom out")}<span class="muted zoom">${tab.zoom ? `${Math.round(tab.zoom * 100)}%` : "Fit"}</span>${ibtn("zoom-in", "Zoom in")}${ibtn("zoom-fit", "Fit")}` : ""}
+      ${ibtn("copy-path", "Copy path")}${ibtn("reload", "Reload")}<a class="icon-btn sm" href="${rawUrl(tab.path, true)}" title="Download" aria-label="Download" download>${ico("download")}</a></div></div>
+      ${searchable(tab) && tab.find?.open ? `<div class="wv-find" role="search"><input type="search" class="wv-find-q" placeholder="Find in file" aria-label="Find in file" spellcheck="false">
+        <span class="muted wv-find-n" aria-live="polite"></span>${ibtn("up", "Previous match (Shift+Enter)")}${ibtn("down", "Next match (Enter)")}${ibtn("close", "Close (Esc)")}</div>` : ""}
+      <div class="wv-body" tabindex="-1"></div>`;
     const body = host.querySelector(".wv-body");
     host.querySelectorAll("[data-mode]").forEach((b) => (b.onclick = () => { tab.mode = b.dataset.mode; renderView(tab, host, actions); }));
     host.querySelectorAll("[data-act]").forEach((b) => (b.onclick = async () => {
       const a = b.dataset.act;
       if (a === "save") return actions.save(tab);
+      if (a === "find") return openFind(tab, host, actions, !tab.find?.open);
+      if (a === "up" || a === "down") return stepFind(tab, host, a === "up" ? -1 : 1);
+      if (a === "close") return openFind(tab, host, actions, false);
       if (a === "wrap") { tab.wrap = !tab.wrap; body.querySelector(".codev")?.classList.toggle("wrap", tab.wrap); return; }
       if (a === "copy-path") return W.copyText(tab.path, "Path copied");
       if (a === "reload") { if (tab.dirty && !confirm("Discard unsaved changes?")) return; tab.file = null; tab.text = null; tab.dirty = false; tab.pdf = null; actions.changed(tab); return renderView(tab, host, actions); }
       if (a.startsWith("zoom")) { tab.zoom = a === "zoom-fit" ? null : Math.min(8, Math.max(0.1, (tab.zoom || 1) * (a === "zoom-in" ? 1.25 : 0.8))); return renderView(tab, host, actions); }
     }));
 
+    wireFind(tab, host, actions);
     if (binaryText) {
       body.innerHTML = infoCard(tab, tab.file.size > 2 * 1024 * 1024 ? "This file is larger than 2 MB." : "This is a binary file.");
       return;
@@ -328,9 +349,97 @@ window.WSP = window.WSP || {};
     body.innerHTML = infoCard(tab, k === "archive" ? "Archive. Extract it from the explorer's context menu, or download it." : "This file type has no preview.");
   };
 
+  // --- find in the file: every match highlighted (CSS Custom Highlight API), Enter steps through them ---------------
+  const searchable = (tab) => !BINARY_KINDS.has(tab.kind) && !tab.file?.binary || tab.kind === "docx";
+  function openFind(tab, host, actions, open) {
+    tab.find = { q: "", i: 0, ...tab.find, open };
+    if (!open) clearFind();
+    W.renderView(tab, host, actions).then(() => { if (open) host.querySelector(".wv-find-q")?.select(); else host.querySelector(".wv-body")?.focus?.(); });
+  }
+  function clearFind() { if (window.CSS?.highlights) { CSS.highlights.delete("wv-find"); CSS.highlights.delete("wv-find-cur"); } }
+  function wireFind(tab, host, actions) {
+    if (!host.dataset.findKeys) {  // Ctrl+F inside the viewer finds in the file (the explorer's Ctrl+F filters its tree)
+      host.dataset.findKeys = "1";
+      host.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && searchable(host._tab)) { e.preventDefault(); if (host._tab.find?.open) host.querySelector(".wv-find-q")?.select(); else openFind(host._tab, host, host._actions, true); }
+        else if (e.key === "F3" && host._tab.find?.q) { e.preventDefault(); stepFind(host._tab, host, e.shiftKey ? -1 : 1); }
+      });
+    }
+    host._tab = tab; host._actions = actions;
+    clearFind();
+    const q = host.querySelector(".wv-find-q");
+    if (!q) return;
+    q.value = tab.find.q;
+    q.oninput = () => { tab.find.q = q.value; tab.find.i = 0; runFind(tab, host, true); };
+    q.onkeydown = (e) => {
+      if (e.key === "Enter") { e.preventDefault(); stepFind(tab, host, e.shiftKey ? -1 : 1); }
+      else if (e.key === "Escape") { e.preventDefault(); openFind(tab, host, actions, false); }
+    };
+    requestAnimationFrame(() => runFind(tab, host, false));  // once the file's view is in place
+  }
+  // Ranges of every match of the query in the rendered view (text split over highlighted tokens is joined first).
+  function matchRanges(root, q) {
+    const nodes = [], ranges = [];
+    let text = "";
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n; (n = walker.nextNode());) { if (n.parentElement.closest(".ln, .wv-status")) continue; nodes.push([n, text.length]); text += n.data; }
+    const hay = text.toLowerCase(), needle = q.toLowerCase();
+    const at = (pos) => { let lo = 0, hi = nodes.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (nodes[mid][1] <= pos) lo = mid; else hi = mid - 1; } return nodes[lo]; };
+    for (let i = hay.indexOf(needle); i >= 0 && ranges.length < 10000; i = hay.indexOf(needle, i + needle.length)) {
+      const [sn, so] = at(i), [en, eo] = at(i + needle.length - 1), r = document.createRange();
+      r.setStart(sn, i - so); r.setEnd(en, i + needle.length - eo);
+      ranges.push(r);
+    }
+    return ranges;
+  }
+  function runFind(tab, host, scroll) {
+    const f = tab.find, body = host.querySelector(".wv-body"), n = host.querySelector(".wv-find-n");
+    if (!f?.open || !body || !n) return;
+    clearFind();
+    const ta = body.querySelector("textarea");
+    if (!f.q) { n.textContent = ""; f.count = 0; return; }
+    if (ta) {  // the editor: positions in its text; the current match is selected when stepped to
+      const hay = ta.value.toLowerCase(), needle = f.q.toLowerCase();
+      f.pos = [];
+      for (let i = hay.indexOf(needle); i >= 0 && f.pos.length < 10000; i = hay.indexOf(needle, i + needle.length)) f.pos.push(i);
+      f.count = f.pos.length;
+    } else {
+      f.ranges = matchRanges(body, f.q); f.count = f.ranges.length;
+    }
+    if (f.i >= f.count) f.i = 0;
+    n.textContent = f.count ? `${f.i + 1} of ${f.count}${f.count >= 10000 ? "+" : ""}` : "No results";
+    n.classList.toggle("bad", !f.count);
+    if (!f.count) return;
+    if (ta) { if (scroll) showInEditor(ta, f, false); return; }
+    if (window.CSS?.highlights && window.Highlight) {
+      CSS.highlights.set("wv-find", new Highlight(...f.ranges));
+      CSS.highlights.set("wv-find-cur", new Highlight(f.ranges[f.i]));
+    }
+    if (scroll) scrollToRange(body, f.ranges[f.i]);
+  }
+  function stepFind(tab, host, dir) {
+    const f = tab.find;
+    if (!f?.count) return runFind(tab, host, true);
+    f.i = (f.i + dir + f.count) % f.count;
+    const ta = host.querySelector(".wv-body textarea");
+    if (ta) { host.querySelector(".wv-find-n").textContent = `${f.i + 1} of ${f.count}`; return showInEditor(ta, f, true); }
+    runFind(tab, host, true);
+  }
+  function showInEditor(ta, f, select) {
+    const pos = f.pos[f.i], line = ta.value.slice(0, pos).split("\n").length - 1;
+    ta.scrollTop = Math.max(0, line * parseFloat(getComputedStyle(ta).lineHeight || "19.5") - ta.clientHeight / 2);
+    if (select) { ta.focus({ preventScroll: true }); ta.setSelectionRange(pos, pos + f.q.length); }
+  }
+  function scrollToRange(body, r) {
+    const rect = r.getBoundingClientRect(), box = body.getBoundingClientRect();
+    if (!rect.width && !rect.height) { r.startContainer.parentElement?.scrollIntoView({ block: "center" }); return; }
+    if (rect.top < box.top + 30 || rect.bottom > box.bottom - 10) body.scrollTop += rect.top - box.top - box.height / 2;
+    if (rect.left < box.left + 60 || rect.right > box.right - 20) body.scrollLeft += rect.left - box.left - box.width / 2;
+  }
+
   function infoCard(tab, msg) {
     return `<div class="wv-info"><div class="wv-info-icon">${W.fileIcon ? W.fileIcon(tab.name, false, 40) : ""}</div><strong>${esc(tab.name)}</strong>
-      <span class="muted">${esc(msg)}${tab.file?.size != null ? ` · ${W.size(tab.file.size)}` : ""}</span><a class="btn" href="${rawUrl(tab.path, true)}" download>Download</a></div>`;
+      <span class="muted">${esc(msg)}${tab.file?.size != null ? ` · ${W.size(tab.file.size)}` : ""}</span><a class="btn keep-text" href="${rawUrl(tab.path, true)}" download>${ico("download")} Download</a></div>`;
   }
   function imageHtml(tab) {
     const style = tab.zoom ? `style="width:auto;max-width:none;max-height:none;zoom:${tab.zoom}"` : "";

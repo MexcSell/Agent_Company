@@ -128,8 +128,8 @@ window.WSP = window.WSP || {};
     <aside class="wc" id="wc" aria-label="Claude Code"></aside>`;
   // Every window of the Workspace can be minimised (a slim strip) or maximised (fills the Workspace).
   function winBtns(pane) {
-    return `<button class="icon-btn sm win-btn" data-win="min" data-pane="${pane}" title="Minimise">${svg("M5 19h14")}</button>`
-      + `<button class="icon-btn sm win-btn" data-win="max" data-pane="${pane}" title="Maximise / restore">${svg("M4 4h16v16H4z")}</button>`;
+    return `<button class="icon-btn sm win-btn" data-win="min" data-pane="${pane}" title="Minimise">${svg("M7 5l5 5 5-5M4 15h16v4H4z")}</button>`
+      + `<button class="icon-btn sm win-btn" data-win="max" data-pane="${pane}" title="Maximise / restore">${svg("M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7")}</button>`;
   }
   function strip(pane, label) {
     return `<button class="win-strip" data-win="restore" data-pane="${pane}" title="Restore ${label}"><span>${label}</span></button>`;
@@ -144,7 +144,7 @@ window.WSP = window.WSP || {};
     S.el.classList.toggle("narrow", narrow);
     ["explorer", "editor", "terminal", "claude"].forEach((p) => { S.el.classList.toggle(`min-${p}`, min.has(p) && max !== p); S.el.classList.toggle(`max-${p}`, max === p); });
     S.el.classList.toggle("no-claude", S.noClaude);
-    S.el.querySelectorAll(".win-btn[data-win=max]").forEach((b) => (b.innerHTML = svg(max === b.dataset.pane ? "M8 8h12v12H8zM4 16V4h12" : "M4 4h16v16H4z")));
+    S.el.querySelectorAll(".win-btn[data-win=max]").forEach((b) => (b.innerHTML = svg(max === b.dataset.pane ? "M4 14h6v6M3 21l7-7M20 10h-6V4M21 3l-7 7" : "M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7")));
     const termOff = S.termHidden || max === "editor";
     // Editor and terminal both minimised: the centre column shrinks to a strip and a side window takes the room.
     const midMin = !max && !narrow && min.has("editor") && (min.has("terminal") || termOff);
@@ -710,6 +710,7 @@ window.WSP = window.WSP || {};
       <li><kbd>Ctrl</kbd>+<kbd>\`</kbd> terminal · <kbd>Ctrl</kbd>+<kbd>L</kbd> Claude · <kbd>Ctrl</kbd>+<kbd>S</kbd> save while editing</li></ul></div>`;
   }
   // Reload tabs whose files changed on disk (after a Claude run, for instance).
+  W.dirtyTabs = () => S.tabs.some((t) => t.dirty);
   W.reloadCleanTabs = () => S.tabs.forEach((t) => { if (!t.dirty) { t.file = null; t.text = null; t.pdf = null; t.stamp = Date.now(); W.renderView(t, t.host, viewActions); } });
 
   // --- view ------------------------------------------------------------------------------

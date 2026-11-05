@@ -548,7 +548,7 @@ def create_app(start_background: bool = True) -> FastAPI:
                                  .where(projects.Proposal.status == "pending")) if user["is_admin"] else 0
         return {"goals": by_status, "agents": agents, "pending_users": pending, "documents": docs,
                 "usage": usage.summary()["totals"], "unread": governance.unread_count(user),
-                "pending_proposals": proposals}
+                "pending_proposals": proposals, "build": static_build()}
 
     # --- agents ---
     @app.get("/api/rooms")
@@ -1009,7 +1009,13 @@ def create_app(start_background: bool = True) -> FastAPI:
     # --- workspace: Claude Code panel (administrators) ---
     @app.get("/api/workspace/claude")
     def claude_info(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        workspace.warm_usage()
         return workspace.available()
+
+    # /status: tokens and cost today and this week, every Claude Code session on the host.
+    @app.get("/api/workspace/claude-usage")
+    def claude_usage(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return workspace.claude_usage()
 
     @app.post("/api/workspace/claude")
     def claude_start(body: ClaudeBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
@@ -1683,7 +1689,7 @@ def create_app(start_background: bool = True) -> FastAPI:
     return app
 
 
-_INDEX: tuple[float, str] = (0.0, "")
+_INDEX: tuple[float, str, str] = (0.0, "", "")
 
 
 def _index_html() -> str:
@@ -1705,8 +1711,16 @@ def _index_html() -> str:
         return f"{m.group(1)}/static/{m.group(2)}?v={hashlib.sha256(f.read_bytes()).hexdigest()[:10]}{m.group(3)}"
 
     html = re.sub(r'((?:src|href)=")/static/([\w./-]+\.(?:js|css))(")', version, (STATIC / "index.html").read_text())
-    _INDEX = (stamp, html)
+    # The build a page was loaded from: /api/overview reports the current one, so an open tab reloads itself.
+    build = hashlib.sha256(html.encode()).hexdigest()[:12]
+    html = html.replace("</head>", f'<meta name="ac-build" content="{build}">\n</head>', 1)
+    _INDEX = (stamp, html, build)
     return html
+
+
+def static_build() -> str:
+    _index_html()
+    return _INDEX[2]
 
 
 def _visible_project_ids(s: Any, user: dict[str, Any]) -> set[int] | None:

@@ -23,13 +23,13 @@ const P = {
   check: "M5 12l5 5L20 7", x: "M6 6l12 12M18 6L6 18", copy: "M8 8h12v12H8zM4 16V4h12", play: "M7 4l13 8-13 8z", stop: "M6 6h12v12H6z",
   refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7", save: "M5 3h11l3 3v15H5zM8 3v6h8M8 21v-7h8v7", search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-5-5",
   send: "M4 12l16-8-6 16-2-7z", attach: "M21 12.5l-8.5 8.5a6 6 0 0 1-8.5-8.5L13 3.5a4 4 0 0 1 5.7 5.7L9.6 18.3a2 2 0 0 1-2.8-2.8L15 7.3",
-  upload: "M12 16V4M7 9l5-5 5 5M4 20h16", download: "M12 4v12M7 11l5 5 5-5M4 20h16", link: "M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1",
+  upload: "M12 16V4M7 9l5-5 5 5M4 20h16", download: "M12 13v8M8 17l4 4 4-4M4.4 15.3A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.4 8.3", link: "M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1",
   pause: "M7 5h3v14H7zM14 5h3v14h-3z", clone: "M8 8h12v12H8zM4 16V4h12", merge: "M6 3v6a6 6 0 0 0 6 6h6M15 12l3 3-3 3M6 21V9",
   git: "M6 3v12M18 9a3 3 0 1 0 0-.01M6 21a3 3 0 1 0 0-.01M18 12c0 4-6 3-12 6", key: "M15 7a4 4 0 1 1-3.5 6L4 20.5V17h3v-3h3l1.5-1.5A4 4 0 0 1 15 7z",
   user_add: "M9 7a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM2 21v-1a5 5 0 0 1 5-5h4M19 14v6M16 17h6", sitemap: "M9 3h6v5H9zM3 16h6v5H3zM15 16h6v5h-6zM12 8v4M6 16v-4h12v4",
   bolt: "M13 2L4 14h7l-1 8 9-12h-7z", plug: "M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4", book: "M4 4h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H4zM20 4h-6a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h7z",
   grip: "M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01", shield: "M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6z",
-  min: "M5 19h14", max: "M4 4h16v16H4z", restore: "M8 8h12v12H8zM4 16V4h12", eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+  min: "M7 5l5 5 5-5M4 15h16v4H4z", max: "M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7", restore: "M4 14h6v6M3 21l7-7M20 10h-6V4M21 3l-7 7", fit: "M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5", eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
   emergency: "M12 3l10 18H2zM12 10v4M12 17h.01", cpu: "M7 7h10v10H7zM9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4",
   system: "M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01",
   files: "M6 2h9l5 5v15H6zM14 2v6h6M9 13h6M9 17h6",
@@ -81,12 +81,43 @@ const store = {
 })();
 
 // --- API ------------------------------------------------------------------------
+// Page data: every GET a page makes is kept (the latest answer per URL). While show() builds a page, a kept
+// answer is used at once and the page is refreshed right after; pointing at a rail icon fetches that page's
+// data ahead (a far-away browser waits a round trip per page otherwise). Any change (POST, PUT…) drops it all.
+const apiCache = new Map(), apiInflight = new Map();
+const API_FRESH = 4000, API_KEEP = 200;
+const NO_CACHE = /^\/api\/(workspace|files|auth|stream|machines\/)/;  // live panels, consoles and sign-in: always asked
+let viewFetch = null;  // { urls, stale } while show() builds a page
 async function api(path, opts = {}) {
-  const res = await fetch(path, { credentials: "same-origin", headers: { "Content-Type": "application/json" }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
-  const data = await res.json().catch(() => ({}));
-  if (res.status === 421 && data.code === "wrong_scheme") { location.reload(); throw new Error(data.detail); }  // the hand-off page moves this tab
-  if (!res.ok) { const e = new Error(data.detail || data.code || res.statusText); e.status = res.status; e.code = data.code; throw e; }
-  return data;
+  const get = !opts.method || opts.method === "GET", cacheable = get && !NO_CACHE.test(path);
+  if (!get) apiCache.clear();
+  const vf = cacheable && !opts.fresh ? viewFetch : null;
+  if (vf) {
+    vf.urls.add(path);
+    const hit = apiCache.get(path);
+    if (hit) { if (Date.now() - hit.at > API_FRESH) vf.stale = true; return structuredClone(hit.data); }
+  }
+  if (cacheable && apiInflight.has(path)) return structuredClone(await apiInflight.get(path));
+  const req = (async () => {
+    const res = await fetch(path, { credentials: "same-origin", headers: { "Content-Type": "application/json" }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 421 && data.code === "wrong_scheme") { location.reload(); throw new Error(data.detail); }  // the hand-off page moves this tab
+    if (!res.ok) { if (res.status === 401) apiCache.clear(); const e = new Error(data.detail || data.code || res.statusText); e.status = res.status; e.code = data.code; throw e; }
+    if (cacheable) { apiCache.delete(path); apiCache.set(path, { data, at: Date.now() }); if (apiCache.size > API_KEEP) apiCache.delete(apiCache.keys().next().value); }
+    return data;
+  })();
+  if (!cacheable) return req;
+  apiInflight.set(path, req);
+  try { return structuredClone(await req); } finally { apiInflight.delete(path); }
+}
+// The URLs each page asked for last time (kept per browser): fetched ahead when the pointer reaches its icon.
+const viewUrls = (() => { try { return JSON.parse(store.get("ac.viewUrls") || "{}"); } catch { return {}; } })();
+function prefetchView(id) {
+  if (id === current || SELF_UPDATING.has(id)) return;
+  for (const url of viewUrls[id] || []) {
+    const hit = apiCache.get(url);
+    if (!apiInflight.has(url) && (!hit || Date.now() - hit.at > API_FRESH)) api(url).catch(() => {});
+  }
 }
 function toast(msg) { const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.append(t); setTimeout(() => t.remove(), 4000); }
 
@@ -174,7 +205,11 @@ function renderRail() {
     <div class="rail-group" data-group="bottom">${g.bottom.map(railButton).join("")}</div>
     ${me.is_admin ? `<button class="rail-edit${railEditing ? " on" : ""}" id="rail-edit" title="${railEditing ? "Done: save the order" : "Edit: drag icons to reorder (also in Settings → Navigation)"}" aria-label="Edit navigation">${icon(railEditing ? "check" : "grip", 18)}</button>` : ""}`;
   $("#rail").classList.toggle("editing", railEditing);
-  $("#rail").querySelectorAll("button[data-v]").forEach((b) => (b.onclick = () => { if (!railEditing) show(b.dataset.v); }));
+  $("#rail").querySelectorAll("button[data-v]").forEach((b) => {
+    b.onclick = () => { if (!railEditing) show(b.dataset.v); };
+    b.onpointerenter = b.onfocus = () => { if (!railEditing) prefetchView(b.dataset.v); };
+    b.classList.toggle("pending", b.dataset.v === current && $("#view").classList.contains("loading"));
+  });
   $("#rail [data-home]").onclick = (e) => { e.preventDefault(); show("dashboard"); };
   $("#rail-edit") && ($("#rail-edit").onclick = () => { railEditing = !railEditing; if (!railEditing) saveNav(readNav($("#rail"))); renderRail(); });
   if (railEditing) wireNavDrag($("#rail"), () => {});
@@ -211,7 +246,8 @@ const BRAND = `<svg viewBox="0 0 40 40" width="34" height="34" aria-hidden="true
   <circle class="brand-dust d1" cx="8" cy="9" r="1.2" fill="url(#bg-s)"/><circle class="brand-dust d2" cx="34" cy="20" r="1" fill="#fff"/><circle class="brand-dust d3" cx="7" cy="22" r=".9" fill="#fff"/></svg>`;
 async function updateBadges() {
   try {
-    const o = await api("/api/overview");
+    const o = await api("/api/overview", { fresh: true });
+    if (o.build && BUILD && o.build !== BUILD) newBuild = true;  // reloaded on the next page switch
     badges = { users: o.pending_users || 0, notifications: o.unread || 0, projects: (o.pending_proposals || 0) + (o.goals.awaiting_approval || 0) + (o.goals.running || 0) };
     renderRail(); setFavicon(o);
   } catch { /* signed out */ }
@@ -220,6 +256,9 @@ async function updateBadges() {
 // (a far-away browser waits a round trip or two for it). Views that keep their own windows are not kept.
 const viewCache = {};
 let showSeq = 0;
+// The build this page was loaded from; after a deploy the next page switch loads the new one (not over unsaved edits).
+const BUILD = document.querySelector('meta[name="ac-build"]')?.content || "";
+let newBuild = false;
 function enter() {
   const view = $("#view");
   view.classList.remove("enter"); void view.offsetWidth; view.classList.add("enter");
@@ -227,6 +266,7 @@ function enter() {
 }
 function show(id) {
   const view = $("#view");
+  if (newBuild && id !== current && !window.WSP?.dirtyTabs?.()) { store.set("ac.view", id); location.reload(); return; }
   if (id !== current) {
     VIEWS.find((x) => x.id === current)?.leave?.();  // e.g. Machines closes its console
     if (!SELF_UPDATING.has(current) && !view.classList.contains("loading"))
@@ -242,7 +282,10 @@ function show(id) {
   const seq = ++showSeq;
   show.overwritten = false;
   view.classList.remove("stale"); view.classList.add("loading"); view.inert = !!snap; $("#loadbar").hidden = false;
+  $("#rail").querySelector(`button[data-v="${id}"]`)?.classList.add("pending");
+  const vf = SELF_UPDATING.has(id) ? null : { urls: new Set(), stale: false };
   const done = async () => {
+    if (vf && viewFetch === vf) viewFetch = null;
     if (seq !== showSeq || !view.classList.contains("loading")) return;
     if (show.overwritten) {  // a page the user had left finished over this one: build this one again
       show.overwritten = false; view.classList.remove("flush", "fit");
@@ -250,11 +293,17 @@ function show(id) {
       if (seq !== showSeq) return;
     }
     view.classList.remove("loading", "stale"); view.inert = false; $("#loadbar").hidden = true;
+    $("#rail").querySelectorAll("button.pending").forEach((b) => b.classList.remove("pending"));
     iconize(view);  // now, not 300 ms later: buttons don't change shape after the page appears
     if (!snap) enter();
+    if (vf) {
+      if (vf.urls.size) { viewUrls[id] = [...vf.urls].slice(0, 12); store.set("ac.viewUrls", JSON.stringify(viewUrls)); }
+      if (vf.stale) render(true);  // it was drawn from data kept from before: now with fresh data
+    }
   };
   clearTimeout(show.guard); show.guard = setTimeout(done, 15000);  // a request that never answers must not lock the page
   clearInterval(refreshTimer);
+  viewFetch = vf;
   render().finally(done);
   updateBadges();
   // Live events push changes; polling stays as a slower fallback when the stream is down.
@@ -484,7 +533,7 @@ const BTN_ICONS = { save: "save", delete: "trash", remove: "trash", cancel: "x",
   disable: "pause", enable: "play", "make admin": "shield", permissions: "key", git: "git", open: "eye", continue: "play", "use this folder": "check",
   "diagnose all agents now": "bolt", "merge idle clones": "merge", create: "check", post: "send", "open folder": "folder", "reset computer": "refresh",
   "save token": "save", "create ssh key": "key", "delete key": "trash", "test github access": "bolt", "download certificate (ca)": "download",
-  source: "files", preview: "eye", wrap: "columns", close: "x", "ctrl+alt+del": "cpu", "full screen": "max", fit: "min", "100%": "max", refresh: "refresh",
+  source: "files", preview: "eye", wrap: "columns", close: "x", "ctrl+alt+del": "cpu", "full screen": "max", fit: "fit", "100%": "max", refresh: "refresh",
   "make machine": "check", "delete": "trash" };
 function iconize(root) {
   root.querySelectorAll("button.btn:not(.icon):not(.keep-text), a.btn:not(.icon):not(.keep-text)").forEach((b) => {

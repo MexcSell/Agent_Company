@@ -23,7 +23,7 @@ window.WSP = window.WSP || {};
   const C = { el: null, convs: [], tab: "", drafts: {}, open: new Set(), history: [], hpos: -1, model: store.get(K + ".model") || "default", effort: store.get(K + ".effort") || "default",
     sessions: [], names: {}, view: { sid: "", events: [], next: 0, d: null }, info: "", cli: null, dtimer: 0, following: "",
     closed: new Set(), hist: { open: false, tab: "running", q: "", items: [], total: 0, at: 0, timer: 0 },
-    logs: new Map(), provider: opt.provider || store.get(K + ".provider") || "claude", models: {} };
+    logs: new Map(), provider: opt.provider || store.get(K + ".provider") || "claude", models: {}, usage: { d: null, at: 0, busy: false, err: "" } };
   try { C.closed = new Set(JSON.parse(store.get(K + ".closed") || "[]")); } catch { /* ignore */ }
   const ENTRY = { "claude-vscode": "VS Code", cli: "Terminal", "sdk-cli": "SDK", "sdk-ts": "SDK", "sdk-py": "SDK", "claude-desktop": "Desktop", "claude-jetbrains": "JetBrains" };
   const PLACEHOLDER = opt.projectId ? "Tell the General Manager what you want…  Enter sends · Shift+Enter new line · paste or drop images"
@@ -31,8 +31,8 @@ window.WSP = window.WSP || {};
   const newConv = (o = {}) => ({ id: `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, session: "", cwd: "", title: "", runs: [], provider: C.provider, ...o });
   const PROV = { claude: { label: "Claude Code", logo: "✳" }, codex: { label: "Codex", logo: "◎" }, copilot: { label: "Copilot", logo: "⬡" } };
   const provOf = (c) => (c?.provider && PROV[c.provider] ? c.provider : "claude");
-  // Short labels, as in Claude Code itself; the menu's tooltip says what they are.
-  const EFFORT = { default: "effort", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
+  // The levels as Claude Code names them; the menu's tooltip says what they are.
+  const EFFORT = { default: "Default effort", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
   // The chosen effort if this conversation's agent has it, else none (its CLI's own setting).
   const effortOf = (c) => (C.effort !== "default" && (C.models[provOf(c)]?.efforts || []).includes(C.effort) ? C.effort : "");
   const saveConvs = () => store.set(K + ".convs", JSON.stringify(C.convs.map((c) => ({ id: c.id, session: c.session, cwd: c.cwd, title: c.title, provider: provOf(c),
@@ -54,9 +54,9 @@ window.WSP = window.WSP || {};
   const init = async (el) => {
     C.el = el;
     el.innerHTML = `<div class="wc-head"><span class="wc-logo" aria-hidden="true">✳</span><select id="wc-prov" class="wc-prov" aria-label="Agent" title="Which agent this conversation talks to"></select><span class="wc-dot" title="idle"></span><span class="grow"></span>
-        <select id="wc-effort" aria-label="Effort" title="Effort: how long the agent thinks before it answers. Higher is more thorough, slower and uses more tokens"></select>
-        <select id="wc-model" aria-label="Model" title="Model"></select>
-        <button class="icon-btn sm" id="wc-compact" title="Compact this conversation: Claude Code summarises it to cut token use (/compact)">${W.svg("M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7")}</button>
+        <span class="wc-pick"><select id="wc-effort" aria-label="Effort" title="Effort: how long the agent thinks before it answers. Higher is more thorough, slower and uses more tokens"></select>
+        <select id="wc-model" aria-label="Model" title="Model"></select></span>
+        <button class="icon-btn sm" id="wc-compact" title="Compact this conversation: Claude Code summarises it to cut token use (/compact)">${W.svg("M12 3v6M9 6l3 3 3-3M12 21v-6M9 18l3-3 3 3M4 12h16")}</button>
         <button class="icon-btn sm" id="wc-hist-btn" title="Sessions: running now and history (/history)" aria-expanded="false">${W.svg("M12 7v5l3 2M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4")}</button>
         <button class="icon-btn sm" id="wc-info-btn" title="Status, tasks and agents (/status, /tasks, /agents)" aria-expanded="false">${W.svg("M3 12h4l3-8 4 16 3-8h4")}</button>
         <button class="icon-btn sm" id="wc-new" title="New conversation in a new tab (the others stay open)">${W.svg("M12 5v14M5 12h14")}</button></div>
@@ -494,7 +494,7 @@ window.WSP = window.WSP || {};
     if (atBottom) log.scrollTop = log.scrollHeight;
   }
   // --- sessions on the host: tabs, live view, /status /tasks /agents -------------------------
-  const fmtK = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n || 0));
+  const fmtK = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n || 0));
   const dur = (s) => (s < 60 ? `${Math.floor(s)}s` : s < 3600 ? `${Math.floor(s / 60)} min` : s < 86400 ? `${Math.floor(s / 3600)} h` : `${Math.floor(s / 86400)} d`);
   const since = (t) => (t ? dur(Math.max(0, Date.now() / 1000 - t)) : "");
   // The selected tab's session: a conversation's own, else the session tab's.
@@ -806,7 +806,32 @@ window.WSP = window.WSP || {};
       ["Last activity", d?.last_activity ? `${since(d.last_activity)} ago` : ""],
       ["Claude Code", esc(d?.version || C.cli?.version || "") || (C.cli && !C.cli.available ? "not installed" : "")],
       ["Account", acct.method ? `${esc(acct.method)}${acct.email ? ` · ${esc(acct.email)}` : ""}${acct.organization ? ` <span class="muted">(${esc(acct.organization)})</span>` : ""}` : ""],
-    ]) + (!d && c ? '<p class="muted">Send a prompt to start a conversation; its status shows here.</p>' : "");
+    ]) + (!d && c ? '<p class="muted">Send a prompt to start a conversation; its status shows here.</p>' : "") + infoUsage();
+  }
+  // Tokens and cost today and this week, every Claude Code session on the host; read again every 30 s.
+  const left = (s) => { const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60); return d ? `${d} d ${h} h` : h ? `${h} h ${m} min` : `${m} min`; };
+  const money2 = (v) => `$${v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(2)}`;
+  function infoUsage() {
+    const U = C.usage;
+    if (!U.busy && Date.now() - U.at > 30000) {
+      U.busy = true;
+      api("/api/workspace/claude-usage").then((d) => { U.d = d; U.err = ""; }).catch((e) => { U.err = e.message; })
+        .finally(() => { U.busy = false; U.at = Date.now(); renderInfo(); });
+    }
+    const head = '<h4>Usage <span class="muted">every Claude Code session on this host</span></h4>';
+    if (!U.d) return head + `<p class="muted">${U.err ? esc(U.err) : '<span class="spin"></span> Counting tokens…'}</p>`;
+    const now = Date.now();
+    const row = (label, w) => {
+      const at = Date.parse(w.resets_at), rest = Math.max(0, (at - now) / 1000);
+      const parts = `Input ${fmt.format(w.input_tokens)} · output ${fmt.format(w.output_tokens)} · cache read ${fmt.format(w.cache_read_tokens)} · cache write ${fmt.format(w.cache_write_tokens)} · ${fmt.format(w.messages)} replies`
+        + (w.models.length ? `\n${w.models.map((m) => `${m.model}: ${fmtK(m.tokens)} tokens${m.priced ? `, ${money2(m.cost)}` : ", no price"}`).join("\n")}` : "");
+      const when = new Date(at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
+      return `<tr><th>${label}</th><td title="${esc(parts)}"><b>${fmtK(w.tokens)}</b> <span class="muted">tokens</span></td>
+        <td title="Cost at API prices${w.unpriced_tokens ? `; ${fmt.format(w.unpriced_tokens)} tokens of models without a price are not counted` : ""}"><b>${money2(w.cost)}</b>${w.unpriced_tokens ? "+" : ""}</td>
+        <td title="Resets ${esc(new Date(at).toLocaleString())}">resets ${esc(when)} <span class="muted">· in ${left(rest)}</span></td></tr>`;
+    };
+    return head + `<table class="wc-usage"><tbody>${row("Today", U.d.daily)}${row("This week", U.d.weekly)}</tbody></table>
+      <p class="muted wc-usage-note">Cost at the API prices in Models (cache reads 0.1×, cache writes 1.25–2× input): a Claude subscription is not billed per token. Day from 00:00 UTC, week from Monday 00:00 UTC. Hover a row for the breakdown.</p>`;
   }
   function infoTasks(d) {
     if (!d) return '<p class="muted">No session yet.</p>';

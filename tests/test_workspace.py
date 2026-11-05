@@ -511,3 +511,44 @@ def test_claude_session_stop_ends_the_process(admin, tmp_path, monkeypatch):
         assert member_of(admin).post(f"/api/workspace/claude-sessions/{SID}/stop").status_code == 403
     finally:
         proc.kill()
+
+
+def test_claude_usage_counts_today_and_this_week_once_per_message(admin):
+    from datetime import timedelta
+
+    from agent_company import usage
+
+    workspace._usage_files.clear()
+    now = usage.now()
+    folder = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / "-x"
+    (folder / "s1" / "subagents").mkdir(parents=True)
+
+    def line(mid, at, model="claude-opus-5-5", **u):
+        return json.dumps({"type": "assistant", "requestId": f"r{mid}", "timestamp": at.isoformat().replace("+00:00", "Z"),
+                           "message": {"id": mid, "model": model, "usage": u, "content": []}}) + "\n"
+
+    week = usage.week_start(now)
+    earlier = week + timedelta(minutes=1) if usage.day_start(now) > week else None
+    text = line("m1", now, input_tokens=1000, output_tokens=100, cache_read_input_tokens=10_000)
+    text += line("m1", now, input_tokens=1000, output_tokens=100, cache_read_input_tokens=10_000)  # the same reply's next block
+    text += line("m0", week - timedelta(hours=1), input_tokens=999_999)  # last week
+    text += json.dumps({"type": "user", "message": {"content": "usage of the word"}}) + "\n"
+    if earlier:
+        text += line("m2", earlier, model="claude-sonnet-5-5", output_tokens=1000)
+    (folder / "s1.jsonl").write_text(text)
+    (folder / "s1" / "subagents" / "agent-a.jsonl").write_text(
+        line("m3", now, model="claude-haiku-5-5-20260101", input_tokens=500, cache_creation_input_tokens=200,
+             cache_creation={"ephemeral_1h_input_tokens": 200}) + line("m4", now, model="mystery", output_tokens=7))
+    d = admin.get("/api/workspace/claude-usage").json()
+    day, wk = d["daily"], d["weekly"]
+    assert day["tokens"] == 11_100 + 700 + 7 and day["messages"] == 3 and day["unpriced_tokens"] == 7
+    # Opus 4/20 $ per 1M: 1000 input + 10k cache reads at 0.1x + 100 output; Haiku 0.1/0.5: 500 + 200 1-hour writes at 2x.
+    assert day["cost"] == round((4 * (1000 + 1000) + 20 * 100) / 1e6 + 0.1 * (500 + 400) / 1e6, 4)
+    assert wk["tokens"] == day["tokens"] + (1000 if earlier else 0)
+    assert 0 < day["resets_in_seconds"] <= 86400 and day["resets_at"] == (usage.day_start(now) + timedelta(days=1)).isoformat()
+    assert wk["resets_at"] == (week + timedelta(days=7)).isoformat()
+    # Appended lines are read on the next call; a member never sees it.
+    with (folder / "s1.jsonl").open("a") as f:
+        f.write(line("m5", now, output_tokens=50))
+    assert admin.get("/api/workspace/claude-usage").json()["daily"]["output_tokens"] == day["output_tokens"] + 50
+    assert member_of(admin).get("/api/workspace/claude-usage").status_code == 403

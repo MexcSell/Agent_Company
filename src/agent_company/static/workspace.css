@@ -112,6 +112,14 @@ kbd { font-family: var(--mono); font-size: 11px; padding: 0 5px; border: 1px sol
 .seg:first-child { border-radius: 5px 0 0 5px; } .seg:nth-last-child(1 of .seg) { border-radius: 0 5px 5px 0; margin-right: 6px; }
 .seg.on { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); position: relative; }
 .wv-body { flex: 1; min-height: 0; overflow: auto; position: relative; background: var(--code-bg); }
+.wv-body:focus { outline: none; }
+.seg { display: inline-flex; align-items: center; } .seg svg { width: 15px; height: 15px; }
+/* Find in the file */
+.wv-find { display: flex; align-items: center; gap: 4px; padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--border); background: var(--panel-2); flex: none; }
+.wv-find-q { width: min(320px, 50%); font-size: 12.5px; padding: 3px 8px; }
+.wv-find-n { font-size: 11.5px; min-width: 70px; margin: 0 4px; font-variant-numeric: tabular-nums; } .wv-find-n.bad { color: var(--bad); }
+::highlight(wv-find) { background-color: color-mix(in srgb, #f59e0b 35%, transparent); }
+::highlight(wv-find-cur) { background-color: #f59e0b; color: #111; }
 .wv-empty { padding: 20px; }
 .wv-note { padding: 6px 12px; font-size: 12.5px; } .wv-note.bad { color: var(--bad); background: var(--del-bg); }
 .codev { display: flex; min-height: 100%; font: 13px/1.5 var(--mono); }
@@ -199,7 +207,17 @@ table.csv .c4 { color: var(--t-kw); } table.csv .c5 { color: var(--t-num); } tab
 .wc-head select { width: auto; font-size: 12px; padding: 2px 4px; min-width: 0; flex: 0 1 auto; text-overflow: ellipsis; }
 /* A narrow panel: the agent's name gives way first (its logo stays), effort and model stay readable. */
 .wc-head .wc-prov { flex-shrink: 30; }
+.wc-pick { display: flex; gap: 6px; min-width: 0; }
 #wc-effort { min-width: 62px; } #wc-model { min-width: 72px; }
+/* A narrow panel: effort and model get a row of their own under the buttons, with their full names. */
+.wc { container-type: inline-size; }
+@container (max-width: 560px) {
+  .wc-head { flex-wrap: wrap; row-gap: 6px; }
+  .wc-pick { order: 10; flex: 1 0 100%; }
+  .wc-head > .grow { flex: 1 1 0 !important; }  /* the spacer and the agent's name never push a button to the next row */
+  .wc-head .wc-prov { flex: 1 1 0; min-width: 30px; max-width: max-content; }
+  .wc-pick select { flex: 0 1 auto; }
+}
 .wc-logo { color: var(--claude); font-size: 18px; line-height: 1; font-weight: 700; }
 .wc-logo.big { font-size: 40px; }
 .wc-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
@@ -417,3 +435,9 @@ table.csv .c4 { color: var(--t-kw); } table.csv .c5 { color: var(--t-num); } tab
 .wx > .wx-tree { flex: 1 1 0; min-height: 90px; }
 .wx-head { flex-wrap: wrap; row-gap: 2px; }
 .wx-head .wx-title { min-width: 70px; }
+/* /status: tokens and cost today and this week */
+.wc-usage { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.wc-usage th { text-align: left; font-weight: 600; color: var(--muted); padding: 3px 10px 3px 0; white-space: nowrap; }
+.wc-usage td { padding: 3px 10px 3px 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wc-usage td:last-child { white-space: normal; padding-right: 0; }
+.wc-usage-note { font-size: 11.5px; margin: 6px 0 0; }

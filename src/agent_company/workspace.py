@@ -38,7 +38,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -977,3 +977,143 @@ def delete_session(session_id: str) -> dict[str, Any]:
     with _watch_lock:
         _watch.pop(session_id, None)
     return {"session_id": session_id, "deleted": [str(p) for p in paths]}
+
+
+# --- token use of every Claude Code session on this host (the panel's /status) -------------------
+# Read from the transcripts (subagents' too): each assistant message records its usage, repeated on every
+# line of the message, so it is counted once per (message id, request id). Files are read incrementally.
+# Windows are the Cost and Usage monitor's (usage.py): today and this week from 00:00 UTC, Monday.
+_usage_files: dict[str, dict[str, Any]] = {}
+_usage_lock = threading.Lock()
+_prices_cache: tuple[float, dict[str, tuple[float, float]]] = (0.0, {})
+
+
+def _model_key(model: str) -> str:
+    return re.sub(r"-\d{8}$", "", model.rsplit("/", 1)[-1].strip().lower())
+
+
+def _prices() -> dict[str, tuple[float, float]]:
+    """$ per 1M input/output tokens per model id, from the Model Router's catalog (editable in Models)."""
+    global _prices_cache
+    if time.time() - _prices_cache[0] < 60:
+        return _prices_cache[1]
+    from sqlalchemy import select
+
+    from agent_company.db import ModelEntry, session
+
+    out: dict[str, tuple[float, float]] = {}
+    try:
+        with session() as s:
+            for m in s.scalars(select(ModelEntry).where(ModelEntry.kind == "llm")).all():
+                if m.model_id and (m.input_cost or m.output_cost):
+                    out.setdefault(_model_key(m.model_id), (m.input_cost, m.output_cost))
+    except Exception:  # noqa: BLE001 - no prices only means no cost, never a failed /status
+        pass
+    _prices_cache = (time.time(), out)
+    return out
+
+
+def _usage_scan(path: Path, entry: dict[str, Any]) -> None:
+    """Read what was appended to a transcript since the last scan (whole lines only)."""
+    with path.open("rb") as f:
+        f.seek(entry["offset"])
+        data = f.read()
+    end = data.rfind(b"\n") + 1
+    entry["offset"] += end
+    for line in data[:end].splitlines():
+        if b'"usage"' not in line or b'"assistant"' not in line:
+            continue  # tool results and prompts are most of the bytes: skip them unparsed
+        try:
+            raw = json.loads(line)
+        except ValueError:
+            continue
+        msg = raw.get("message") or {}
+        u = msg.get("usage") or {}
+        model = str(msg.get("model") or "")
+        if raw.get("type") != "assistant" or not u or model.startswith("<"):
+            continue
+        cw = u.get("cache_creation") or {}
+        cw1h = int(cw.get("ephemeral_1h_input_tokens") or 0)
+        entry["msgs"][(msg.get("id"), raw.get("requestId"))] = (
+            _ts(raw.get("timestamp")), _model_key(model), int(u.get("input_tokens") or 0),
+            int(u.get("output_tokens") or 0), int(u.get("cache_read_input_tokens") or 0),
+            max(0, int(u.get("cache_creation_input_tokens") or 0) - cw1h), cw1h)
+
+
+def claude_usage() -> dict[str, Any]:
+    """Tokens and their API-price cost today and this week, all Claude Code sessions on this host."""
+    from agent_company import usage
+
+    t = usage.now()
+    d0, w0 = usage.day_start(t), usage.week_start(t)
+    next_day, next_week = d0 + timedelta(days=1), w0 + timedelta(days=7)
+    since = w0.timestamp()
+    with _usage_lock:
+        seen: set[str] = set()
+        for path in (claude_home() / "projects").glob("**/*.jsonl"):
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            if st.st_mtime < since:
+                continue
+            key = str(path)
+            seen.add(key)
+            entry = _usage_files.get(key)
+            if entry is None or st.st_size < entry["offset"]:  # new, or rewritten shorter: read it again
+                entry = _usage_files[key] = {"offset": 0, "msgs": {}}
+            if st.st_size > entry["offset"]:
+                try:
+                    _usage_scan(path, entry)
+                except OSError:
+                    continue
+        for gone in set(_usage_files) - seen:
+            _usage_files.pop(gone, None)
+        msgs: dict[Any, tuple[Any, ...]] = {}
+        for entry in _usage_files.values():
+            msgs.update(entry["msgs"])
+    prices = _prices()
+
+    def window(start: float, resets: datetime) -> dict[str, Any]:
+        w = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0,
+             "tokens": 0, "cost": 0.0, "unpriced_tokens": 0, "messages": 0, "models": {}}
+        for at, model, i, o, cr, cw5, cw1h in msgs.values():
+            if at < start:
+                continue
+            n = i + o + cr + cw5 + cw1h
+            w["messages"] += 1
+            w["input_tokens"] += i
+            w["output_tokens"] += o
+            w["cache_read_tokens"] += cr
+            w["cache_write_tokens"] += cw5 + cw1h
+            w["tokens"] += n
+            m = w["models"].setdefault(model, {"model": model, "tokens": 0, "cost": 0.0, "priced": model in prices})
+            m["tokens"] += n
+            if model in prices:  # cache reads cost 0.1x input, 5-minute writes 1.25x, 1-hour writes 2x
+                pin, pout = prices[model]
+                cost = (pin * (i + 0.1 * cr + 1.25 * cw5 + 2 * cw1h) + pout * o) / 1_000_000
+                w["cost"] += cost
+                m["cost"] += cost
+            else:
+                w["unpriced_tokens"] += n
+        w["cost"] = round(w["cost"], 4)
+        w["models"] = sorted(({**m, "cost": round(m["cost"], 4)} for m in w["models"].values()),
+                             key=lambda m: -m["tokens"])
+        return w | {"since": datetime.fromtimestamp(start, UTC).isoformat(), "resets_at": resets.isoformat(),
+                    "resets_in_seconds": max(0, int((resets - t).total_seconds()))}
+
+    return {"daily": window(d0.timestamp(), next_day), "weekly": window(since, next_week),
+            "now": t.isoformat(), "files": len(_usage_files)}
+
+
+def warm_usage() -> None:
+    """Read the transcripts in the background, so the first /status answers at once."""
+    if not _usage_files and not _usage_lock.locked():
+        threading.Thread(target=lambda: _safe(claude_usage), daemon=True, name="claude-usage").start()
+
+
+def _safe(fn: Any) -> None:
+    try:
+        fn()
+    except Exception:  # noqa: BLE001 - a warm-up only
+        pass
