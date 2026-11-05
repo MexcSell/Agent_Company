@@ -94,3 +94,22 @@ def test_an_agent_working_for_another_project_is_cloned_when_nobody_else_is_free
     assert registry.staff("developer", [], ga2).id == dev
     with session() as s:
         assert s.scalars(select(Event).where(Event.kind == "staffing_conflict", Event.goal_id == ga2)).first() is None
+
+
+def test_a_busy_agent_of_another_project_is_cloned_and_the_conflict_logged_at_default_concurrency():
+    a, b = projects.create("Alpha"), projects.create("Beta")
+    ga = loop.create_goal("Alpha work", project_id=a["id"])
+    gb = loop.create_goal("Beta work", project_id=b["id"])
+    dev = _agent("developer")
+    with session() as s:
+        for x in s.scalars(select(Agent).where(Agent.role == "developer", Agent.id != dev)):
+            x.enabled = False
+        d = s.get(Agent, dev)
+        assert (d.max_concurrent or 1) == 1
+        d.active_goals, d.status = [ga], "busy"
+
+    got = registry.staff("developer", [], gb, task_id=None)
+    assert got.parent_id == dev
+    with session() as s:
+        ev = s.scalars(select(Event).where(Event.kind == "staffing_conflict", Event.goal_id == gb)).one()
+        assert ev.data["projects"] == [a["id"]] and ev.data["resolution"] == f"clone {got.name}"

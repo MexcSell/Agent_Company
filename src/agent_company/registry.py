@@ -78,7 +78,7 @@ def over_quota(s: Session, a: Agent) -> str:
 
 
 def _other_projects(s: Session, agents: list[Agent], goal: Goal | None) -> dict[int, list[int]]:
-    """For each agent with a slot left that is working on a goal of another project than `goal`'s: those project ids
+    """For each agent working on a goal of another project than `goal`'s: those project ids
     (ASEAO05 S05-R-09). Goals without a project and benchmark goals never conflict."""
     if goal is None or goal.project_id is None or goal.origin == "eval":
         return {}
@@ -92,6 +92,14 @@ def _other_projects(s: Session, agents: list[Agent], goal: Goal | None) -> dict[
         if found:
             out[a.id] = found
     return out
+
+
+def _log_conflict(s: Session, role: str, goal_id: int | None, conflict: dict[str, Any]) -> str:
+    why = f"{conflict['agent']} works for project(s) {', '.join(f'#{x}' for x in conflict['projects'])}: " \
+          f"{conflict['resolution']}"
+    log_event("staffing_conflict", f"{role}: {why}", goal_id=goal_id, agent_id=conflict["shared_agent_id"], s=s,
+              **conflict)
+    return why
 
 
 def _free(a: Agent, goal_id: int | None) -> bool:
@@ -539,6 +547,7 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
             if not pool:
                 raise RuntimeError(f"every {role} agent was released from goal #{goal_id}'s team; add one back "
                                    "or plan without the role")
+        g = s.get(Goal, goal_id) if goal_id else None
         quota ={a.id: over_quota(s, a) for a in pool}  # S02-R-03: the quota covers an agent and its clones
         idle = [a for a in pool if _free(a, goal_id) and a.health != "degraded" and not quota[a.id]]  # S02-R-02
         team = _team_weights(s, goal_id)
@@ -554,7 +563,6 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
             ranks = _rank(s, idle, skills, team)
             agent = max(idle, key=lambda a: ranks[a.id]["score"])
             action = "assigned"
-            g = s.get(Goal, goal_id) if goal_id else None
             others = _other_projects(s, idle, g)
             if agent.id in others:  # S05-R-09: the best agent works for another project's goal right now
                 free = [a for a in idle if a.id not in others]
@@ -567,10 +575,7 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
                     agent, action = _clone(s, agent), "cloned"
                     conflict["resolution"] = f"clone {agent.name}"
                 idle = free
-                why = (f"{conflict['agent']} works for project(s) {', '.join(f'#{x}' for x in conflict['projects'])}: "
-                       f"{conflict['resolution']}")
-                log_event("staffing_conflict", f"{role}: {why}", goal_id=goal_id,
-                          agent_id=conflict["shared_agent_id"], s=s, **conflict)
+                why = _log_conflict(s, role, goal_id, conflict)
             new = [a for a in idle if ranks[a.id]["evidence"] < EVIDENCE_MIN]
             if (action == "assigned" and new and agent not in new and not critical
                     and not (g is not None and g.origin == "eval") and _random() < settings().explore_rate):
@@ -588,10 +593,17 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
                                    "model, give the agent another one, or reset its health")
             healthy = healthy or pool
             ranks = _rank(s, healthy, skills, team)
-            agent = _clone(s, max(healthy, key=lambda a: ranks[a.id]["score"]))
+            base = max(healthy, key=lambda a: ranks[a.id]["score"])
+            others = _other_projects(s, [base], g)
+            agent = _clone(s, base)
             action = "cloned"
             if any(a.status == "idle" and a.health == "degraded" for a in pool):
                 why = "its idle agents are degraded"
+            elif others:  # S05-R-09: the agent the goal needed works for another project's goal
+                conflict = {"shared_agent_id": base.id, "agent": base.name, "projects": others[base.id],
+                            "project_id": g.project_id if g is not None else None,
+                            "resolution": f"clone {agent.name}"}
+                why = _log_conflict(s, role, goal_id, conflict)
         elif off and s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active",
                                                    Agent.room_key.in_(off))).first():
             # an administrator disabled their room: a clone or a recruit would walk around that decision

@@ -126,6 +126,16 @@ cannot be deleted or renamed and only administrators see it, so agents can work
 on the platform itself. Approved changes are merged into this checkout; restart
 the service to load them.
 
+### Blockers and task stages
+
+An agent names what stops its work as `BLOCKER: <what>` lines (at most three per
+task). While the goal is open they are blockers of its project (Plan tab,
+`/status`); they close when the goal ends or is planned again. Every task also
+has a lifecycle stage beside its execution status: planned, assigned, in
+progress, review, approved and, once the goal is approved, completed; or
+blocked, failed, cancelled, reopened, skipped. The goal view shows the stage and
+its history on hover.
+
 ### Proposals
 
 Agents may end a task with `PROPOSAL: <title> :: <why>`. By default proposals

@@ -391,16 +391,16 @@ def _wanted_blockers(s: Session, project_id: int) -> dict[str, dict[str, Any]]:
                 "goal_id": g.id, "category": "schedule", "severity": "medium",
                 "title": f"Goal #{g.id} has waited for approval more than {hours} h", "description": g.title,
                 "mitigation": "Approve or reject the merge."}
-    for g in s.scalars(select(Goal).where(Goal.project_id == project_id, Goal.origin != "eval",
-                                          Goal.status.not_in(("approved", "rejected", "cancelled", "failed")))):
-        # BLOCKER: lines of the latest iteration's tasks (S05-R-08), open until the goal ends or re-plans
-        for t in s.scalars(select(Task).where(Task.goal_id == g.id, Task.iteration == g.iteration)):
-            for n, text in enumerate((t.gate or {}).get("blockers") or []):
-                want[f"task:{t.id}:blocker:{n}"] = {
-                    "goal_id": g.id, "category": "technical", "severity": "medium",
-                    "title": f"Goal #{g.id}, task '{t.key}': {text}"[:256],
-                    "description": f"Reported by the task's agent in its output.\n{g.title}",
-                    "mitigation": "Remove the cause, or re-plan the goal around it."}
+    # BLOCKER: lines of the open goals' latest iteration tasks (S05-R-08), open until the goal ends or re-plans
+    for t, g in s.execute(select(Task, Goal).join(Goal, Task.goal_id == Goal.id).where(
+            Goal.project_id == project_id, Goal.origin != "eval", Task.iteration == Goal.iteration,
+            Goal.status.not_in(("approved", "rejected", "cancelled", "failed")))).all():
+        for n, text in enumerate((t.gate or {}).get("blockers") or []):
+            want[f"task:{t.id}:blocker:{n}"] = {
+                "goal_id": g.id, "category": "technical", "severity": "medium",
+                "title": f"Goal #{g.id}, task '{t.key}': {text}"[:256],
+                "description": f"Reported by the task's agent in its output.\n{g.title}",
+                "mitigation": "Remove the cause, or re-plan the goal around it."}
     for m in s.scalars(select(Milestone).where(Milestone.project_id == project_id, Milestone.status == "open")):
         for gid, status in _goal_states(s, m.goal_ids or []).items():
             if status in ("failed", "cancelled", "rejected"):

@@ -163,8 +163,10 @@ S05-R-06 done · S05-R-07 done · S05-R-08 done (adapted) · S05-R-09 done · S0
   a `handover_to` link old → new (evidence `project:<id>:gm`), an event and a message in the command window. The
   Plan tab lists the handovers, the agent card shows them beside task handovers. `registry._other_projects`: when the
   best-ranked free agent (one with `max_concurrent` > 1 and a slot left) works for a goal of another project, the
-  best agent without such a goal is staffed instead, or that agent is cloned; a `staffing_conflict` event and the
-  task's staffing record (`conflict`) name the agent, the projects and the resolution. Goals of one project, goals
+  best agent without such a goal is staffed instead, or that agent is cloned; when every agent of the role is busy
+  (the default, `max_concurrent` 1) and the one to clone works for another project, the clone is the resolution.
+  Either way a `staffing_conflict` event and the task's staffing record (`conflict`) name the agent, the projects
+  and the resolution. Goals of one project, goals
   without a project and benchmark goals never conflict. `tests/test_project_handover.py`.)
 
 ### S05-R-10 Restart and concurrency — AT-026, AT-027, AT-030
