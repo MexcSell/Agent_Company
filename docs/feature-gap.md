@@ -82,7 +82,7 @@ Machines code):
 | Agent lifecycle states (active, paused, retired) | SPEC02 §6 | done (`Agent.lifecycle`) |
 | Duplicate-agent prevention: role synonyms, reuse of an agent covering the skills, near-duplicate list | SPEC03 §6, §11.2 | done (S03-R-02) |
 | Capability-gap calculation, recruitment records and job descriptions | SPEC03 §5, §7, §8 | done (`recruitment.py`, S03-R-01, S03-R-03) |
-| Recruitment approval policy, probation and recruitment effectiveness | SPEC03 §9-10, §16.3 | done (S03-R-05; S03-R-04 partial: qualification run open) |
+| Recruitment approval policy, probation and recruitment effectiveness | SPEC03 §9-10, §16.3 | done (S03-R-05, S03-R-04 with the `qualify_recruits` run) |
 | Blackboard: shared context per goal, with versioning; agent-to-agent messages on it | SPEC04 §9-10 | done (`blackboard.py`, S04-R-01, S04-R-10) |
 | Decision records (approval blocks the merge) | SPEC04 §12.2 | done (`decisions.py`, S04-R-02) |
 | Conflict resolution between agents' results | SPEC04 §12.1 | done (`loop._review_conflicts`, S04-R-03) |

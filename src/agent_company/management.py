@@ -381,9 +381,10 @@ def _wanted_blockers(s: Session, project_id: int) -> dict[str, dict[str, Any]]:
         if g.status == "paused" and why == "recruitment":  # SPEC-03 S03-R-05
             want[f"goal:{g.id}:recruitment"] = {
                 "goal_id": g.id, "category": "staffing", "severity": "medium",
-                "title": f"Goal #{g.id} waits for a recruitment to be approved",
+                "title": f"Goal #{g.id} waits for a recruitment (approval or qualification run)",
                 "description": f"{g.title}\n{(g.checkpoint or {}).get('paused_why', '')}".strip(),
-                "mitigation": "Approve or reject the recruitment (Agents → Recruitment)."}
+                "mitigation": "Approve or reject the recruitment, or wait for its candidate's qualification run "
+                              "(Evolution → Recruitment)."}
         hours = settings().approval_blocker_hours
         if g.status == "awaiting_approval" and hours and _waiting_since(s, g) < now() - timedelta(hours=hours):
             want[f"goal:{g.id}:approval"] = {

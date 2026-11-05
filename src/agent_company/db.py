@@ -73,7 +73,8 @@ class Agent(Base):
     tasks_done: Mapped[int] = mapped_column(Integer, default=0)
     tasks_failed: Mapped[int] = mapped_column(Integer, default=0)
     playbook: Mapped[str] = mapped_column(Text, default="")
-    lifecycle: Mapped[str] = mapped_column(String(16), default="active")  # active|paused|retired (SPEC02 §6)
+    # active|paused|retired (SPEC02 §6); candidate = a recruit in its qualification run (SPEC-03 S03-R-04)
+    lifecycle: Mapped[str] = mapped_column(String(16), default="active")
     playbook_version: Mapped[int] = mapped_column(Integer, default=0)
     experiment: Mapped[dict[str, Any]] = mapped_column(default=dict)  # running candidate playbook trial
     plugins: Mapped[list[Any]] = mapped_column(default=list)  # names of catalog plugins/skills it may use
@@ -753,7 +754,8 @@ class Hypothesis(Base):
 class Recruitment(Base):
     """A recruitment request (SPEC-03 S03-R-03): a task needed a role nobody holds. The job description (versioned in
     `history`), the capability gap, the decision reuse|clone|recruit with its reason, the approval (S03-R-05) and the
-    agent it produced. pending -> approved | rejected | cancelled. recruitment.py."""
+    agent it produced. pending -> approved | rejected | cancelled; with `qualify_recruits` a new recruit is first
+    `qualifying` (S03-R-04: a candidate runs an eval suite, then pending or approved, or rejected). recruitment.py."""
 
     __tablename__ = "recruitments"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -774,6 +776,8 @@ class Recruitment(Base):
     pending_permissions: Mapped[list[Any]] = mapped_column(default=list)  # shell/network for a new role (S03-R-05)
     agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     evaluation_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    # S03-R-04 qualification run: {suite, status queued|running|passed|failed|skipped, label, pass_rate, runs, ...}
+    qualification: Mapped[dict[str, Any]] = mapped_column(default=dict)
     decided_by: Mapped[str] = mapped_column(String(128), default="")
     note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

@@ -42,8 +42,8 @@ registration.*
 | S03-FR-05 | Required and preferred skills | P0 | done: required = skills with a gap, preferred = skills the workforce has |
 | S03-FR-06 | Select agent templates | P0 | done: the role's `org.ROLES` entry, else the developer/QA template (`Recruitment.template`) |
 | S03-FR-07 | Generate candidate profiles | P0 | done (implicit in `_recruit`) |
-| S03-FR-08 | Evaluate candidate capabilities | P0 | partial: probation with reviewed tasks; qualification run open → S03-R-04 |
-| S03-FR-09 | Run candidate test assignments | P0 | open → S03-R-04 (`qualify_recruits`) |
+| S03-FR-08 | Evaluate candidate capabilities | P0 | done: qualification run (`qualify_recruits`), then probation with reviewed tasks (S03-R-04) |
+| S03-FR-09 | Run candidate test assignments | P0 | done: the candidate runs an eval suite in scratch repositories (`recruitment.qualify`) |
 | S03-FR-10 | Record evaluation evidence | P0 | done: probation passes and failures per recruit, reviews on the gate |
 | S03-FR-11 | Approve or reject candidates | P0 | done (`recruitment.approve`/`reject`, Evolution → Recruitment) |
 | S03-FR-12 | Register approved candidates | P0 | done |
@@ -53,7 +53,7 @@ registration.*
 | S03-FR-16 | Temporary agents | P0 | done (clones retired after the goal) |
 | S03-FR-17 | Permanent recruitment | P1 | done (`create_agent`) |
 | S03-FR-18 | Forecast workforce requirements | P1 | gated |
-| S03-FR-19 | Track recruitment costs | P1 | partial: `Recruitment.evaluation_cost_usd` stays 0 until the qualification run exists |
+| S03-FR-19 | Track recruitment costs | P1 | done: the qualification run's cost is `Recruitment.evaluation_cost_usd`, summed in Performance |
 | S03-FR-20 | Recommend restructuring | P2 | gated |
 | S03-FR-21 | Detect duplicate or redundant agents | P1 | done (`registry.duplicates`, Evolution page) |
 | S03-FR-22 | Track recruitment effectiveness | P1 | done (`recruitment.effectiveness`, Performance) |
@@ -103,7 +103,7 @@ registration.*
 - **Status: done** (`recruitment.py`, `recruitments`). One record per goal and role (parallel tasks and later
   iterations share it); also for a reuse or clone of a covering agent. The job description is built from the role
   template and the task contract without a model call (staffing holds a lock); a pending one can be revised, each
-  version kept in `history` (AT-005). Evaluation cost stays 0 until the qualification run exists.
+  version kept in `history` (AT-005). Evaluation cost = the cost of the qualification run (S03-R-04).
 
 ### S03-R-04 Qualification and probation — §9, §10
 - Probation is a flag on an `active` agent (`Agent.probation_tasks_left`, default 3 for recruits),
@@ -116,19 +116,29 @@ registration.*
 - When an eval suite matches the role (e.g. `smoke` for writers), a quick qualification run can
   be required before first use (setting `qualify_recruits`, default off — costs money).
 - Recruitment effectiveness = pass rate of recruits during probation, shown in Performance.
-- **Status: partial.** Done: recruits start with 3 probation tasks; a clone of a probationer counts for its
+- **Status: done.** Recruits start with 3 probation tasks; a clone of a probationer counts for its
   original; the loop adds a QA review (`probation-review`, avoiding the writer's provider) when the iteration has
   none, and the gate fails a probationer's change without a passing review by an agent not on probation (check
   `probation review`). A verified pass counts down; a failure counts only when the recruit's own task failed or a
   review depending on it failed (not when another check failed the gate); 2 retire it, its lessons stay. A retired
-  or disabled recruit is not replaced under its old approval: the replacement is a new record under the policy. Effectiveness in Performance. Open: the
-  `qualify_recruits` run, because eval suites staff by role (`registry._trainee` only substitutes a trainee within
-  its own role), so a recruit of a new role cannot be measured on `smoke` yet.
+  or disabled recruit is not replaced under its old approval: the replacement is a new record under the policy. Effectiveness in Performance.
+  Qualification (`qualify_recruits`, default off): a new recruit of a writing role gets a record in state
+  `qualifying` and is registered by a background run as an agent with lifecycle `candidate` (never in a staffing
+  pool, a covering search or the capability gap; only retiring it is allowed by hand; its clones are candidates
+  too). It runs one repeat of a practice or benchmark suite naming one of its skills, else `smoke`; the eval goals
+  carry `trial.qualify`, so `registry._trainee` gives the candidate every writing task whatever its role, never a
+  review (the probation review still comes from another agent). Passing at 2/3 sends the record to the approval
+  policy (pending, or approved and the agent active on probation); failing, an error in the run, or the candidate
+  retired meanwhile rejects the record (`decided_by = "qualification"`) and retires the candidate; the goal's
+  task then fails with the refusal and the planner re-plans, no second recruit is made under that record. An
+  administrator can cancel a qualifying record. The goal waits as for an approval; runs a restart cut off start
+  again (`evolution.cycle`, or when the goal retries). Qualification runs do not count as probation tasks. A
+  reading role has no qualification suite: its record notes `skipped` and it starts on probation.
 
 Spec acceptance tests (§18) this covers: AT-001 gap report (S03-R-01), AT-002 reuse recommended
 and AT-017 duplicate warning (S03-R-02), AT-005 versioned job description (S03-R-03),
-AT-007 candidate without production access (recruits never get more than the role template),
-AT-008..010 failed/passed qualification (S03-R-04), AT-011 unauthorized approval → denied and
+AT-007 candidate without production access (recruits never get more than the role template; a candidate is never
+staffed for users' work), AT-008..010 failed/passed qualification (S03-R-04), AT-011 unauthorized approval → denied and
 audited and AT-022 human suspends recruitment (S03-R-05), AT-015 temporary agent expiry (done:
 `retire_goal_clones`), AT-020 repeated approval → no duplicate agent (approval is idempotent per
 recruitment record).

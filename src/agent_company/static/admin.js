@@ -124,20 +124,23 @@ async function recruitmentPanel() {
   const box = $("#ev-recruit");
   if (!box) return;
   const recs = await api("/api/recruitments");
-  const pending = recs.filter((r) => r.status === "pending" || (r.status === "approved" && r.pending_permissions.length));
+  const pending = recs.filter((r) => r.status === "pending" || r.status === "qualifying" || (r.status === "approved" && r.pending_permissions.length));
   const row = (r) => {
     const jd = r.job_description || {};
     const gap = Object.entries(r.gap || {}).map(([k, v]) => `${esc(k)} ${v.available}/${v.required}`).join(" · ");
-    const act = me.is_admin && (r.status === "pending" || r.pending_permissions.length)
+    const q = r.qualification || {};
+    const qual = q.status ? ` · qualification: ${esc(q.status)}${q.suite ? ` (${esc(q.suite)}${q.pass_rate != null ? ` ${Math.round(q.pass_rate * 100)}%` : ""})` : ""}${r.evaluation_cost_usd ? ` $${r.evaluation_cost_usd.toFixed(2)}` : ""}` : "";
+    const act = !me.is_admin ? "" : r.status === "qualifying" ? `<button class="btn sm" data-rrej="${r.id}" data-rcancel="1">Cancel</button>`
+      : (r.status === "pending" || r.pending_permissions.length)
       ? `<button class="btn sm primary" data-rapp="${r.id}">${r.status === "pending" ? "Approve" : `Grant ${esc(r.pending_permissions.join(", "))}`}</button>${r.status === "pending" ? `<button class="btn sm" data-rrej="${r.id}">Reject</button>` : ""}` : "";
-    return `<div class="row" title="${esc((jd.responsibilities || []).join("\n"))}"><span class="grow"><b>#${r.id}</b> ${esc(r.decision)} · ${esc(jd.title || r.requested_role)}${r.agent ? ` → <a href="#" data-agent="${r.agent_id}">${esc(r.agent)}</a>` : ""}${r.goal_id ? ` · <a href="#" data-goal="${r.goal_id}">goal #${r.goal_id}</a>` : ""}<div class="muted ellipsis" style="max-width:420px">${esc(r.reason)}${gap ? ` · gap: ${gap}` : ""}</div></span>${pill(r.status === "approved" ? "done" : r.status === "pending" ? "pending" : "failed").replace(/>[^<]+</, `>${esc(r.status)}<`)}${act}</div>`;
+    return `<div class="row" title="${esc((jd.responsibilities || []).join("\n"))}"><span class="grow"><b>#${r.id}</b> ${esc(r.decision)} · ${esc(jd.title || r.requested_role)}${r.agent ? ` → <a href="#" data-agent="${r.agent_id}">${esc(r.agent)}</a>` : ""}${r.goal_id ? ` · <a href="#" data-goal="${r.goal_id}">goal #${r.goal_id}</a>` : ""}<div class="muted ellipsis" style="max-width:420px" title="${esc(r.note || "")}">${esc(r.reason)}${gap ? ` · gap: ${gap}` : ""}${qual}</div></span>${pill(r.status === "approved" ? "done" : r.status === "pending" || r.status === "qualifying" ? "pending" : "failed").replace(/>[^<]+</, `>${esc(r.status)}<`)}${act}</div>`;
   };
-  box.innerHTML = `<h2>Recruitment (${pending.length} waiting)</h2><p class="muted">A task that needs a role nobody holds becomes a recruitment request with a job description. Setting <code>recruit_requires_approval</code> decides which wait for an administrator; the goal pauses until then. A recruit's first 3 tasks are reviewed by QA; 2 failures during probation retire it.</p>
+  box.innerHTML = `<h2>Recruitment (${pending.length} waiting)</h2><p class="muted">A task that needs a role nobody holds becomes a recruitment request with a job description. With <code>qualify_recruits</code> on, a new recruit of a writing role first runs an eval suite as a candidate (never staffed for real work); failing rejects it. Setting <code>recruit_requires_approval</code> decides which wait for an administrator; the goal pauses until then. A recruit's first 3 tasks are reviewed by QA; 2 failures during probation retire it.</p>
     <div class="events">${[...pending, ...recs.filter((r) => !pending.includes(r)).slice(0, 12)].map(row).join("") || '<span class="muted">No recruitment yet.</span>'}</div>`;
   box.querySelectorAll("[data-agent]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); agentModal(Number(a.dataset.agent)); }));
   box.querySelectorAll("[data-goal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); goalModal(Number(a.dataset.goal)); }));
   box.querySelectorAll("[data-rapp]").forEach((b) => (b.onclick = async () => { try { const r = await api(`/api/recruitments/${b.dataset.rapp}/approve`, { method: "POST", body: { grant: true } }); toast(r.resumed ? `Approved; goal #${r.goal_id} resumed` : "Approved"); recruitmentPanel(); } catch (err) { toast(err.message); } }));
-  box.querySelectorAll("[data-rrej]").forEach((b) => (b.onclick = async () => { const reason = prompt("Why is this recruitment rejected? (the planner reads it)") ; if (reason === null) return; try { await api(`/api/recruitments/${b.dataset.rrej}/reject`, { method: "POST", body: { reason } }); toast("Rejected; the goal re-plans without it"); recruitmentPanel(); } catch (err) { toast(err.message); } }));
+  box.querySelectorAll("[data-rrej]").forEach((b) => (b.onclick = async () => { const cancel = !!b.dataset.rcancel; const reason = prompt(cancel ? "Cancel the qualification run and retire the candidate? Why? (the planner reads it)" : "Why is this recruitment rejected? (the planner reads it)") ; if (reason === null) return; try { await api(`/api/recruitments/${b.dataset.rrej}/reject`, { method: "POST", body: { reason, status: cancel ? "cancelled" : "rejected" } }); toast(cancel ? "Cancelled; the goal re-plans without it" : "Rejected; the goal re-plans without it"); recruitmentPanel(); } catch (err) { toast(err.message); } }));
 }
 
 // SPEC-13: experiments (baseline vs candidate on one suite), capability gaps, learning plans.

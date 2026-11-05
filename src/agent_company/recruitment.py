@@ -17,16 +17,27 @@
              gate fails a probationer's change without a passing review. A verified pass counts down; after
              PROBATION_MAX_FAILURES failed tasks of its own (its task failed, or a review of it failed) the recruit
              is retired (its lessons stay).
+  qualify    S03-R-04: with `qualify_recruits` on, a new recruit of a writing role is first registered as a
+             `candidate` (lifecycle: never staffed for users' work, not counted as available) and runs an eval suite
+             in scratch repositories (a practice/benchmark suite naming one of its skills, else `smoke`); the eval
+             goals give it their writing tasks whatever its role, reviews stay with others. Passing at
+             QUALIFY_PASS_RATE makes the record pending (the approval policy) or approved, and the agent active on
+             probation; failing rejects the record and retires the candidate. The run's cost is the record's
+             evaluation cost. The goal waits (`paused_for = "recruitment"`) until then.
 """
 
 from __future__ import annotations
 
+import threading
+import time
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agent_company import org
+from agent_company.config import settings
 from agent_company.db import Agent, Goal, Recruitment, Task, log_event, now, session
 
 PROBATION_TASKS = 3
@@ -34,6 +45,15 @@ PROBATION_MAX_FAILURES = 2
 SELF_ASSIGNED = 0.5  # verification factor of a recruit's uncertified skill
 PROFICIENT = 5  # the skill level that counts as one unit (a recruit claims it for each skill of its task)
 GRANTED_BY_ADMIN = {"shell", "network"}  # never given to a role outside the catalog without an administrator
+QUALIFY_SUITE = "smoke"  # the qualification suite of a writing role when no suite names one of its skills
+QUALIFY_PASS_RATE = 2 / 3
+WAITING = ("pending", "qualifying")  # a goal with such a record waits for it
+_qualifying: set[int] = set()  # records whose qualification run is queued or running in this process
+_qualifying_lock = threading.Lock()
+
+
+def _spawn(fn: Callable[[], Any]) -> None:  # tests replace it
+    threading.Thread(target=fn, daemon=True, name="qualification").start()
 
 
 class RecruitmentPending(RuntimeError):
@@ -178,13 +198,12 @@ def _row(r: Recruitment, names: dict[int, str]) -> dict[str, Any]:
             "template": r.template, "gap": r.gap or {}, "decision": r.decision, "reason": r.reason,
             "lifecycle": r.lifecycle, "status": r.status, "pending_permissions": r.pending_permissions or [],
             "agent_id": r.agent_id, "agent": names.get(r.agent_id) if r.agent_id else None,
-            "evaluation_cost_usd": r.evaluation_cost_usd, "decided_by": r.decided_by, "note": r.note,
+            "evaluation_cost_usd": r.evaluation_cost_usd, "qualification": r.qualification or {},
+            "decided_by": r.decided_by, "note": r.note,
             "created_at": r.created_at.isoformat(), "decided_at": r.decided_at.isoformat() if r.decided_at else None}
 
 
 def needs_approval(decision: str) -> bool:
-    from agent_company.config import settings
-
     policy = settings().recruit_requires_approval
     return (policy == "always" and decision in {"clone", "recruit"}) or (policy == "permanent_only"
                                                                           and decision == "recruit")
@@ -198,7 +217,8 @@ def open_request(s: Session, role: str, skills: list[str], writes: bool | None, 
 
     rec = s.scalars(select(Recruitment).where(Recruitment.goal_id == goal_id, Recruitment.requested_role == role)
                     .order_by(Recruitment.id.desc())).first() if goal_id is not None else None
-    if rec is not None and rec.agent_id is not None:  # its recruit was retired or disabled since: ask again
+    if rec is not None and rec.agent_id is not None and rec.status == "approved":
+        # its recruit was retired or disabled since: ask again (a rejected one, e.g. not qualified, stays refused)
         a = s.get(Agent, rec.agent_id)
         if a is None or a.lifecycle != "active" or not a.enabled:
             rec = None
@@ -216,16 +236,21 @@ def open_request(s: Session, role: str, skills: list[str], writes: bool | None, 
                           pending_permissions=held if decision == "recruit" else [])
         s.add(rec)
         s.flush()
-        if needs_approval(decision):
-            g = s.get(Goal, goal_id) if goal_id else None
-            notify(f"Recruitment #{rec.id} waits for approval: {jd['title']}"[:256],
-                   f"Goal #{goal_id}: {decision} for role '{role}' ({', '.join(skills) or role}). {reason}".strip(),
-                   level="warning", source="recruitment", goal_id=goal_id, project_id=g.project_id if g else None,
-                   admin_only=True, s=s)
-            log_event("recruitment", f"recruitment #{rec.id} for '{role}' waits for approval", goal_id=goal_id, s=s,
-                      recruitment_id=rec.id)
+        suite = qualification_suite(skills) if decision == "recruit" and writes and settings().qualify_recruits else ""
+        if suite:  # S03-R-04: a candidate first, approval (by policy or a person) after its run
+            rec.status, rec.qualification = "qualifying", {"suite": suite, "status": "queued"}
+            log_event("recruitment", f"recruitment #{rec.id} for '{role}': the candidate runs the {suite} suite "
+                      "first", goal_id=goal_id, s=s, recruitment_id=rec.id)
         else:
-            rec.status, rec.decided_by, rec.decided_at = "approved", "policy", now()
+            if decision == "recruit" and settings().qualify_recruits:
+                rec.qualification = {"status": "skipped", "reason": "no eval suite matches the role" if writes
+                                     else "the suites measure writing work; a reading role starts on probation"}
+            _ask_or_approve(s, rec, notify)
+    if rec.status == "qualifying":
+        s.commit()  # the record stays when the caller's session rolls back on the raise
+        start_qualification(rec.id)
+        raise RecruitmentPending(f"recruitment #{rec.id}: the candidate for role '{role}' takes its qualification "
+                                 f"run ({(rec.qualification or {}).get('suite', QUALIFY_SUITE)} suite) first")
     if rec.status == "pending":
         s.commit()  # the record and its notification stay when the caller's session rolls back on the raise
         raise RecruitmentPending(f"recruitment #{rec.id} ({rec.decision} for role '{role}') waits for an "
@@ -235,6 +260,26 @@ def open_request(s: Session, role: str, skills: list[str], writes: bool | None, 
                                  + (f": {rec.note}" if rec.note else "")
                                  + ". Plan the work with the roles the company has.")
     return rec
+
+
+def _ask_or_approve(s: Session, rec: Recruitment, notify: Callable[..., Any]) -> None:
+    """The approval policy (S03-R-05): the record waits for an administrator, or is approved by policy."""
+    if needs_approval(rec.decision):
+        g = s.get(Goal, rec.goal_id) if rec.goal_id else None
+        jd = rec.job_description or {}
+        rec.status = "pending"
+        done = (rec.qualification or {}).get("status") == "passed"
+        notify(f"Recruitment #{rec.id} waits for approval: {jd.get('title', rec.requested_role)}"[:256],
+               f"Goal #{rec.goal_id}: {rec.decision} for role '{rec.requested_role}' "
+               f"({', '.join(jd.get('expertise') or []) or rec.requested_role}). {rec.reason}".strip()
+               + (f" The candidate passed its qualification run ({rec.qualification.get('pass_rate', 0):.0%})."
+                  if done else ""),
+               level="warning", source="recruitment", goal_id=rec.goal_id, project_id=g.project_id if g else None,
+               admin_only=True, s=s)
+        log_event("recruitment", f"recruitment #{rec.id} for '{rec.requested_role}' waits for approval",
+                  goal_id=rec.goal_id, s=s, recruitment_id=rec.id)
+    else:
+        rec.status, rec.decided_by, rec.decided_at = "approved", "policy", now()
 
 
 def on_recruited(s: Session, rec: Recruitment, agent: Agent) -> None:
@@ -314,7 +359,7 @@ def _resume_goal(goal_id: int | None, actor: str) -> bool:
         g = s.get(Goal, goal_id)
         waiting = g is not None and g.status == "paused" and (g.checkpoint or {}).get("paused_for") == "recruitment"
         others = s.scalars(select(Recruitment.id).where(Recruitment.goal_id == goal_id,
-                                                        Recruitment.status == "pending")).first()
+                                                        Recruitment.status.in_(WAITING))).first()
     if not waiting or others is not None:
         return False
     try:
@@ -336,12 +381,16 @@ def approve(recruitment_id: int, actor: str, grant: bool = True) -> dict[str, An
             raise KeyError(recruitment_id)
         if r.status in {"rejected", "cancelled"}:
             raise ValueError(f"recruitment #{r.id} was {r.status}")
+        if r.status == "qualifying":
+            raise ValueError(f"recruitment #{r.id} waits for its candidate's qualification run")
         was = r.status
         if r.status == "pending":
             r.status, r.decided_by, r.decided_at = "approved", actor, now()
             if r.decision == "recruit" and r.agent_id is None:
                 agent = registry._recruit(s, r)
                 on_recruited(s, r, agent)
+            elif r.agent_id is not None:  # a candidate that passed its qualification run
+                _activate(s, r, actor)
         if grant and r.pending_permissions and r.agent_id:
             a = s.get(Agent, r.agent_id)
             if a is not None:
@@ -360,23 +409,152 @@ def approve(recruitment_id: int, actor: str, grant: bool = True) -> dict[str, An
 
 
 def reject(recruitment_id: int, actor: str, reason: str = "", status: str = "rejected") -> dict[str, Any]:
-    """Reject (or cancel) a pending record. The goal resumes; its task fails with the refusal, so the planner
-    re-plans with the roles the company has."""
+    """Reject (or cancel) a pending record, or one whose candidate is still qualifying (the candidate is retired).
+    The goal resumes; its task fails with the refusal, so the planner re-plans with the roles the company has."""
     if status not in {"rejected", "cancelled"}:
         raise ValueError("status is rejected or cancelled")
     with session() as s:
         r = s.get(Recruitment, recruitment_id)
         if r is None:
             raise KeyError(recruitment_id)
-        if r.status != "pending":
+        if r.status not in WAITING:
             raise ValueError(f"recruitment #{r.id} is {r.status}; only a pending one can be {status}")
         r.status, r.decided_by, r.decided_at, r.note = status, actor, now(), reason[:2000]
+        _retire_candidate(s, r, f"recruitment #{r.id} {status} by {actor}")
         log_event("recruitment", f"recruitment #{r.id} {status} by {actor}", goal_id=r.goal_id, s=s,
                   recruitment_id=r.id)
         goal_id = r.goal_id
     out = get(recruitment_id)
     out["resumed"] = _resume_goal(goal_id, actor)
     return out
+
+
+# --- qualification (S03-R-04) ------------------------------------------------------------------
+
+def qualification_suite(skills: list[str]) -> str:
+    """A practice or benchmark suite naming one of the skills, else QUALIFY_SUITE; '' when there is none. Final
+    suites stay for certification (SPEC-13 S13-R-03)."""
+    from agent_company import evaluation
+    from agent_company.training import _slug
+
+    suites = [x for x in evaluation.list_suites() if x["kind"] != "final"]
+    wanted = {_slug(k) for k in skills}
+    named = next((x["name"] for x in suites if wanted & {_slug(k) for k in x["skills"]}), "")
+    return named or next((x["name"] for x in suites if x["name"] == QUALIFY_SUITE), "")
+
+
+def start_qualification(recruitment_id: int) -> bool:
+    """Run the record's qualification in the background, unless it runs already in this process."""
+    with _qualifying_lock:
+        if recruitment_id in _qualifying:
+            return False
+        _qualifying.add(recruitment_id)
+    _spawn(lambda: qualify(recruitment_id))
+    return True
+
+
+def resume_qualifications() -> int:
+    """Qualification runs a restart cut off start again (evolution.cycle)."""
+    with session() as s:
+        ids = list(s.scalars(select(Recruitment.id).where(Recruitment.status == "qualifying")))
+    return sum(start_qualification(i) for i in ids)
+
+
+def qualify(recruitment_id: int) -> dict[str, Any]:
+    """The candidate (registered now if it is not yet) runs the qualification suite; its verdict decides."""
+    from agent_company import evaluation, registry
+
+    try:
+        with registry._staff_lock, session() as s:
+            r = s.get(Recruitment, recruitment_id)
+            if r is None or r.status != "qualifying":
+                return {}
+            if r.agent_id is None:
+                agent = registry._recruit(s, r)
+                agent.lifecycle = "candidate"  # never staffed for users' work until it passes (AT-007)
+                registry.record_version(s, agent, "qualification", f"candidate for recruitment #{r.id}")
+                r.agent_id = agent.id
+            agent_id, suite = r.agent_id, (r.qualification or {}).get("suite") or QUALIFY_SUITE
+            label = f"qualify{r.id}-{int(time.time() * 1000)}"
+            r.qualification = {**(r.qualification or {}), "suite": suite, "status": "running", "label": label,
+                               "started_at": now().isoformat()}
+            log_event("recruitment", f"recruitment #{r.id}: candidate runs the {suite} suite", goal_id=r.goal_id,
+                      agent_id=agent_id, s=s, recruitment_id=r.id)
+        summary = evaluation.run_suite(suite, label, repeats=1, trial={"trainee_id": agent_id,
+                                                                       "qualify": recruitment_id})
+        return _finish(recruitment_id, summary)
+    except Exception as e:  # noqa: BLE001 - a broken suite must not leave the record qualifying forever
+        log_event("error", f"qualification of recruitment #{recruitment_id} failed: {type(e).__name__}: {e}")
+        return _finish(recruitment_id, None, f"the qualification run failed: {type(e).__name__}: {e}")
+    finally:
+        with _qualifying_lock:
+            _qualifying.discard(recruitment_id)
+
+
+def _finish(recruitment_id: int, summary: dict[str, Any] | None, error: str = "") -> dict[str, Any]:
+    from agent_company.governance import notify
+
+    with session() as s:
+        r = s.get(Recruitment, recruitment_id)
+        if r is None or r.status != "qualifying":  # rejected or cancelled meanwhile
+            return {}
+        a = s.get(Agent, r.agent_id) if r.agent_id else None
+        rate = float((summary or {}).get("pass_rate") or 0.0)
+        cost = float((summary or {}).get("total_cost") or 0.0)
+        r.evaluation_cost_usd = round((r.evaluation_cost_usd or 0.0) + cost, 6)
+        if a is None or a.lifecycle != "candidate":
+            error = error or "the candidate was retired during its qualification run"
+        passed = not error and rate >= QUALIFY_PASS_RATE - 1e-9
+        r.qualification = {**(r.qualification or {}), "status": "passed" if passed else "failed",
+                           "pass_rate": round(rate, 3), "runs": (summary or {}).get("runs", 0),
+                           "passed_runs": (summary or {}).get("passed", 0), "cost_usd": round(cost, 6),
+                           "needed": round(QUALIFY_PASS_RATE, 3), "finished_at": now().isoformat(),
+                           **({"error": error[:500]} if error else {})}
+        suite = r.qualification.get("suite", QUALIFY_SUITE)
+        name = a.name if a else f"agent {r.agent_id}"
+        if passed:
+            _ask_or_approve(s, r, notify)
+            if r.status == "approved":
+                _activate(s, r, "qualification")
+            verdict = f"passed its qualification run: {rate:.0%} of the {suite} suite"
+        else:
+            r.status, r.decided_by, r.decided_at = "rejected", "qualification", now()
+            r.note = (error or f"{rate:.0%} of the {suite} suite, needs {QUALIFY_PASS_RATE:.0%}")[:2000]
+            _retire_candidate(s, r, f"not qualified: {r.note}")
+            verdict = f"failed its qualification run: {r.note}"
+        log_event("recruitment", f"recruitment #{r.id}: {name} {verdict}", goal_id=r.goal_id, agent_id=r.agent_id,
+                  s=s, recruitment_id=r.id)
+        if not passed or r.status == "approved":  # a pending record notifies through the approval request
+            notify(f"Recruitment #{r.id}: {name} {'qualified' if passed else 'not qualified'}"[:256],
+                   f"{name} {verdict} (${cost:.2f})." + ("" if passed else " The goal re-plans without it."),
+                   level="info" if passed else "warning", source="recruitment", goal_id=r.goal_id, admin_only=True,
+                   s=s)
+        goal_id, waiting = r.goal_id, r.status == "pending"
+    out = get(recruitment_id)
+    out["resumed"] = False if waiting else _resume_goal(goal_id, "qualification")
+    return out
+
+
+def _activate(s: Session, r: Recruitment, actor: str) -> None:
+    """The candidate becomes an active agent on probation."""
+    from agent_company import registry
+
+    a = s.get(Agent, r.agent_id) if r.agent_id else None
+    if a is None or a.lifecycle != "candidate":
+        return
+    a.lifecycle, a.enabled = "active", True
+    registry.record_version(s, a, actor, f"qualified for recruitment #{r.id}")
+    on_recruited(s, r, a)
+
+
+def _retire_candidate(s: Session, r: Recruitment, why: str) -> None:
+    from agent_company import registry
+
+    a = s.get(Agent, r.agent_id) if r.agent_id else None
+    if a is None or a.lifecycle != "candidate":
+        return
+    a.lifecycle, a.enabled, a.probation_tasks_left = "retired", False, 0
+    registry.record_version(s, a, "qualification", why[:500])
 
 
 # --- probation (S03-R-04) ---------------------------------------------------------------------
@@ -459,16 +637,25 @@ def effectiveness() -> dict[str, Any]:
             if a is None:
                 continue
             left, failed = a.probation_tasks_left or 0, a.probation_failures or 0
-            state = ("retired" if failed >= PROBATION_MAX_FAILURES else
+            q = (r.qualification or {}).get("status", "")
+            state = ("qualifying" if r.status == "qualifying" else
+                     "not qualified" if q == "failed" else
+                     "cancelled" if r.status in {"rejected", "cancelled"} else  # withdrawn while qualifying
+                     "awaiting approval" if r.status == "pending" else
+                     "retired" if failed >= PROBATION_MAX_FAILURES else
                      "withdrawn" if left > 0 and a.lifecycle == "retired" else  # an administrator retired it
                      "on probation" if left > 0 else "passed")
             out.append({"recruitment_id": r.id, "agent_id": a.id, "agent": a.name, "role": r.requested_role,
-                        "passed_tasks": PROBATION_TASKS - left if state != "retired" else None,
-                        "failed_tasks": failed, "state": state, "evaluation_cost_usd": r.evaluation_cost_usd})
+                        "passed_tasks": PROBATION_TASKS - left if state in {"on probation", "passed", "withdrawn"} else None,
+                        "failed_tasks": failed, "state": state, "qualification": q,
+                        "evaluation_cost_usd": r.evaluation_cost_usd})
         done = [x for x in out if x["state"] in {"passed", "retired"}]
         passed = [x for x in done if x["state"] == "passed"]
         by_status: dict[str, int] = {}
         for st in s.scalars(select(Recruitment.status)):
             by_status[st] = by_status.get(st, 0) + 1
+        qualified = [x for x in out if x["qualification"] in {"passed", "failed"}]
     return {"recruits": out, "finished": len(done), "passed": len(passed),
-            "pass_rate": round(len(passed) / len(done), 3) if done else None, "requests": by_status}
+            "pass_rate": round(len(passed) / len(done), 3) if done else None, "requests": by_status,
+            "qualified": sum(x["qualification"] == "passed" for x in qualified), "qualification_runs": len(qualified),
+            "evaluation_cost_usd": round(sum(x["evaluation_cost_usd"] or 0 for x in out), 6)}

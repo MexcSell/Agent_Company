@@ -43,6 +43,8 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "explore_rate": (float, "Share of non-critical tasks given to a new agent that has too little evidence yet (0-1)"),
     "recruit_requires_approval": (str, "Recruitments that wait for an administrator: 'never', 'permanent_only' (a new "
                                        "agent) or 'always' (also a clone made for a role nobody holds)"),
+    "qualify_recruits": (bool, "A new recruit of a writing role first passes an eval suite as a candidate before it is "
+                               "used (costs model calls; the offline simulator always fails it)"),
     "improvement_min_score": (float, "Percent a code-improvement candidate's weighted benchmark score must beat the baseline by"),
     "improvement_max_regression": (int, "Percent any single benchmark metric of a candidate may get worse before it is rejected"),
     "improvement_auto_rollback": (bool, "Revert a deployed code improvement automatically when the safe restart refuses it"),

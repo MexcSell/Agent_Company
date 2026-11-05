@@ -376,6 +376,9 @@ def cycle() -> int:
     try:  # capability gaps (S13-R-01) and learning plans a restart cut off
         training.raise_gaps()
         training.resume_plans()
+        from agent_company import recruitment
+
+        recruitment.resume_qualifications()  # SPEC-03 S03-R-04: candidates whose run a restart cut off
     except Exception as e:  # noqa: BLE001 - the diagnosis above already happened
         log_event("error", f"capability gaps: {type(e).__name__}: {e}")
     return started

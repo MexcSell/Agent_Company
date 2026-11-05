@@ -348,3 +348,162 @@ def test_a_decision_before_the_goal_paused_requeues_it(monkeypatch):
     assert recruitment.approve(rid, "user:admin")["resumed"] is False, "the goal has not paused yet"
     out = loop._out_for_recruitment(gid, "recruitment waits", {})
     assert out["status"] == "queued" and loop._goal(gid).status == "queued"
+
+
+# --- S03-R-04 qualification run ------------------------------------------------------------------
+
+def qualify_on(monkeypatch, rate=1.0, cost=0.12):
+    """`qualify_recruits` on, with evaluation.run_suite answering `rate`; returns the calls it got."""
+    from agent_company import evaluation
+
+    config.set_overrides({"qualify_recruits": True})
+    calls = []
+
+    def run_suite(suite, label, repeats=3, only=None, trial=None):
+        calls.append({"suite": suite, "label": label, "repeats": repeats, "trial": trial})
+        return {"label": label, "runs": 3, "passed": round(3 * rate), "pass_rate": rate, "total_cost": cost}
+
+    monkeypatch.setattr(evaluation, "run_suite", run_suite)
+    monkeypatch.setattr(loop, "enqueue", lambda gid: None)
+    return calls
+
+
+def paused_for_qualification(monkeypatch):
+    with_plan(monkeypatch, rust_plan())
+    gid = loop.create_goal("Port the parser", quality_commands=["test -f WORKLOG.md"], max_iterations=1)
+    out = loop.run_goal(gid)
+    assert out["status"] == "paused" and "qualification run" in out["recruitment"]
+    [rec] = records()
+    assert rec["status"] == "qualifying" and rec["qualification"] == {"suite": "smoke", "status": "queued"}
+    assert count_agents("rust_expert") == 0, "the candidate is registered by the run, outside the staffing lock"
+    return gid, rec
+
+
+def test_a_candidate_that_fails_its_qualification_is_rejected_and_retired(monkeypatch):
+    calls = qualify_on(monkeypatch, rate=1 / 3)
+    gid, rec = paused_for_qualification(monkeypatch)
+    out = recruitment.qualify(rec["id"])  # AT-008
+    assert out["status"] == "rejected" and out["decided_by"] == "qualification" and out["resumed"]
+    assert out["qualification"]["status"] == "failed" and out["evaluation_cost_usd"] == 0.12
+    assert "33% of the smoke suite, needs 67%" in out["note"]
+    assert calls[0]["trial"] == {"trainee_id": out["agent_id"], "qualify": rec["id"]} and calls[0]["repeats"] == 1
+    with session() as s:
+        a = s.get(Agent, out["agent_id"])
+        assert a.lifecycle == "retired" and not a.enabled
+    assert loop.run_goal(gid)["status"] == "failed"
+    with session() as s:
+        build = s.scalars(select(Task).where(Task.goal_id == gid, Task.key == "build")).first()
+        assert build.status == "failed" and "rejected by qualification" in build.output
+    assert len(records()) == 1 and count_agents("rust_expert") == 1, "a failed candidate is not recruited again"
+    eff = recruitment.effectiveness()
+    assert eff["recruits"][0]["state"] == "not qualified" and eff["qualified"] == 0 and eff["qualification_runs"] == 1
+
+
+def test_a_candidate_that_passes_becomes_an_active_recruit_on_probation(monkeypatch):
+    qualify_on(monkeypatch, rate=1.0)
+    gid, rec = paused_for_qualification(monkeypatch)
+    out = recruitment.qualify(rec["id"])  # AT-009, AT-010
+    assert out["status"] == "approved" and out["decided_by"] == "policy" and out["resumed"]
+    assert out["qualification"]["status"] == "passed" and out["evaluation_cost_usd"] == 0.12
+    with session() as s:
+        a = s.get(Agent, out["agent_id"])
+        assert a.lifecycle == "active" and a.probation_tasks_left == recruitment.PROBATION_TASKS
+    assert loop.run_goal(gid)["status"] == "awaiting_approval"
+    with session() as s:
+        build = s.scalars(select(Task).where(Task.goal_id == gid, Task.key == "build")).first()
+        assert build.agent_id == out["agent_id"] and build.status == "done"
+    assert recruitment.effectiveness()["qualified"] == 1
+
+
+def test_a_qualified_candidate_still_waits_for_the_approval_policy(monkeypatch):
+    qualify_on(monkeypatch, rate=1.0)
+    config.set_overrides({"qualify_recruits": True, "recruit_requires_approval": "permanent_only"})
+    gid, rec = paused_for_qualification(monkeypatch)
+    try:
+        recruitment.approve(rec["id"], "user:admin")
+        raise AssertionError("an administrator decides after the qualification run")
+    except ValueError as e:
+        assert "qualification run" in str(e)
+    out = recruitment.qualify(rec["id"])
+    assert out["status"] == "pending" and not out["resumed"]
+    with session() as s:
+        assert s.get(Agent, out["agent_id"]).lifecycle == "candidate"
+        assert s.scalars(select(Notification).where(Notification.title.like(f"Recruitment #{rec['id']} waits%"))).first()
+    assert loop._goal(gid).status == "paused"
+    approved = recruitment.approve(rec["id"], "user:admin")
+    assert approved["resumed"] and approved["agent_id"] == out["agent_id"] and count_agents("rust_expert") == 1
+    with session() as s:
+        assert s.get(Agent, out["agent_id"]).lifecycle == "active"
+
+
+def test_a_candidate_is_never_staffed_for_users_work(monkeypatch):
+    qualify_on(monkeypatch)
+    gid = loop.create_goal("Needs rust", quality_commands=[])
+    try:
+        registry.staff("rust_expert", ["rust"], gid, writes=True)
+        raise AssertionError("the candidate qualifies first")
+    except recruitment.RecruitmentPending:
+        pass
+    rid = records()[0]["id"]
+    monkeypatch.setattr(recruitment, "_finish", lambda rid, summary, error="": {})  # stop inside the run
+    recruitment.qualify(rid)
+    cand = recruitment.get(rid)["agent_id"]
+    assert recruitment.capability_gap({"rust": 1.0})["rust"]["available"] == 0, "a candidate is not available"
+    other = loop.create_goal("Also rust", quality_commands=[])
+    try:  # another goal opens its own request; it never gets the candidate (AT-007)
+        registry.staff("rust_expert", ["rust"], other, writes=True)
+        raise AssertionError("the other goal waits for its own candidate")
+    except recruitment.RecruitmentPending:
+        pass
+    try:
+        registry.set_lifecycle(cand, "active", "user:admin")
+        raise AssertionError("only the qualification run activates a candidate")
+    except ValueError:
+        pass
+    out = recruitment.reject(rid, "user:admin", "not needed", status="cancelled")
+    assert out["status"] == "cancelled"
+    with session() as s:
+        assert s.get(Agent, cand).lifecycle == "retired"
+
+
+def test_the_qualification_run_gives_the_candidate_the_writing_tasks_of_the_suite(monkeypatch, tmp_path):
+    import json
+
+    config.set_overrides({"qualify_recruits": True})
+    monkeypatch.setattr(loop, "enqueue", lambda gid: None)
+    suite = tmp_path / "mini.json"
+    suite.write_text(json.dumps({"name": "mini", "tasks": [
+        {"name": "worklog", "title": "Write a worklog", "checks": ["test -f WORKLOG.md"], "max_iterations": 2}]}))
+    monkeypatch.setattr(recruitment, "qualification_suite", lambda skills: str(suite))
+    gid = loop.create_goal("Needs rust", quality_commands=[])
+    try:
+        registry.staff("rust_expert", ["rust"], gid, writes=True)
+    except recruitment.RecruitmentPending:
+        pass
+    out = recruitment.qualify(records()[0]["id"])  # the real eval harness, offline
+    cand = out["agent_id"]
+    assert out["qualification"]["status"] == "passed" and out["status"] == "approved"
+    with session() as s:
+        evals = list(s.scalars(select(Goal.id).where(Goal.origin == "eval")))
+        tasks = list(s.scalars(select(Task).where(Task.goal_id.in_(evals))))
+        writers = [t for t in tasks if t.writes and t.agent_id]
+        assert writers and all(t.agent_id == cand for t in writers), "the candidate does the developer's work"
+        reviews = [t for t in tasks if t.role == "qa" and t.agent_id]
+        assert reviews and all(t.agent_id != cand for t in reviews), "never its own reviewer"
+        assert s.get(Agent, cand).probation_tasks_left == recruitment.PROBATION_TASKS, "an exercise is not probation"
+
+
+def test_qualification_suites_name_a_skill_or_fall_back_to_smoke():
+    assert recruitment.qualification_suite(["python"]) == "python-practice"
+    assert recruitment.qualification_suite(["rust"]) == "smoke"
+
+
+def test_no_qualification_for_a_reading_role_or_when_off(monkeypatch):
+    gid = loop.create_goal("Needs rust", quality_commands=[])
+    registry.staff("rust_expert", ["rust"], gid, writes=True)
+    assert records()[0]["qualification"] == {}, "off by default"
+    qualify_on(monkeypatch)
+    other = loop.create_goal("Needs a historian", quality_commands=[])
+    a = registry.staff("historian", ["history"], other, writes=False)
+    rec = recruitment.list_recruitments(goal_id=other)[0]
+    assert rec["status"] == "approved" and rec["qualification"]["status"] == "skipped" and a.lifecycle == "active"

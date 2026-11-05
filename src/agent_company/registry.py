@@ -513,8 +513,11 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
         quota = {a.id: over_quota(s, a) for a in pool}  # S02-R-03: the quota covers an agent and its clones
         idle = [a for a in pool if _free(a, goal_id) and a.health != "degraded" and not quota[a.id]]  # S02-R-02
         team = _team_weights(s, goal_id)
-        trainee = _trainee(s, goal_id, pool)  # an exercise or experiment measures one agent (SPEC-13)
-        if trainee is not None and trainee in idle:
+        trainee = _trainee(s, goal_id, pool, role, writes)  # an exercise or experiment measures one agent (SPEC-13)
+        if trainee is not None and trainee.id not in quota:  # a candidate in its qualification run (SPEC-03)
+            quota[trainee.id] = over_quota(s, trainee)
+        if trainee is not None and (trainee in idle or (trainee not in pool and _free(trainee, goal_id)
+                                                         and not quota[trainee.id])):
             agent, action = trainee, "assigned"
         elif trainee is not None and not quota[trainee.id]:  # busy: its clone, which merges back after the goal
             agent, action = _clone(s, trainee), "cloned"
@@ -600,14 +603,25 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
     return agent
 
 
-def _trainee(s: Session, goal_id: int | None, pool: list[Agent]) -> Agent | None:
+def _trainee(s: Session, goal_id: int | None, pool: list[Agent], role: str = "",
+             writes: bool | None = None) -> Agent | None:
     """The agent an eval goal's trial names (a learning plan's trainee, a playbook experiment's agent), if it is
-    in this role's pool."""
+    in this role's pool. A recruit's qualification run (SPEC-03 S03-R-04) gives its candidate every writing task
+    whatever the role, never a review: the suites are planned with the catalog's roles."""
     if goal_id is None:
         return None
     g = s.get(Goal, goal_id)
-    tid = (g.trial or {}).get("trainee_id") if g is not None and g.origin == "eval" else None
-    return next((a for a in pool if a.id == tid), None) if tid else None
+    trial = (g.trial or {}) if g is not None and g.origin == "eval" else {}
+    tid = trial.get("trainee_id")
+    found = next((a for a in pool if a.id == tid), None) if tid else None
+    if found is not None or not trial.get("qualify") or not writes:
+        return found
+    from agent_company.quality import REVIEW_ROLES
+
+    a = s.get(Agent, tid)
+    if role in REVIEW_ROLES or a is None or not a.enabled or a.lifecycle not in {"candidate", "active"}:
+        return None
+    return a if "write" in (a.permissions or []) and level(a.autonomy) >= 2 else None
 
 
 def _covering(s: Session, skills: list[str], writes: bool | None) -> tuple[Agent, float] | None:
@@ -647,6 +661,7 @@ def _clone(s: Session, src: Agent) -> Agent:
         n += 1
         name = f"{base.name} #{n + 2}"
     clone = Agent(name=name, role=base.role, title=base.title, room_key=base.room_key,
+                  lifecycle="candidate" if base.lifecycle == "candidate" else "active",
                   superior_id=base.superior_id, parent_id=base.id, goal=base.goal,
                   backstory=base.backstory, skills=dict(base.skills), permissions=list(base.permissions),
                   autonomy=base.autonomy or "G3", model_pref=base.model_pref, playbook=base.playbook, enabled=True,
@@ -808,6 +823,8 @@ def rollback(agent_id: int, version: int, actor: str) -> dict[str, Any]:
         snap = dict(v.snapshot)
         if a.lifecycle == "retired":
             raise ValueError("retirement is permanent")
+        if a.lifecycle == "candidate" or snap.get("lifecycle") == "candidate":
+            raise ValueError("a candidate's lifecycle follows its qualification run (Evolution → Recruitment)")
         if snap.get("lifecycle") == "retired":
             raise ValueError("rolling back to a retired version would retire the agent; retire it instead")
         if snap.get("lifecycle") != "active" and a.role == "general_manager" and a.parent_id is None:
@@ -949,6 +966,8 @@ def set_lifecycle(agent_id: int, state: str, actor: str = "system") -> dict[str,
             raise KeyError(agent_id)
         if a.lifecycle == "retired":
             raise ValueError("retirement is permanent")
+        if a.lifecycle == "candidate" and state != "retired":
+            raise ValueError("a candidate becomes active by passing its qualification run; it can only be retired")
         if state != "active" and a.role == "general_manager" and a.parent_id is None:
             raise ValueError("the company General Manager cannot be paused or retired")
         if state != "active" and a.status == "busy":

@@ -39,6 +39,10 @@ def env(tmp_path, monkeypatch):
     training._running.clear()
     monkeypatch.setattr(experiments, "_spawn", lambda fn: None)
     monkeypatch.setattr(training, "_spawn", lambda fn: None)
+    from agent_company import recruitment
+
+    recruitment._qualifying.clear()  # qualification runs of recruits neither (S03-R-04); tests run them by hand
+    monkeypatch.setattr(recruitment, "_spawn", lambda fn: None)
     from agent_company import api
     from agent_company.api import bootstrap
 

@@ -1425,8 +1425,9 @@ def _skipped_with(goal_id: int, iteration: int, prefix: str) -> str:
 
 
 def _out_for_recruitment(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, Any]:
-    """A recruit the goal needs waits for an administrator (SPEC-03 S03-R-05): the goal pauses and resumes when the
-    recruitment is approved or rejected (recruitment.approve/reject). Benchmark runs end instead."""
+    """A recruit the goal needs waits for an administrator (SPEC-03 S03-R-05) or its qualification run (S03-R-04):
+    the goal pauses and resumes when the recruitment is decided (recruitment.approve/reject/qualify). Benchmark runs
+    end instead."""
     g = _goal(goal_id)
     if g.origin == "eval":
         _update_goal(goal_id, status="failed", result=f"Stopped: {why}.")
@@ -1436,7 +1437,7 @@ def _out_for_recruitment(goal_id: int, why: str, report: dict[str, Any]) -> dict
         row = s.get(Goal, goal_id)
         row.checkpoint = {**(row.checkpoint or {}), "paused_for": "recruitment", "paused_why": why}
         pending = s.scalars(select(recruitment.Recruitment.id).where(
-            recruitment.Recruitment.goal_id == goal_id, recruitment.Recruitment.status == "pending")).first()
+            recruitment.Recruitment.goal_id == goal_id, recruitment.Recruitment.status.in_(recruitment.WAITING))).first()
     log_event("goal", f"waiting for a recruitment: {why}", goal_id=goal_id)
     if pending is None:  # decided while the iteration was still running: nobody would resume it
         try:
