@@ -93,8 +93,8 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 
 | # | Problem | Status |
 |---|---------|--------|
-| T1 | `/summary` runs the GM's model once (Claude Code by default, so the server's Claude subscription). Offline it returns the extractive draft only and finds no new decisions. | by design (S05-R-07) |
-| T2 | Goals of one topic run one after another (G-R-07). A goal stuck in `queued` in a topic (for example held by an E5 stop) holds every later goal of that topic; paused goals and goals waiting for approval do not. | by design |
+| T1 | `/summary` runs the GM's model once (Claude Code by default, so the server's Claude subscription). Like the GM's proposal triage, that run is not recorded in usage, so goal budgets and the cost rule do not see it. Offline it returns the extractive draft only and finds no new decisions. | by design (S05-R-07) |
+| T2 | Goals of one topic run one after another (G-R-07). A goal stuck in `queued` in a topic (for example one queued by `gm goal` while the server was down, until the watcher picks it up) holds every later goal of that topic; paused goals and goals waiting for approval do not. | by design |
 | T3 | `/stop` cancels the project's goals in every topic, whichever topic it is sent in; `/status` in a topic other than `general` lists only that topic's goals, blockers are project-wide. | by design |
 | T4 | Databases made before topics get the `topic` column (all old messages and goals in `general`) but not its index; filtering is by project first, so this only matters for very long histories. | open (low) |
 | T5 | Assigning agents to a topic changes who reports in its `/standup`, not who is staffed on its goals. | open (staffing by topic is not specified) |

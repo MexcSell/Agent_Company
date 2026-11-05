@@ -17,7 +17,7 @@ those technologies are `skip` unless a requirement here cannot be met without th
 | Company overview | Dashboard | — |
 | Organization chart | Agents (hierarchy) | room/position editing → SPEC-01 S01-R-01 |
 | Agent management | Agents | versions, rollback, health → SPEC-02 |
-| Project management | Projects | milestones, risks, insights, action items, topics → ASEAO05 |
+| Project management | Projects | — (Plan tab; topics in Orders & reports) |
 | Task management | Goals | decisions, workflow history, blackboard done; stage-wise gate → ASEAO09 S09-R-01; trace has an API but no view |
 | Research center | Research | request fields, monitoring rules, claims review → ASEAO06 |
 | Knowledge center | — | new view: knowledge items, review queue, contradictions → SPEC-11 |
@@ -51,6 +51,8 @@ pause/resume are on the goal page; a trace view is open (the trace has an API).
 
 ### S15-R-05 Project detail — ASEAO05
 Milestones, risk/blocker register, insights, upcoming action items, weighted progress, topics.
+**Status: done:** Projects → Plan (milestones, risks and blockers, insights, action items, progress) and the
+topic tabs of Orders & reports (ASEAO05 S05-R-01..R-05, S05-R-07).
 
 All views keep the current conventions: one file per area in `static/`, live updates through
 `/api/stream`, administrative actions audited.

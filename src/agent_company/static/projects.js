@@ -184,12 +184,14 @@ async function projectMain(id, incremental, early = null) {
     }
   }
   if (mode === "orders" && $("#msgs")) {
-    projectTopics = await api(`/api/projects/${id}/topics`);
-    if (!projectTopics.some((t) => t.name === topicOf(id) && (!t.archived || me.is_admin))) { store.set(`ac.project.topic.${id}`, "general"); messageCache = []; lastMessageId = 0; }
+    const qs = projectSearch ? `q=${encodeURIComponent(projectSearch)}` : `after=${lastMessageId}&topic=${encodeURIComponent(topicOf(id))}`;
+    let fresh;
+    [projectTopics, fresh] = await Promise.all([api(`/api/projects/${id}/topics`), api(`/api/projects/${id}/messages?${qs}`)]);
+    if (!projectTopics.some((t) => t.name === topicOf(id) && (!t.archived || me.is_admin))) {  // gone or archived meanwhile
+      store.set(`ac.project.topic.${id}`, "general"); messageCache = []; lastMessageId = 0;
+      if (!projectSearch) fresh = await api(`/api/projects/${id}/messages?topic=general`);
+    }
     renderTopics(id);
-    const topic = topicOf(id);
-    const qs = projectSearch ? `q=${encodeURIComponent(projectSearch)}` : `after=${lastMessageId}&topic=${encodeURIComponent(topic)}`;
-    const fresh = await api(`/api/projects/${id}/messages?${qs}`);
     if (projectSearch) { messageCache = fresh; renderMessages(false); }
     else if (fresh.length || !lastMessageId) { messageCache.push(...fresh); lastMessageId = messageCache.length ? messageCache[messageCache.length - 1].id : 0; renderMessages(lastMessageId && incremental); }
     $("#p-running").textContent = `${d.goals.filter((g) => GOAL_ACTIVE.includes(g.status) && g.status !== "paused").length} goal(s) running`;

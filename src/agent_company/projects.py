@@ -216,7 +216,7 @@ def messages(project_id: int, after: int = 0, limit: int = 300, topic: str = "",
         names = dict(s.execute(select(Agent.id, Agent.name)).all())
         query = select(Message).where(Message.project_id == project_id, Message.id > after)
         if topic:
-            query = query.where(Message.topic == topic)
+            query = query.where(Message.topic == topic_name(topic))
         if q.strip():
             query = query.where(Message.content.icontains(q.strip(), autoescape=True))
         rows = s.scalars(query.order_by(Message.id.desc()).limit(limit)).all()
