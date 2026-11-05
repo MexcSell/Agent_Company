@@ -231,6 +231,8 @@ class ModelEntry(Base):
     base_url: Mapped[str] = mapped_column(String(512), default="")  # OpenAI-compatible server (llama-server, LM Studio)
     api_key_env: Mapped[str] = mapped_column(String(64), default="")  # env var holding this model's key
     session_id: Mapped[str] = mapped_column(String(64), default="")  # claude_code: every run forks this session
+    # the highest classification it may receive (SPEC-14 S14-R-05); "" = by locality (router.clearance)
+    clearance: Mapped[str] = mapped_column(String(16), default="")
 
 
 class Route(Base):
@@ -272,6 +274,8 @@ class Goal(Base):
     estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     # the project's conversation lane the order came from; its reports go there and its goals run in order
     topic: Mapped[str] = mapped_column(String(64), default="general")
+    # the order's classification (its attachments, its project at creation); the project's current one may raise it
+    classification: Mapped[str] = mapped_column(String(16), default="internal")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
@@ -445,6 +449,7 @@ class Upload(Base):
     content_type: Mapped[str] = mapped_column(String(128), default="")
     size: Mapped[int] = mapped_column(Integer, default=0)
     user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    classification: Mapped[str] = mapped_column(String(16), default="internal")  # that of the order it came with
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

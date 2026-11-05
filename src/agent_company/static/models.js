@@ -5,6 +5,7 @@
 // or one picked from a provider's catalog.
 
 let providersList = [];
+const CLEARANCES = ["public", "internal", "confidential", "restricted", "secret"];
 async function viewModels(quiet) {
   if (quiet && $("#mdl-page")) return;
   const [m, provs] = await Promise.all([api("/api/models"), api("/api/providers")]);
@@ -16,7 +17,8 @@ async function viewModels(quiet) {
       <div class="mdl-list">${m.models.map((x) => `<div class="mdl-item ${x.available ? "" : "off"}"><div class="row nowrap"><span class="mdl-kind k-${esc(x.kind)}">${esc(x.kind === "claude_code" ? "Claude Code" : x.kind === "codex" ? "Codex" : x.kind === "offline" ? "offline" : "API")}</span><strong class="grow">${esc(x.name)}</strong>
           ${x.available ? pill("ok") : ""}${admin && x.available ? ib("bolt", "Test this model", `data-test="${x.id}"`, "sm") : ""}${admin && x.kind !== "offline" ? ib("trash", "Delete", `data-del="${x.id}"`, "sm danger") : ""}</div>
         <div class="muted mono ellipsis">${esc(x.model_id || "default model")}${x.base_url ? ` · ${esc(x.base_url)}` : ""}${x.session_id ? ` · session ${esc(x.session_id.slice(0, 8))}` : ""}</div>
-        <div class="muted">${x.input_cost || x.output_cost ? `$${x.input_cost} / $${x.output_cost} per 1M tokens` : "no per-token price"}${x.available ? "" : ` · <span class="mdl-why">${esc(x.unavailable_reason)}</span>`}</div></div>`).join("")}</div></section>
+        <div class="muted">${x.input_cost || x.output_cost ? `$${x.input_cost} / $${x.output_cost} per 1M tokens` : "no per-token price"}${x.available ? "" : ` · <span class="mdl-why">${esc(x.unavailable_reason)}</span>`}</div>
+        <div class="row nowrap muted" title="The most classified content this model may receive (SPEC-14): hosted models default to internal, local ones to restricted; secret only when set here">Receives up to ${admin && x.kind !== "offline" ? `<select data-clear="${x.id}" style="width:auto">${["", ...CLEARANCES].map((c) => `<option value="${c}" ${(x.clearance_set ? x.clearance : "") === c ? "selected" : ""}>${c || `default (${x.clearance})`}</option>`).join("")}</select>` : `<b>${esc(x.clearance)}</b>${x.kind === "offline" ? " (sends nothing anywhere)" : ""}`}</div></div>`).join("")}</div></section>
     <section class="card ag-scroll"><h2>Routes: which role uses which model</h2><p class="muted">Retry model: used after a failed quality gate (escalation). An agent's own model (its card) comes first.</p>
       <table class="mdl-routes"><tr><th>Role</th><th>Model</th><th>Retry model</th></tr>${Object.entries(m.routes).map(([role, name]) => `<tr><td>${esc(role.replace(/_/g, " "))}</td><td>${admin ? `<select data-role="${esc(role)}">${m.models.map((x) => `<option ${x.name === name ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : esc(name)}</td><td>${admin ? `<select data-esc="${esc(role)}"><option value="">same model</option>${m.models.map((x) => `<option ${x.name === m.escalations[role] ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : esc(m.escalations[role] || "same model")}</td></tr>`).join("")}</table></section></div>`;
   document.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => { if (!confirm("Delete this model? Routes using it move to another model.")) return; try { await api(`/api/models/${b.dataset.del}`, { method: "DELETE" }); viewModels(); } catch (e) { toast(e.message); } }));
@@ -25,6 +27,10 @@ async function viewModels(quiet) {
   document.querySelectorAll("[data-esc]").forEach((s) => (s.onchange = () => saveRoute(s.dataset.esc)));
   document.querySelectorAll("[data-test]").forEach((b) => (b.onclick = async () => { b.disabled = true; b.classList.add("busy"); try { const r = await api(`/api/models/${b.dataset.test}/test`, { method: "POST" }); toast(r.ok ? `OK in ${r.seconds}s: ${r.reply.slice(0, 60)} (${r.input_tokens}/${r.output_tokens} tokens)` : `Failed: ${r.error}`); } catch (e) { toast(e.message); } b.disabled = false; b.classList.remove("busy"); }));
   $("#m-add") && ($("#m-add").onclick = addModelDialog);
+  document.querySelectorAll("[data-clear]").forEach((s) => (s.onchange = async () => {
+    if (s.value === "secret" && !confirm("Clear this model for secret content? Secret orders and projects will then be sent to it.")) { viewModels(); return; }
+    try { await api(`/api/models/${s.dataset.clear}`, { method: "PATCH", body: { clearance: s.value } }); toast("Saved"); viewModels(); } catch (e) { toast(e.message); }
+  }));
 }
 
 function addModelDialog() {

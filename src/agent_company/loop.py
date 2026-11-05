@@ -36,9 +36,11 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                 attachments: list[dict[str, Any]] | None = None, origin: str = "user",
                 parent_goal_id: int | None = None, allowed_paths: list[str] | None = None,
                 protect_tests: bool = False, extract_checks: bool = False,
-                permits: list[str] | None = None, estimated_cost_usd: float = 0.0, topic: str = "general") -> int:
+                permits: list[str] | None = None, estimated_cost_usd: float = 0.0, topic: str = "general",
+                classification: str = "") -> int:
     """Create a goal. `extract_checks` (only for trusted authors) adds the test/lint commands
-    the description names in backticks when no quality commands are given."""
+    the description names in backticks when no quality commands are given. `classification` (S14-R-05) can
+    only raise the level: the goal is at least as classified as its project and its attachments."""
     from agent_company.checks import extract_check_commands
     from agent_company.governance import check_command, stops
 
@@ -60,14 +62,24 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
         if not (p / ".git").exists():
             raise ValueError(f"{p} is not a git repository")
         repo_path = str(p)
+    from agent_company.db import Project, Upload
+    from agent_company.learning import check_level, highest
+
+    if classification:
+        check_level(classification)
     with session() as s:
+        project = s.get(Project, project_id) if project_id is not None else None
+        ids = [a["id"] for a in attachments or [] if isinstance(a, dict) and a.get("id")]
+        levels = [u.classification for u in s.scalars(select(Upload).where(Upload.id.in_(ids)))] if ids else []
+        level = highest(classification, project.classification if project else None, *levels)
         g = Goal(title=title.strip()[:256], description=(description or title).strip(), repo_path=repo_path,
                  urls=list(urls or []), quality_commands=list(quality_commands or []),
                  max_iterations=max_iterations or settings().max_iterations, created_by=created_by,
                  project_id=project_id, attachments=list(attachments or []), origin=origin,
                  parent_goal_id=parent_goal_id, allowed_paths=[p.strip() for p in allowed_paths or [] if p.strip()],
                  protect_tests=protect_tests, permits=sorted(set(permits or [])),
-                 estimated_cost_usd=max(0.0, float(estimated_cost_usd or 0)), topic=topic or "general")
+                 estimated_cost_usd=max(0.0, float(estimated_cost_usd or 0)), topic=topic or "general",
+                 classification=level)
         s.add(g)
         s.flush()
         gid = g.id
@@ -170,7 +182,8 @@ TRANSIENT = re.compile(r"(?i)(\b(429|50[0-4]|529)\b|rate.?limit|overloaded|timed
                        r"|connection (reset|refused|error|aborted)|network is unreachable|service unavailable"
                        r"|APIConnectionError|ECONNRESET)")
 # Policy refusals and stops are final: retrying them would only repeat the refusal (S04-R-06).
-NO_RETRY = re.compile(r"(?i)refused by the command policy|emergency stop|\bE[0-5] stop\b|WorktreeError|outside the worktree")
+NO_RETRY = re.compile(r"(?i)refused by the command policy|emergency stop|\bE[0-5] stop\b|WorktreeError|outside the worktree"
+                      r"|no model is cleared for")
 _sleep = time.sleep  # tests replace it
 
 
@@ -200,16 +213,24 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
     the goal's (time.monotonic()): a retry that would wait past it is not made (S04-R-06)."""
     from agent_company.governance import stopped, stops
 
-    project_id = None
+    from agent_company.learning import goal_level
+
+    project_id, level = None, "internal"
     if goal_id is not None:
         with session() as s:
             g = s.get(Goal, goal_id)
             project_id = g.project_id if g else None
+            level = goal_level(s, g)
     why = stopped(agent_id=agent.id, project_id=project_id, room=agent.room_key)
     if why:
         return _stopped_result(why)
     req.agent_id, req.goal_id = agent.id, goal_id
-    chain = router.resolve_chain(agent.role, agent.model_pref, escalate, avoid_provider)
+    try:  # only models cleared for the goal's classification (S14-R-05)
+        chain = router.resolve_chain(agent.role, agent.model_pref, escalate, avoid_provider, level)
+    except router.NotCleared as e:
+        log_event("security", f"{agent.name}: {e}", goal_id=goal_id, agent_id=agent.id, classification=level)
+        return (executors.Result(text="", ok=False, error=str(e)),
+                router.Choice(name="(not cleared)", kind="offline", model_id="", reason=str(e)))
     if req.workdir is None:  # CLI agents only run inside a worktree
         chain = [c for c in chain if c.kind not in {"claude_code", "codex"}]
     if chain and chain[0].kind != "offline":
@@ -420,6 +441,8 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
             req = executors.Request(purpose="plan", role="general_manager", system=_system_for(gm), prompt=prompt,
                                     workdir=Path(goal.worktree), data={"goal": goal.title, "feedback": feedback})
             res, choice = _execute(gm, req, "plan", goal_id=goal.id)
+            if not res.ok and "no model is cleared for" in res.error:  # S14-R-05: nothing may run this goal
+                raise RuntimeError(res.error)
             try:
                 data = contracts.extract_json(res.text)
                 tasks = data["tasks"] if isinstance(data, dict) else data
@@ -510,9 +533,16 @@ def _spec_step(fn: Any, goal: Goal, iteration: int, data: Any) -> None:
 def _configure(goal: Goal) -> None:
     """A CLI General Manager (Claude Code, Codex) first updates the project's .claude/ configuration for the goal,
     in the worktree; changes outside .claude/ and .mcp.json are put back. API models and the simulator skip this."""
+    from agent_company.learning import goal_level
+
     gm = registry.staff("general_manager", ["planning"], goal.id)
     try:
-        chain = router.resolve_chain(gm.role, gm.model_pref)
+        with session() as s:
+            level = goal_level(s, s.get(Goal, goal.id))
+        try:
+            chain = router.resolve_chain(gm.role, gm.model_pref, classification=level)
+        except router.NotCleared:  # planning will report it; no configure step
+            return
         if not chain or chain[0].kind not in {"claude_code", "codex"}:
             return
         req = executors.Request(purpose="configure", role="general_manager", system=_system_for(gm),

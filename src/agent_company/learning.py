@@ -28,6 +28,28 @@ from agent_company.db import Agent, Goal, Lesson, Project, log_event, now, sessi
 XP_SUCCESS, XP_FAILURE, XP_PER_LEVEL = 10, 3, 50
 CLASSIFICATIONS = ["public", "internal", "confidential", "restricted", "secret"]
 SHAREABLE = {"public", "internal"}  # may be retrieved by goals of other projects
+
+
+def rank(level: str | None) -> int:
+    return CLASSIFICATIONS.index(level) if level in CLASSIFICATIONS else 1  # unknown or empty: internal
+
+
+def highest(*levels: str | None) -> str:
+    return CLASSIFICATIONS[max([rank(x) for x in levels if x] or [1])]
+
+
+def check_level(level: str) -> str:
+    if level not in CLASSIFICATIONS:
+        raise ValueError(f"classification must be one of {', '.join(CLASSIFICATIONS)}")
+    return level
+
+
+def goal_level(s, g: Goal | None) -> str:  # noqa: ANN001
+    """What a goal's content is classified as: its own level, raised by its project's current one (S14-R-05)."""
+    if g is None:
+        return "internal"
+    project = s.get(Project, g.project_id) if g.project_id else None
+    return highest(g.classification, project.classification if project else None)
 _WORD = re.compile(r"[a-z0-9_]{3,}")
 _STOP = {"the", "and", "for", "with", "this", "that", "from", "into", "task", "goal", "your", "you", "are", "was",
          "were", "has", "have", "not", "but", "all", "any", "can", "use", "uses", "used", "when", "then", "them"}
@@ -128,11 +150,10 @@ def learn(agent_id: int, goal_id: int | None, lesson: str, success: bool, skills
             return
         g = s.get(Goal, goal_id) if goal_id else None
         is_eval = bool(g and g.origin == "eval")
-        project = s.get(Project, g.project_id) if g and g.project_id else None
-        classification = (project.classification if project else None) or "internal"
+        classification = goal_level(s, g)
         status, reason = screen(text)
         if classification == "secret":  # secret content is never stored in lessons (S14-R-05)
-            text, status, reason = "(withheld: the project is classified secret)", "rejected", "secret project"
+            text, status, reason = "(withheld: the work is classified secret)", "rejected", "secret goal or project"
         sources = [f"goal:{goal_id}"] if goal_id else []
         sources += [f"task:{task_id}"] if task_id else []
         sources += [f"commit:{commit}"] if commit else []

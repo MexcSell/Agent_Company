@@ -259,7 +259,11 @@ def members(project_id: int, only: list[int] | None = None) -> list[dict[str, An
 
 # --- uploads ----------------------------------------------------------------------
 
-def save_upload(name: str, data: bytes, content_type: str, user_id: int | None) -> dict[str, Any]:
+def save_upload(name: str, data: bytes, content_type: str, user_id: int | None, classification: str = "internal"
+                ) -> dict[str, Any]:
+    from agent_company.learning import check_level
+
+    check_level(classification or "internal")
     if len(data) > MAX_UPLOAD:
         raise ValueError("files may be at most 10 MB")
     ctype = content_type or mimetypes.guess_type(name)[0] or "application/octet-stream"
@@ -272,13 +276,15 @@ def save_upload(name: str, data: bytes, content_type: str, user_id: int | None) 
     path = folder / f"{uid}-{safe}"
     path.write_bytes(data)
     with session() as s:
-        s.add(Upload(id=uid, name=safe, path=str(path), content_type=ctype, size=len(data), user_id=user_id))
-    return {"id": uid, "name": safe, "content_type": ctype, "size": len(data)}
+        s.add(Upload(id=uid, name=safe, path=str(path), content_type=ctype, size=len(data), user_id=user_id,
+                     classification=classification or "internal"))
+    return {"id": uid, "name": safe, "content_type": ctype, "size": len(data), "classification": classification or "internal"}
 
 
 def uploads(ids: list[str]) -> list[dict[str, Any]]:
     with session() as s:
-        return [{"id": u.id, "name": u.name, "path": u.path, "content_type": u.content_type, "size": u.size}
+        return [{"id": u.id, "name": u.name, "path": u.path, "content_type": u.content_type, "size": u.size,
+                 "classification": u.classification or "internal"}
                 for u in s.scalars(select(Upload).where(Upload.id.in_(ids)))]
 
 
@@ -470,6 +476,7 @@ def summarize(project_id: int, topic: str) -> str:
         p = s.get(Project, project_id)
         gm = s.get(Agent, p.manager_id) if p and p.manager_id else None
         gm_name, gm_pref, gm_id = (gm.name, gm.model_pref, gm.id) if gm else ("General Manager", None, None)
+        level = p.classification if p else "internal"
     text, recorded = draft, []
     if transcript:
         req = executors.Request(
@@ -481,9 +488,10 @@ def summarize(project_id: int, topic: str) -> str:
                     "\"alternatives\", \"confidence\", \"category\"}]} after the summary.\n\n"
                     f"Draft:\n{draft}\n\nConversation:\n{transcript}"),
             data={"draft": draft})
-        try:
-            res = executors.for_choice(router.resolve("general_manager", gm_pref), settings().command_timeout).run(req)
-        except Exception as e:  # noqa: BLE001 - the draft still answers
+        try:  # only a model cleared for the project's classification (S14-R-05) reads the conversation
+            choice = router.resolve("general_manager", gm_pref, classification=level)
+            res = executors.for_choice(choice, settings().command_timeout).run(req)
+        except Exception as e:  # noqa: BLE001 - the draft still answers (also when no model is cleared)
             res = executors.Result(text="", ok=False, error=str(e))
         if res.ok and res.text.strip():
             text = res.text.strip()
@@ -523,8 +531,9 @@ HELP = ("Commands: an order in plain words starts a goal for the General Manager
 
 
 def command(project_id: int, user: dict[str, Any], content: str, attachment_ids: list[str] | None = None,
-            topic: str = GENERAL) -> dict[str, Any]:
-    """Handle one command-window entry in a topic. Returns {"message_id", "goal_id"?, "decisions"?}."""
+            topic: str = GENERAL, classification: str = "") -> dict[str, Any]:
+    """Handle one command-window entry in a topic. Returns {"message_id", "goal_id"?, "decisions"?}.
+    `classification` marks the order and its attachments (SPEC-14 S14-R-05); below the project's it is ignored."""
     from agent_company import loop
     from agent_company.auth import can
 
@@ -536,9 +545,16 @@ def command(project_id: int, user: dict[str, Any], content: str, attachment_ids:
     if not content and not files:
         raise ValueError("empty command")
     topic = _open_topic(p.id, topic)
+    from agent_company.learning import check_level, highest
+
+    level = highest(check_level(classification) if classification else None, p.classification)
+    if files:
+        with session() as s:
+            for u in s.scalars(select(Upload).where(Upload.id.in_([f["id"] for f in files]))):
+                u.classification = highest(u.classification, level)
     mid = post(p.id, content, "user", "command", user_id=user["id"],
                attachments=[{k: f[k] for k in ("id", "name", "content_type", "size")} for f in files],
-               topic=topic, author=user["name"])
+               topic=topic, author=user["name"], **({"classification": level} if level != "internal" else {}))
     slash = content.split()[0].lower() if content.startswith("/") else ""
 
     def reply(text: str, kind: str = "chat", **kw: Any) -> None:
@@ -584,7 +600,7 @@ def command(project_id: int, user: dict[str, Any], content: str, attachment_ids:
         title = f"Order: {title}"
     gid = loop.create_goal(title, content or title, repo_path=p.path, quality_commands=list(p.quality_commands),
                            created_by=user["id"], project_id=p.id, attachments=files,
-                           extract_checks=user["is_admin"], topic=topic)
+                           extract_checks=user["is_admin"], topic=topic, classification=level)
     ahead = loop.lane_ahead(gid)
     reply(f"Order received as goal #{gid}. " + (f"It starts when goal #{ahead} of this topic is done."
                                                if ahead else "Planning now."),
@@ -739,12 +755,14 @@ def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = Tr
                      "repo": origin.repo_path if origin else "",
                      "checks": list(origin.quality_commands) if origin else [], "project_id": p.project_id,
                      "parent": origin.id if origin else None, "created_by": origin.created_by if origin else None,
-                     "topic": origin.topic if origin else GENERAL}
+                     "topic": origin.topic if origin else GENERAL,
+                     "classification": origin.classification if origin else ""}
         out = proposal_dict(p, dict(s.execute(select(Agent.id, Agent.name)).all()))
     if spawn is not None:
         gid = loop.create_goal(spawn["title"], spawn["description"], spawn["repo"], quality_commands=spawn["checks"],
                                created_by=spawn["created_by"], project_id=spawn["project_id"], origin="proposal",
-                               parent_goal_id=spawn["parent"], topic=spawn["topic"])
+                               parent_goal_id=spawn["parent"], topic=spawn["topic"],
+                               classification=spawn["classification"])
         with session() as s:
             s.get(Proposal, proposal_id).spawned_goal_id = gid
         out["spawned_goal_id"] = gid
@@ -787,7 +805,19 @@ def settle_proposals(goal_id: int) -> None:
         notify(f"{len(pending)} proposal(s) wait for a decision", goal_title, level="warning", source="proposals",
                goal_id=goal_id, admin_only=True)
         return
-    choice = router.resolve("general_manager", gm.model_pref)
+    from agent_company.learning import goal_level
+
+    with session() as s:
+        level = goal_level(s, s.get(Goal, goal_id))
+    try:
+        choice = router.resolve("general_manager", gm.model_pref, classification=level)
+    except router.NotCleared:  # no model may read this goal's proposals: a person decides them
+        for pid, title, why in pending:
+            post_for_goal(goal_id, f"Proposal: {title}" + (f"\n{why}" if why else ""), kind="proposal",
+                          proposal_id=pid)
+        notify(f"{len(pending)} proposal(s) wait for a decision", goal_title, level="warning", source="proposals",
+               goal_id=goal_id, admin_only=True)
+        return
     for pid, title, why in pending:
         req = executors.Request(
             purpose="triage", role="general_manager", system=f"You are {gm.name}, the General Manager.",

@@ -109,3 +109,12 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 | R4 | `model_pref` must now name a catalog model or an existing agent; an edit setting any other text gets 400. Preferences stored before keep working until the agent is edited. | by design (AT-008) |
 | R5 | A rollback restores the model preference of that version; if that model was deleted since, the rollback is refused. | by design |
 | R6 | During a provider outage, staffing clones the degraded agent once per task; the clone asks for the same model, so it may degrade too. Clones are merged and retired when their goal ends. When the cause is the model's failed test, staffing fails instead of cloning. | mitigated |
+
+## Added 2026-11-05 (classification, SPEC-14 S14-R-05)
+
+| # | Problem | Status |
+|---|---------|--------|
+| K1 | Hosted models (Claude Code included) are cleared only up to `internal` by default. A project or order marked `confidential` or higher fails at planning until an administrator clears a model for it (Models → "Receives up to") or a local model is routed. | by design |
+| K2 | The administrator's own Claude Code panel (Projects → General Manager, the Workspace) is not filtered by classification: it is the owner's tool, not an agent (CLAUDE.md). | by decision |
+| K3 | Whether a model is "local" is read from its address (localhost, 127.0.0.1, ::1) or provider (Ollama, vLLM); a model on another machine of your own network counts as hosted until it is cleared by hand. | by design |
+| K4 | A classification chosen for an order applies to the files attached to it; a file uploaded and never sent keeps the level chosen at upload. | by design |

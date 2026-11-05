@@ -29,7 +29,7 @@ Mapping: identities → `User` (humans), `Agent` (agents); permissions → `Agen
 | S14-R-02 | partial: agents can never approve a proposal touching permissions, autonomy, budgets, routes, settings or safety controls (`projects.restricted`, `decide(by_human=False)`); `Agent.autonomy` levels G0–G5 are open |
 | S14-R-03 | done: rules for refused commands (pause + one alert), credentials in a change (stop + SEV-2), writes outside the worktree (SEV-2), repeated scope violations (stop + alert), failure rate > 70 % over 10 tasks (flag) (`governance.on_command_refused`, `loop._behaviour_rules`, `evolution._flag_unreliable`); cost > 2× estimate pauses the goal (`Goal.estimated_cost_usd`, set by the order or the planner's `estimated_cost_usd`; `loop.CostOverrun`; resuming accepts the cost so far as the new estimate) |
 | S14-R-04 | done (`incidents` table, `governance.open_incident`/`update_incident`, containment actions, closing needs a root cause and becomes a lesson, Incidents list in the Audit view) |
-| S14-R-05 | partial: projects and lessons are classified; secret projects store no lesson text; other projects never retrieve confidential+ lessons, and playbooks take only public/internal items (`learning.py`, `evolution.curate`). Uploads, documents, sources, and the model-level rule ("restricted only to allowed models") are open |
+| S14-R-05 | done: projects, orders (goals), uploads and lessons are classified; models receive only what they are cleared for; secret work stores no lesson text; other projects never retrieve confidential+ lessons, and playbooks take only public/internal items. Research sources: skip (see S14-R-05) |
 | S14-R-06 | open |
 | S14-R-07 | partial: every executor run has a timeout and runs in its own process group (killed on timeout or stop); output beyond 5 M characters is cut after the run rather than ending it; the isolation level per run is not recorded; L3 open |
 | S14-R-08 | partial: `GET /api/goals/{id}/trace` names agent, model, executor, duration, cost and error of every run; tool calls per run and permissions used are not recorded |
@@ -119,6 +119,19 @@ no ML):
   `confidential`+ content.
 - Acceptance: a lesson from project A marked `confidential` is not in the context of a goal of
   project B (SEC-008, SEC-028 analogue).
+- **Status: done** (`ModelEntry.clearance`, `Goal.classification`, `Upload.classification`;
+  `router.clearance`, `cleared`, `NotCleared`, `resolve_chain(classification=)`; `learning.goal_level`,
+  `highest`; `loop._execute`, `_plan`, `_configure`; `projects.command(classification=)`, `summarize`,
+  `settle_proposals`; Models → "Receives up to", Projects → Orders → Classification; `tests/test_classification.py`,
+  `tests/test_knowledge.py`). A model's clearance is set on the model, or by default `restricted` for local models
+  (an OpenAI-compatible server on localhost, Ollama, vLLM) and `internal` for hosted ones; the offline simulator
+  sends nothing and counts as `secret`. "Secret is never sent to a model" is read as: only to a model an
+  administrator explicitly cleared for `secret` (none by default). A goal's level is the highest of its order's,
+  its attachments' and its project's (the project's current one, so raising a project raises its running goals).
+  When the level rules out every real model that would have run, the run fails with "no model is cleared for …"
+  (no retry, not counted against the agent's health) and planning fails the goal; the simulator never stands in.
+  Summaries fall back to their draft; proposals go to a person. Documents are the knowledge items, already
+  classified. Research sources: skip, they are public web pages (private hosts need `ALLOW_PRIVATE_CRAWL`).
 
 ### S14-R-06 Tool permission contracts — §8.2, §8.3
 - Each executor/tool declares capabilities, allowed roles, max seconds, `requires_approval`.

@@ -102,7 +102,40 @@ def model_dict(m: ModelEntry) -> dict[str, Any]:
             "input_cost": m.input_cost, "output_cost": m.output_cost,
             "daily_token_limit": m.daily_token_limit, "weekly_token_limit": m.weekly_token_limit,
             "enabled": m.enabled, "builtin": m.builtin, "notes": m.notes, "base_url": m.base_url,
-            "api_key_env": m.api_key_env, "session_id": m.session_id, "available": ok, "unavailable_reason": why}
+            "api_key_env": m.api_key_env, "session_id": m.session_id, "available": ok, "unavailable_reason": why,
+            "clearance": clearance(m), "clearance_set": bool(m.clearance)}
+
+
+# --- classification clearance (SPEC-14 S14-R-05) --------------------------------------------
+
+class NotCleared(RuntimeError):
+    """No usable model may receive content of this classification."""
+
+
+def is_local(m: ModelEntry) -> bool:
+    """Runs on this host: an OpenAI-compatible server on localhost, or a local provider (Ollama, vLLM)."""
+    from urllib.parse import urlparse
+
+    if m.base_url:
+        return (urlparse(m.base_url).hostname or "") in {"localhost", "127.0.0.1", "::1"}
+    return m.kind == "llm" and provider_of(m.model_id) in LOCAL_PROVIDERS
+
+
+def clearance(m: ModelEntry) -> str:
+    """The highest classification a model may receive: set on the model, or by default `restricted` for local
+    models and `internal` for every hosted one. The offline simulator sends nothing anywhere. Secret content
+    goes only to a model an administrator cleared for `secret`."""
+    if m.kind == "offline":
+        return "secret"
+    if m.clearance:
+        return m.clearance
+    return "restricted" if is_local(m) else "internal"
+
+
+def cleared(m: ModelEntry, level: str) -> bool:
+    from agent_company.learning import rank
+
+    return rank(clearance(m)) >= rank(level)
 
 
 def seed() -> None:
@@ -229,8 +262,11 @@ def _choice_from_dict(m: dict[str, Any]) -> Choice:
 
 
 def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = False,
-                  avoid_provider: str | None = None) -> list[Choice]:
+                  avoid_provider: str | None = None, classification: str = "internal") -> list[Choice]:
     """Every usable model for the role, best first, ending with the offline simulator.
+
+    Only models cleared for `classification` are used (S14-R-05). When that rules out every real model that
+    would otherwise have been used, NotCleared is raised: the simulator must not stand in for real work.
 
     Order: the escalation model (on retries), the agent's preference, the role's route,
     MODEL from .env. With `avoid_provider` (a reviewer checking a developer's work), an
@@ -255,6 +291,7 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
             candidates.append(("MODEL in .env", m.name if m else None))
         chain: list[Choice] = []
         skipped: list[str] = []
+        blocked: list[str] = []
         for label, name in candidates:
             if not name or any(c.name == name for c in chain):
                 continue
@@ -263,24 +300,31 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
                 skipped.append(f"{name}: not in catalog")
                 continue
             ok, why = available(m)
-            if ok:
+            if ok and m.kind != "offline" and not cleared(m, classification):
+                blocked.append(f"{name} (cleared for {clearance(m)})")
+                skipped.append(f"{name}: not cleared for {classification}")
+            elif ok:
                 chain.append(_choice(m, label))
             else:
                 skipped.append(f"{name}: {why}")
         if avoid_provider and (not chain or chain[0].provider == avoid_provider):
             for m in s.scalars(select(ModelEntry).where(ModelEntry.kind == "llm").order_by(ModelEntry.id)):
                 c = _choice(m, f"different family from {avoid_provider}")
-                if c.provider != avoid_provider and available(m)[0] and all(x.name != m.name for x in chain):
+                if (c.provider != avoid_provider and available(m)[0] and cleared(m, classification)
+                        and all(x.name != m.name for x in chain)):
                     chain.insert(0, c)
                     break
+        if blocked and not any(c.kind != "offline" for c in chain):
+            raise NotCleared(f"no model is cleared for {classification} content: {', '.join(blocked)}. Clear a "
+                             "local model for it (Models), or lower the classification")
         chain.append(_choice(offline, "fallback (" + "; ".join(skipped) + ")" if skipped else "fallback"))
         return chain
 
 
 def resolve(role: str, model_pref: str | None = None, escalate: bool = False,
-            avoid_provider: str | None = None) -> Choice:
+            avoid_provider: str | None = None, classification: str = "internal") -> Choice:
     """Pick the model an agent of `role` should use right now."""
-    return resolve_chain(role, model_pref, escalate, avoid_provider)[0]
+    return resolve_chain(role, model_pref, escalate, avoid_provider, classification)[0]
 
 
 def list_models() -> list[dict[str, Any]]:
@@ -313,11 +357,15 @@ def set_route(role: str, model_name: str, escalation: str | None = None) -> None
 
 
 MODEL_FIELDS = {"name", "kind", "model_id", "input_cost", "output_cost", "daily_token_limit",
-                "weekly_token_limit", "enabled", "notes", "base_url", "api_key_env", "session_id"}
+                "weekly_token_limit", "enabled", "notes", "base_url", "api_key_env", "session_id", "clearance"}
 
 
 def add_model(data: dict[str, Any]) -> dict[str, Any]:
     data = {k: v for k, v in data.items() if k in MODEL_FIELDS}
+    if data.get("clearance"):
+        from agent_company.learning import check_level
+
+        check_level(data["clearance"])
     if not data.get("name") or not data.get("kind"):
         raise ValueError("name and kind are required")
     if data["kind"] not in {"llm", "claude_code", "codex"}:
@@ -335,6 +383,10 @@ def add_model(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def update_model(model_id: int, data: dict[str, Any]) -> dict[str, Any]:
+    if data.get("clearance"):
+        from agent_company.learning import check_level
+
+        check_level(data["clearance"])
     with session() as s:
         m = s.get(ModelEntry, model_id)
         if m is None:

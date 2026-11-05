@@ -17,6 +17,7 @@ const gmPanels = new Map();  // project id -> { el, panel }
 let projectSearch = "";
 let projectTopics = [];
 const topicOf = (id) => store.get(`ac.project.topic.${id}`) || "general";
+const CLASS_RANK = { public: 0, internal: 1, confidential: 2, restricted: 3, secret: 4 };
 
 async function viewProjects(quiet) {
   // The selected project's details load alongside the list: one round trip instead of two.
@@ -98,7 +99,7 @@ const KIND_LABEL = { command: "", plan: "Plan", result: "Result", error: "Proble
 function messageHtml(m, count) {
   const who = m.author_type === "user" ? esc(m.meta?.author || "You") : m.agent ? esc(m.agent) : "System";
   const files = (m.attachments || []).map((a) => a.content_type.startsWith("image/") ? `<a href="/api/uploads/${a.id}" target="_blank" rel="noopener"><img src="/api/uploads/${a.id}" alt="${esc(a.name)}" class="thumb"></a>` : `<a href="/api/uploads/${a.id}" target="_blank" rel="noopener">${esc(a.name)}</a>`).join(" ");
-  return `<div class="msg by-${m.author_type} ${m.kind}" data-mid="${m.id}"><div class="msg-head row nowrap"><strong>${who}</strong>${KIND_LABEL[m.kind] ? ` <span class="pill ${m.kind === "error" ? "failed" : m.kind === "result" ? "done" : "info"}">${KIND_LABEL[m.kind]}</span>` : ""}${m.goal_id ? ` <a href="#" data-goal="${m.goal_id}" class="muted">#${m.goal_id}</a>` : ""}${projectSearch && m.topic ? ` <span class="pill">${esc(m.topic)}</span>` : ""}${count > 1 ? ` <span class="pill" title="identical messages collapsed">×${count}</span>` : ""}<span class="muted grow" style="text-align:right">${ago(m.at)}</span><button class="icon-btn" data-copy="${m.id}" title="Copy" aria-label="Copy message">${icon("copy", 14)}</button></div>
+  return `<div class="msg by-${m.author_type} ${m.kind}" data-mid="${m.id}"><div class="msg-head row nowrap"><strong>${who}</strong>${KIND_LABEL[m.kind] ? ` <span class="pill ${m.kind === "error" ? "failed" : m.kind === "result" ? "done" : "info"}">${KIND_LABEL[m.kind]}</span>` : ""}${m.goal_id ? ` <a href="#" data-goal="${m.goal_id}" class="muted">#${m.goal_id}</a>` : ""}${projectSearch && m.topic ? ` <span class="pill">${esc(m.topic)}</span>` : ""}${m.meta?.classification ? ` <span class="pill pending" title="only models cleared for it receive this order">${esc(m.meta.classification)}</span>` : ""}${count > 1 ? ` <span class="pill" title="identical messages collapsed">×${count}</span>` : ""}<span class="muted grow" style="text-align:right">${ago(m.at)}</span><button class="icon-btn" data-copy="${m.id}" title="Copy" aria-label="Copy message">${icon("copy", 14)}</button></div>
     <div class="msg-body">${esc(m.content)}</div>${files ? `<div class="row">${files}</div>` : ""}</div>`;
 }
 
@@ -173,7 +174,8 @@ async function projectMain(id, incremental, early = null) {
         <form id="composer" class="composer wc-composer"><div id="att" class="row"></div>
           <div class="wc-inrow"><textarea id="cmd" rows="3" placeholder="Order for the General Manager, a DECISION: subject :: choice line, or /standup, /status, /summary, /stop, /sync, /help. Enter sends, Shift+Enter adds a line. Paste images to attach."></textarea>
           <div class="wc-side"><label class="icon-btn sm wc-attach" for="file" title="Attach images or files" aria-label="Attach">${icon("attach", 16)}</label><button class="wc-send" title="Send (Enter)" aria-label="Send">${icon("send", 16)}</button></div></div>
-          <input type="file" id="file" multiple hidden accept="image/*,text/*,.json,.yaml,.yml,.md,.pdf"><span class="muted" id="p-running"></span></form>`;
+          <input type="file" id="file" multiple hidden accept="image/*,text/*,.json,.yaml,.yml,.md,.pdf"><div class="row nowrap"><span class="muted grow" id="p-running"></span>
+          <label class="muted row nowrap" style="margin:0" title="How classified this order and its attachments are: only models cleared for it receive them (Models). It cannot be lower than the project's.">Classification <select id="cmd-class" style="width:auto">${["", "confidential", "restricted", "secret"].filter((c) => !c || CLASS_RANK[c] > CLASS_RANK[d.classification || "internal"]).map((c) => `<option value="${c}">${c || `project's (${esc(d.classification || "internal")})`}</option>`).join("")}</select></label></div></form>`;
       resetMessages(); pendingUploads = [];
       let searchTimer = 0;
       $("#p-search").oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { projectSearch = $("#p-search").value.trim(); resetMessages(); projectMain(id, true); }, 300); };
@@ -329,7 +331,7 @@ async function projectFilesPanel(d) {
 }
 
 async function uploadFile(file) {
-  const fd = new FormData(); fd.append("file", file);
+  const fd = new FormData(); fd.append("file", file); fd.append("classification", $("#cmd-class")?.value || "internal");
   try {
     const res = await fetch("/api/uploads", { method: "POST", body: fd, credentials: "same-origin" });
     const data = await res.json(); if (!res.ok) throw new Error(data.detail || res.statusText);
@@ -391,7 +393,7 @@ async function sendCommand(id, text) {
   const content = text ?? $("#cmd")?.value.trim();
   if (!content && !pendingUploads.length) return;
   try {
-    await api(`/api/projects/${id}/command`, { method: "POST", body: { content, attachments: pendingUploads.map((u) => u.id), topic: projectMode === "orders" ? topicOf(id) : "general" } });
+    await api(`/api/projects/${id}/command`, { method: "POST", body: { content, attachments: pendingUploads.map((u) => u.id), topic: projectMode === "orders" ? topicOf(id) : "general", classification: text === undefined ? $("#cmd-class")?.value || "" : "" } });
     if (text === undefined) { $("#cmd").value = ""; pendingUploads = []; renderAttachments(); }
     else toast(`${text} sent`);
     projectMain(id, true); updateBadges();

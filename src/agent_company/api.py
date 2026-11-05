@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile, WebSocket
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, WebSocket
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -414,6 +414,7 @@ class CommandBody(BaseModel):
     content: str = ""
     attachments: list[str] = Field(default_factory=list)
     topic: str = "general"
+    classification: str = ""  # SPEC-14 S14-R-05: raises the order's level above the project's
 
 
 class TopicBody(BaseModel):
@@ -1562,7 +1563,7 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.post("/api/projects/{project_id}/command")
     def project_command(project_id: int, body: CommandBody, user: dict[str, Any] = Depends(current_user)
                         ) -> dict[str, Any]:
-        return projects.command(project_id, user, body.content, body.attachments, body.topic)
+        return projects.command(project_id, user, body.content, body.attachments, body.topic, body.classification)
 
     # --- topics: conversation lanes of the command window (ASEAO05 S05-R-07) ---
     @app.get("/api/projects/{project_id}/topics")
@@ -1596,9 +1597,11 @@ def create_app(start_background: bool = True) -> FastAPI:
         return {"message": gitsync.sync_project(project_id, admin)}
 
     @app.post("/api/uploads")
-    async def upload(file: UploadFile = File(...), user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    async def upload(file: UploadFile = File(...), classification: str = Form("internal"),
+                     user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         data = await file.read(projects.MAX_UPLOAD + 1)
-        return projects.save_upload(file.filename or "file", data, file.content_type or "", user["id"])
+        return projects.save_upload(file.filename or "file", data, file.content_type or "", user["id"],
+                                    classification)
 
     @app.get("/api/uploads/{uid}")
     def upload_get(uid: str, _: dict[str, Any] = Depends(current_user)) -> FileResponse:
