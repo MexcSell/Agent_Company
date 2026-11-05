@@ -40,7 +40,7 @@ function kCard(i, extra = "") {
 
 async function viewKnowledge() {
   const qs = new URLSearchParams({ q: kState.q, status: kState.status, kind: kState.kind, limit: "300" });
-  const [items, pairs, queue, hyps] = await Promise.all([api(`/api/knowledge?${qs}`), api("/api/knowledge/contradictions"), api("/api/knowledge?status=draft,quarantined,rejected&limit=50"), api("/api/hypotheses")]);
+  const [items, pairs, queue, hyps, rs] = await Promise.all([api(`/api/knowledge?${qs}`), api("/api/knowledge/contradictions"), api("/api/knowledge?status=draft,quarantined,rejected&limit=50"), api("/api/hypotheses"), api("/api/knowledge/retrieval").catch(() => null)]);
   const actions = (i) => [
     i.status !== "approved" && i.status !== "quarantined" && i.status !== "superseded" ? ib("check", "Approve", `data-kok="${i.id}"`, "sm primary") : "",
     i.status === "approved" ? ib("x", "Reject", `data-kno="${i.id}"`, "sm") : "",
@@ -58,7 +58,7 @@ async function viewKnowledge() {
           <div class="row" style="margin-top:6px"><span class="muted grow">#${p.id} · found ${ago(p.at)}</span><button class="btn sm keep-text" data-kres="${p.id}" data-how="keep_old">Older holds</button><button class="btn sm keep-text" data-kres="${p.id}" data-how="keep_both">Both hold</button><button class="btn sm keep-text" data-kres="${p.id}" data-how="keep_new">Newer holds</button></div></div>`).join("") || '<span class="muted">No open contradictions.</span>'}</div>
       <div class="card"><h2>Review queue <span class="muted">${queue.length}</span></h2><p class="muted">Drafts wait for approval; quarantined items hold credential-like text (delete them); rejected items stay out of prompts.</p>
         <div class="grid">${queue.map((i) => kCard(i, `<div class="row" style="margin-top:6px">${actions(i)}</div>`)).join("") || '<span class="muted">Nothing to review.</span>'}</div></div>
-      ${hypCard(hyps)}</div>
+      ${hypCard(hyps)}${rs ? rankCard(rs) : ""}</div>
       <div class="card"><h2>Items <span class="muted">${items.length}${items.length >= 300 ? "+" : ""}</span></h2><div class="table-wrap"><table><tr><th>#</th><th>Item</th><th>Status</th><th>Source</th><th></th></tr>
         ${items.map((i) => `<tr><td class="num">K${i.id}${i.version > 1 ? `<div class="muted">v${i.version}</div>` : ""}</td><td>${esc(i.text)}<div class="muted"><span class="pill">${esc(i.kind)}</span> ${esc(i.evidence_class)} · ${esc(i.agent || "?")} · ${ago(i.at)}${(i.technologies || []).length ? " · " + esc(i.technologies.join(", ")) : ""}</div>${i.contradicted_by.length ? `<div class="pill pending" title="an open contradiction">disputed by ${i.contradicted_by.map((c) => "K" + c).join(", ")}</div>` : ""}${kReport(i)}</td>
           <td>${kStatusPill(i.status)}<div class="muted">${esc(i.classification)}</div></td><td class="muted">${(i.sources || []).map(kSource).join("<br>")}</td><td class="nowrap">${actions(i)}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No items match.</td></tr>'}</table></div></div></div>`;
@@ -80,10 +80,22 @@ async function viewKnowledge() {
     $("#ksf").onsubmit = async (e) => { e.preventDefault(); try { await api(`/api/knowledge/${i.id}/supersede`, { method: "POST", body: { text: $("#ksf-t").value, note: $("#ksf-n").value } }); $("#modal").hidden = true; viewKnowledge(); } catch (err) { toast(err.message); } };
   }));
   hypBind(v, call);
+  const rl = v.querySelector("#k-rlearn");
+  if (rl) rl.onclick = async () => { rl.classList.add("busy"); try { const r = await api("/api/knowledge/retrieval/learn", { method: "POST" }); toast(Object.entries(r.applied).map(([c, s]) => `${c}=${s}`).join(", ") || "balanced for every class"); } catch (err) { toast(err.message); } viewKnowledge(); };
   v.querySelectorAll("[data-kres]").forEach((b) => (b.onclick = () => {
     const rationale = prompt(`${b.textContent}: why?`);
     if (rationale && rationale.trim()) call(`/api/knowledge/contradictions/${b.dataset.kres}/resolve`, { method: "POST", body: { resolution: b.dataset.how, rationale } });
   }));
+}
+
+// SE-R-21: which ranking procedure each query class uses, measured per strategy on evals/retrieval-classes.json.
+function rankCard(r) {
+  const strats = Object.keys(r.strategies);
+  const cell = (m, cls, s) => { if (!m) return "<td></td>"; const v = m.mrr.toFixed(2); return `<td class="num" title="recall@5 ${m.recall}">${(r.current[cls] || "balanced") === s ? `<strong>${v}</strong>` : v}</td>`; };
+  return `<div class="card"><div class="row nowrap"><h2 class="grow" style="margin:0">Ranking per query class</h2>${me.is_admin ? '<button class="btn sm keep-text" id="k-rlearn">Learn</button>' : ""}</div>
+    <p class="muted">Each query is classed by its form (exact name, document, recent, complex question, concept) and ranked by the procedure learned for its class: MRR per strategy on <code>${esc(r.eval)}</code> (${r.cases} cases; the classifier agrees with ${r.classifier.agree}/${r.classifier.n} labels). A choice is kept only while ${esc(r.guard.metric)} of the retrieval eval holds (now ${r.guard.value}); the fixed benchmark measures it independently.</p>
+    <div class="table-wrap"><table><tr><th>Class</th><th class="num">n</th>${strats.map((s) => `<th class="num" title="${esc(r.strategies[s])}">${esc(s)}</th>`).join("")}<th>In use</th></tr>
+    ${Object.entries(r.table).map(([cls, row]) => `<tr><td>${esc(cls)}</td><td class="num">${row.balanced?.n ?? ""}</td>${strats.map((s) => cell(row[s], cls, s)).join("")}<td>${esc(r.current[cls] || "balanced")}${r.choice[cls] && r.choice[cls] !== r.current[cls] ? ` <span class="muted">(learn: ${esc(r.choice[cls])})</span>` : ""}</td></tr>`).join("")}</table></div></div>`;
 }
 
 // Hypotheses (ASEAO07 S07-R-03): statements under test, with evidence for and against. Experiments test their own;

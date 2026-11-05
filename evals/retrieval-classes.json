@@ -1,0 +1,43 @@
+{
+  "name": "retrieval-classes",
+  "kind": "retrieval",
+  "description": "Query classes of the knowledge retrieval (SE-R-21, guide §9 version 4): each case is labelled exact, document, recent, complex or concept; `expected` are the items a good ranking puts first. Used by learning.learn_strategies to choose the ranking procedure per class; it is separate from evals/retrieval.json (the S11-R-08 guard) and from benchmarks/retrieval.py (the independent measure). A higher id is newer.",
+  "items": [
+    {"id": 1, "text": "registry.staff picks the agent for a role by verified proficiency, load and quota", "technologies": ["python"]},
+    {"id": 2, "text": "Staff of every registry room is listed with their role and a short profile of what they do", "technologies": ["python"]},
+    {"id": 3, "text": "worktrees.ensure_sandboxed refuses any path outside data/worktrees", "technologies": ["python", "git"]},
+    {"id": 4, "text": "A sandboxed worktree is ensured for each goal so that writes stay inside it", "technologies": ["git"]},
+    {"id": 5, "text": "set_status() writes one goal_transitions row per change of a goal's status", "technologies": ["python", "sqlite"]},
+    {"id": 6, "text": "The status of a goal is set by the workflow and shown on the goal page with its transitions", "technologies": ["javascript"]},
+    {"id": 7, "text": "RFC 6749 defines the OAuth 2.0 authorization framework and its grant types", "technologies": ["oauth"]},
+    {"id": 8, "text": "OAuth 2.0 authorization grant types: the framework lets clients obtain limited access tokens", "technologies": ["oauth"]},
+    {"id": 9, "text": "PEP 621 stores project metadata in the [project] table of pyproject.toml", "technologies": ["python"]},
+    {"id": 10, "text": "Project metadata in pyproject.toml: the project table keeps name, version and dependencies", "technologies": ["python"]},
+    {"id": 11, "text": "pip-audit release notes: audit requirement files", "technologies": ["pip-audit"]},
+    {"id": 12, "text": "Bubblewrap notes: the sandbox shares the network", "technologies": ["bubblewrap"]},
+    {"id": 13, "text": "SQLite WAL mode lets readers continue while one writer commits", "technologies": ["sqlite"]},
+    {"id": 14, "text": "Exponential backoff with jitter spreads retries of rate limited model calls", "technologies": ["httpx"]},
+    {"id": 15, "text": "FTS5 bm25 ranks short documents higher when they contain the query terms", "technologies": ["sqlite"]},
+    {"id": 16, "text": "Cross-encoder rerankers reorder candidate passages by semantic relevance to the question", "technologies": ["reranker"]},
+    {"id": 17, "text": "Caching identical model prompts avoids paying twice for the same answer", "technologies": ["llm"]},
+    {"id": 18, "text": "Trimming the retrieved context to the token budget lowers the cost of every task", "technologies": ["llm"]},
+    {"id": 19, "text": "Near-duplicate knowledge items are merged before they reach a prompt so context is not wasted", "technologies": ["llm"]},
+    {"id": 20, "text": "pip-audit release notes 2026: audit requirement files and uv.lock exports, with fix versions per advisory", "technologies": ["pip-audit"]},
+    {"id": 21, "text": "Bubblewrap notes 2026: the sandbox drops the network with --unshare-net unless an audit step needs it", "technologies": ["bubblewrap"]},
+    {"id": 22, "text": "The dashboard rail order is shared by every user of the company", "technologies": ["javascript"]},
+    {"id": 23, "text": "Machines run as Docker containers with a console in the browser", "technologies": ["docker"]}
+  ],
+  "cases": [
+    {"class": "exact", "query": "registry.staff", "expected": [1]},
+    {"class": "exact", "query": "ensure_sandboxed", "expected": [3]},
+    {"class": "exact", "query": "set_status()", "expected": [5]},
+    {"class": "document", "query": "RFC 6749", "expected": [7]},
+    {"class": "document", "query": "PEP 621", "expected": [9]},
+    {"class": "recent", "query": "latest pip-audit release notes", "expected": [20]},
+    {"class": "recent", "query": "newest bubblewrap sandbox network notes", "expected": [21]},
+    {"class": "complex", "query": "how can the research agents spend less on model calls while keeping the prompts and context useful", "expected": [17, 18, 19]},
+    {"class": "complex", "query": "how should knowledge retrieval rank short and long items, rerank candidates and avoid duplicates", "expected": [15, 16, 19]},
+    {"class": "concept", "query": "readers keep reading while a write is committed", "expected": [13]},
+    {"class": "concept", "query": "spreading out retries after rate limiting", "expected": [14]}
+  ]
+}

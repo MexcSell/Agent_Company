@@ -124,7 +124,8 @@ def main(argv: list[str] | None = None) -> None:
     ev.add_argument("--model", help="benchmark this catalog model for --role (S13-R-06); label defaults to model:<name>")
     ev.add_argument("--role", default="developer", help="the role --model stands in for")
     le = sub.add_parser("learn", help="capability gaps, learning plans and experiments (SPEC-13)")
-    le.add_argument("action", choices=["gaps", "raise", "plans", "plan", "start", "cancel", "experiments", "metrics"])
+    le.add_argument("action", choices=["gaps", "raise", "plans", "plan", "start", "cancel", "experiments", "metrics",
+                                       "retrieval"], help="retrieval: learn the ranking procedure per query class (SE-R-21)")
     le.add_argument("args", nargs="*", help="plan: <agent id> <capability> [final suite] [practice suite]; "
                                             "start/cancel: <plan id>")
     sb = sub.add_parser("sbom", help="CycloneDX SBOM of a repository's dependencies at a commit (S08-R-05)")
@@ -275,6 +276,10 @@ def main(argv: list[str] | None = None) -> None:
                 out = training.start_plan(int(a[0]))
         elif args.action == "experiments":
             out = experiments.list_experiments()
+        elif args.action == "retrieval":
+            from agent_company import learning
+
+            out = learning.learn_strategies("cli")
         else:
             out = training.metrics()
         print(json.dumps(out, indent=2, default=str))

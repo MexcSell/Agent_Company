@@ -1984,6 +1984,20 @@ def create_app(start_background: bool = True) -> FastAPI:
                        limit: int = 200, _: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
         return learning.knowledge(status, agent_id, max(1, min(limit, 1000)), q, kind)
 
+    # --- SE-R-21: the ranking procedure per query class, learned offline and guarded by recall@5 ---
+    @app.get("/api/knowledge/retrieval")
+    def knowledge_retrieval(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        guard = learning.evaluate_retrieval()
+        return {**learning.strategy_report(), "strategies": learning.STRATEGIES,
+                "guard": {"metric": guard["metric"], "value": guard["value"], "cases": len(guard["cases"])}}
+
+    @app.post("/api/knowledge/retrieval/learn")
+    def knowledge_retrieval_learn(admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        before = learning.strategy_map()
+        out = learning.learn_strategies(f"user:{admin['name']}")
+        _audit(admin, "retrieval_strategies_learn", "retrieval", before=before, after=out["applied"])
+        return out
+
     @app.get("/api/knowledge/contradictions")
     def knowledge_contradictions(state: str = "open", _: dict[str, Any] = Depends(admin_user)
                                  ) -> list[dict[str, Any]]:

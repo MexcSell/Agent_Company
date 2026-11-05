@@ -154,7 +154,7 @@ Machines code):
 | Approval, deployment through the safe restart, automatic revert of a refused restart, benchmark of the deployed commit, one-click rollback | §12, §15, §16 | done (SE-R-13..R-15) |
 | Agent Score per agent with role weights | §7 | done (Performance view, SE-R-11) |
 | Fixed research-retrieval benchmark by query class | §9, §18 | done (`benchmarks/retrieval.py`, SE-R-17) |
-| Retrieval strategy learned per query class | §9 v4 | open → SE-R-21 |
+| Retrieval strategy learned per query class | §9 v4 | done (`learning.query_class`, `learn_strategies`, `evals/retrieval-classes.json`, SE-R-21) |
 | Candidates in containers with network and resource limits | §12 | done (benchmarks in the L3 sandbox, `sandbox.py`, SE-R-22) |
 | Fine-tuning, training models | §13 | skip (no training infrastructure) |
 

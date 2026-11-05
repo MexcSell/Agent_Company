@@ -107,6 +107,8 @@ class Settings:
     sandbox_cpus: float = 2.0
     sandbox_paths: list[str] = field(default_factory=list)  # extra read-only paths (toolchains)
     sandbox_env: list[str] = field(default_factory=list)  # extra environment variable names passed through
+    # SE-R-21: `<query class>=<strategy>` lines (learning.QUERY_CLASSES, STRATEGIES); empty = balanced everywhere
+    retrieval_strategies: list[str] = field(default_factory=list)
 
     @property
     def worktrees_dir(self) -> Path:
@@ -173,6 +175,7 @@ def load_settings() -> Settings:
         retrieval_w_author=float(os.environ.get("RETRIEVAL_W_AUTHOR") or 0.3),
         retrieval_w_recency=float(os.environ.get("RETRIEVAL_W_RECENCY") or 0.3),
         retrieval_w_contradiction=float(os.environ.get("RETRIEVAL_W_CONTRADICTION") or 1.0),
+        retrieval_strategies=[x.strip() for x in (os.environ.get("RETRIEVAL_STRATEGIES") or "").split(",") if x.strip()],
         sandbox=(os.environ.get("SANDBOX") or "auto").lower(),
         dependency_audit=(os.environ.get("DEPENDENCY_AUDIT") or "block").lower(),
         sandbox_memory_mb=_int("SANDBOX_MEMORY_MB", 4096),

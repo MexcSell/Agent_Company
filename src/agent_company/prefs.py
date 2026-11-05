@@ -59,6 +59,9 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "retrieval_w_author": (float, "Knowledge ranking: weight of who learned it (the agent itself, related agents)"),
     "retrieval_w_recency": (float, "Knowledge ranking: weight of recency"),
     "retrieval_w_contradiction": (float, "Knowledge ranking: rank lost by an item with an unresolved contradiction"),
+    "retrieval_strategies": (list, "Knowledge ranking procedure per query class, one '<class>=<strategy>' per line "
+                                   "(classes exact, document, recent, complex, concept; strategies balanced, literal, "
+                                   "fresh, broad); learned by 'learn retrieval', kept only while recall@5 holds"),
     "sandbox": (str, "Quality commands and benchmarks run agent-written code: 'auto' in the L3 sandbox (no network, "
                      "only the worktree writable) when bubblewrap works, 'required' never outside it, 'off' on the host"),
     "sandbox_memory_mb": (int, "Memory limit of a sandboxed command in MB (needs systemd-run)"),
@@ -113,6 +116,10 @@ def _coerce(key: str, value: Any) -> Any:
 
             if bad := [n for n in value if SECRETISH.search(n) or not n.replace("_", "").isalnum()]:
                 raise ValueError(f"sandbox_env: {', '.join(bad)} look like credentials or are not variable names")
+        if key == "retrieval_strategies":
+            from agent_company import learning
+
+            learning.parse_strategies(value)
         if key == "blocked_commands":
             import re
 
@@ -166,6 +173,8 @@ def set_value(key: str, value: Any, actor: str = "system") -> Any:
     v = _coerce(key, value)
     if key in RETRIEVAL_KEYS:
         _check_retrieval(key, v, actor)
+    if key == "retrieval_strategies":
+        _check_strategies(v, actor)
     if key == "transport":  # reconfigure nginx first; a failure leaves the setting unchanged
         from agent_company import transport
 
@@ -195,6 +204,21 @@ def _check_retrieval(key: str, value: float, actor: str) -> None:
         raise ValueError(f"{key} = {value:g} lowers recall@5 of evals/retrieval.json from {before:.2f} to {after:.2f}")
     log_event("retrieval", f"{key} = {value:g} by {actor}: recall@5 {before:.2f} -> {after:.2f}",
               key=key, before=before, after=after)
+
+
+def _check_strategies(lines: list[str], actor: str) -> None:
+    """The ranking procedures per query class change only when recall@5 of the retrieval eval holds (SE-R-21)."""
+    from agent_company import learning
+    from agent_company.db import log_event
+
+    new = learning.parse_strategies(lines)
+    before = learning.evaluate_retrieval()["value"]
+    after = learning.evaluate_retrieval(strategies=new)["value"]
+    if after < before:
+        raise ValueError(f"retrieval_strategies {', '.join(lines)} lowers recall@5 of evals/retrieval.json from "
+                         f"{before:.2f} to {after:.2f}")
+    log_event("retrieval", f"retrieval_strategies = {', '.join(lines) or '(balanced)'} by {actor}: recall@5 "
+              f"{before:.2f} -> {after:.2f}", key="retrieval_strategies", before=before, after=after)
 
 
 def clear(key: str, actor: str = "system") -> None:

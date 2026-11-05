@@ -100,7 +100,9 @@ the order is safety and correctness of that pipeline first, then management, the
    S04-R-13 (FR-27/28) self-evaluation of orchestration done 2026-11-05: reports per workflow template version,
    recommended candidates as strategy experiments under the §20.3 policy, an administrator's rollout with a canary.
    The S08-R-05 SBOM (CycloneDX of every merged commit) done 2026-11-05.
-5. **Still open** (2026-11-05): SE-R-21 retrieval strategy per query class; the gated rooms one at a time
+   SE-R-21 the retrieval procedure per query class, learned on a labelled class eval and guarded by recall@5,
+   done 2026-11-05.
+5. **Still open** (2026-11-05): the gated rooms one at a time
    (G-R-04); L3 for the agent CLIs themselves (they need network and their logins, see the threat model's known
    gaps).
 

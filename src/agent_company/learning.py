@@ -14,7 +14,9 @@ When an agent starts a task, `experience_context` ranks approved items by releva
 term coverage), technology overlap, verification, who learned them (the agent itself, related agents) and recency,
 after filtering by scope: the goal's own project, items without a project, or public/internal items of other
 projects (S11-R-03, SPEC-14 S14-R-05). Every item in the prompt carries its id and source goal. The weights are
-settings that change only when recall@5 of `evals/retrieval.json` holds (S11-R-08). `task_references` adds the
+settings that change only when recall@5 of `evals/retrieval.json` holds (S11-R-08). The query's class (§9 of the
+self-improvement guide: exact, document, recent, complex, concept) picks the ranking procedure, learned offline per
+class on `evals/retrieval-classes.json` (SE-R-21, `learn_strategies`). `task_references` adds the
 project's standards (from the goal's base branch) and matching research documents to a task's package.
 
 A new item that states the opposite of an approved one on the same subject (a shared technology, mostly the
@@ -190,14 +192,15 @@ def _bm25(conn, terms: set[str], limit: int = FTS_POOL) -> dict[int, float] | No
 
 def _score(i: Lesson, want: set[str], bm25: dict[int, float] | None, techs: set[str], agent_id: int | None,
            related: dict[int, float], span: tuple[int, int], disputed: dict[int, list[int]],
-           w: dict[str, float]) -> float:
+           w: dict[str, float], coverage_weight: float = 0.5) -> float:
     """Rank of one item for a task (§8.3): keyword relevance (FTS5 bm25 and the share of the task's terms it covers),
     technology overlap, verification (evidence class, reviewed by a person), who learned it, recency, minus the
     penalty of an unresolved contradiction."""
     item_techs = {str(x).lower() for x in i.technologies or []}
     words = _tokens(i.text) | _tokens(" ".join(item_techs))
     coverage = len(want & words) / len(want) if want else 0.0
-    relevance = (coverage + bm25.get(i.id, 0.0)) / 2 if bm25 is not None else coverage
+    relevance = (coverage_weight * coverage + (1 - coverage_weight) * bm25.get(i.id, 0.0)) if bm25 is not None \
+        else coverage
     tech = len(item_techs & techs) / len(item_techs) if item_techs and techs else 0.0
     verified = min(1.0, VERIFIED.get(i.evidence_class or "", 0.5) + (0.25 if i.reviewed_by else 0.0))
     who = 1.0 if agent_id is not None and i.agent_id == agent_id else related.get(i.agent_id, 0.0)
@@ -206,6 +209,86 @@ def _score(i: Lesson, want: set[str], bm25: dict[int, float] | None, techs: set[
     penalty = 1.0 if i.id in disputed else 0.0  # until a person resolves it (S11-R-04)
     return (w["relevance"] * relevance + w["technology"] * tech + w["verified"] * verified + w["author"] * who
             + w["recency"] * recency - w["contradiction"] * penalty)
+
+
+# --- the ranking procedure per query class (SE-R-21, guide §9 version 4) ---------------------------------------
+
+QUERY_CLASSES = ("exact", "document", "recent", "complex", "concept")
+STRATEGIES = {
+    "balanced": "the weighted score as it is (relevance from FTS5 bm25 and term coverage in equal parts)",
+    "literal": "an item that contains the query itself (a function, file or document name) gains a full relevance",
+    "fresh": "the items within 20 % of the best score come newest first, then the rest",
+    "broad": "relevance counts the share of the query's terms an item covers three times as much as bm25",
+}
+FRESH_BAND = 0.8
+RETRIEVAL_CLASS_EVAL = REPO_ROOT / "evals" / "retrieval-classes.json"
+_DOC_REF = re.compile(r"(?i)\b(?:rfc|adr|pep|cve|iso|ieee|bug|issue)[ -]?\d+|https?://\S+"
+                      r"|\b[\w-]+\.(?:md|mdx|pdf|txt|rst|json|ya?ml|toml|html?)\b")
+_CODE_NAME = re.compile(r"\b[A-Za-z_]\w*\.[A-Za-z_]\w*\b|\b\w+\(\)|\b[a-z0-9]+_[a-z0-9_]+\b|\b[a-z]+[A-Z]\w*\b")
+_RECENT = re.compile(r"(?i)\b(?:latest|newest|most recent|recent(?:ly)?|current(?:ly)?|today|this (?:week|month|year))\b")
+_QUESTION = ("how ", "why ", "what ", "which ", "should ", "compare ", "when ")
+
+
+def query_class(query: str) -> str:
+    """exact | document | recent | complex | concept, from the query's form alone (no model call)."""
+    q = " ".join((query or "").split())
+    terms = _tokens(q)
+    if _DOC_REF.search(q):
+        return "document"
+    if _CODE_NAME.search(q) and len(terms) <= 4:
+        return "exact"
+    if _RECENT.search(q):
+        return "recent"
+    if len(terms) >= 8 or (q.lower().startswith(_QUESTION) and len(terms) >= 5):
+        return "complex"
+    return "concept"
+
+
+def parse_strategies(lines: list[str]) -> dict[str, str]:
+    """`class=strategy` lines (the `retrieval_strategies` setting) as a map; unknown names are an error."""
+    out: dict[str, str] = {}
+    for line in lines or []:
+        cls, sep, strat = (x.strip().lower() for x in str(line).partition("="))
+        if not sep or cls not in QUERY_CLASSES or strat not in STRATEGIES:
+            raise ValueError(f"retrieval_strategies: {line!r} is not <class>=<strategy> with a class of "
+                             f"{', '.join(QUERY_CLASSES)} and a strategy of {', '.join(STRATEGIES)}")
+        if cls in out:
+            raise ValueError(f"retrieval_strategies: {cls} is named twice")
+        out[cls] = strat
+    return out
+
+
+def strategy_map() -> dict[str, str]:
+    try:
+        return parse_strategies(list(getattr(settings(), "retrieval_strategies", []) or []))
+    except ValueError:
+        return {}
+
+
+def _plain(text: str) -> str:
+    return " " + " ".join(re.sub(r"[^a-z0-9]+", " ", text.lower().replace("()", " ")).split()) + " "
+
+
+def rank_items(items: list[Lesson], query: str, want: set[str], bm25: dict[int, float] | None, techs: set[str],
+         agent_id: int | None, related: dict[int, float], span: tuple[int, int], disputed: dict[int, list[int]],
+         w: dict[str, float], strategy: str = "balanced") -> tuple[list[Lesson], dict[int, float]]:
+    """Items in rank order and their scores, by the strategy's procedure (STRATEGIES). Used by `retrieve` and by the
+    retrieval evaluations, so what is measured is what runs."""
+    cw = 0.75 if strategy == "broad" else 0.5
+    scores = {i.id: _score(i, want, bm25, techs, agent_id, related, span, disputed, w, cw) for i in items}
+    if strategy == "literal":
+        needle = _plain(query)
+        if needle.strip():
+            for i in items:
+                if needle in _plain(i.text):
+                    scores[i.id] += w["relevance"]
+    ranked = sorted(items, key=lambda i: scores[i.id], reverse=True)
+    if strategy == "fresh" and ranked:
+        best = scores[ranked[0].id]
+        band = [i for i in ranked if best > 0 and scores[i.id] >= FRESH_BAND * best]
+        rest = [i for i in ranked if i not in band]
+        ranked = sorted(band, key=lambda i: i.id, reverse=True) + rest
+    return ranked, scores
 
 
 def retrieve(agent_id: int, goal_id: int | None = None, query: str = "", limit: int = 8,
@@ -235,8 +318,10 @@ def retrieve(agent_id: int, goal_id: int | None = None, query: str = "", limit: 
                  and (i.review_due_at is None or i.review_due_at.replace(tzinfo=None) > cutoff)]
         span = (min((i.id for i in items), default=0), max((i.id for i in items), default=0))
         disputed = _open_contradictions(s, [i.id for i in items])
-        scores = {i.id: _score(i, want, bm25, techs, agent_id, related, span, disputed, w) for i in items}
-        ranked = sorted(items, key=lambda i: scores[i.id], reverse=True)[:limit]
+        cls = query_class(query) if query else ""
+        strategy = strategy_map().get(cls, "balanced")
+        ranked, scores = rank_items(items, query, want, bm25, techs, agent_id, related, span, disputed, w, strategy)
+        ranked = ranked[:limit]
         names = dict(s.execute(select(Agent.id, Agent.name)).all())
         out = [{"id": i.id, "text": i.text, "outcome": i.outcome, "kind": i.kind, "goal_id": i.goal_id,
                 "project_id": i.project_id, "agent": "you" if i.agent_id == agent_id else names.get(i.agent_id, "?"),
@@ -247,7 +332,7 @@ def retrieve(agent_id: int, goal_id: int | None = None, query: str = "", limit: 
                for i in ranked]
     if goal_id and out:
         log_event("retrieval", f"{len(out)} knowledge item(s) for {names.get(agent_id, agent_id)}", goal_id=goal_id,
-                  agent_id=agent_id, ids=[x["id"] for x in out])
+                  agent_id=agent_id, ids=[x["id"] for x in out], query_class=cls, strategy=strategy)
         kgraph.on_retrieval(goal_id, [x["id"] for x in out])
     return out
 
@@ -335,14 +420,18 @@ def task_references(goal_id: int, query: str) -> str:
 
 # --- retrieval evaluation (S11-R-08): recall@5 over a fixed set, so ranking weights only change when it holds ---
 
-def evaluate_retrieval(path: Path | str | None = None, k: int = 5, **override: float) -> dict[str, Any]:
-    """recall@k of the ranking over the eval set (its own items, ranked in memory with the same FTS5 index and
-    scoring as `retrieve`); `override` tries other weights. Nothing is written to the database."""
+def evaluate_retrieval(path: Path | str | None = None, k: int = 5, strategies: dict[str, str] | None = None,
+                       **override: float) -> dict[str, Any]:
+    """recall@k (and MRR) of the ranking over an eval set: its own items, ranked in memory with the same FTS5 index,
+    scoring and procedure per query class as `retrieve` (`strategies`: class -> strategy, default the setting);
+    `override` tries other weights. Each case records its query class and the strategy that ranked it. Nothing is
+    written to the database."""
     import json
     import sqlite3
 
     data = json.loads(Path(path or RETRIEVAL_EVAL).read_text())
     w = weights(**override)
+    chosen = strategy_map() if strategies is None else dict(strategies)
     items = [Lesson(id=x["id"], text=x["text"], technologies=x.get("technologies") or [],
                     evidence_class=x.get("evidence_class", "MEASURED"), reviewed_by=x.get("reviewed_by", ""),
                     agent_id={"self": 1, "related": 2}.get(x.get("author", ""), 3)) for x in data["items"]]
@@ -359,14 +448,78 @@ def evaluate_retrieval(path: Path | str | None = None, k: int = 5, **override: f
         want = _tokens(case["query"])
         bm25 = _bm25(conn, want) or {}
         techs = {str(x).lower() for x in case.get("technologies") or []}
-        top = [i.id for i in sorted(items, key=lambda i: _score(i, want, bm25, techs, 1, {2: 0.6}, span, disputed, w),
-                                    reverse=True)[:k]]
+        cls = query_class(case["query"])
+        strategy = chosen.get(cls, "balanced")
+        ranked, _ = rank_items(items, case["query"], want, bm25, techs, 1, {2: 0.6}, span, disputed, w, strategy)
+        top = [i.id for i in ranked[:k]]
         expected = set(case["expected"])
-        cases.append({"query": case["query"], "expected": sorted(expected), "top": top,
-                      "recall": len(expected & set(top)) / len(expected)})
+        first = next((n + 1 for n, x in enumerate(top) if x in expected), None)
+        cases.append({"query": case["query"], "class": cls, "labelled": case.get("class", ""), "strategy": strategy,
+                      "expected": sorted(expected), "top": top, "recall": len(expected & set(top)) / len(expected),
+                      "rr": 1 / first if first else 0.0})
     conn.close()
     recall = sum(c["recall"] for c in cases) / len(cases) if cases else 0.0
-    return {"metric": f"recall@{k}", "value": round(recall, 4), "weights": w, "cases": cases}
+    return {"metric": f"recall@{k}", "value": round(recall, 4),
+            "mrr": round(sum(c["rr"] for c in cases) / len(cases), 4) if cases else 0.0,
+            "weights": w, "strategies": chosen, "cases": cases}
+
+
+def _by_class(cases: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for cls in QUERY_CLASSES:
+        cs = [c for c in cases if c["class"] == cls]
+        if cs:
+            out[cls] = {"n": len(cs), "mrr": round(sum(c["rr"] for c in cs) / len(cs), 4),
+                        "recall": round(sum(c["recall"] for c in cs) / len(cs), 4)}
+    return out
+
+
+STRATEGY_MARGIN = 0.05  # MRR a strategy must gain on its class over `balanced` before it is chosen
+
+
+def strategy_report(path: Path | str | None = None) -> dict[str, Any]:
+    """Every strategy on every query class of the class eval set: MRR and recall@5 with the number of cases, the
+    classifier's agreement with the labels, and the strategy each class would get."""
+    path = path or RETRIEVAL_CLASS_EVAL
+    base = evaluate_retrieval(path, strategies={})
+    labelled = [c for c in base["cases"] if c["labelled"]]
+    table = {cls: {} for cls in _by_class(base["cases"])}
+    for strat in STRATEGIES:
+        res = _by_class(evaluate_retrieval(path, strategies={c: strat for c in QUERY_CLASSES})["cases"])
+        for cls, m in res.items():
+            table[cls][strat] = m
+    choice = {}
+    for cls, row in table.items():
+        b = row["balanced"]
+        best = max(row, key=lambda s: (row[s]["mrr"], row[s]["recall"], s == "balanced"))
+        if best != "balanced" and row[best]["mrr"] >= b["mrr"] + STRATEGY_MARGIN and row[best]["recall"] >= b["recall"]:
+            choice[cls] = best
+    return {"eval": str(Path(path).name), "cases": len(base["cases"]), "table": table, "choice": choice,
+            "classifier": {"n": len(labelled), "agree": sum(c["class"] == c["labelled"] for c in labelled)},
+            "current": strategy_map()}
+
+
+def learn_strategies(actor: str = "system", path: Path | str | None = None) -> dict[str, Any]:
+    """SE-R-21: choose the procedure per query class from the class eval set (offline: there are no live relevance
+    labels) and apply it as the `retrieval_strategies` setting, but only where recall@5 of evals/retrieval.json does
+    not drop (S11-R-08). The fixed benchmark (benchmarks/retrieval.py) stays the independent measure."""
+    from agent_company import prefs
+
+    report = strategy_report(path)
+    guard = evaluate_retrieval(strategies={})["value"]
+    keep = {cls: s for cls, s in report["choice"].items()
+            if evaluate_retrieval(strategies={cls: s})["value"] >= guard}  # each choice alone
+    if keep and evaluate_retrieval(strategies=keep)["value"] < guard:
+        keep = {}
+    dropped = sorted(set(report["choice"]) - set(keep))
+    lines = [f"{cls}={s}" for cls, s in sorted(keep.items())]
+    if keep != report["current"]:
+        prefs.set_value("retrieval_strategies", lines, actor)
+    after = evaluate_retrieval(strategies=keep)["value"]
+    log_event("retrieval", f"retrieval strategies learned by {actor}: {', '.join(lines) or 'balanced for every class'}"
+              + (f" (left out, they lower recall@5: {', '.join(dropped)})" if dropped else ""),
+              table=report["table"], applied=keep, dropped=dropped, guard_before=guard, guard_after=after)
+    return {**report, "applied": keep, "dropped": dropped, "guard": {"before": guard, "after": after}}
 
 
 REPORT_KEYS = ("objective", "context_refs", "actions", "outcome", "evidence_refs", "failures",

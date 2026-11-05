@@ -48,7 +48,8 @@ feature came from.
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals, uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress and goal times;
   blockers and generated items are reconciled from goal state by `sync`; a new project GM gets a handover package); `kgraph.py` (SPEC-11 knowledge graph: `kg_edges` written as side effects, the paged neighbourhood API);
   `learning.py` (knowledge items: provenance, experience reports, screening, scoped ranked retrieval over an FTS5
-  index with `retrieval_w_*` weights guarded by `evals/retrieval.json` recall@5; a task's package adds the project's
+  index with `retrieval_w_*` weights guarded by `evals/retrieval.json` recall@5; SE-R-21 ranking procedure per query
+  class (`query_class`, `retrieval_strategies` setting) learned on `evals/retrieval-classes.json` by `learn_strategies`; a task's package adds the project's
   standards from the base branch and matching research documents; contradictions and versions as `kg_edges`,
   resolved by people)
   + `evolution.py` (playbook candidates are experiments); `experiments.py` (SPEC-13: baseline vs candidate on one eval
@@ -85,7 +86,8 @@ feature came from.
   `workspace.js` + `viewer.js` + `console.js` + `claude.js` are the Workspace home page, sharing
   `window.WSP`; `vendor/` holds xterm.js, pdf.js, mammoth and noVNC); `crew.py` (classic crew); `__main__.py` (CLI)
 - `evals/` – benchmark suites (JSON; `kind` benchmark|practice|final|adversarial, `skills`; a final suite's checks never reach agents);
-  `retrieval.json` is the knowledge-retrieval eval (items + cases, no tasks)
+  `retrieval.json` is the knowledge-retrieval eval (items + cases, no tasks), `retrieval-classes.json` the same with
+  cases labelled by query class (SE-R-21)
 - `benchmarks/` – fixed code benchmarks for improvement contracts (`<name>.json` manifest with metric weights and
   guards + `<name>.py` printing JSON metrics for the `agent_company` first on PYTHONPATH); protected
 - `tests/` – pytest; every test gets its own temp DATA_DIR and runs offline
@@ -137,7 +139,7 @@ feature came from.
 - `uv run python -m agent_company goal "<goal>" --check "<cmd>" [--allow 'src/*'] [--protect-tests] [--permit dependencies|config|skip_tests] [--kind feature|bugfix|refactor|research|docs]`
 - `uv run python -m agent_company improve list|weaknesses|benchmark [name]|create|start|deploy|rollback|cancel <id>` – verified self-evolution
 - `uv run python -m agent_company eval --suite smoke --label <name> [--repeats 3] [--model <name> --role <role>]` / `eval --compare a b`
-- `uv run python -m agent_company learn gaps|raise|plans|plan <agent> <skill>|start <id>|cancel <id>|experiments|metrics`
+- `uv run python -m agent_company learn gaps|raise|plans|plan <agent> <skill>|start <id>|cancel <id>|experiments|metrics|retrieval`
 - `uv run python -m agent_company requirements list|trace|import [--project <id>]` – requirements and traceability
 - `uv run python -m agent_company strategies evaluate [kind]|recommend <kind>` – self-evaluation of the workflow templates
 - `uv run python -m agent_company sbom [repo] [--rev HEAD] [--out file]` – CycloneDX SBOM of a commit
