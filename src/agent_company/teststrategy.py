@@ -5,7 +5,8 @@ plan) is stored on the goal (`Goal.test_strategy`):
 
 - the goal's classification (S14-R-05): confidential raises the risk to medium, restricted or secret to high;
 - the changed areas: the goal's allowed paths, each task's `in_scope` globs and the files changed so far. A path
-  in a sensitive area (authentication, sessions, tokens, secrets, crypto, permissions) makes the goal high-risk,
+  with a word of a sensitive area (authentication, sessions, tokens, secrets, crypto, permissions, credentials, keys;
+  whole words, documentation excluded) makes the goal high-risk,
   and the writing tasks touching it get `risk_level: high`, so the existing security review follows them;
 - earlier defects in those files: files that earlier goals on the same repository changed in an iteration the gate
   failed (`Goal.history[].changed_files`). They raise the risk to medium and are named to the planner;
@@ -29,8 +30,20 @@ from sqlalchemy import select
 from agent_company import contracts, worktrees
 from agent_company.db import Goal, now, session
 
-SENSITIVE = re.compile(r"(?i)(auth|login|logout|session|token|passw|secret|crypt|permission|acl|rbac|oauth|jwt|"
-                       r"saml|sso|security|credential|\.env\b|private[_-]?key|\bkeys?\b)")
+# whole words of a path (split on / . _ - and camelCase), never substrings: "processor" is not "sso"
+SENSITIVE_WORDS = {"auth", "authn", "authz", "authentication", "authorization", "authorize", "login", "logout",
+                   "signin", "session", "sessions", "token", "tokens", "password", "passwords", "passwd", "secret",
+                   "secrets", "crypto", "crypt", "encrypt", "decrypt", "encryption", "cipher", "permission",
+                   "permissions", "perms", "acl", "acls", "rbac", "oauth", "oauth2", "jwt", "saml", "sso", "security",
+                   "credential", "credentials", "creds", "env", "key", "keys", "keystore", "privkey"}
+DOCS = re.compile(r"(?i)(^|/)docs?/|\.(md|mdx|rst|txt|adoc)$")  # documentation is not a sensitive area
+_SPLIT = re.compile(r"[/._\-\s]+|(?<=[a-z0-9])(?=[A-Z])")
+
+
+def sensitive(path: str) -> bool:
+    if DOCS.search(path):
+        return False
+    return any(w.lower() in SENSITIVE_WORDS for w in _SPLIT.split(path.strip("*")) if w)
 HIGH_STAGES = ["integration", "security"]
 RISKS = ["low", "medium", "high"]
 CAP = 20  # paths and files listed per field
@@ -77,7 +90,7 @@ def derive(goal_id: int, plan: list[contracts.TaskContract] | None = None, itera
         changed = _changed(g) if iteration > 1 else []
         area = sorted({*(g.allowed_paths or []), *(p for c in plan or [] for p in c.in_scope), *changed})
         history = _defect_history(s, g, area)
-    sensitive = [p for p in area if SENSITIVE.search(p)][:CAP]
+    touched = [p for p in area if sensitive(p)][:CAP]
     high_tasks = [c.key for c in plan or [] if c.risk_level == "high"]
     reasons: list[str] = []
     risk = 0
@@ -88,9 +101,9 @@ def derive(goal_id: int, plan: list[contracts.TaskContract] | None = None, itera
     elif rank == CLASSIFICATIONS.index("confidential"):
         risk = 1
         reasons.append("classified confidential")
-    if sensitive:
+    if touched:
         risk = 2
-        reasons.append("sensitive area: " + ", ".join(sensitive[:5]))
+        reasons.append("sensitive area: " + ", ".join(touched[:5]))
     if high_tasks:
         risk = 2
         reasons.append("high-risk task(s): " + ", ".join(high_tasks[:5]))
@@ -100,7 +113,7 @@ def derive(goal_id: int, plan: list[contracts.TaskContract] | None = None, itera
     high = risk == 2
     return {"risk": RISKS[risk], "reasons": reasons or ["no sensitive area, classification or defect history"],
             "mandatory_stages": HIGH_STAGES if high else [], "reviewers": ["qa"] + (["security"] if high else []),
-            "sensitive_paths": sensitive, "defect_history": history, "area": area[:CAP],
+            "sensitive_paths": touched, "defect_history": history, "area": area[:CAP],
             "iteration": iteration, "at": now().isoformat()}
 
 
@@ -113,7 +126,7 @@ def escalate(goal_id: int, plan: list[contracts.TaskContract], iteration: int = 
     out = []
     for c in plan:
         area = c.in_scope or goal_area
-        if c.writes and c.risk_level != "high" and any(SENSITIVE.search(p) for p in area):
+        if c.writes and c.risk_level != "high" and any(sensitive(p) for p in area):
             c = c.model_copy(update={"risk_level": "high"})
         out.append(c)
     return out

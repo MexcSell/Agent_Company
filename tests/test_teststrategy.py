@@ -114,8 +114,10 @@ def test_condition_stage_is_validated():
         contracts.Condition(type="command", run="pytest", stage="regression")
 
 
-def test_sensitive_paths():
-    hits = [p for p in ["src/auth/login.py", "app/session.ts", "lib/crypto.py", ".env", "keys/id.pem",
-                        "src/monkey.py", "docs/readme.md", "src/permissions.py"] if teststrategy.SENSITIVE.search(p)]
-    assert hits == ["src/auth/login.py", "app/session.ts", "lib/crypto.py", ".env", "keys/id.pem",
-                    "src/permissions.py"]
+def test_sensitive_paths_are_whole_words():
+    yes = ["src/auth/login.py", "app/session.ts", "lib/crypto.py", ".env", "keys/id.pem", "src/permissions.py",
+           "src/userAuth.ts", "api/oauth2_client.py", "src/auth/*"]
+    no = ["src/monkey.py", "docs/readme.md", "image_processor.py", "oracle_client.py", "AUTHORS", "tokenizer.py",
+          "lesson.py", "docs/security.md", "SECURITY.md", "src/keyboard.py"]
+    assert [p for p in yes if not teststrategy.sensitive(p)] == []
+    assert [p for p in no if teststrategy.sensitive(p)] == []

@@ -36,8 +36,9 @@ scope checks (`quality.py`, `checks.py`); defects opened/closed/reopened automat
 - **Status: done** (`teststrategy.py`: `derive`, `escalate`, `planner_note`, `Goal.test_strategy`;
   `quality.evaluate`; `tests/test_teststrategy.py`). Inputs: the goal's classification (with its project's, S14-R-05:
   confidential → medium, restricted/secret → high on their own), the changed areas (allowed paths, each task's
-  `in_scope`, the files changed so far), a sensitive-path pattern (auth, login, session, token, password, secret,
-  crypto, permission/ACL/RBAC, OAuth/JWT/SSO, credentials, `.env`, keys → high), tasks the planner marked
+  `in_scope`, the files changed so far), sensitive areas (a whole word of the path, split on `/ . _ -` and camelCase:
+  auth, login, session, token, password, secret, crypto, permission/ACL/RBAC, OAuth/JWT/SSO, credentials, env, keys →
+  high; documentation files and `docs/` never count), tasks the planner marked
   `risk_level: high` (→ high), and files earlier goals on the same repository changed in an iteration the gate failed
   (`Goal.history[].changed_files`, recorded from now on → medium, named to the planner). The planner sees a
   preliminary strategy; the one with the plan is stored per iteration and shown on the goal page. Writing tasks
