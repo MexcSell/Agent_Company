@@ -429,7 +429,7 @@ def _research(goal: Goal, iteration: int, feedback: str) -> str:
                 research.collect(url, depth=1, max_pages=20, goal_id=goal.id)
             except (ValueError, OSError) as e:
                 log_event("error", f"could not collect {url}: {e}", goal_id=goal.id)
-    found = research.search(f"{goal.title} {goal.description} {feedback}", limit=8)
+    found = research.search(f"{goal.title} {goal.description} {feedback}", limit=8, goal_id=goal.id)
     docs = [d for d in found if not d["flags"]][:5]  # pages that try to instruct agents never reach a prompt
     if len(docs) < len(found[:5]):
         log_event("research", f"left out {len(found) - len([d for d in found if not d['flags']])} flagged page(s)",
@@ -877,7 +877,8 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                       + blackboard.context_for(goal.id, role, exclude={contract.key, *contract.depends_on})
                       + blackboard.inbox(goal.id, role, agent.id)
                       + learning.experience_context(agent.id, goal_id=goal.id, query=" ".join(
-                          [contract.title, contract.description, *contract.skills]))
+                          [contract.title, contract.description, *contract.skills]), technologies=contract.skills)
+                      + learning.task_references(goal.id, f"{contract.title} {contract.description}")
                       + _attachment_note(goal)
                       + ("\n\nYou may change files in the working directory." if writes
                          else "\n\nDo not change files; answer in text.")
@@ -1875,7 +1876,8 @@ def trace(goal_id: int) -> dict[str, Any]:
                  "error": r.error[:500], "duration": round(r.duration, 2), "cost": r.cost,
                  "tokens": r.input_tokens + r.output_tokens, "at": r.started_at.isoformat(),
                  "isolation": r.isolation or "", "tools": list(r.tools or []), "permissions": list(r.permissions or []),
-                 "withheld": list(r.dropped or []), "denied_tools": list(r.denied_tools or [])}
+                 "withheld": list(r.dropped or []), "denied_tools": list(r.denied_tools or []),
+                 "tool_calls": list(r.tool_calls or [])}
                 for r in s.scalars(select(Run).where(Run.goal_id == goal_id).order_by(Run.id))]
         gates = [{"at": e.created_at.isoformat(), "passed": e.data.get("passed"), "commit": e.data.get("commit"),
                   "checks": e.data.get("checks", []), "message": e.message}

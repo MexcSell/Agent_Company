@@ -93,7 +93,7 @@ Machines code):
 | Retry policy and escalation levels for failed tasks | SPEC04 §14 | done (retry by failure type, budget pause, re-plan, repeated-check escalation, S04-R-06; levels 1-5 routed to agent, goal GM, room manager, executive GM, a person, `escalation.py`, S04-R-07) |
 | Task contract fields: scope, risk, test plan, budget, deadline, requirement keys; findings and next actions | Designing guide §3 | done (`contracts.TaskContract`, G-R-01) |
 | Workflow templates per goal kind (bugfix, feature, refactor, research, docs) with versions; strategy picked by the order or the planner; team resizing with history | SPEC04 FR-24..26, §8.4, §20.4 | done (`strategies.py`, `teams.py`, S04-R-11) |
-| Execution trace per goal | SPEC04 FR-30, SPEC14 | partial (`/api/goals/{id}/trace`; tool calls open) → S04-R-12 |
+| Execution trace per goal | SPEC04 FR-30, SPEC14 | done (`/api/goals/{id}/trace` with each run's tool calls) → S04-R-12 |
 | Goal-chain depth limit for proposals | SPEC04 §9.4 | done (`max_goal_depth`, message budget, duplicates dropped, unanswered requests escalated, S04-R-08) |
 | Project registration fields (rooms, skills, stack, budget, deadline, priority) and lifecycle (pause, resume, archive, cancel, complete) | ASEAO05 FR-05..09 | done (`projects.set_status`, project budget caps its goals, priority queue, S05-R-06) |
 | Milestones, blockers and risks, insights, upcoming action items per project | ASEAO05 §7-10 | done (`management.py`, Projects → Plan, S05-R-01..R-04; time per goal with the planner's estimates and weighted progress, S05-R-05) |
@@ -111,7 +111,7 @@ Machines code):
 | Test-strategy selection by test category and risk | ASEAO09 §6-7 | open → S09-R-02 |
 | Innovation experiments, portfolio and technology radar | ASEAO10 §10-14, §21 | open → S10-R-02, S10-G-01..G-06 |
 | Knowledge graph of agents, projects, technologies and lessons | SPEC11 §7, 1.txt (Neo4j) | done (`kgraph.py`: edges as side effects, paged graph API, Knowledge → graph explorer; S11-R-07) |
-| Knowledge items with provenance; task-relevant, project-scoped retrieval | SPEC11 §3, §8 | done / partial (`learning.retrieve` with the contradiction penalty; FTS5 open) → S11-R-01, S11-R-03 |
+| Knowledge items with provenance; task-relevant, project-scoped retrieval | SPEC11 §3, §8 | done (`learning.retrieve`: FTS5, weights as settings guarded by the retrieval eval, standards and research documents in a task's package) → S11-R-01, S11-R-03, S11-R-08 |
 | Contradiction handling between stored lessons | SPEC11 §6.3 | done (`CONTRADICTS` edges, people resolve with a rationale, S11-R-04) |
 | Knowledge versions (supersede) and deletion with their links | SPEC11 §10.3 | done (`learning.supersede`, `delete`, S11-R-06) |
 | Structured experience reports after every task | SPEC11 §9.1 | done (`Lesson.report`, `loop._experience_facts`, `learning.clean_report`, S11-R-02) |
@@ -130,7 +130,7 @@ Machines code):
 | Emergency shutdown with levels E0-E5 (executor, agent, goal, project, room, company), CLI and top-bar control | SPEC14 §12 | done (`governance.stop`, `python -m agent_company stop`, S14-R-01) |
 | Autonomy levels and action classification | SPEC14 §13 | done (`Agent.autonomy` G0–G4, enforced by the tool gateway; only administrators change permissions or autonomy, S14-R-02) |
 | Threat model (STRIDE + AI threats) mapped to controls and tests; security simulations | SPEC14 PDF §19 | done (`docs/threat-model.md`, `tests/test_threats.py`, S14-R-09) |
-| Tool permission contracts: one gateway for every executor run; isolation level, tools and permissions recorded per run | SPEC14 §7.3, §8.2, §8.3 | done (`executors.gate`, `Run.isolation`, S14-R-06; L3 containers and per-call tool logs open, S14-R-07, S14-R-08) |
+| Tool permission contracts: one gateway for every executor run; isolation level, tools and permissions recorded per run | SPEC14 §7.3, §8.2, §8.3 | done (`executors.gate`, `Run.isolation`, `Run.tool_calls`, S14-R-06, S14-R-08; L3 containers open, S14-R-07) |
 | Information classification and data-handling rules | SPEC14 §5 | partial (projects and lessons; uploads, documents, model rule open) → S14-R-05 |
 | MCP tool servers for agents | 1.txt, CDAF guide §11 | done (`mcp.py`, Tools & MCP, G-R-05) |
 | A2A protocol for agent-to-agent messages | 1.txt | done (`a2a.py`: A2A 1.0 agent card, JSON-RPC tasks as goals for issued clients, G-R-06) |

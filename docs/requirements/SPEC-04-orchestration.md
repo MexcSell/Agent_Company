@@ -42,7 +42,7 @@ orchestrator → `loop.py`; scheduler → `scheduler.run_dag`; team → agents s
 | S04-FR-27 | Self-evaluation of orchestration | P2 | open (after SPEC-13 experiments) |
 | S04-FR-28 | Recommend improved orchestration strategies | P2 | open (after SPEC-13 experiments) |
 | S04-FR-29 | Support multi-project concurrency | P1 | done (`GoalQueue` workers, `Goal.project_id`) |
-| S04-FR-30 | Support execution replay and audit | P1 | partial: `GET /api/goals/{id}/trace` (S04-R-12) |
+| S04-FR-30 | Support execution replay and audit | P1 | done: `GET /api/goals/{id}/trace` with every run's tool calls (S04-R-12); a replay that re-runs a goal is not taken (runs are not deterministic) |
 
 ## Specific requirements
 
@@ -249,8 +249,14 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
 - `GET /api/goals/{id}/trace`: ordered transitions, tasks, runs (agent, model, tool calls,
   duration, cost, errors), decisions, gate results, merges.
 - Acceptance: for a finished goal the trace names the agent and model of every run.
-- **Status: partial:** the acceptance holds (`loop.trace`, `/api/goals/{id}/trace`); tool calls per
-  run are not recorded.
+- **Status: done** (`loop.trace`, `/api/goals/{id}/trace`, `tests/test_gateway.py`). Every run carries its tool
+  calls (`Run.tool_calls`: tool, a short input — the command, file or pattern — with credential-like text redacted,
+  and whether it failed; at most 200 per run, then a count). Claude Code runs with `--output-format stream-json
+  --verbose` (`executors.parse_claude_stream`: `tool_use` blocks, a `tool_result` with `is_error` marks the call
+  failed, the final `result` event as before); Codex with `exec --json` (`executors.parse_codex_stream`: commands
+  with their exit code, file changes, MCP calls, web searches, usage from `turn.completed`; a Codex without events
+  is read as plain text). HTTP models and the simulator make no tool calls. An output over the 5 M character cap
+  keeps its head and tail, so the result event survives. The trace view lists the calls under each run.
 
 ## Spec acceptance tests (§23) → requirements
 

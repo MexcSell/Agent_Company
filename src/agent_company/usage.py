@@ -41,7 +41,8 @@ def record(*, model_name: str, kind: str, input_tokens: int = 0, output_tokens: 
                   isolation=getattr(res, "isolation", "") or "", tools=list(getattr(res, "tools", None) or [])[:100],
                   permissions=list(getattr(res, "permissions", None) or []),
                   dropped=list(getattr(res, "dropped", None) or []),
-                  denied_tools=list(getattr(res, "denied_tools", None) or [])[:100]))
+                  denied_tools=list(getattr(res, "denied_tools", None) or [])[:100],
+                  tool_calls=list(getattr(res, "tool_calls", None) or [])))
     if agent_id is not None:  # activity and health (SPEC-02 S02-R-02)
         from agent_company import registry
 

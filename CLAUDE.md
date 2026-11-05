@@ -17,7 +17,8 @@ feature came from.
   new writing recruit is first a `candidate` that runs an eval suite, then approved or rejected), `scheduler.py`, `router.py` (models, routes, fallback,
   provider catalogs, classification clearance per model), `contracts.py` (task contracts with scope, risk, budget, deadline; output lines),
   `executors.py` (tracked subprocesses: `terminate` for stops; `gate`, the tool gateway every run passes: permissions and
-  `Agent.autonomy` G0-G4 decide writes, Bash and MCP tools, the isolation level L0-L2 is recorded on the `Run`), `worktrees.py`,
+  `Agent.autonomy` G0-G4 decide writes, Bash and MCP tools, the isolation level L0-L2 and every tool call (Claude Code
+  stream-json, Codex `--json`) are recorded on the `Run`), `worktrees.py`,
   `quality.py` + `checks.py` (gate: contracts, review verdicts with logic verification, secrets, syntax, scope,
   change boundaries, baseline), `usage.py`; `loop.py` (circular goal loop, budgets that pause, best-iteration
   rollback, handovers, checkpoint commits per writing task + worktree reconcile on resume, retry policy,
@@ -38,8 +39,10 @@ feature came from.
   `budgets.py` (S04-R-09 goal budgets: cost, tokens, agents at once; child goals capped by the parent's remainder); `projects.py` (projects with stack, skills, rooms, budget, deadline, priority and a lifecycle `set_status`; command window
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals, uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress and goal times;
   blockers and generated items are reconciled from goal state by `sync`; a new project GM gets a handover package); `kgraph.py` (SPEC-11 knowledge graph: `kg_edges` written as side effects, the paged neighbourhood API);
-  `learning.py` (knowledge items: provenance, experience reports, screening, scoped ranked retrieval;
-  contradictions and versions as `kg_edges`, resolved by people)
+  `learning.py` (knowledge items: provenance, experience reports, screening, scoped ranked retrieval over an FTS5
+  index with `retrieval_w_*` weights guarded by `evals/retrieval.json` recall@5; a task's package adds the project's
+  standards from the base branch and matching research documents; contradictions and versions as `kg_edges`,
+  resolved by people)
   + `evolution.py` (playbook candidates are experiments); `experiments.py` (SPEC-13: baseline vs candidate on one eval
   suite, review by the E0-E6 policy, canary, rollback; routes only applied by an administrator); `hypotheses.py`
   (ASEAO07 S07-R-03: statements under test with evidence; an experiment's comparison concludes its hypothesis; an agent
@@ -72,7 +75,8 @@ feature came from.
   label become icons (`iconize` in app.js); `index.html` is served with content-hashed static URLs;
   `workspace.js` + `viewer.js` + `console.js` + `claude.js` are the Workspace home page, sharing
   `window.WSP`; `vendor/` holds xterm.js, pdf.js, mammoth and noVNC); `crew.py` (classic crew); `__main__.py` (CLI)
-- `evals/` – benchmark suites (JSON; `kind` benchmark|practice|final, `skills`; a final suite's checks never reach agents)
+- `evals/` – benchmark suites (JSON; `kind` benchmark|practice|final, `skills`; a final suite's checks never reach agents);
+  `retrieval.json` is the knowledge-retrieval eval (items + cases, no tasks)
 - `benchmarks/` – fixed code benchmarks for improvement contracts (`<name>.json` manifest with metric weights and
   guards + `<name>.py` printing JSON metrics for the `agent_company` first on PYTHONPATH); protected
 - `tests/` – pytest; every test gets its own temp DATA_DIR and runs offline

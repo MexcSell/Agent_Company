@@ -693,6 +693,8 @@ class Run(Base):
     permissions: Mapped[list[Any]] = mapped_column(default=list)
     dropped: Mapped[list[Any]] = mapped_column(default=list)
     denied_tools: Mapped[list[Any]] = mapped_column(default=list)
+    # every call a CLI run made (S04-R-12, S14-R-08): {tool, input (short, redacted), ok}, at most 200
+    tool_calls: Mapped[list[Any]] = mapped_column(default=list)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
 
@@ -1281,6 +1283,8 @@ def engine() -> Engine:
 
             Base.metadata.create_all(_engine)
             _add_missing_columns(_engine)
+            if url.startswith("sqlite"):
+                _knowledge_fts(_engine)
             _factory = sessionmaker(_engine, expire_on_commit=False)
         return _engine
 
@@ -1304,6 +1308,30 @@ def _add_missing_columns(eng: Engine) -> None:
                     v = col.default.arg
                     default = f" DEFAULT {int(v) if isinstance(v, bool) else repr(v) if isinstance(v, str) else v}"
                 conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl}{default}'))
+
+
+def _knowledge_fts(eng: Engine) -> None:
+    """The FTS5 index over knowledge items (SPEC-11 S11-R-03), kept current by triggers. A new index is filled
+    from the rows already there."""
+    from sqlalchemy import text
+
+    with eng.begin() as conn:
+        new = conn.execute(text("SELECT 1 FROM sqlite_master WHERE name = 'lessons_fts'")).first() is None
+        conn.execute(text("CREATE VIRTUAL TABLE IF NOT EXISTS lessons_fts USING fts5("
+                          "text, technologies, content='lessons', content_rowid='id', tokenize='porter unicode61')"))
+        conn.execute(text("CREATE TRIGGER IF NOT EXISTS lessons_fts_ai AFTER INSERT ON lessons BEGIN "
+                          "INSERT INTO lessons_fts(rowid, text, technologies) "
+                          "VALUES (new.id, new.text, new.technologies); END"))
+        conn.execute(text("CREATE TRIGGER IF NOT EXISTS lessons_fts_ad AFTER DELETE ON lessons BEGIN "
+                          "INSERT INTO lessons_fts(lessons_fts, rowid, text, technologies) "
+                          "VALUES ('delete', old.id, old.text, old.technologies); END"))
+        conn.execute(text("CREATE TRIGGER IF NOT EXISTS lessons_fts_au AFTER UPDATE OF text, technologies ON lessons "
+                          "BEGIN INSERT INTO lessons_fts(lessons_fts, rowid, text, technologies) "
+                          "VALUES ('delete', old.id, old.text, old.technologies); "
+                          "INSERT INTO lessons_fts(rowid, text, technologies) "
+                          "VALUES (new.id, new.text, new.technologies); END"))
+        if new:
+            conn.execute(text("INSERT INTO lessons_fts(lessons_fts) VALUES ('rebuild')"))
 
 
 @contextmanager

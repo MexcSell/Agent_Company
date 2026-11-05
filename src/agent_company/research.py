@@ -43,7 +43,9 @@ from agent_company.db import (
     Agent,
     Document,
     DocumentVersion,
+    Goal,
     Lesson,
+    Project,
     ResearchReport,
     ResearchShift,
     Room,
@@ -370,7 +372,27 @@ def collect(url: str, depth: int = 1, max_pages: int = 20, agent_id: int | None 
 _WORD = re.compile(r"[A-Za-z0-9_]{3,}")
 
 
-def search(query: str, limit: int = 5) -> list[dict[str, Any]]:
+def _reports_hidden_from(s, goal_id: int) -> set[str]:  # noqa: ANN001
+    """URLs (report://<id>) of research reports a goal may not see: reports of another project whose project or
+    goal is classified above internal (SPEC-14 S14-R-05, like knowledge items)."""
+    from agent_company.learning import SHAREABLE, goal_level, highest
+
+    g = s.get(Goal, goal_id)
+    mine = g.project_id if g else None
+    hidden = set()
+    for r in s.scalars(select(ResearchReport).where(ResearchReport.status == "done")):
+        if r.project_id is not None and r.project_id == mine:
+            continue
+        rg = s.get(Goal, r.goal_id) if r.goal_id else None
+        rp = s.get(Project, r.project_id) if r.project_id else None
+        if highest(goal_level(s, rg) if rg else None, rp.classification if rp else None) not in SHAREABLE:
+            hidden.add(f"report://{r.id}")
+    return hidden
+
+
+def search(query: str, limit: int = 5, goal_id: int | None = None) -> list[dict[str, Any]]:
+    """Collected documents matching the query, best first. With a goal, reports written for another project that is
+    classified above internal are left out."""
     terms = list(dict.fromkeys(w.lower() for w in _WORD.findall(query)))[:12]
     if not terms:
         return []
@@ -378,6 +400,9 @@ def search(query: str, limit: int = 5) -> list[dict[str, Any]]:
         cond = or_(*[Document.text.ilike(f"%{t}%") for t in terms],
                    *[Document.title.ilike(f"%{t}%") for t in terms])
         docs = s.scalars(select(Document).where(cond).limit(500)).all()
+        if goal_id is not None:
+            hidden = _reports_hidden_from(s, goal_id)
+            docs = [d for d in docs if d.url not in hidden]
         scored = []
         for d in docs:
             low_t, low_x = d.title.lower(), d.text.lower()
@@ -877,7 +902,6 @@ def submit(question: str, urls: list[str] | None = None, user_id: int | None = N
     returned instead (`duplicate`); the caller should not run it again."""
     from datetime import datetime
 
-    from agent_company.db import Goal, Project
 
     question = question.strip()
     if len(question) < 5:

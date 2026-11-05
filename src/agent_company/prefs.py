@@ -52,7 +52,14 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "shift_seconds": (int, "Length of a research shift on the rotation in seconds (0 = every rotation turn is a shift)"),
     "blocked_commands": (list, "Regular expressions (one per line) the command policy refuses on top of its built-in "
                                "rules; they cannot loosen them"),
+    "retrieval_w_relevance": (float, "Knowledge ranking: weight of keyword relevance to the task (FTS5 + term coverage)"),
+    "retrieval_w_technology": (float, "Knowledge ranking: weight of the item's technologies the task and project use"),
+    "retrieval_w_verified": (float, "Knowledge ranking: weight of verification (evidence class, reviewed by a person)"),
+    "retrieval_w_author": (float, "Knowledge ranking: weight of who learned it (the agent itself, related agents)"),
+    "retrieval_w_recency": (float, "Knowledge ranking: weight of recency"),
+    "retrieval_w_contradiction": (float, "Knowledge ranking: rank lost by an item with an unresolved contradiction"),
 }
+RETRIEVAL_KEYS = {k for k in SCHEMA if k.startswith("retrieval_w_")}
 LIMITS: dict[str, tuple[float, float]] = {
     "max_iterations": (1, 10), "max_parallel": (1, 16), "command_timeout": (10, 7200),
     "rotation_interval": (0, 86400), "max_proposal_goals": (0, 20), "goal_budget_usd": (0, 10_000),
@@ -63,6 +70,7 @@ LIMITS: dict[str, tuple[float, float]] = {
     "approval_blocker_hours": (0, 720), "inactive_days": (1, 3650), "explore_rate": (0, 1),
     "improvement_min_score": (0, 100), "improvement_max_regression": (0, 100),
     "shift_seconds": (0, 7 * 86400),
+    **{k: (0, 10) for k in RETRIEVAL_KEYS},
 }
 CHOICES: dict[str, set[str]] = {"proposal_policy": {"user", "superiors"}, "executor": {"auto", "offline"},
                                 "transport": {"https", "http"}, "budget_exhausted_action": {"pause", "stop"},
@@ -131,6 +139,8 @@ def set_value(key: str, value: Any, actor: str = "system") -> Any:
     if key not in SCHEMA:
         raise ValueError(f"unknown setting {key!r}")
     v = _coerce(key, value)
+    if key in RETRIEVAL_KEYS:
+        _check_retrieval(key, v, actor)
     if key == "transport":  # reconfigure nginx first; a failure leaves the setting unchanged
         from agent_company import transport
 
@@ -147,6 +157,19 @@ def set_value(key: str, value: Any, actor: str = "system") -> Any:
     if key in policies.GOVERNANCE_KEYS:
         policies.record("company", actor, f"{key} = {v}")
     return v
+
+
+def _check_retrieval(key: str, value: float, actor: str) -> None:
+    """A ranking weight changes only when recall@5 of the retrieval eval holds (SPEC-11 S11-R-08)."""
+    from agent_company import learning
+    from agent_company.db import log_event
+
+    name = key.removeprefix("retrieval_w_")
+    before, after = learning.evaluate_retrieval()["value"], learning.evaluate_retrieval(**{name: value})["value"]
+    if after < before:
+        raise ValueError(f"{key} = {value:g} lowers recall@5 of evals/retrieval.json from {before:.2f} to {after:.2f}")
+    log_event("retrieval", f"{key} = {value:g} by {actor}: recall@5 {before:.2f} -> {after:.2f}",
+              key=key, before=before, after=after)
 
 
 def clear(key: str, actor: str = "system") -> None:

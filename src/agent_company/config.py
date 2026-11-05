@@ -91,6 +91,13 @@ class Settings:
     a2a_enabled: bool = False
     # Regular expressions the command policy refuses on top of governance.DANGEROUS (SPEC-01 S01-R-05).
     blocked_commands: list[str] = field(default_factory=list)
+    # Knowledge ranking weights (SPEC-11 S11-R-03 §8.3); a change must keep recall@5 of evals/retrieval.json (S11-R-08).
+    retrieval_w_relevance: float = 3.0
+    retrieval_w_technology: float = 0.5
+    retrieval_w_verified: float = 0.2
+    retrieval_w_author: float = 0.3
+    retrieval_w_recency: float = 0.3
+    retrieval_w_contradiction: float = 1.0
 
     @property
     def worktrees_dir(self) -> Path:
@@ -151,6 +158,12 @@ def load_settings() -> Settings:
         improvement_auto_rollback=_bool("IMPROVEMENT_AUTO_ROLLBACK", True),
         shift_seconds=_int("SHIFT_SECONDS", 0),
         a2a_enabled=_bool("A2A_ENABLED", False),
+        retrieval_w_relevance=float(os.environ.get("RETRIEVAL_W_RELEVANCE") or 3.0),
+        retrieval_w_technology=float(os.environ.get("RETRIEVAL_W_TECHNOLOGY") or 0.5),
+        retrieval_w_verified=float(os.environ.get("RETRIEVAL_W_VERIFIED") or 0.2),
+        retrieval_w_author=float(os.environ.get("RETRIEVAL_W_AUTHOR") or 0.3),
+        retrieval_w_recency=float(os.environ.get("RETRIEVAL_W_RECENCY") or 0.3),
+        retrieval_w_contradiction=float(os.environ.get("RETRIEVAL_W_CONTRADICTION") or 1.0),
     )
 
 

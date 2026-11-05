@@ -226,3 +226,87 @@ def test_only_an_administrator_changes_permissions_or_autonomy():
         assert member.post(f"/api/agents/{dev['id']}/rollback", params={"version": first}).status_code == 403
         detail = member.get(f"/api/agents/{dev['id']}").json()
         assert detail["autonomy"] == "G2" and "G0" in detail["autonomy_levels"]
+
+
+CLAUDE_STREAM = "\n".join(json.dumps(e) for e in [
+    {"type": "system", "subtype": "init", "session_id": "0f9c2b9e-1111-2222-3333-444455556666"},
+    {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "src/app.py"}},
+        {"type": "tool_use", "id": "t2", "name": "Bash",
+         "input": {"command": "curl -H 'x: AKIAZ3MXQ7RTV2KD9WPL' http://x", "description": "fetch"}}]}},
+    {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "1\tcode"},
+                                             {"type": "tool_result", "tool_use_id": "t2", "is_error": True,
+                                              "content": "permission denied"}]}},
+    {"type": "assistant", "message": {"content": [{"type": "text", "text": "done"}]}},
+    {"type": "result", "subtype": "success", "result": "done", "is_error": False, "total_cost_usd": 0.02,
+     "session_id": "0f9c2b9e-1111-2222-3333-444455556666", "usage": {"input_tokens": 12, "output_tokens": 3},
+     "permission_denials": [{"tool_name": "Bash"}]},
+])
+
+CODEX_STREAM = "\n".join(json.dumps(e) for e in [
+    {"type": "thread.started", "thread_id": "x"}, {"type": "turn.started"},
+    {"type": "item.started", "item": {"id": "i0", "type": "command_execution", "command": "pytest -q", "status": "in_progress"}},
+    {"type": "item.completed", "item": {"id": "i0", "type": "command_execution", "command": "pytest -q", "exit_code": 1,
+                                        "status": "completed"}},
+    {"type": "item.completed", "item": {"id": "i1", "type": "file_change", "status": "completed",
+                                        "changes": [{"path": "src/app.py", "kind": "update"}]}},
+    {"type": "item.completed", "item": {"id": "i2", "type": "agent_message", "text": "fixed it"}},
+    {"type": "turn.completed", "usage": {"input_tokens": 900, "cached_input_tokens": 800, "output_tokens": 40}},
+])
+
+
+def test_claude_code_runs_record_every_tool_call_redacted_and_in_the_trace(monkeypatch, wt):
+    """S04-R-12 / S14-R-08: stream-json gives each call; inputs are short and credential-like text is redacted."""
+    from agent_company import usage
+
+    cmds = []
+
+    class Stream:
+        returncode, stderr, stdout = 0, "", CLAUDE_STREAM
+
+    monkeypatch.setattr(executors.Executor, "_spawn", lambda self, cmd, r, cwd, env=None: cmds.append(cmd) or Stream())
+    res = cc(req(wt, ["read", "write", "shell"]))
+    assert "stream-json" in cmds[0] and "--verbose" in cmds[0]
+    assert res.ok and res.text == "done" and res.input_tokens == 12 and res.session_id.startswith("0f9c")
+    assert [(c["tool"], c["ok"]) for c in res.tool_calls] == [("Read", True), ("Bash", False)]
+    assert res.tool_calls[0]["input"] == "src/app.py" and "AKIA" not in res.tool_calls[1]["input"]
+    assert "[redacted]" in res.tool_calls[1]["input"] and res.denied_tools == ["Bash"]
+    gid = loop.create_goal("traced")
+    usage.record(model_name="Claude Code", kind="claude_code", goal_id=gid, res=res)
+    assert loop.trace(gid)["runs"][0]["tool_calls"] == res.tool_calls
+
+
+def test_codex_runs_record_commands_and_file_changes_from_its_json_events(monkeypatch, wt):
+    cmds = []
+
+    class Stream:
+        returncode, stderr, stdout = 0, "", CODEX_STREAM
+
+    monkeypatch.setattr(executors.Executor, "_spawn", lambda self, cmd, r, cwd, env=None: cmds.append(cmd) or Stream())
+    res = executors.CodexExecutor(router.Choice("Codex", "codex", "", "t")).run(req(wt, ["read", "write", "shell"]))
+    assert "--json" in cmds[0] and res.ok and res.text == "fixed it" and res.input_tokens == 900
+    assert res.tool_calls == [{"tool": "command", "input": "pytest -q", "ok": False},
+                              {"tool": "file_update", "input": "src/app.py", "ok": True}]
+    failed = CODEX_STREAM + "\n" + json.dumps({"type": "turn.failed", "error": {"message": "usage limit reached"}})
+    Stream.stdout = failed
+    res = executors.CodexExecutor(router.Choice("Codex", "codex", "", "t")).run(req(wt, ["read"]))
+    assert not res.ok and "usage limit" in res.error
+
+
+def test_a_run_keeps_at_most_200_tool_calls_and_a_cut_stream_keeps_its_result():
+    many = "\n".join(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": f"t{i}", "name": "Grep", "input": {"pattern": f"p{i}"}}]}}) for i in range(250))
+    result, calls = executors.parse_claude_stream(many + "\n" + json.dumps({"type": "result", "result": "ok"}))
+    assert result["result"] == "ok" and len(calls) == 201 and calls[-1]["input"] == "50 more call(s) not kept"
+    assert executors.parse_codex_stream("plain final answer") is None, "a Codex without --json events is plain text"
+
+
+def test_an_output_cut_keeps_the_tail_with_the_streams_result(monkeypatch, wt):
+    import sys
+
+    monkeypatch.setattr(executors, "MAX_OUTPUT", 2000)
+    script = "print('x' * 9000); print('{\"type\": \"result\", \"result\": \"ok\"}')"
+    ex = executors.ClaudeCodeExecutor(router.Choice("Claude Code", "claude_code", "", "test"))
+    proc = ex._spawn([sys.executable, "-c", script], req(wt, ["read"]), wt)
+    assert len(proc.stdout) < 2100 and "output cut" in proc.stderr
+    assert executors.parse_claude_stream(proc.stdout)[0]["result"] == "ok"

@@ -70,6 +70,7 @@ class Result:
     permissions: list[str] = field(default_factory=list)
     dropped: list[str] = field(default_factory=list)
     denied_tools: list[str] = field(default_factory=list)  # tool calls the CLI refused (Claude Code reports them)
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)  # each call the run made: tool, input, ok
 
 
 FILE_BLOCK_HELP = (
@@ -88,6 +89,112 @@ def estimate_tokens(text: str) -> int:
 
 
 MAX_OUTPUT = 5_000_000  # characters of stdout an executor run may produce (SPEC-14 S14-R-07)
+
+
+# --- the tool calls of a CLI run (SPEC-04 S04-R-12, SPEC-14 S14-R-08) ------------------------------------------
+# Claude Code (stream-json) and Codex (--json) report every call as it happens; a run keeps each one's tool, a short
+# input (the command, the file, the pattern) with anything credential-like redacted, and whether it failed.
+
+MAX_TOOL_CALLS, TOOL_INPUT_CAP = 200, 200
+_INPUT_KEYS = ("command", "file_path", "notebook_path", "path", "pattern", "url", "query", "description", "skill")
+
+
+def _redact(text: str) -> str:
+    from agent_company.checks import PLACEHOLDER, SECRET_PATTERNS
+
+    for _, pattern in SECRET_PATTERNS:
+        text = pattern.sub(lambda m: m.group(0) if PLACEHOLDER.search(m.group(0)) else "[redacted]", text)
+    return text
+
+
+def tool_call(tool: str, detail: Any, ok: bool = True) -> dict[str, Any]:
+    if isinstance(detail, dict):
+        detail = next((detail[k] for k in _INPUT_KEYS if detail.get(k)), json.dumps(detail)[:TOOL_INPUT_CAP * 2])
+    return {"tool": str(tool)[:80], "input": _redact(" ".join(str(detail).split()))[:TOOL_INPUT_CAP], "ok": bool(ok)}
+
+
+def _capped(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if len(calls) <= MAX_TOOL_CALLS:
+        return calls
+    return calls[:MAX_TOOL_CALLS] + [{"tool": "…", "input": f"{len(calls) - MAX_TOOL_CALLS} more call(s) not kept",
+                                      "ok": True}]
+
+
+def _events(stdout: str) -> list[dict[str, Any]]:
+    out = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(ev, dict):
+                out.append(ev)
+    return out
+
+
+def parse_claude_stream(stdout: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """(the result event, the tool calls) of `claude -p --output-format stream-json --verbose`; the single object of
+    `--output-format json` is read as the result."""
+    result: dict[str, Any] | None = None
+    calls: list[dict[str, Any]] = []
+    by_id: dict[str, dict[str, Any]] = {}
+    for ev in _events(stdout):
+        kind = ev.get("type")
+        if kind == "result" or (kind is None and "result" in ev):
+            result = ev
+        elif kind in ("assistant", "user"):
+            for block in (ev.get("message") or {}).get("content") or []:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_use":
+                    c = tool_call(block.get("name") or "?", block.get("input") or "")
+                    calls.append(c)
+                    by_id[str(block.get("id"))] = c
+                elif block.get("type") == "tool_result" and block.get("is_error"):
+                    if str(block.get("tool_use_id")) in by_id:
+                        by_id[str(block.get("tool_use_id"))]["ok"] = False
+    return result, _capped(calls)
+
+
+def parse_codex_stream(stdout: str) -> dict[str, Any] | None:
+    """text, usage, tool calls and error of `codex exec --json`; None when stdout holds no events (plain text)."""
+    events = _events(stdout)
+    if not any(str(ev.get("type", "")).startswith(("thread.", "turn.", "item.")) for ev in events):
+        return None
+    texts: list[str] = []
+    calls: list[dict[str, Any]] = []
+    usage: dict[str, Any] = {}
+    error = ""
+    for ev in events:
+        kind = ev.get("type")
+        item = ev.get("item") or {}
+        if kind == "item.completed":
+            k = item.get("type")
+            failed = item.get("status") == "failed"
+            if k == "agent_message":
+                texts.append(str(item.get("text") or ""))
+            elif k == "command_execution":
+                calls.append(tool_call("command", item.get("command") or "",
+                                       not failed and item.get("exit_code") in (0, None)))
+            elif k == "file_change":
+                calls += [tool_call(f"file_{ch.get('kind') or 'change'}", ch.get("path") or "", not failed)
+                          for ch in item.get("changes") or [] if isinstance(ch, dict)]
+            elif k == "mcp_tool_call":
+                calls.append(tool_call(f"mcp:{item.get('server') or '?'}/{item.get('tool') or '?'}",
+                                       item.get("arguments") or "", not failed))
+            elif k == "web_search":
+                calls.append(tool_call("web_search", item.get("query") or ""))
+            elif k == "error":
+                error = str(item.get("message") or "")
+        elif kind == "turn.completed":
+            usage = ev.get("usage") or {}
+        elif kind == "turn.failed":
+            error = str((ev.get("error") or {}).get("message") or "turn failed")
+        elif kind == "error":
+            error = str(ev.get("message") or "")
+    return {"text": texts[-1] if texts else "", "usage": usage, "tool_calls": _capped(calls), "error": error}
 
 
 # --- the tool gateway (SPEC-14 S14-R-02, S14-R-06, S14-R-07) ----------------------------------------
@@ -308,8 +415,8 @@ class Executor:
         timeout or an emergency stop ends the CLI and everything it started."""
         import signal
 
-        proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
-                                start_new_session=True)
+        proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, env=env, start_new_session=True)
         _track(proc.pid, cmd[0], self.kind, req)
         try:
             out, err = proc.communicate(timeout=self.timeout)
@@ -321,8 +428,10 @@ class Executor:
             _untrack(proc.pid)
         if proc.returncode is not None and proc.returncode < 0:
             err = (err or "") + f"\nterminated by signal {-proc.returncode}"
-        if len(out) > MAX_OUTPUT:
-            out, err = out[:MAX_OUTPUT], (err or "") + f"\noutput cut at {MAX_OUTPUT} characters"
+        if len(out) > MAX_OUTPUT:  # keep the head and the tail: a stream's result event comes last
+            half = MAX_OUTPUT // 2
+            out = out[:half] + "\n[output cut]\n" + out[-half:]
+            err = (err or "") + f"\noutput cut to {MAX_OUTPUT} characters"
         return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
@@ -387,7 +496,7 @@ class ClaudeCodeExecutor(Executor):
         cwd = ensure_sandboxed(req.workdir)
         grant = req.grant or Grant()
         tools = self.tools(grant)
-        cmd = ["claude", "-p", req.prompt, "--output-format", "json",
+        cmd = ["claude", "-p", req.prompt, "--output-format", "stream-json", "--verbose",
                "--append-system-prompt", req.system, "--allowedTools", ",".join(tools)]
         if req.writes:
             cmd += ["--permission-mode", "acceptEdits"]
@@ -416,10 +525,10 @@ class ClaudeCodeExecutor(Executor):
         finally:
             if mcp_file:
                 Path(mcp_file).unlink(missing_ok=True)
-        try:
-            data = json.loads(proc.stdout)
-        except json.JSONDecodeError:
-            return Result(text=proc.stdout, ok=False, error=(proc.stderr or proc.stdout)[-2000:])
+        data, calls = parse_claude_stream(proc.stdout)
+        if data is None:  # no result event: the CLI failed before it finished
+            return Result(text=proc.stdout[-20_000:], ok=False, error=(proc.stderr or proc.stdout)[-2000:],
+                          tools=tools, tool_calls=calls)
         u = data.get("usage") or {}
         inp = int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0) + int(
             u.get("cache_creation_input_tokens") or 0)
@@ -428,7 +537,7 @@ class ClaudeCodeExecutor(Executor):
                       cost=float(data.get("total_cost_usd") or 0.0),
                       ok=not data.get("is_error") and proc.returncode == 0,
                       error="" if proc.returncode == 0 else (proc.stderr or str(data.get("result")))[-2000:],
-                      session_id=str(data.get("session_id") or ""), tools=tools,
+                      session_id=str(data.get("session_id") or ""), tools=tools, tool_calls=calls,
                       denied_tools=sorted({str(d.get("tool_name") or "?") for d in data.get("permission_denials") or []
                                            if isinstance(d, dict)}))
 
@@ -444,14 +553,22 @@ class CodexExecutor(Executor):
             raise RuntimeError("Codex needs a worktree")
         cwd = ensure_sandboxed(req.workdir)
         prompt = req.system + "\n\n" + req.prompt
-        cmd = ["codex", "exec", "--skip-git-repo-check", "-C", str(cwd),
+        cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "-C", str(cwd),
                "--sandbox", "workspace-write" if req.writes else "read-only"]
         if self.choice.model_id:
             cmd += ["--model", self.choice.model_id]
         proc = self._spawn([*cmd, prompt], req, cwd)
-        text = proc.stdout.strip()
-        return Result(text=text, input_tokens=estimate_tokens(prompt), output_tokens=estimate_tokens(text),
-                      ok=proc.returncode == 0, error=proc.stderr[-2000:] if proc.returncode else "")
+        parsed = parse_codex_stream(proc.stdout)
+        if parsed is None:  # a Codex without --json events: its plain final message
+            text = proc.stdout.strip()
+            return Result(text=text, input_tokens=estimate_tokens(prompt), output_tokens=estimate_tokens(text),
+                          ok=proc.returncode == 0, error=proc.stderr[-2000:] if proc.returncode else "")
+        text, u = parsed["text"].strip(), parsed["usage"]
+        ok = proc.returncode == 0 and not parsed["error"]
+        return Result(text=text, input_tokens=int(u.get("input_tokens") or 0) or estimate_tokens(prompt),
+                      output_tokens=int(u.get("output_tokens") or 0) or estimate_tokens(text), ok=ok,
+                      error="" if ok else (parsed["error"] or proc.stderr[-2000:] or "codex failed")[-2000:],
+                      tool_calls=parsed["tool_calls"])
 
 
 def standard_plan(goal: str) -> dict[str, Any]:

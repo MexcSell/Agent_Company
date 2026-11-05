@@ -481,6 +481,9 @@ async function goalDetail(id, openIds = new Set()) {
   }));
 }
 
+// The tool calls a CLI run made (S04-R-12, S14-R-08): tool, short input, failed ones marked.
+const toolCalls = (calls) => `<details class="tool-calls"><summary class="muted">${calls.length} tool call(s)${calls.some((c) => !c.ok) ? ` · ${calls.filter((c) => !c.ok).length} failed` : ""}</summary><ol>${calls.map((c) => `<li class="${c.ok ? "" : "failed"}"><span class="mono">${esc(c.tool)}</span> ${esc(c.input)}${c.ok ? "" : ' <span class="pill failed">failed</span>'}</li>`).join("")}</ol></details>`;
+
 // The execution trace of a goal (S15-R-04, S04-R-12): workflow, runs, gates, decisions and operations on one
 // time line, with totals per agent and model.
 async function goalTrace(id) {
@@ -490,7 +493,7 @@ async function goalTrace(id) {
     ...t.transitions.map((x) => ({ at: x.at, k: "workflow", cls: "", text: `${x.from.replace(/_/g, " ")} → ${x.to.replace(/_/g, " ")}${x.reason ? ` · ${x.reason}` : ""}`, who: x.actor })),
     ...t.tasks.filter((x) => x.started_at).map((x) => ({ at: x.started_at, k: "task", cls: "", text: `#${x.id} ${x.title} (${x.role}, iteration ${x.iteration})`, who: x.agent || "" })),
     ...t.tasks.filter((x) => x.finished_at).map((x) => ({ at: x.finished_at, k: x.status, cls: x.status === "done" ? "done" : x.status === "failed" ? "failed" : "", text: `#${x.id} ${x.title}${x.files.length ? ` · ${x.files.length} file(s)` : ""}${x.commit ? ` · ${x.commit.slice(0, 10)}` : ""}`, who: x.agent || "" })),
-    ...t.runs.map((r) => ({ at: r.at, k: "run", cls: r.ok ? "" : "failed", text: `${r.purpose} via ${r.executor} · ${r.model || "-"} · ${r.duration}s · ${fmt.format(r.tokens)} tokens · ${money(r.cost)}${r.isolation ? ` · ${r.isolation} (${(r.permissions || []).join(", ")})` : ""}${r.withheld?.length ? ` · withheld: ${r.withheld.join("; ")}` : ""}${r.denied_tools?.length ? ` · refused tool calls: ${r.denied_tools.join(", ")}` : ""}${r.task_id && tasks[r.task_id] ? ` · task #${r.task_id}` : ""}${r.ok ? "" : ` · ${r.error}`}`, who: r.agent || "" })),
+    ...t.runs.map((r) => ({ at: r.at, k: "run", cls: r.ok ? "" : "failed", text: `${r.purpose} via ${r.executor} · ${r.model || "-"} · ${r.duration}s · ${fmt.format(r.tokens)} tokens · ${money(r.cost)}${r.isolation ? ` · ${r.isolation} (${(r.permissions || []).join(", ")})` : ""}${r.withheld?.length ? ` · withheld: ${r.withheld.join("; ")}` : ""}${r.denied_tools?.length ? ` · refused tool calls: ${r.denied_tools.join(", ")}` : ""}${r.task_id && tasks[r.task_id] ? ` · task #${r.task_id}` : ""}${r.ok ? "" : ` · ${r.error}`}`, who: r.agent || "", calls: r.tool_calls || [] })),
     ...t.gates.map((x) => ({ at: x.at, k: "gate", cls: x.passed ? "done" : "failed", text: `${x.message}${(x.checks || []).length ? ": " + x.checks.map((c) => `${c.passed ? "✓" : "✗"} ${c.check}`).join(" · ") : ""}`, who: "" })),
     ...t.decisions.map((d) => ({ at: d.created_at || d.at, k: "decision", cls: "", text: `#${d.id} ${d.topic}: ${d.status}`, who: d.approver || "" })),
     ...t.operations.map((o) => ({ at: o.at, k: "operation", cls: o.status === "done" ? "done" : "", text: `${o.key.split(":").slice(2).join(":")} ${o.status}`, who: "" })),
@@ -501,7 +504,7 @@ async function goalTrace(id) {
   $("#goal-detail").innerHTML = `<div class="row" style="padding-right:24px"><button class="btn icon" id="trace-back" title="Back to the goal" aria-label="Back to the goal">${icon("up", 16)}</button><h2 class="grow" style="margin:0">Trace · #${t.goal.id} ${esc(t.goal.title)}</h2>${pill(t.goal.status)}</div>
     <p class="muted">${t.runs.length} run(s) · ${t.gates.length} gate result(s) · ${t.operations.length} operation(s) · ${money(t.runs.reduce((n, r) => n + r.cost, 0))}</p>
     ${Object.keys(by).length ? `<div class="table-wrap"><table><tr><th>Agent · model</th><th class="num">Runs</th><th class="num">Failed</th><th class="num">Tokens</th><th class="num">Seconds</th><th class="num">Cost</th></tr>${Object.entries(by).map(([key, x]) => `<tr><td>${esc(key)}</td><td class="num">${x.runs}</td><td class="num">${x.failed}</td><td class="num">${fmt.format(x.tokens)}</td><td class="num">${x.sec.toFixed(1)}</td><td class="num">${money(x.cost)}</td></tr>`).join("")}</table></div>` : ""}
-    <h3>Time line</h3><div class="events">${rows.map((r) => `<div><span class="muted mono">${time(r.at)}</span> <span class="pill ${r.cls}">${esc(r.k)}</span> ${esc(r.text)}${r.who ? ` <span class="muted">${esc(r.who)}</span>` : ""}</div>`).join("") || '<span class="muted">Nothing recorded yet.</span>'}</div>`;
+    <h3>Time line</h3><div class="events">${rows.map((r) => `<div><span class="muted mono">${time(r.at)}</span> <span class="pill ${r.cls}">${esc(r.k)}</span> ${esc(r.text)}${r.who ? ` <span class="muted">${esc(r.who)}</span>` : ""}${r.calls?.length ? toolCalls(r.calls) : ""}</div>`).join("") || '<span class="muted">Nothing recorded yet.</span>'}</div>`;
   $("#trace-back").onclick = () => goalDetail(id);
 }
 

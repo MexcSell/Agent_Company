@@ -17,8 +17,8 @@ graph is an edge table and search is SQLite FTS5. Revisit only if retrieval eval
 
 ## Specific requirements
 
-Status (2026-11-05): S11-R-01 done · S11-R-02 done · S11-R-03 partial · S11-R-04 done · S11-R-05 done ·
-S11-R-06 done · S11-R-07 done · S11-R-08 open.
+Status (2026-11-05): S11-R-01 done · S11-R-02 done · S11-R-03 done · S11-R-04 done · S11-R-05 done ·
+S11-R-06 done · S11-R-07 done · S11-R-08 done.
 
 ### S11-R-01 Knowledge items with type, evidence class and provenance — §3.1, §6.1
 - Extend `lessons` (via `_add_missing_columns`) or add `knowledge` with: `type`
@@ -67,10 +67,19 @@ S11-R-06 done · S11-R-07 done · S11-R-08 open.
 - Acceptance: KT-007, KT-009, KT-010, KT-018 — a goal of project B never sees a confidential
   lesson from project A; a newly cloned agent receives lessons of its template's history with
   their source goal IDs.
-- **Status: partial.** Done: scope filter before ranking, ranking by task-term coverage + who learned
-  it + recency, K-number and source goal per item, wrapped as data, retrieval logged; the acceptance
-  tests above pass (`tests/test_knowledge.py`). Open: FTS5, weights as settings, research
-  documents and project standards in the package. The contradiction penalty is done (S11-R-04).
+- **Status: done** (`learning.retrieve`, `learning.task_references`, `tests/test_knowledge.py`). Scope filter before
+  ranking; the candidate pool is the agent's own and its related agents' latest items plus the best 200 matches of
+  an FTS5 index over item text and technologies (`lessons_fts`, external content kept current by triggers, created
+  and filled in `db.engine`). Rank = relevance (mean of bm25 normalised to the best hit and the share of the task's
+  terms the item covers) + technology overlap (the task's skills and the project's stack) + verification (evidence
+  class, reviewed by a person) + who learned it + recency − the contradiction penalty (S11-R-04). The weights are
+  the `retrieval_w_*` settings (S11-R-08 guards them). Each item in the prompt carries its K-number, source goal,
+  outcome, author, a *reviewed* mark, limitations and the contradiction warning, wrapped as data. A task's package
+  adds the project's standards (the first of `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `README.md`, read from
+  the goal's base branch so an agent's edit in the worktree never reaches other prompts; a file that tries to
+  instruct agents is left out) and up to three matching research documents (unflagged; research reports of another
+  project above internal are left out). Similar past tasks, the agents who did them and failed approaches arrive
+  as lessons (negative items for failures). Without SQLite FTS5 the pool falls back to the latest 300 items.
 
 ### S11-R-04 Contradiction handling — §6.3
 - When a new item states the opposite of an approved one on the same subject (same technology +
@@ -133,6 +142,11 @@ S11-R-06 done · S11-R-07 done · S11-R-08 open.
 ### S11-R-08 Retrieval evaluation — §8.3, KT-023
 - A small eval set (`evals/retrieval.json`: task → expected knowledge IDs) and a metric
   (recall@5) so ranking weights are changed only when the metric improves.
+- **Status: done** (`learning.evaluate_retrieval`, `prefs._check_retrieval`). The eval set holds its own 25 items
+  (text, technologies, evidence class, reviewer, author, one contradiction pair) and 10 tasks with expected items;
+  it is ranked in memory with the same FTS5 tokenizer and scoring as `retrieve` and writes nothing. Setting a
+  `retrieval_w_*` weight is refused when recall@5 would drop (adapted from "improves": an equal score is allowed);
+  an accepted change is logged with recall before and after. Default weights: recall@5 = 1.0.
 
 ### Not taken
 - Embedding/vector search: `open` (P2) — add only if S11-R-08 shows keyword+FTS is insufficient.

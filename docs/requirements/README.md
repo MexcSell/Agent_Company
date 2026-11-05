@@ -85,8 +85,11 @@ the order is safety and correctness of that pipeline first, then management, the
    S04-R-11 workflow templates per goal kind, strategy versions and team resizing done 2026-11-05.
    S05-R-05 time estimates per task and goal times on the goal page done 2026-11-05, then S05-R-09 GM handovers
    and shared-agent conflicts and S05-R-08 task stages (adapted: a stage beside the execution status).
-5. **Still open** (2026-11-05), in a sensible order: S11-R-03 and S04-R-12 (partial); S14-R-07 L3 isolation and
-   S14-R-08 per-call tool logs (partial); then the gated rooms one at a time (G-R-04).
+   S11-R-03 task-relevant retrieval (FTS5, weights as settings, project standards and research documents in a
+   task's package) with S11-R-08 retrieval evaluation done 2026-11-05.
+   S04-R-12 with S14-R-08: every tool call of a CLI run in the trace, done 2026-11-05.
+5. **Still open** (2026-11-05), in a sensible order: S14-R-07 L3 isolation; then the gated rooms one at a time
+   (G-R-04).
 
 ![Specification dependency map](images/spec01-spec-dependency-map.png)
 
