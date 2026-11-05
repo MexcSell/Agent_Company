@@ -53,6 +53,9 @@ def record(goal_id: int | None, topic: str, recommendation: str, alternatives: l
                      decided_at=None if human else now(), created_by_agent_id=agent_id)
         s.add(d)
         s.flush()
+        from agent_company import kgraph
+
+        kgraph.on_decision(s, d.id, d.evidence)  # SPEC-11 S11-R-07
         out = _row(d)
         if human:
             log_event("escalation", f"decision #{d.id} '{d.topic}' needs a person (level 5)", goal_id=goal_id,

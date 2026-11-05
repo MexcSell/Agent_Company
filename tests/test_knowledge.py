@@ -184,7 +184,11 @@ def test_a_new_version_supersedes_the_old_and_deletion_removes_edges():
     assert learning.delete(new["id"])["edges"] == 1
     with session() as s:
         from agent_company.db import KgEdge
-        assert s.scalars(select(KgEdge)).first() is None
+        key = str(new["id"])
+        assert not [e for e in s.scalars(select(KgEdge)) if ("knowledge", key) in {(e.src_type, e.src_id),
+                                                                                     (e.dst_type, e.dst_id)}]
+        assert s.scalars(select(KgEdge).where(KgEdge.rel == "CREATED", KgEdge.dst_id == str(old["id"]))).first(), \
+            "the old version keeps its own edges"
     with pytest.raises(KeyError):
         learning.item(new["id"])
 

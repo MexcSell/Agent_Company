@@ -27,7 +27,7 @@ from typing import Any
 
 from sqlalchemy import String, cast, select
 
-from agent_company import registry
+from agent_company import kgraph, registry
 from agent_company.db import Agent, Goal, KgEdge, Lesson, Project, log_event, now, session
 
 XP_SUCCESS, XP_FAILURE, XP_PER_LEVEL = 10, 3, 50
@@ -178,6 +178,7 @@ def retrieve(agent_id: int, goal_id: int | None = None, query: str = "", limit: 
     if goal_id and out:
         log_event("retrieval", f"{len(out)} knowledge item(s) for {names.get(agent_id, agent_id)}", goal_id=goal_id,
                   agent_id=agent_id, ids=[x["id"] for x in out])
+        kgraph.on_retrieval(goal_id, [x["id"] for x in out])
     return out
 
 
@@ -234,8 +235,9 @@ def learn(agent_id: int, goal_id: int | None, lesson: str, success: bool, skills
                       technologies=[x.strip().lower() for x in skills if x.strip()][:10], status=status,
                       status_reason=reason, classification=classification)
         s.add(item)
+        s.flush()
+        kgraph.on_lesson(s, item, success, skills)  # S11-R-07
         if status == "approved" and not is_eval:
-            s.flush()
             _link_contradictions(s, item)
         if status != "approved":
             log_event("security", f"lesson for {a.name} {status}: {reason}", goal_id=goal_id, agent_id=agent_id, s=s,
@@ -321,6 +323,9 @@ def review(item_id: int, approve: bool, reviewer: str, note: str = "") -> dict[s
         if approve and was != "approved" and i.review_due_at and i.review_due_at.replace(tzinfo=None) <= now().replace(
                 tzinfo=None):
             i.review_due_at = None  # reviewed again: back in retrieval
+        if approve:
+            kgraph.on_knowledge(s, i)
+            kgraph.link(s, ("knowledge", i.id), "VERIFIED_BY", ("user", reviewer.removeprefix("user:").lower()))
         agent = i.agent_id
     if was == "approved" and not approve:
         recurate({agent}, f"K{item_id} rejected by {reviewer}")

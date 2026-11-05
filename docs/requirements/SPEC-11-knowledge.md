@@ -18,7 +18,7 @@ graph is an edge table and search is SQLite FTS5. Revisit only if retrieval eval
 ## Specific requirements
 
 Status (2026-11-05): S11-R-01 done · S11-R-02 open · S11-R-03 partial · S11-R-04 done · S11-R-05 done ·
-S11-R-06 done · S11-R-07 partial · S11-R-08 open.
+S11-R-06 done · S11-R-07 done · S11-R-08 open.
 
 ### S11-R-01 Knowledge items with type, evidence class and provenance — §3.1, §6.1
 - Extend `lessons` (via `_add_missing_columns`) or add `knowledge` with: `type`
@@ -104,8 +104,17 @@ S11-R-06 done · S11-R-07 partial · S11-R-08 open.
   `ASSIGNED_TO`; decision → `SUPPORTS` evidence). `relationships` stays the agent-agent store.
 - API `GET /api/knowledge/graph?entity=type:id&depth=2` (paginated, KT-019); a graph view in the
   dashboard is `open` (P2).
-- **Status: partial:** the `kg_edges` table exists with these columns; only `CONTRADICTS` and `SUPERSEDES`
-  between knowledge items are written. The other relations, the side effects and the graph API are open.
+- **Status: done** (`kgraph.py`): side effects in the caller's session: `agent CREATED knowledge`,
+  `knowledge APPLIES_TO technology`, `knowledge DERIVED_FROM goal|task` (once the item is approved, at storage
+  or on review), `knowledge VERIFIED_BY user` (a person approved it), `agent EXPERIENCED_IN skill` (weight =
+  passed tasks, each task once), `goal USED knowledge` (retrieval), `task ASSIGNED_TO agent` (staffing),
+  `x SUPPORTS decision` (evidence entries naming an entity: `K12`, `goal:3`, `{"type": "review", "id": 7}`),
+  plus the existing `CONTRADICTS`/`SUPERSEDES`. `COLLABORATED_WITH` is read from `relationships` (not copied).
+  `GET /api/knowledge/graph?entity=type:id&depth=2&offset=&limit=&rel=` (administrators) walks breadth-first
+  (depth ≤ 3, nearest first) and pages the edges with the nodes they touch (KT-019). The Knowledge view has a
+  graph explorer (from an item, or any `type:id`; click a node to centre on it). `DEPENDS_ON` between
+  entities is not written yet (task dependencies are agent links in SPEC-12); research documents and incidents
+  are not linked yet.
 
 ### S11-R-08 Retrieval evaluation — §8.3, KT-023
 - A small eval set (`evals/retrieval.json`: task → expected knowledge IDs) and a metric

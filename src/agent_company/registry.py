@@ -569,7 +569,10 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
 
             t = s.get(Task, task_id)
             if t is not None:
+                from agent_company import kgraph
+
                 t.contract = {**(t.contract or {}), "staffing": decision}
+                kgraph.link(s, ("task", task_id), "ASSIGNED_TO", ("agent", agent.id))
         s.flush()
         s.expunge(agent)
     log_event("staff", f"{action} {agent.name} as {role}" + (f" ({why})" if why else ""), goal_id=goal_id,

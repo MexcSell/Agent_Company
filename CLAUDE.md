@@ -21,7 +21,8 @@ feature came from.
   inputs in `registry._rank`) + `mentoring.py` (a mentor per learning plan: reviews practice results, never certifies);
   `decisions.py` (decision records; human ones block the merge); `projects.py` (projects, command window
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals, uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress;
-  blockers and generated items are reconciled from goal state by `sync`); `learning.py` (knowledge items: provenance, screening, scoped ranked retrieval;
+  blockers and generated items are reconciled from goal state by `sync`); `kgraph.py` (SPEC-11 knowledge graph: `kg_edges` written as side effects, the paged neighbourhood API);
+  `learning.py` (knowledge items: provenance, screening, scoped ranked retrieval;
   contradictions and versions as `kg_edges`, resolved by people)
   + `evolution.py` (playbook candidates are experiments); `experiments.py` (SPEC-13: baseline vs candidate on one eval
   suite, review by the E0-E6 policy, canary, rollback; routes only applied by an administrator); `training.py`
@@ -43,7 +44,7 @@ feature came from.
   TaskCompleted, TeammateIdle → `data/logs/team-hooks.jsonl`, fail-open);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
   (Workspace Claude Code panel: a tab per conversation (new ones on the far left), titled by Haiku; other live host sessions only in the sessions window (a tab while one is opened), session history with resume/stop/delete); `api.py`; `static/` (dashboard, plain JS, one file per area; `agents.js` (org chart, Tools & MCP, Skills & plugins, agent card),
-  `models.js`; `knowledge.js` (Knowledge: items, review queue, contradictions); `security.js` (Security: stops, incidents,
+  `models.js`; `knowledge.js` (Knowledge: items, review queue, contradictions, graph explorer); `security.js` (Security: stops, incidents,
   refused commands, alerts); rail order shared by all users via `/api/ui/nav_layout` (Settings → Navigation); buttons with a known
   label become icons (`iconize` in app.js); `index.html` is served with content-hashed static URLs;
   `workspace.js` + `viewer.js` + `console.js` + `claude.js` are the Workspace home page, sharing

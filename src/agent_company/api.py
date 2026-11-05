@@ -30,6 +30,7 @@ from agent_company import (
     files,
     gitsync,
     governance,
+    kgraph,
     learning,
     loop,
     machines,
@@ -1539,6 +1540,12 @@ def create_app(start_background: bool = True) -> FastAPI:
         out = learning.resolve(edge_id, body.resolution, f"user:{admin['name']}", body.rationale)
         _audit(admin, "knowledge_resolve", f"contradiction {edge_id}", after={"resolution": body.resolution})
         return out
+
+    @app.get("/api/knowledge/graph")
+    def knowledge_graph(entity: str, depth: int = 2, offset: int = 0, limit: int = 100, rel: str = "",
+                        _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        """Edges within `depth` steps of `type:id`, paged (SPEC-11 S11-R-07, KT-019)."""
+        return kgraph.neighbourhood(entity, depth, max(0, offset), max(1, min(limit, 500)), rel)
 
     @app.get("/api/knowledge/{item_id}")
     def knowledge_item(item_id: int, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:

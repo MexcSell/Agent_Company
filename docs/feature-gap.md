@@ -102,7 +102,7 @@ Machines code):
 | Quality gates as named stages; an open critical defect blocks the merge | ASEAO09 §13 | done (`quality.stages`, S09-R-01) |
 | Test-strategy selection by test category and risk | ASEAO09 §6-7 | open → S09-R-02 |
 | Innovation experiments, portfolio and technology radar | ASEAO10 §10-14, §21 | open → S10-R-02, S10-G-01..G-06 |
-| Knowledge graph of agents, projects, technologies and lessons | SPEC11 §7, 1.txt (Neo4j) | partial (`kg_edges` table; only contradiction and supersede edges so far) → S11-R-07 |
+| Knowledge graph of agents, projects, technologies and lessons | SPEC11 §7, 1.txt (Neo4j) | done (`kgraph.py`: edges as side effects, paged graph API, Knowledge → graph explorer; S11-R-07) |
 | Knowledge items with provenance; task-relevant, project-scoped retrieval | SPEC11 §3, §8 | done / partial (`learning.retrieve` with the contradiction penalty; FTS5 open) → S11-R-01, S11-R-03 |
 | Contradiction handling between stored lessons | SPEC11 §6.3 | done (`CONTRADICTS` edges, people resolve with a rationale, S11-R-04) |
 | Knowledge versions (supersede) and deletion with their links | SPEC11 §10.3 | done (`learning.supersede`, `delete`, S11-R-06) |
