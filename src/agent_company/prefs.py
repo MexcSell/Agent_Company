@@ -42,6 +42,7 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "improvement_min_score": (float, "Percent a code-improvement candidate's weighted benchmark score must beat the baseline by"),
     "improvement_max_regression": (int, "Percent any single benchmark metric of a candidate may get worse before it is rejected"),
     "improvement_auto_rollback": (bool, "Revert a deployed code improvement automatically when the safe restart refuses it"),
+    "a2a_enabled": (bool, "Publish the A2A agent card and take tasks from A2A clients issued on Security -> A2A clients"),
     "shift_seconds": (int, "Length of a research shift on the rotation in seconds (0 = every rotation turn is a shift)"),
 }
 LIMITS: dict[str, tuple[float, float]] = {

@@ -122,7 +122,7 @@ Machines code):
 | Autonomy levels and action classification | SPEC14 §13 | partial (agents cannot approve authority-raising proposals; autonomy levels open) → S14-R-02 |
 | Information classification and data-handling rules | SPEC14 §5 | partial (projects and lessons; uploads, documents, model rule open) → S14-R-05 |
 | MCP tool servers for agents | 1.txt, CDAF guide §11 | done (`mcp.py`, Tools & MCP, G-R-05) |
-| A2A protocol for agent-to-agent messages | 1.txt | open → G-R-06 |
+| A2A protocol for agent-to-agent messages | 1.txt | done (`a2a.py`: A2A 1.0 agent card, JSON-RPC tasks as goals for issued clients, G-R-06) |
 
 ## From docs/advanced_self_improving_agent_guide.pdf (verified self-evolution)
 

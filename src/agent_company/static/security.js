@@ -20,6 +20,8 @@ async function viewSecurity() {
         <div class="table-wrap"><table><tr><th>Agent</th><th class="num">Refused</th><th class="num">Goals</th><th>Last</th></tr>${sec.refused.map((r) => `<tr><td>${r.agent_id ? `<a href="#" data-sagent="${r.agent_id}">${esc(r.agent)}</a>` : esc(r.agent)}</td><td class="num">${r.count}</td><td class="num">${r.goals}</td><td>${ago(r.last_at)}</td></tr>`).join("") || '<tr><td colspan="4" class="muted">No command was refused.</td></tr>'}</table></div>
         ${sec.recent_refusals.length ? `<h3>Latest</h3><div class="events">${sec.recent_refusals.map((e) => `<div><span class="k">${esc(e.agent || "?")}</span>${esc(e.message)} ${e.goal_id ? `<a href="#" data-sgoal="${e.goal_id}">#${e.goal_id}</a>` : ""} <span class="muted">${ago(e.at)}</span></div>`).join("")}</div>` : ""}</div>
       <div class="card"><h2>Security alerts</h2><p class="muted">Raised by the behaviour rules and incidents; also in Notifications.</p><div class="events">${sec.alerts.map((n) => `<div><span class="pill ${n.level === "error" ? "failed" : "pending"}">${esc(n.level)}</span> <strong>${esc(n.title)}</strong>${n.goal_id ? ` <a href="#" data-sgoal="${n.goal_id}">#${n.goal_id}</a>` : ""} <span class="muted">${ago(n.at)}</span>${n.body ? `<div class="muted">${esc(n.body)}</div>` : ""}</div>`).join("") || '<span class="muted">No alerts.</span>'}</div></div></div>`;
+  $("#view").insertAdjacentHTML("beforeend", '<div class="card" style="margin-top:12px" id="a2a-card"></div>');
+  a2aClients();
   const v = $("#view");
   const send = async (id, body) => { try { await api(`/api/incidents/${id}`, { method: "POST", body }); viewSecurity(); } catch (e) { toast(e.message); } };
   v.querySelectorAll("[data-sgoal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); goalModal(Number(a.dataset.sgoal)); }));
@@ -41,6 +43,37 @@ async function viewSecurity() {
     const severity = prompt(`Severity (${sec.severities.join(", ")}; SEV-1 is the worst)`, "SEV-3") || "SEV-3";
     const goal = prompt("Goal id it concerns (optional)") || "";
     try { await api("/api/incidents", { method: "POST", body: { title, category, severity, goal_id: goal ? Number(goal) : null } }); viewSecurity(); } catch (e) { toast(e.message); }
+  };
+}
+
+// A2A clients (G-R-06): outside callers that may give the company tasks; each gets a bearer token shown once.
+async function a2aClients() {
+  const box = $("#a2a-card");
+  if (!box) return;
+  const [d, projs] = await Promise.all([api("/api/a2a/clients"), api("/api/projects")]);
+  box.innerHTML = `<div class="row"><h2 class="grow" style="margin:0">A2A clients</h2><span class="muted">${d.enabled ? "A2A is on: the agent card is at /.well-known/agent-card.json" : "A2A is off (Settings → a2a_enabled)"}</span></div>
+    <p class="muted" style="margin:4px 0 8px">Outside agents send tasks over A2A with a client's token; each task becomes a goal of the client's project, created on your behalf, and its result always waits for approval. A client only sees its own tasks and no result above its clearance.${d.gate.met ? "" : " The pipeline is not measured reliable yet: issuing a client is an audited override."}</p>
+    ${d.clients.length ? `<div class="table-wrap"><table><tr><th>Name</th><th>Project</th><th>Clearance</th><th>Issued</th><th>Last used</th><th></th></tr>${d.clients.map((c) => `<tr><td>${esc(c.name)}</td><td>${esc(c.project || "none (a new workspace per task)")}</td><td>${esc(c.clearance)}</td><td>${ago(c.created_at)}</td><td>${c.last_used_at ? ago(c.last_used_at) : "never"}</td><td>${c.revoked ? pill("revoked") : `<button class="btn sm" data-a2a-revoke="${c.id}">Revoke</button>`}</td></tr>`).join("")}</table></div>` : ""}
+    <form id="a2a-new" class="row" style="margin-top:8px;flex-wrap:wrap"><input id="a2a-name" required minlength="3" maxlength="64" placeholder="client name" style="max-width:200px">
+      <select id="a2a-proj" style="width:auto"><option value="">no project</option>${projs.map((p) => `<option value="${p.id}">${esc(p.name)} (${esc(p.classification || "internal")})</option>`).join("")}</select>
+      <select id="a2a-clr" style="width:auto" title="Highest classification its answers may carry">${["public", "internal", "confidential", "restricted", "secret"].map((x) => `<option ${x === "internal" ? "selected" : ""}>${x}</option>`).join("")}</select>
+      <button class="btn">Issue token</button></form><div id="a2a-token"></div>`;
+  box.querySelectorAll("[data-a2a-revoke]").forEach((b) => (b.onclick = async () => {
+    if (!confirm("Revoke this client? Its token stops working at once.")) return;
+    try { await api(`/api/a2a/clients/${b.dataset.a2aRevoke}`, { method: "DELETE" }); a2aClients(); } catch (e) { toast(e.message); }
+  }));
+  $("#a2a-new").onsubmit = async (e) => {
+    e.preventDefault();
+    const body = { name: $("#a2a-name").value.trim(), project_id: $("#a2a-proj").value ? Number($("#a2a-proj").value) : null, clearance: $("#a2a-clr").value };
+    if (!d.gate.met) {
+      if (!confirm(`The pipeline is not measured reliable yet:\n${d.gate.reasons.join("\n")}\n\nIssue the client anyway (audited, high severity)?`)) return;
+      body.override_gate = true;
+    }
+    try {
+      const r = await api("/api/a2a/clients", { method: "POST", body });
+      await a2aClients();
+      $("#a2a-token").innerHTML = `<p>Token for ${esc(r.name)} (shown once; send it as <code>Authorization: Bearer …</code>):</p><pre>${esc(r.token)}</pre>`;
+    } catch (err) { toast(err.message); }
   };
 }
 

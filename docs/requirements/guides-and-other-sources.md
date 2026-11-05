@@ -79,9 +79,32 @@ defect is open; retry rate and cost per accepted goal are reported. An administr
   `--mcp-config … --strict-mcp-config` with only its granted, tested servers and their allowed tools
   added to `--allowedTools`; the GM's toolbox only lists servers.
 
-### G-R-06 A2A interoperability — `1.txt`, `.rtf` §15 infrastructure, AWS guide — P2 `open`
+### G-R-06 A2A interoperability — `1.txt`, `.rtf` §15 infrastructure, AWS guide — P2
 - Publish an A2A agent card describing the company's skills and accept A2A tasks as goals for
   authenticated callers only. Not before G-R-04 is met.
+- **Status: done** (`a2a.py`, tables `a2a_clients`, `a2a_tasks`; `tests/test_a2a.py`), against A2A 1.0
+  (a2a-protocol.org, JSON-RPC binding). Off by default (`a2a_enabled`); while off, the card and the endpoint answer
+  404. `GET /.well-known/agent-card.json` lists the enabled roles as skills, one JSONRPC interface
+  (`/api/a2a`, protocol 1.0), a bearer security scheme, no streaming, push notifications or extended card.
+  "Not before G-R-04 is met" is read as the measured condition: issuing a client (`POST /api/a2a/clients`,
+  admin) answers 409 with the gate's reasons unless `performance.enablement_gate()` is met or the administrator
+  overrides (audited, high severity). Only the token's SHA-256 is stored; revoking is immediate. Calls need the
+  `A2A-Version: 1.0` header (else -32009) and a valid token (else HTTP 401 with `WWW-Authenticate: Bearer` and
+  JSON-RPC code -32040, a code chosen here: the specification leaves it open). `SendMessage` (text parts only, else
+  -32005) creates a goal of the client's project on behalf of the issuing administrator with `origin="a2a"`,
+  `extract_checks=False` and no repository, quality commands or permits from the caller; it is audited
+  (`a2a_task`) and refused during an E5 stop or an E3 stop of its project. An A2A goal always waits for a person's
+  approval, whatever `require_approval` says (`loop`: held like improvement goals). States: queued → SUBMITTED;
+  planning, running, recovering, paused, awaiting approval → WORKING (paused and awaiting approval explain
+  themselves in `status.message`); approved → COMPLETED with the goal's result as an artifact; failed → FAILED;
+  rejected → REJECTED; cancelled → CANCELED. `GetTask` (with `historyLength`), `ListTasks` (newest first, pages
+  with `pageToken`, filters `contextId` and `status`) and `CancelTask` (idempotent; a finished task is -32002)
+  see only the caller's tasks; another client's task is -32001. A client cannot be issued for a project
+  classified above its clearance, and a result whose goal is later classified above it is withheld. Push
+  methods answer -32003, streaming and the extended card -32004.
+  **Deviations:** `SendMessage` answers at once with the submitted task (as if `returnImmediately` were true):
+  goals take minutes to hours. A message to an existing task is refused (-32004, "send a new message"): there is
+  no input channel into a running goal. Security → A2A clients issues and revokes clients.
 
 ### G-R-07 Topics run in order — AgentForge website spec (orchestration)
 - Goals in the same project topic (ASEAO05 S05-R-07) run in sequence; different topics run

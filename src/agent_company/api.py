@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from collections import defaultdict, deque
@@ -18,6 +19,7 @@ from sqlalchemy import func, select
 from starlette.background import BackgroundTask
 
 from agent_company import (
+    a2a,
     agentdefs,
     auth,
     blackboard,
@@ -184,6 +186,13 @@ class SourceBody(CrawlBody):
     interval: str = ""  # hourly|daily|weekly|monthly|manual; "" = the rotation interval (S06-R-02)
     subject: str = Field(default="", max_length=500)
     notify_room: str = ""
+
+
+class A2AClientBody(BaseModel):
+    name: str = Field(min_length=3, max_length=64)
+    project_id: int | None = None
+    clearance: str = "internal"
+    override_gate: bool = False
 
 
 class ShiftReplaceBody(BaseModel):
@@ -563,7 +572,7 @@ def create_app(start_background: bool = True) -> FastAPI:
         """Requests on the other scheme get a hand-off page (pages) or 421 (API), never data."""
         if _wrong_scheme(request) and request.url.path not in transport.EXEMPT:
             target = settings().transport
-            if request.url.path.startswith("/api/"):
+            if request.url.path.startswith(("/api/", "/.well-known/")):
                 return JSONResponse({"code": "wrong_scheme", "detail": f"This server uses {target.upper()} now.",
                                      "scheme": target}, status_code=421)
             return HTMLResponse(transport.handoff_page(target), headers={"Cache-Control": "no-store"})
@@ -783,6 +792,59 @@ def create_app(start_background: bool = True) -> FastAPI:
                         ) -> dict[str, Any]:
         out = registry.set_lifecycle(agent_id, body.state, admin["name"])
         _audit(admin, "agent_lifecycle", out["name"], after={"state": body.state})
+        return out
+
+    # --- A2A (G-R-06): the agent card and JSON-RPC for issued clients ---
+    def _base_url(request: Request) -> str:
+        proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+        return f"{proto}://{request.headers.get('host') or request.url.netloc}"
+
+    @app.get("/.well-known/agent-card.json")
+    def a2a_card(request: Request) -> JSONResponse:
+        if not settings().a2a_enabled:
+            raise HTTPException(404, "A2A is off")
+        return JSONResponse(a2a.card(_base_url(request)), headers={"Cache-Control": "public, max-age=300"})
+
+    @app.post("/api/a2a")
+    async def a2a_rpc(request: Request) -> JSONResponse:
+        if not settings().a2a_enabled:
+            raise HTTPException(404, "A2A is off")
+        try:
+            body = await request.json()
+        except ValueError:
+            return JSONResponse(a2a.RpcError(a2a.PARSE, "the body is not JSON").body(None))
+        version = request.headers.get("a2a-version") or request.query_params.get("A2A-Version")
+        out, goal, status = await asyncio.to_thread(a2a.handle, body, request.headers.get("authorization"), version)
+        if goal is not None:
+            q = request.app.state.queue
+            if q is not None:
+                q.submit(goal)
+            else:
+                threading.Thread(target=_run_quietly, args=(goal,), daemon=True).start()
+        headers = {"WWW-Authenticate": 'Bearer realm="a2a"'} if status == 401 else None
+        return JSONResponse(out, status_code=status, headers=headers)
+
+    @app.get("/api/a2a/clients")
+    def a2a_clients(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return {"clients": a2a.list_clients(), "enabled": settings().a2a_enabled,
+                "gate": performance.enablement_gate()}
+
+    @app.post("/api/a2a/clients")
+    def a2a_client_create(body: A2AClientBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        """Issue a client token; opening the company to outside callers needs the measured gate (G-R-04)."""
+        gate = performance.enablement_gate()
+        if not gate["met"] and not body.override_gate:
+            raise HTTPException(409, "the pipeline is not measured reliable yet: " + "; ".join(gate["reasons"])
+                                + ". An administrator can override (override_gate).")
+        out, token = a2a.create_client(body.name, body.project_id, admin["id"], body.clearance)
+        _audit(admin, "a2a_client_create", out["name"], after={"project_id": out["project_id"],
+               "clearance": out["clearance"], "gate_met": gate["met"]}, severity="info" if gate["met"] else "high")
+        return out | {"token": token}
+
+    @app.delete("/api/a2a/clients/{client_id}")
+    def a2a_client_revoke(client_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = a2a.revoke(client_id)
+        _audit(admin, "a2a_client_revoke", out["name"])
         return out
 
     @app.get("/api/network/graph")

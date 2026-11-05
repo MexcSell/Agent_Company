@@ -79,6 +79,8 @@ class Settings:
     improvement_auto_rollback: bool = True
     # Length of a research shift on the rotation (SPEC-12 S12-R-05); 0 = every rotation turn is a shift of its own.
     shift_seconds: int = 0
+    # Outside callers may give the company tasks over A2A (G-R-06): the agent card is published and /api/a2a answers.
+    a2a_enabled: bool = False
 
     @property
     def worktrees_dir(self) -> Path:
@@ -134,6 +136,7 @@ def load_settings() -> Settings:
         improvement_max_regression=_int("IMPROVEMENT_MAX_REGRESSION", 25),
         improvement_auto_rollback=_bool("IMPROVEMENT_AUTO_ROLLBACK", True),
         shift_seconds=_int("SHIFT_SECONDS", 0),
+        a2a_enabled=_bool("A2A_ENABLED", False),
     )
 
 

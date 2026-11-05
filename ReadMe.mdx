@@ -501,6 +501,28 @@ they order are committed and merged under that identity and pushed to that branc
   first, worst first; containment and status steps), refused commands per agent and
   the latest ones, and security alerts. Every user sees an active stop level (for
   example `E1 stop`) in the top bar, without its scope.
+- **A2A** (admins, off by default): other companies' agents can give this company
+  work over the [A2A protocol](https://a2a-protocol.org/latest/) (version 1.0).
+  Turn on `a2a_enabled` in Settings and issue a client on Security → A2A clients
+  (a name, the project its tasks go to, the highest classification its answers may
+  carry). Issuing one needs the measured enablement gate, or an audited override.
+  The token is shown once. The agent card is public at
+  `/.well-known/agent-card.json`; calls go to `/api/a2a` as JSON-RPC 2.0:
+
+  ```bash
+  curl -s https://company:4900/api/a2a --cacert ca.crt -H 'A2A-Version: 1.0' \
+    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"SendMessage","params":{"message":
+         {"messageId":"m1","role":"ROLE_USER","parts":[{"text":"Add a /health endpoint"}]}}}'
+  ```
+
+  A message becomes a goal of the client's project, created on behalf of the
+  administrator who issued the client; text never becomes quality commands, and the
+  result always waits for a person's approval. `SendMessage` answers at once with
+  the submitted task (goals take minutes to hours); poll it with `GetTask`, list
+  tasks with `ListTasks`, stop one with `CancelTask`. A client sees only its own
+  tasks and no result classified above its clearance. Streaming and push
+  notifications are not offered.
 - **Knowledge** (admins): what agents learned, with the goal, task and commit each
   lesson came from. Search, approve or reject, write a new version, or delete an
   item. Lessons that contradict each other appear side by side; you decide which

@@ -719,6 +719,34 @@ class ResearchShift(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class A2AClient(Base):
+    """An outside caller allowed to give the company tasks over A2A (G-R-06). Only the token's SHA-256 is kept.
+    Its tasks become goals of `project_id`, created on behalf of the administrator who issued it."""
+
+    __tablename__ = "a2a_clients"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    clearance: Mapped[str] = mapped_column(String(16), default="internal")  # the highest level its answers may carry
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class A2ATask(Base):
+    """An A2A task and the goal it became; only the client that sent it can read or cancel it."""
+
+    __tablename__ = "a2a_tasks"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("a2a_clients.id"), index=True)
+    goal_id: Mapped[int] = mapped_column(Integer, index=True)
+    context_id: Mapped[str] = mapped_column(String(128), index=True)
+    history: Mapped[list[Any]] = mapped_column(default=list)  # the caller's messages
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)

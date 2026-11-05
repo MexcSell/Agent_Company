@@ -36,6 +36,8 @@ feature came from.
   `containers.py` (Docker and LXD VMs on the host: install, start, clean up; admin-only);
   `machines.py` (Machines view, from AXoR in /home/thomas/axor-3.0.zip: Linux/Windows KVM VMs as Docker
   containers with a noVNC console relayed over a WebSocket; admin-only; cleanup never prunes them);
+  `a2a.py` (G-R-06: the A2A 1.0 agent card and JSON-RPC `SendMessage`/`GetTask`/`ListTasks`/`CancelTask` for
+  issued bearer clients (`a2a_clients`, `a2a_tasks`); tasks become `origin="a2a"` goals that always wait for approval);
   `mcp.py` (Tools & MCP catalog, from AXoR's mcp_hub: stdio/HTTP servers, encrypted secrets, tool allow-list,
   per-agent grants, call log; bundled servers in `mcp_servers/`); `catalog.py` (skills, plugins, rules, commands,
   hooks; exports a project's `.claude/`); `agentdefs.py` (each agent's versioned definition file in `data/agents/`,

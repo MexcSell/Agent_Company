@@ -1060,8 +1060,9 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                     _update_goal(goal_id, status="approved", result=_summary(goal_id, iteration, report))
                     return {"status": "approved", "iterations": iteration, "report": report}
                 waiting = decisions.blocking(goal_id)
-                # an improvement candidate reaches main only through approve(): verified first (selfevolve)
-                held = waiting or goal.origin == "improvement"
+                # an improvement candidate reaches main only through approve(): verified first (selfevolve); work
+                # ordered by an outside A2A caller always waits for a person, whatever require_approval says
+                held = waiting or goal.origin in ("improvement", "a2a")
                 status = "awaiting_approval" if report["needs_approval"] or held else "approved"
                 note = ""
                 if status == "approved":  # merge before the final state: a refused merge leaves it for a person
