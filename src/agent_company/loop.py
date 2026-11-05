@@ -1575,6 +1575,14 @@ def approve(goal_id: int, actor: str = "system") -> dict[str, Any]:
     g = _goal(goal_id)
     if g.status != "awaiting_approval":
         raise ValueError(f"goal is {g.status}, not awaiting approval")
+    if g.project_id is not None:  # S05-R-06: a cancelled or archived project takes no more merges
+        from agent_company.db import Project
+
+        with session() as s:
+            p = s.get(Project, g.project_id)
+            if p is not None and p.status in {"cancelled", "archived"}:
+                raise ValueError(f"project '{p.name}' is {p.status}"
+                                 + ("; restore it first" if p.status == "archived" else ""))
     waiting = decisions.blocking(goal_id)
     if waiting:  # S04-R-02: checked at merge time, so a revoked approval blocks too
         raise ValueError("decision(s) waiting for a person: " + ", ".join(f"#{d['id']} {d['topic']}" for d in waiting))

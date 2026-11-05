@@ -80,6 +80,12 @@ def test_cancel_is_final_and_archive_or_complete_need_no_open_goals():
     assert out["goals_changed"] == [g2] and status(g2) == "cancelled"
     with pytest.raises(ValueError, match="final"):
         projects.set_status(p["id"], "active", "admin")
+    q = projects.create("Waiting")
+    done = loop.create_goal("Finished work", project_id=q["id"], max_iterations=1)
+    assert loop.run_goal(done)["status"] == "awaiting_approval"
+    projects.set_status(q["id"], "cancelled", "admin")
+    with pytest.raises(ValueError, match="cancelled"):
+        loop.approve(done)
     platform = next(x for x in projects.list_projects(ADMIN) if x["protected"])
     with pytest.raises(ValueError, match="platform"):
         projects.set_status(platform["id"], "paused", "admin")

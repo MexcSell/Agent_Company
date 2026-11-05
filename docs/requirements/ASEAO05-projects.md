@@ -108,7 +108,9 @@ S05-R-06 done · S05-R-07 done · S05-R-08, R-09 open · S05-R-10 done (SPEC-04)
   participating rooms; a plan naming a role of another room goes back once and otherwise fails the goal, as does a
   standard plan outside them (`loop._in_rooms`; a role nobody has yet passes and is recruited as usual). The goal
   queue is a priority queue: critical, high, normal (also goals without a project), low, then first come first
-  served (`loop.PRIORITY_RANK`). The deadline is shown and marked overdue in `/status` and the header; it does not
+  served (`loop.PRIORITY_RANK`; no aging: a steady stream of critical or high goals keeps low ones waiting). A goal
+  of a cancelled or archived project waiting for approval cannot be merged (`loop.approve`); completed projects
+  still merge pending work. The deadline is shown and marked overdue in `/status` and the header; it does not
   stop work.
 
 ### S05-R-07 Topics (conversation lanes) — §12 (AT-021..023), AgentForge website spec
