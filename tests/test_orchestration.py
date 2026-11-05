@@ -41,7 +41,8 @@ def test_an_out_of_scope_change_fails_the_task_as_a_scope_violation(monkeypatch)
 
 def test_a_high_risk_task_gets_a_security_review_by_qa_while_security_is_disabled(monkeypatch):
     plan = executors.standard_plan("x")["tasks"]
-    plan[1]["risk_level"] = "high"
+    plan[1]["risk_level"] = "high"  # a high-risk goal needs an integration check too (S09-R-02)
+    plan[1]["acceptance"].append({"type": "command", "run": "test -f WORKLOG.md", "stage": "integration"})
     with_plan(monkeypatch, plan)
     gid = loop.create_goal("Risky", quality_commands=["test -f WORKLOG.md"])
     assert loop.run_goal(gid)["status"] == "awaiting_approval"

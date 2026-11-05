@@ -33,6 +33,22 @@ scope checks (`quality.py`, `checks.py`); defects opened/closed/reopened automat
   S14-R-05), changed areas, and previous defects in those files: which stages are mandatory and
   which reviewers (security reviewer when auth/crypto/permissions files change).
 - Stored in the goal; high-risk goals require `integration` and `security` stages.
+- **Status: done** (`teststrategy.py`: `derive`, `escalate`, `planner_note`, `Goal.test_strategy`;
+  `quality.evaluate`; `tests/test_teststrategy.py`). Inputs: the goal's classification (with its project's, S14-R-05:
+  confidential → medium, restricted/secret → high on their own), the changed areas (allowed paths, each task's
+  `in_scope`, the files changed so far), a sensitive-path pattern (auth, login, session, token, password, secret,
+  crypto, permission/ACL/RBAC, OAuth/JWT/SSO, credentials, `.env`, keys → high), tasks the planner marked
+  `risk_level: high` (→ high), and files earlier goals on the same repository changed in an iteration the gate failed
+  (`Goal.history[].changed_files`, recorded from now on → medium, named to the planner). The planner sees a
+  preliminary strategy; the one with the plan is stored per iteration and shown on the goal page. Writing tasks
+  touching a sensitive area become `risk_level: high`, so the existing security review follows them (the reviewer
+  is QA until the Security Room is enabled, G-R-04). High risk makes `integration` and `security` mandatory: the gate
+  adds a `stage <name>` row per mandatory stage that fails when no check of that stage ran (a defect of severity
+  high). The planner satisfies `integration` with a command acceptance condition carrying `"stage": "integration"`
+  (`contracts.Condition.stage`: unit|integration|security|static); the gate runs it again itself on the tested
+  commit as a `command` row of that stage (S09-R-04), for done and failed tasks. The `security` stage is the secret
+  scan until a dependency audit exists (S08-R-05), so it is met whenever the goal has a base branch. Templates that
+  change no files (`strategies.skips_checks`) have no mandatory stages.
 
 ### S09-R-03 Defect fields and lifecycle — §11 (AT-014, AT-015)
 - Separate `severity` (`critical|high|medium|low|info`, exists via `severity_of`) and

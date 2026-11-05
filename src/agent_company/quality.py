@@ -23,7 +23,7 @@ from typing import Any
 from sqlalchemy import select
 
 from agent_company import checks as checks_mod
-from agent_company import contracts, sandbox, strategies, worktrees
+from agent_company import contracts, sandbox, strategies, teststrategy, worktrees
 from agent_company.config import settings
 from agent_company.db import Goal, Task, session
 
@@ -207,6 +207,14 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
         ordered_by = goal.created_by
         mode = sandbox.mode_for(goal, s=s)
         rows = [(t.key, t.title, t.role, t.status, t.output, dict(t.gate or {})) for t in tasks]
+        # S09-R-02: command conditions naming a gate stage are run again by the gate below, after the commit
+        own = {(split_tag(c)[0], split_tag(c)[2]) for c in commands}  # the same command in the same stage runs once
+        staged = {} if strategies.skips_checks(goal) else {
+            (c["stage"], c["run"]): list(c.get("requirement_keys") or [])
+            for t in tasks if t.status in ("done", "failed") for c in (t.contract or {}).get("acceptance", [])
+            if c.get("type") == "command" and c.get("stage") and c.get("run") and (c["stage"], c["run"]) not in own}
+        required = [] if strategies.skips_checks(goal) else teststrategy.mandatory(goal)
+        risk = (goal.test_strategy or {}).get("risk", "")
         from agent_company.recruitment import on_probation
 
         # SPEC-03 S03-R-04: a probationer's change needs a passing review by an agent not on probation
@@ -277,6 +285,28 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
             feedback.append(("Command failed (it already failed on the untouched code, so the goal may be to "
                              "fix it): " if preexisting else "Command failed: ") + detail[-1500:])
 
+    for (stage, run), keys in staged.items():
+        info = {}
+        ok, detail = contracts.run_command(run, worktree, settings().command_timeout, mode=mode, info=info)
+        name = f"command {run}" + (f" [{stage}]" if any(r == run for _, r in own) else "")  # one defect each
+        results.append({"check": name, "passed": ok, "detail": detail[-1500:], "stage": stage,
+                        "baseline_passed": False, "isolation": info.get("isolation", ""), "command": run,
+                        "commit": tested, "exit_code": info.get("exit_code"), "timed_out": bool(info.get("timed_out")),
+                        "duration_s": info.get("duration_s", 0.0), "output_tail": info.get("output_tail", ""),
+                        "requirement_keys": keys, "from_task": True})
+        if not ok:
+            feedback.append(f"{stage.capitalize()} check failed: " + detail[-1500:])
+    for stage in required:  # S09-R-02: a mandatory stage of the goal's test strategy must have run checks
+        ran = [c for c in results if c.get("stage") == stage]
+        results.append({"check": f"stage {stage}", "passed": bool(ran), "stage": stage,
+                        "detail": f"{len(ran)} check(s) ran" if ran else
+                                  f"mandatory for this {risk}-risk goal (test strategy): no check of this stage ran"})
+        if not ran:
+            feedback.append(f"The goal's test strategy makes the {stage} stage mandatory and no {stage} check ran. "
+                            + ('Give a task an acceptance condition {"type": "command", "run": "<test command>", '
+                               f'"stage": "{stage}"}} that tests the changed parts together.'
+                               if stage != "security" else "The security stage holds the secret scan of the "
+                               "change; it runs once the goal has a base branch."))
     passed = all(c["passed"] for c in results) and bool(rows)
     score = round(sum(c["passed"] for c in results) / len(results), 3) if results else 0.0
     return {

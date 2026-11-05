@@ -24,7 +24,7 @@ from sqlalchemy import select
 
 from agent_company import (adr, blackboard, budgets, contracts, decisions, executors, learning, network, quality,
                            rca, recruitment, registry, requirements, research, router, sandbox, specs, strategies,
-                           teams, usage, workflow, worktrees)
+                           teams, teststrategy, usage, workflow, worktrees)
 from agent_company.config import settings
 from agent_company.db import Agent, Event, Goal, Task, log_event, session
 from agent_company.org import ROLES
@@ -479,7 +479,8 @@ PLAN_INSTRUCTIONS = """Split the goal into task contracts. Answer with JSON only
 Optional task fields: "in_scope"/"out_of_scope" (path globs; changing an out_of_scope path fails the task),
 "risk_level": "low|medium|high" (high adds a security review), "test_plan": "...",
 "budget": {"cost_usd": 0.5, "turns": 30}, "deadline": seconds, "requirement_keys": ["..."] (a "command"
-acceptance condition may also carry "requirement_keys": the requirements that test checks),
+acceptance condition may also carry "requirement_keys": the requirements that test checks, and "stage":
+"unit|integration|security|static": the quality gate then runs it again as a check of that stage),
 "decision_topic": "..." (tasks that must each recommend on one question; disagreements are reviewed),
 "weight": 1 (its share of the goal's progress), "estimated_minutes": 20 (how long you expect the task to take).
 Optionally add "estimated_cost_usd" (the whole goal's expected model cost) and "decisions": [{"topic": "...", "question": "...", "alternatives": ["..."],
@@ -514,6 +515,7 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                      if feedback else "")
                   + (f"\nResearch notes:\n{notes}\n" if notes else "")
                   + strategies.planner_note(goal) + teams.planner_note(goal.id)
+                  + teststrategy.planner_note(teststrategy.derive(goal.id, None, iteration))  # S09-R-02
                   + f"\nAvailable roles:\n{role_lines}\n\n"
                   + blackboard.inbox(goal.id, "general_manager", gm.id)
                   + (learning.experience_context(gm.id, goal_id=goal.id, query=f"{goal.title} {goal.description}")
@@ -540,7 +542,7 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                                          + "; ".join(bad))
                     plan = strategies.with_review(tmpl, plan)
                 _in_rooms(plan, rooms)
-                plan = _with_security_reviews(plan)
+                plan = _risk_based(goal, iteration, plan)
                 break
             except (ValueError, KeyError, TypeError) as e:
                 if attempt == 0 and res.ok:
@@ -557,6 +559,7 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                     _in_rooms(plan, rooms)
                 except ValueError as e:  # nothing to fall back to inside the project's rooms
                     raise RuntimeError(f"no valid plan within the project's rooms: {e}") from e
+                plan = _risk_based(goal, iteration, plan)
                 if tmpl is None:
                     strategies.choose(goal.id, strategies.infer(goal.title, plan), "inferred")
                 _board_plan(goal, iteration, plan, "standard plan", gm.id)
@@ -645,6 +648,14 @@ def _cleared_for(goal_id: int, plan: list[contracts.TaskContract]) -> None:
             router.resolve_chain(role, pref, classification=level)
         except router.NotCleared as e:
             raise RuntimeError(f"{role}: {e}") from e
+
+
+def _risk_based(goal: Goal, iteration: int, plan: list[contracts.TaskContract]) -> list[contracts.TaskContract]:
+    """S09-R-02: writing tasks in sensitive areas become high-risk (and get a security review); the goal's test
+    strategy for this iteration is stored, with the stages the gate must see."""
+    plan = teststrategy.escalate(goal.id, plan, iteration)
+    teststrategy.store(goal.id, teststrategy.derive(goal.id, plan, iteration))
+    return _with_security_reviews(plan)
 
 
 def _with_security_reviews(plan: list[contracts.TaskContract]) -> list[contracts.TaskContract]:
@@ -1429,6 +1440,7 @@ def _record_history(goal_id: int, iteration: int, report: dict[str, Any]) -> Non
                      {"iteration": iteration, "commit": report.get("head"), "score": report.get("score", 0.0),
                       "passed": report["passed"], "scope_failed": "scope" in failed or out_of_scope,
                       "failed_checks": sorted(failed),
+                      "changed_files": list(report.get("changed_files") or [])[:200],  # S09-R-02 defect history
                       "stages": {r["stage"]: r["status"] for r in report.get("stages", [])},
                       # S09-R-04: what the gate itself ran, on which commit, with which result and toolchain
                       "verification": [{k: c.get(k) for k in ("command", "stage", "commit", "exit_code", "timed_out",

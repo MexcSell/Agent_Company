@@ -184,10 +184,13 @@ def analyse(goal_id: int, trigger: str, goal_ids: list[int] | None = None,
     with session() as s:
         row = s.get(Goal, goal_id)
         status, reason = screen(f"{text}\n" + "\n".join(a["title"] + " " + a["why"] for a in found["actions"]))
+        level = goal_level(s, row)
+        if level == "secret":  # secret content is never stored in knowledge, nor proposed from (S14-R-05)
+            text, status, reason = "(withheld: the work is classified secret)", "rejected", "secret goal or project"
         # outcome "analysis": knowledge, not the analyst's own success or failure (evolution counts those)
         item = Lesson(agent_id=gm.id, goal_id=goal_id, project_id=row.project_id, text=text, outcome="analysis",
                       kind="operational", evidence_class="INFERENCE", sources=[f"goal:{i}" for i in ids],
-                      status=status, status_reason=reason, classification=goal_level(s, row), report={})
+                      status=status, status_reason=reason, classification=level, report={})
         s.add(item)
         s.flush()
         if status == "approved":  # a screened-out analysis proposes nothing (it waits for a person in the queue)
@@ -198,7 +201,7 @@ def analyse(goal_id: int, trigger: str, goal_ids: list[int] | None = None,
                 s.add(p)
                 s.flush()
                 report["actions"].append({"proposal_id": p.id, "title": a["title"], "result": "pending"})
-        else:
+        elif level != "secret":
             log_event("security", f"root-cause analysis K{item.id} {status}: {reason}", goal_id=goal_id, s=s,
                       rule="memory_poisoning")
         item.report = dict(report)  # set once, after the proposals: in-place changes of a JSON column are not seen

@@ -109,6 +109,7 @@ Machines code):
 | Code-review checklist with a logic-verification step (trace data flow; no approval for code that only looks clean) and de-duplicated comments | ASEAO08 §13, `extensions/analysis_results.md` | done (`quality.REVIEW_CHECKLIST`, `review_verdict`, `merge_findings`, S08-R-03) |
 | Change boundaries: no skipped tests, removed assertions, new dependencies or CI/.env edits without a permit | ASEAO08 §12.2 | done (`checks.boundary_violations`, S08-R-04) |
 | Quality gates as named stages; an open critical defect blocks the merge | ASEAO09 §13 | done (`quality.stages`, S09-R-01) |
+| Risk-based test strategy per goal: mandatory integration/security stages for high-risk goals, security review of sensitive areas, files with earlier failures | ASEAO09 §6 | done (`teststrategy.py`, S09-R-02) |
 | Test-strategy selection by test category and risk | ASEAO09 §6-7 | open → S09-R-02 |
 | Independent verification: the gate re-runs every command and records commit, exit code, duration, output tail and toolchain versions | ASEAO09 §12 | done (`quality.evaluate`, `quality.environment`, goal history `verification`, S09-R-04) |
 | Innovation experiments, portfolio and technology radar | ASEAO10 §10-14, §21 | open → S10-R-02, S10-G-01..G-06 |

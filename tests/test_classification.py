@@ -9,7 +9,7 @@ from sqlalchemy import select
 from agent_company import loop, projects, router
 from agent_company.api import create_app
 from agent_company.auth import DEFAULT_PERMISSIONS
-from agent_company.db import Goal, Lesson, ModelEntry, Route, Upload, session
+from agent_company.db import Goal, Lesson, ModelEntry, Proposal, Route, Upload, session
 
 ADMIN = {"id": 1, "name": "admin", "is_admin": True, "permissions": dict(DEFAULT_PERMISSIONS)}
 
@@ -110,6 +110,8 @@ def test_a_secret_order_in_an_internal_project_stores_no_lesson_text():
     with session() as s:
         lessons = s.scalars(select(Lesson).where(Lesson.goal_id == gid)).all()
         assert lessons and all(x.classification == "secret" and x.text.startswith("(withheld") for x in lessons)
+        assert any(x.outcome == "analysis" for x in lessons), "the failed goal's root-cause analysis is withheld too"
+        assert not s.scalars(select(Proposal).where(Proposal.goal_id == gid)).all(), "and proposes nothing"
 
 
 def test_a_project_raised_later_raises_its_goals(models):

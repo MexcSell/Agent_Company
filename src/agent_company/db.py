@@ -451,6 +451,8 @@ class Goal(Base):
     # workflow template (strategy) version it runs under, a snapshot with its source (strategies.py)
     kind: Mapped[str] = mapped_column(String(16), default="")
     strategy: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # S09-R-02: risk, reasons, mandatory gate stages, reviewers, sensitive paths, files with earlier failures
+    test_strategy: Mapped[dict[str, Any]] = mapped_column(default=dict)
     # the order's classification (its attachments, its project at creation); the project's current one may raise it
     classification: Mapped[str] = mapped_column(String(16), default="internal")
     # eval goals only (SPEC-13): experiment_id + side, role -> model overrides, trainee_id (the agent staffed for

@@ -24,7 +24,8 @@ feature came from.
   auto|required|off, a project only stricter, A2A goals required; a changed lock file is installed first with
   network into `data/sandbox/home`), `worktrees.py`,
   `quality.py` + `checks.py` (gate: contracts, review verdicts with logic verification, secrets, syntax, scope,
-  change boundaries, baseline), `usage.py`; `loop.py` (circular goal loop, budgets that pause, best-iteration
+  change boundaries, baseline) + `teststrategy.py` (S09-R-02 risk-based test strategy per goal: mandatory stages
+  for high-risk goals, staged command conditions the gate runs again), `usage.py`; `loop.py` (circular goal loop, budgets that pause, best-iteration
   rollback, handovers, checkpoint commits per writing task + worktree reconcile on resume, retry policy,
   re-plan, conflict review, escalation, behaviour rules, idempotent merge/push, trace; goals of one project topic
   run in order, `lane_ahead`); `workflow.py` (goal

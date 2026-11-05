@@ -3078,7 +3078,7 @@ def _goal_dict(g: Goal) -> dict[str, Any]:
             "estimated_cost_usd": g.estimated_cost_usd or 0.0, "budget_usd": g.budget_usd or 0.0,
             "budget_tokens": g.budget_tokens or 0, "max_active_agents": g.max_active_agents or 0,
             "paused_for": (g.checkpoint or {}).get("paused_for", ""), "requirement_keys": g.requirement_keys or [],
-            "kind": g.kind or "", "strategy": dict(g.strategy or {}),
+            "kind": g.kind or "", "strategy": dict(g.strategy or {}), "test_strategy": dict(g.test_strategy or {}),
             "created_at": g.created_at.isoformat(), "updated_at": g.updated_at.isoformat()}
 
 
