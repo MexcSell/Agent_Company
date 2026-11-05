@@ -17,7 +17,8 @@ feature came from.
   run in order, `lane_ahead`); `workflow.py` (goal
   state machine, `goal_transitions`); `blackboard.py` (versioned shared goal context, agent messages);
   `network.py` (SPEC-12 relationship kinds with evidence: observed links from finished work,
-  complementary specialists and a mentor candidate for new agents, administrator corrections);
+  complementary specialists and a mentor candidate for new agents, administrator corrections, fair staffing
+  inputs in `registry._rank`) + `mentoring.py` (a mentor per learning plan: reviews practice results, never certifies);
   `decisions.py` (decision records; human ones block the merge); `projects.py` (projects, command window
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals, uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress;
   blockers and generated items are reconciled from goal state by `sync`); `learning.py` (knowledge items: provenance, screening, scoped ranked retrieval;

@@ -388,6 +388,13 @@ class OfflineExecutor(Executor):
         lines = list(dict.fromkeys(kept + learned + read)) or ["- Read the acceptance conditions before starting."]
         return "\n".join(lines[:10])
 
+    def _mentor(self, req: Request) -> str:
+        practice = req.data.get("practice") or {}
+        study = ", ".join(f"K{x['id']}" for x in req.data.get("materials", [])[:3]) or "the plan's knowledge items"
+        return (f"{practice.get('passed', 0)} of {practice.get('runs', 0)} practice runs on "
+                f"'{req.data.get('skill', 'the skill')}' passed. Study {study}, then repeat the exercises that failed "
+                "before the final evaluation.")
+
     def _report(self, req: Request) -> str:
         docs = req.data.get("documents") or []
         findings = "\n".join(f"{i}. {d['title'] or d['url']} is relevant [{i}]." for i, d in enumerate(docs, 1))

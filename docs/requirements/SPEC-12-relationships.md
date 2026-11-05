@@ -28,7 +28,7 @@ specialists, mentors and past collaborators, and that departments keep a shift s
 
 ## Specific requirements
 
-Status (2026-11-05): S12-R-01 done · S12-R-02 done · S12-R-03 done · S12-R-04 open · S12-R-05 open ·
+Status (2026-11-05): S12-R-01 done · S12-R-02 done · S12-R-03 done · S12-R-04 done · S12-R-05 open ·
 S12-R-06 done · S12-R-07 open.
 
 ### S12-R-01 Relationship kinds with evidence — §2.2
@@ -86,6 +86,16 @@ S12-R-06 done · S12-R-07 open.
   reviews exercise results; certification uses the independent evaluation (SPEC-13 S13-R-03), never
   the mentor's own judgement.
 - Acceptance: AR-013, AR-014.
+- **Status: done** (`mentoring.py`, table `mentorings`): `training.create_plan` opens a mentoring when the learner
+  has a `mentored_by` link to an active agent, else when `network.mentor_for` finds a certified agent of its role
+  (which then gets the link); it holds objectives, gap assessment (gap, current and target level) and materials
+  (the plan's knowledge items plus the mentor's own on the skill). After the practice suite the mentor reviews
+  the harness's practice summary in a run of its own (purpose `mentor`; fail-open: a plain note when the run
+  fails) and its text is stored as feedback; it never sees the final set. The plan's verdict closes the record
+  (`completed`/`failed`/`cancelled`) and adds `mentoring:<id>` evidence to the link, which makes it observed.
+  Certification is untouched by anything in the record (AR-014). People add feedback on the agent card's
+  Relationships tab (`POST /api/mentoring/{id}/feedback`, audited); `GET /api/mentoring?agent_id=`.
+  Mentoring starts with a learning plan (S13-R-02, which `raise_gaps` proposes for detected gaps).
 
 ### S12-R-05 Shift rotation and workload — `.rtf` SPEC-12, ASEAO06 §14
 - Rotational rooms get shifts (`acquisition`, `verification`, `analysis`, `organisation`,

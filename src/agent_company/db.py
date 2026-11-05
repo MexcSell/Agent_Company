@@ -306,6 +306,27 @@ class Lesson(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class Mentoring(Base):
+    """A mentor helping a learner through one learning plan (SPEC-12 S12-R-04). The mentor reviews the practice
+    results; certification stays the final evaluation's harness verdict (SPEC-13 S13-R-03)."""
+
+    __tablename__ = "mentorings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    mentor_id: Mapped[int] = mapped_column(Integer, index=True)
+    learner_id: Mapped[int] = mapped_column(Integer, index=True)
+    skill: Mapped[str] = mapped_column(String(64))
+    plan_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    objectives: Mapped[list[Any]] = mapped_column(default=list)
+    gap_assessment: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    materials: Mapped[list[Any]] = mapped_column(default=list)  # knowledge item ids
+    exercises: Mapped[dict[str, Any]] = mapped_column(default=dict)  # the practice suite's harness summary
+    feedback: Mapped[list[Any]] = mapped_column(default=list)  # {by, text, at, source}
+    final_evaluation: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="active")  # active|completed|failed|cancelled
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 class KgEdge(Base):
     """An edge of the knowledge graph (SPEC-11 S11-R-07); for now CONTRADICTS and SUPERSEDES between knowledge
     items. `evidence` holds why the edge exists and, for a contradiction, its review state and resolution."""

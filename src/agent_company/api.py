@@ -35,6 +35,7 @@ from agent_company import (
     machines,
     management,
     mcp,
+    mentoring,
     network,
     performance,
     prefs,
@@ -446,6 +447,10 @@ class PlanBody(BaseModel):
 
 class NoteBody(BaseModel):
     note: str = ""
+
+
+class FeedbackBody(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
 
 
 class StatusBody(BaseModel):
@@ -1397,6 +1402,19 @@ def create_app(start_background: bool = True) -> FastAPI:
                              ) -> dict[str, Any]:
         out = training.cancel_plan(plan_id)
         _audit(admin, "learning_plan_cancel", plan_id)
+        return out
+
+    @app.get("/api/mentoring")
+    def mentoring_list(agent_id: int | None = None, status: str = "", _: dict[str, Any] = Depends(current_user)
+                       ) -> list[dict[str, Any]]:
+        return mentoring.list_mentorings(agent_id, status)
+
+    @app.post("/api/mentoring/{mentoring_id}/feedback")
+    def mentoring_feedback(mentoring_id: int, body: FeedbackBody,
+                           admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        """Advice for the learner from a person; never a grade (certification is the final evaluation's)."""
+        out = mentoring.add_feedback(mentoring_id, f"user:{admin['name']}", body.text)
+        _audit(admin, "mentoring_feedback", mentoring_id, after={"chars": len(body.text)})
         return out
 
     # --- verified self-evolution of the platform's code (selfevolve.py) ---

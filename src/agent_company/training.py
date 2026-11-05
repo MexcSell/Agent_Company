@@ -264,7 +264,11 @@ def create_plan(agent_id: int, capability: str, target_level: int | None = None,
         s.flush()
         s.add(EvolutionEvent(stage="plan", agent_id=agent_id, title=f"{a.name}: learning plan #{p.id} for '{cap}' "
                              f"(L{current} → L{target})", detail={"plan_id": p.id}))
-        return plan_dict(p, {a.id: a.name})
+        out = plan_dict(p, {a.id: a.name})
+    from agent_company import mentoring
+
+    out["mentoring"] = mentoring.open_for_plan(out["id"])  # SPEC-12 S12-R-04: when a mentor exists
+    return out
 
 
 def list_plans(agent_id: int | None = None, status: str = "") -> list[dict[str, Any]]:
@@ -319,6 +323,9 @@ def cancel_plan(plan_id: int) -> dict[str, Any]:
         if p.status not in OPEN:
             raise ValueError(f"plan #{plan_id} is {p.status}")
         p.status = "cancelled"
+        from agent_company import mentoring
+
+        mentoring.finish(s, p)
     return get_plan(plan_id)
 
 
@@ -354,6 +361,13 @@ def run_plan(plan_id: int) -> dict[str, Any]:
             with session() as s:
                 p = s.get(LearningPlan, plan_id)
                 p.results = {**(p.results or {}), side: results[side]}
+            if side == "practice":  # the mentor reads the practice results only, never the final set's checks
+                from agent_company import mentoring
+
+                try:
+                    mentoring.review(plan_id, summary)
+                except Exception as e:  # noqa: BLE001 - advice is optional; the evaluation goes on
+                    log_event("error", f"mentor review of plan #{plan_id} failed: {type(e).__name__}: {e}")
         with session() as s:
             p = s.get(LearningPlan, plan_id)
             a = s.get(Agent, agent_id)
@@ -378,6 +392,9 @@ def run_plan(plan_id: int) -> dict[str, Any]:
                 stage = "retrain"
             s.add(EvolutionEvent(stage=stage, agent_id=agent_id, title=f"{name}: {p.recommendation}"[:500],
                                  detail={"plan_id": plan_id, "final": results["final"]}))
+            from agent_company import mentoring
+
+            mentoring.finish(s, p)  # the verdict closes the mentoring; it never changes the verdict
             notify(f"Learning plan #{plan_id} {p.status}", f"{name}: {p.recommendation}",
                    level="info" if p.status == "passed" else "warning", source="evolution", admin_only=True, s=s)
             log_event("learning", f"plan #{plan_id} {p.status}: {name} {p.recommendation}", agent_id=agent_id, s=s)
@@ -387,6 +404,9 @@ def run_plan(plan_id: int) -> dict[str, Any]:
             p = s.get(LearningPlan, plan_id)
             if p is not None and p.status == "running":
                 p.status, p.recommendation = "failed", f"the evaluation run failed: {type(e).__name__}: {e}"
+                from agent_company import mentoring
+
+                mentoring.finish(s, p)
         log_event("error", f"learning plan #{plan_id} failed: {type(e).__name__}: {e}")
         return {}
     finally:

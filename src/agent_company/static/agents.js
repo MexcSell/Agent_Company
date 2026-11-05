@@ -174,25 +174,40 @@ async function agentModal(id, tab = "profile") {
 // corrected by an administrator) and their evidence; an administrator can set a weight or expire one (SPEC-12).
 const REL_KINDS = ["similar", "collaborated", "complementary_skill", "research_partner", "testing_partner", "reviewed_by", "mentored_by", "depends_on", "handover_to", "supervises", "knowledge_contributor"];
 async function relationshipsTab(box, a, all, admin) {
-  const rels = await api(`/api/agents/${a.id}/relationships`);
+  const [rels, ments] = await Promise.all([api(`/api/agents/${a.id}/relationships`), api(`/api/mentoring?agent_id=${a.id}`)]);
+  const ment = (m) => `<details class="cv"><summary class="row nowrap"><strong>#${m.id}</strong><span class="grow">${esc(m.mentor)} mentors ${esc(m.learner)} on <b>${esc(m.skill)}</b> <span class="muted">· plan #${m.plan_id} · L${m.gap_assessment.current_level ?? "?"} → L${m.gap_assessment.target_level ?? "?"}</span></span>${pill(m.status)}</summary>
+    <p class="muted">Practice: ${m.exercises.runs ? `${m.exercises.passed}/${m.exercises.runs} passed` : "not run yet"} · materials ${m.materials.map((k) => `K${k}`).join(", ") || "none"}${m.final_evaluation.status ? ` · final evaluation ${esc(m.final_evaluation.status)}` : ""}</p>
+    <div class="events">${m.feedback.map((f) => `<div><span class="k">${esc(f.by)}</span>${esc(f.text)} <span class="muted">${ago(f.at)}</span></div>`).join("") || '<span class="muted">No feedback yet.</span>'}</div>
+    ${admin && m.status === "active" ? `<div class="row" style="margin-top:6px"><input class="grow" data-mfb="${m.id}" maxlength="4000" placeholder="Advice for the learner (not a grade)">${ib("send", "Add feedback", `data-mfbsend="${m.id}"`, "sm")}</div>` : ""}</details>`;
   const phrase = (r) => r.directed ? `${esc(r.a)} <b>${esc(r.kind.replace(/_/g, " "))}</b> ${esc(r.b)}` : `<b>${esc(r.kind.replace(/_/g, " "))}</b> with ${esc(r.a_id === a.id ? r.b : r.a)}`;
   box.innerHTML = `<p class="muted">Inferred links come from profiles (role, skills, the specialists its peers work with, a mentor candidate); observed ones only from verified work (gate results, reviews, dependencies, handovers, knowledge it used). Expired links are kept but no longer used.</p>
     <table class="rel-table"><tr><th>Relationship</th><th>Origin</th><th class="num">Weight</th><th>Evidence</th>${admin ? "<th></th>" : ""}</tr>
     ${rels.map((r) => `<tr class="${r.status === "expired" ? "off" : ""}"><td>${phrase(r)}${r.status === "expired" ? ' <span class="pill">expired</span>' : ""}</td><td>${pill(r.origin)}</td><td class="num">${r.weight.toFixed(2)}</td><td class="muted ellipsis" style="max-width:220px" title="${esc(r.evidence.join("\n"))}">${esc(r.evidence.slice(-3).join(", "))}</td>${admin ? `<td>${ib("edit", "Correct this relationship", `data-rel="${r.id}"`, "sm")}</td>` : ""}</tr>`).join("") || `<tr><td colspan="5" class="muted">No relationships yet.</td></tr>`}</table>
+    <h3>Mentoring</h3><p class="muted">A mentor reviews the practice results of a learning plan; only the final evaluation certifies.</p>${ments.map(ment).join("") || '<span class="muted">None.</span>'}
     ${admin ? `<h3>Correct or add a relationship</h3><form id="rel-f"><div class="row"><div class="grow"><label for="rel-o">Other agent</label><select id="rel-o">${all.filter((x) => x.id !== a.id).map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join("")}</select></div>
-      <div class="grow"><label for="rel-k">Kind (directed kinds read: ${esc(a.name)} → other)</label><select id="rel-k">${REL_KINDS.map((k) => `<option>${k}</option>`).join("")}</select></div></div>
+      <div class="grow"><label for="rel-k" id="rel-kl">Kind (directed kinds read: ${esc(a.name)} → other)</label><select id="rel-k">${REL_KINDS.map((k) => `<option>${k}</option>`).join("")}</select></div></div>
       <div class="row"><div class="grow"><label for="rel-w">Weight 0–1 (empty: unchanged)</label><input id="rel-w" type="number" min="0" max="1" step="0.05"></div><div class="grow"><label for="rel-s">Status</label><select id="rel-s"><option value="">unchanged</option><option>active</option><option>expired</option></select></div></div>
       <label for="rel-r">Reason (audited)</label><input id="rel-r" required maxlength="500">
       <div class="row" style="margin-top:8px"><button class="btn icon primary" title="Save the correction" aria-label="Save the correction">${icon("save", 16)}</button></div></form>` : ""}`;
   if (!admin) return;
+  box.querySelectorAll("[data-mfbsend]").forEach((b) => (b.onclick = async () => {
+    const text = box.querySelector(`[data-mfb="${b.dataset.mfbsend}"]`).value.trim();
+    if (!text) return;
+    try { await api(`/api/mentoring/${b.dataset.mfbsend}/feedback`, { method: "POST", body: { text } }); toast("Feedback added"); agentModal(a.id, "links"); } catch (err) { toast(err.message); }
+  }));
   box.querySelectorAll("[data-rel]").forEach((b) => (b.onclick = () => {
     const r = rels.find((x) => x.id === Number(b.dataset.rel));
     $("#rel-o").value = String(r.a_id === a.id ? r.b_id : r.a_id); $("#rel-k").value = r.kind; $("#rel-w").value = r.weight; $("#rel-s").value = r.status; $("#rel-r").focus();
+    // a directed link that points at this agent is corrected from its source, so its direction is kept
+    $("#rel-f").dataset.rev = r.directed && r.a_id !== a.id ? "1" : "";
+    $("#rel-kl").textContent = $("#rel-f").dataset.rev ? `Kind (directed: other → ${a.name})` : `Kind (directed kinds read: ${a.name} → other)`;
   }));
+  ["#rel-o", "#rel-k"].forEach((sel) => ($(sel).onchange = () => { $("#rel-f").dataset.rev = ""; $("#rel-kl").textContent = `Kind (directed kinds read: ${a.name} → other)`; }));
   $("#rel-f").onsubmit = async (e) => {
     e.preventDefault();
     const w = $("#rel-w").value;
-    try { await api(`/api/agents/${a.id}/relationships`, { method: "POST", body: { other_id: Number($("#rel-o").value), kind: $("#rel-k").value, weight: w === "" ? null : Number(w), status: $("#rel-s").value || null, reason: $("#rel-r").value } }); toast("Corrected"); agentModal(a.id, "links"); } catch (err) { toast(err.message); }
+    const rev = $("#rel-f").dataset.rev === "1", other = Number($("#rel-o").value);
+    try { await api(`/api/agents/${rev ? other : a.id}/relationships`, { method: "POST", body: { other_id: rev ? a.id : other, kind: $("#rel-k").value, weight: w === "" ? null : Number(w), status: $("#rel-s").value || null, reason: $("#rel-r").value } }); toast("Corrected"); agentModal(a.id, "links"); } catch (err) { toast(err.message); }
   };
 }
 

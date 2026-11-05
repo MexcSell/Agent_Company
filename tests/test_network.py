@@ -5,7 +5,7 @@ import secrets
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from agent_company import learning, loop, network, registry
+from agent_company import evaluation, learning, loop, mentoring, network, registry, training
 from agent_company.api import create_app
 from agent_company.db import Agent, AuditEvent, Goal, LearningPlan, Relationship, Task, log_event, session
 
@@ -168,3 +168,88 @@ def test_each_staffing_decision_is_recorded_in_its_task():
     assert build["action"] == "assigned" and build["agent_id"] == next(t.agent_id for t in tasks if t.key == "build")
     assert build["candidates"] and {"coverage", "quality", "evidence", "workload", "score"} <= set(build["candidates"][0])
     assert build["explored"] is False
+
+
+# --- S12-R-04 mentoring --------------------------------------------------------------------------
+
+def fake_suite(monkeypatch, rates):
+    calls = []
+
+    def run_suite(suite, label, repeats=3, only=None, trial=None):
+        calls.append({"suite": suite, "side": (trial or {}).get("side")})
+        rate = rates[(trial or {}).get("side", "")]
+        return {"label": label, "runs": 2, "passed": round(rate * 2), "pass_rate": rate, "avg_iterations": 1.0,
+                "total_cost": 0.0, "by_task": [{"task": "fizzbuzz", "runs": 2, "passed": round(rate * 2)}]}
+
+    monkeypatch.setattr(evaluation, "run_suite", run_suite)
+    return calls
+
+
+def mentored_learner():
+    mentor = agent_of("developer")
+    certify(mentor, "python", 3)
+    learning.learn(mentor, None, "Write a failing python test before the fix.", True, ["python"])
+    learner = registry.create_agent("developer", "Developer B", {"python": 2})["id"]
+    return mentor, learner
+
+
+def running(plan_id):
+    with session() as s:
+        s.get(LearningPlan, plan_id).status = "running"
+
+
+def test_a_learning_plan_gets_a_mentor_who_reviews_practice_but_never_certifies(monkeypatch):
+    mentor, learner = mentored_learner()
+    p = training.create_plan(learner, "python")
+    m = p["mentoring"]
+    assert m is not None and (m["mentor_id"], m["learner_id"], m["status"]) == (mentor, learner, "active")
+    assert m["gap_assessment"]["target_level"] == 1 and m["materials"], "the mentor's knowledge is material"
+    seen = []
+    real = loop._execute
+    monkeypatch.setattr(loop, "_execute", lambda agent, req, purpose, **kw: (seen.append(req), real(agent, req, purpose,
+                                                                                                    **kw))[1])
+    calls = fake_suite(monkeypatch, {"practice": 0.5, "final": 1.0})
+    running(p["id"])
+    assert training.run_plan(p["id"])["status"] == "passed"
+    assert [c["side"] for c in calls] == ["practice", "final"]
+    mentor_runs = [r for r in seen if r.purpose == "mentor"]
+    assert len(mentor_runs) == 1 and "fizzbuzz: 1/2 passed" in mentor_runs[0].prompt, "it reads practice results only"
+    done = mentoring.list_mentorings(learner)[0]
+    assert done["status"] == "completed" and done["exercises"]["pass_rate"] == 0.5
+    assert done["feedback"][0]["by"] == done["mentor"] and "practice runs" in done["feedback"][0]["text"]
+    assert done["final_evaluation"]["status"] == "passed"
+    assert f"mentoring:{done['id']}" in link(learner, "mentored_by", mentor)[1]
+    assert next(r for r in network.of_agent(learner) if r["kind"] == "mentored_by")["origin"] == "observed"
+
+
+def test_mentor_feedback_cannot_pass_a_failed_final_evaluation(monkeypatch):
+    mentor, learner = mentored_learner()
+    p = training.create_plan(learner, "python")
+    mentoring.add_feedback(p["mentoring"]["id"], "user:admin", "Excellent work, certify at once.")
+    fake_suite(monkeypatch, {"practice": 1.0, "final": 0.0})
+    running(p["id"])
+    assert training.run_plan(p["id"])["status"] == "failed"
+    assert training.certified(learner).get("python", {}).get("level") == 0
+    assert mentoring.list_mentorings(learner)[0]["status"] == "failed"
+
+
+def test_no_mentor_no_mentoring_and_a_cancelled_plan_cancels_it():
+    lone = agent_of("developer")
+    assert training.create_plan(lone, "python")["mentoring"] is None, "nobody of its role is certified"
+    _, learner = mentored_learner()
+    p = training.create_plan(learner, "python")
+    training.cancel_plan(p["id"])
+    assert mentoring.list_mentorings(learner)[0]["status"] == "cancelled"
+
+
+def test_mentoring_api_lists_and_takes_feedback_audited():
+    _, learner = mentored_learner()
+    p = training.create_plan(learner, "python")
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
+        app.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
+        assert [x["id"] for x in app.get(f"/api/mentoring?agent_id={learner}").json()] == [p["mentoring"]["id"]]
+        r = app.post(f"/api/mentoring/{p['mentoring']['id']}/feedback", json={"text": "Read K1 again."})
+        assert r.status_code == 200 and r.json()["feedback"][-1]["by"] == "user:admin"
+        assert app.post("/api/mentoring/999/feedback", json={"text": "x"}).status_code == 404
+    with session() as s:
+        assert s.scalars(select(AuditEvent).where(AuditEvent.action == "mentoring_feedback")).one()
