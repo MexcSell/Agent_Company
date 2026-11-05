@@ -298,7 +298,8 @@ function show(id) {
     if (!snap) enter();
     if (vf) {
       if (vf.urls.size) { viewUrls[id] = [...vf.urls].slice(0, 12); store.set("ac.viewUrls", JSON.stringify(viewUrls)); }
-      if (vf.stale) render(true);  // it was drawn from data kept from before: now with fresh data
+      // It was drawn from data kept from before: now with fresh data (not under a form being filled in).
+      if (vf.stale && !document.activeElement?.closest("form:not(#composer)")) render(true).then(() => seq === showSeq && iconize(view));
     }
   };
   clearTimeout(show.guard); show.guard = setTimeout(done, 15000);  // a request that never answers must not lock the page
@@ -314,7 +315,7 @@ const SELF_UPDATING = new Set(["workspace", "files", "machines"]);
 function refreshNow() {
   if (document.hidden || !$("#modal").hidden || document.activeElement?.closest("form:not(#composer)")) return;
   if ($("#view").classList.contains("loading")) return;  // the page is still being built
-  if (!SELF_UPDATING.has(current)) render(true);
+  if (!SELF_UPDATING.has(current)) render(true).then(() => iconize($("#view")));  // buttons keep their icons through a refresh
   updateBadges();
 }
 let liveOk = false, liveSource = null, liveTimer = null;
