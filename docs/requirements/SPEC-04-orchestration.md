@@ -302,7 +302,7 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
 | --- | --- | --- |
 | AT-001..004 | goal → run, invalid goal → errors, plan version, child tasks | done |
 | AT-005 | cyclic dependencies → rejected | done (`contracts.topo_order`) |
-| AT-006, AT-007 | qualified candidates; unqualified agent → rejected | partial: staffing ranks but never rejects → SPEC-03 S03-R-02 (coverage threshold) |
+| AT-006, AT-007 | qualified candidates; unqualified agent → rejected | done (SPEC-03 S03-R-02: an agent covering < 70 % of the skills is not staffed; a match is reused, cloned or recruited) |
 | AT-008..011 | group recorded; unauthorized member / delegation beyond authority → denied | S14-R-02, S14-R-06 |
 | AT-012, AT-013 | parallel and dependent execution | done (`scheduler.run_dag`) |
 | AT-014, AT-015 | message delivery recorded; unauthorized context denied | done (S04-R-10, S04-R-01) |

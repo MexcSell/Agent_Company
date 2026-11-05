@@ -42,7 +42,7 @@ Provisioning/Starting/Stopping collapse into a run's start and end.
 | S02-FR-18 | Automatic runtime recovery | P1 | partial: goals resume after a restart (SPEC-04 S04-R-05), transient errors are retried (S04-R-06) |
 | S02-FR-19 | Retire without deleting history | P0 | done (`set_lifecycle`) |
 | S02-FR-20 | Complete lifecycle history | P0 | done (S02-R-01: every lifecycle change, stops and lifts included) |
-| S02-FR-21 | Capability discovery | P1 | partial → SPEC-03 S03-R-02 |
+| S02-FR-21 | Capability discovery | P1 | done (SPEC-03 S03-R-02 coverage search, S03-R-01 capability gaps) |
 | S02-FR-22 | Configuration rollback | P1 | done (`registry.rollback`; playbook `restore`) |
 | S02-FR-23 | Detect inactive and unhealthy agents | P1 | done (`registry.health_overview`, S02-R-02) |
 | S02-FR-24 | Quotas and concurrency limits | P1 | done (global `max_parallel`; per agent S02-R-03) |

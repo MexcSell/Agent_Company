@@ -111,7 +111,11 @@ the order is safety and correctness of that pipeline first, then management, the
    with their actors, then SPEC-01 S01-R-06 department KPIs.
 5. **Still open** (2026-11-05): the gated rooms one at a time
    (G-R-04); L3 for the agent CLIs themselves (they need network and their logins, see the threat model's known
-   gaps).
+   gaps). Model-dependent or conditional: S13-R-02 generated practice/final exercises (hand-written suites today),
+   S11-R-04 a model judge for contradictions (deterministic today), S11 embedding search (only if S11-R-08 shows
+   FTS insufficient), per-room eval suites (G-R-04). Per project via check commands: ASEAO09 §7.7–7.10 load,
+   stress, compatibility and accessibility testing. Small: a task's `NEXT:` lines as project action items.
+   Deliberately not taken: S06-FR-04 date ranges and languages (no such data in the knowledge store).
 
 ![Specification dependency map](images/spec01-spec-dependency-map.png)
 

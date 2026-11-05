@@ -124,7 +124,7 @@ S11-R-06 done · S11-R-07 done · S11-R-08 done.
 - Edges are written as side effects (lesson stored → `CREATED`, `APPLIES_TO` technology; task →
   `ASSIGNED_TO`; decision → `SUPPORTS` evidence). `relationships` stays the agent-agent store.
 - API `GET /api/knowledge/graph?entity=type:id&depth=2` (paginated, KT-019); a graph view in the
-  dashboard is `open` (P2).
+  dashboard is done (Knowledge → graph explorer, `static/knowledge.js`).
 - **Status: done** (`kgraph.py`): side effects in the caller's session: `agent CREATED knowledge`,
   `knowledge APPLIES_TO technology`, `knowledge DERIVED_FROM goal|task` (once the item is approved, at storage
   or on review), `knowledge VERIFIED_BY user` (a person approved it), `agent EXPERIENCED_IN skill` (weight =
