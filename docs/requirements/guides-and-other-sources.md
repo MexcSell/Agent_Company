@@ -129,6 +129,16 @@ defect is open; retry rate and cost per accepted goal are reported. An administr
   goal declares the paths it expects to change (`allowed_paths` or planner output); a second goal
   declaring overlapping paths waits or is warned. Merge conflicts set the goal to
   `revision_required` instead of failing.
+- **Status: done, adapted** (`loop.paths_ahead`, `_note_lease`, `GoalQueue._loop`; `checks.overlapping`, `in_scope`;
+  `tests/test_leases.py`). A goal's declared paths are its `allowed_paths`. The queue holds a goal while an earlier goal
+  on the same repository (before either has one: the same project) is queued or being worked on and declared paths
+  that can name the same file — the scope check's rule (`fnmatch` either way, or a folder prefix). The goal's events
+  and its command window say once which goal it waits for and on which paths; the watcher offers it again. A goal
+  that declares no paths may change anything and leases nothing (making it wait would run every goal of a repository
+  one by one); goals waiting for approval, paused or ended hold no lease, so a person's queue never blocks work. The
+  merge half is met by G-R-03's behaviour instead of a new `revision_required` state: a conflicting merge is rolled
+  back, the repository is left unchanged, an automatic merge leaves the goal `awaiting_approval` and `approve`
+  answers 400 until the branch is resolved.
 
 ### G-R-09 Mission digest — AgentForge website spec, step 5
 - After a goal, the GM posts one digest in the command window: tasks passed/total, duration,

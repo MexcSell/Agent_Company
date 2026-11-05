@@ -34,6 +34,7 @@ Status: `done` = implemented in this repository, `skip` = deliberately not taken
 | Project preview proxy | skip: it runs arbitrary dev servers on the host and needs WebSocket proxying and URL rewriting to be useful; a half version would be worse than none, and AgentForge already has it |
 | Topics: separate conversation lanes inside a project (AgentForge website spec) | done (`projects.topics`, `loop.lane_ahead`; Projects → Orders & reports tabs) → S05-R-07, G-R-07 |
 | Mission digest after a goal: tasks passed of total, duration, tokens, cost, merge state (AgentForge website spec) | done (`loop.digest`, command window and goal page) → G-R-09 |
+| File leases: a goal waits while an earlier goal of the same repository declared overlapping paths (AgentForge website spec) | done, adapted (`loop.paths_ahead`; declared paths = `allowed_paths`) → G-R-08 |
 | 21 screen-format presets (scale, density, corners, rail left/right/bottom, labels, width, floating cards, Projects panel order/sizes/hidden/orientation) | done (`static/layouts.js`, top bar → Screen format) |
 | Resizable areas: drag the gutters between the Projects panels; widths remembered per format | done (`static/layouts.js`) |
 

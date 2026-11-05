@@ -140,6 +140,16 @@ def _changed_with_status(worktree: Path, base: str) -> list[tuple[str, str]]:
     return rows
 
 
+def in_scope(path: str, pattern: str) -> bool:
+    """Whether a path (or a glob, read as a path) falls under an allowed-paths glob: the scope check's rule."""
+    return fnmatch.fnmatch(path, pattern) or path.startswith(pattern.rstrip("*").rstrip("/") + "/")
+
+
+def overlapping(a: list[str], b: list[str]) -> list[tuple[str, str]]:
+    """Pairs of allowed-paths globs of two goals that can name the same file (G-R-08), by the scope check's rule."""
+    return [(x, y) for x in a for y in b if x == y or in_scope(x, y) or in_scope(y, x)]
+
+
 def scope_violations(worktree: Path, base: str, allowed: list[str], protect_tests: bool,
                      exempt: list[str] | None = None) -> list[str]:
     """`exempt`: files the platform itself wrote for the goal (its ADRs, adr.paths)."""
@@ -148,8 +158,7 @@ def scope_violations(worktree: Path, base: str, allowed: list[str], protect_test
     for status, path in _changed_with_status(worktree, base):
         if path.startswith((".claude/", ".mcp.json")) or path in exempt_set:  # spec artifacts, Claude Code config
             continue
-        if allowed and not any(fnmatch.fnmatch(path, pat) or path.startswith(pat.rstrip("*").rstrip("/") + "/")
-                               for pat in allowed):
+        if allowed and not any(in_scope(path, pat) for pat in allowed):
             problems.append(f"{path}: outside the allowed paths ({', '.join(allowed)})")
         elif protect_tests and status in {"M", "D"} and is_test_file(path):
             problems.append(f"{path}: existing test {'changed' if status == 'M' else 'deleted'} (tests are protected)")

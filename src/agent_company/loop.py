@@ -147,6 +147,33 @@ def lane_ahead(goal_id: int) -> int | None:
                          .order_by(Goal.id)).first()
 
 
+def paths_ahead(goal_id: int) -> tuple[int, list[tuple[str, str]]] | None:
+    """File leases (G-R-08): the earlier goal on the same repository (or, before either has one, the same project)
+    that is still queued or being worked on and declared allowed paths overlapping this goal's, with the overlapping
+    pairs. A goal that declares no paths may change anything and leases nothing: it never waits and holds no one.
+    Goals waiting for approval, paused or ended hold no lease; a conflict at their merge is refused and leaves the
+    goal waiting for a person (worktrees.merge)."""
+    from agent_company.checks import overlapping
+    from agent_company.workflow import WORKING
+
+    with session() as s:
+        g = s.get(Goal, goal_id)
+        if g is None or not g.allowed_paths:
+            return None
+        mine = str(Path(g.repo_path).resolve()) if g.repo_path else ""
+        for other in s.scalars(select(Goal).where(Goal.id < g.id, Goal.status.in_(["queued", *WORKING]))
+                               .order_by(Goal.id)):
+            if not other.allowed_paths:
+                continue
+            theirs = str(Path(other.repo_path).resolve()) if other.repo_path else ""
+            same = (mine == theirs) if mine and theirs else (g.project_id is not None
+                                                              and g.project_id == other.project_id)
+            pairs = overlapping(list(g.allowed_paths), list(other.allowed_paths)) if same else []
+            if pairs:
+                return other.id, pairs
+    return None
+
+
 _queue: GoalQueue | None = None
 
 
@@ -1991,6 +2018,25 @@ def trace(goal_id: int) -> dict[str, Any]:
 PRIORITY_RANK = {"critical": 0, "high": 1, "normal": 2, "low": 3}
 
 
+_leases_noted: set[tuple[int, int]] = set()
+
+
+def _note_lease(goal_id: int, holder: int, pairs: list[tuple[str, str]]) -> None:
+    """Say once per holder why a goal waits (G-R-08): in its events and in its project's command window."""
+    if (goal_id, holder) in _leases_noted:
+        return
+    _leases_noted.add((goal_id, holder))
+    paths = ", ".join(sorted({x if x == y else f"{x} ~ {y}" for x, y in pairs}))
+    log_event("goal", f"waits for goal #{holder}: both change {paths}", goal_id=goal_id, lease_holder=holder)
+    try:
+        from agent_company.projects import post_for_goal
+
+        post_for_goal(goal_id, f"Goal #{goal_id} waits for goal #{holder}: both declared {paths}. It starts when "
+                               f"#{holder} is merged, waits for approval, is paused or ends.", kind="chat")
+    except Exception:  # noqa: BLE001 - the note never holds the queue
+        pass
+
+
 def _queue_rank(goal_id: int) -> int:
     """Goals of higher-priority projects are taken first (ASEAO05 S05-R-06); then first come, first served."""
     from agent_company.db import Project
@@ -2068,6 +2114,14 @@ class GoalQueue:
                 self.seen.discard(gid)
                 continue
             if lane_ahead(gid) is not None:  # an earlier goal of its topic first; the watcher offers it again
+                self.seen.discard(gid)
+                continue
+            try:
+                lease = paths_ahead(gid)
+            except Exception:  # noqa: BLE001 - a lookup failure never holds the goal
+                lease = None
+            if lease is not None:  # G-R-08: an earlier goal holds overlapping paths of the same repository
+                _note_lease(gid, *lease)
                 self.seen.discard(gid)
                 continue
             try:
