@@ -100,8 +100,8 @@ def _names(value: Any, what: str, slug: bool = False) -> list[str]:
     return list(dict.fromkeys(x for x in out if x))
 
 
-def _fields(s, changes: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN001
-    """Validate and normalise the registration fields of an update."""
+def _fields(s, changes: dict[str, Any], current: list[Any] | None = None) -> dict[str, Any]:  # noqa: ANN001
+    """Validate and normalise the registration fields of an update; `current` = the rooms the project lists now."""
     from datetime import datetime
 
     from agent_company.db import Room
@@ -116,6 +116,9 @@ def _fields(s, changes: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN001
         known = {r.key for r in s.scalars(select(Room))}
         if set(rooms) - known:
             raise ValueError(f"unknown room(s): {', '.join(sorted(set(rooms) - known))}")
+        off = (set(rooms) - set(current or [])) & {r.key for r in s.scalars(select(Room).where(Room.enabled.is_(False)))}
+        if off:  # S01-R-01: a project keeps a room disabled later, but cannot add one
+            raise ValueError(f"disabled room(s): {', '.join(sorted(off))}")
         out["rooms"] = rooms
     if "budget_usd" in out:
         try:
@@ -284,16 +287,23 @@ def create(name: str, path: str = "", github_url: str = "", description: str = "
         s.flush()
         if not p.path:
             p.path = str(worktrees.new_workspace(f"project-{p.id}"))
+        if gm is not None:
+            from agent_company.organization import record_position
+
+            record_position(s, f"project:{p.id}:gm", None, gm.id, f"user:{created_by}" if created_by else "system",
+                            "project created")
         s.add(Message(project_id=p.id, author_type="system", kind="chat",
                       content=f"Project created. Give the General Manager an order below; it works in {p.path}."))
         return project_dict(p)
 
 
-def update(project_id: int, changes: dict[str, Any]) -> dict[str, Any]:
+def update(project_id: int, changes: dict[str, Any], actor: str = "system") -> dict[str, Any]:
+    """Change a project. A new General Manager (`manager_id`, with an optional `manager_reason`) is recorded in the
+    position history `project:<id>:gm` (SPEC-01 S01-R-02)."""
     from agent_company.learning import CLASSIFICATIONS
 
     allowed = {"name", "github_url", "description", "quality_commands", "classification", "stack", "required_skills",
-               "rooms", "budget_usd", "deadline", "priority"}
+               "rooms", "budget_usd", "deadline", "priority", "manager_id", "manager_reason"}
     bad = set(changes) - allowed
     if bad:
         raise ValueError(f"not editable: {', '.join(sorted(bad))}")
@@ -307,7 +317,16 @@ def update(project_id: int, changes: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("the platform project cannot be renamed")
         _check(changes.get("name", p.name), "", changes.get("github_url", p.github_url),
                changes.get("quality_commands", p.quality_commands))
-        changes = _fields(s, changes)
+        changes = _fields(s, changes, p.rooms)
+        reason = str(changes.pop("manager_reason", "") or "")
+        if "manager_id" in changes:
+            from agent_company.organization import record_position
+
+            changes["manager_id"] = int(changes["manager_id"]) if changes["manager_id"] else None
+            gm = s.get(Agent, changes["manager_id"]) if changes["manager_id"] else None
+            if gm is None or gm.lifecycle != "active":
+                raise ValueError("the project's General Manager is an active agent")
+            record_position(s, f"project:{p.id}:gm", p.manager_id, gm.id, actor, reason)
         old = p.classification or "internal"
         for k, v in changes.items():
             setattr(p, k, v.strip() if isinstance(v, str) else v)

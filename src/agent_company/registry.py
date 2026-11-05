@@ -18,7 +18,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from agent_company import org
+from agent_company import org, organization
 from agent_company.executors import AUTONOMY, level
 from agent_company.db import Agent, AgentVersion, Goal, Relationship, Room, log_event, now, session
 
@@ -485,7 +485,9 @@ def resolve_role(role: str) -> tuple[str, str | None]:
     if spec is None or spec.enabled:
         return role, None
     with session() as s:
-        if s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active")).first():
+        off = organization.disabled_rooms(s)
+        if s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active",
+                                         Agent.room_key.not_in(off))).first():
             return role, None
     fallback = org.FALLBACK_WRITE_ROLE if spec.writes else org.FALLBACK_READ_ROLE
     return fallback, f"role '{role}' is disabled; using '{fallback}'"
@@ -508,8 +510,9 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
     ranks: dict[int, dict[str, Any]] = {}
     explored = False
     with _staff_lock, session() as s:
+        off = organization.disabled_rooms(s)  # S01-R-01: a disabled room's agents are not staffed
         pool = [a for a in s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active"))
-                if level(a.autonomy) > 0]  # G0 observes only (S14-R-02)
+                if level(a.autonomy) > 0 and a.room_key not in off]  # G0 observes only (S14-R-02)
         quota = {a.id: over_quota(s, a) for a in pool}  # S02-R-03: the quota covers an agent and its clones
         idle = [a for a in pool if _free(a, goal_id) and a.health != "degraded" and not quota[a.id]]  # S02-R-02
         team = _team_weights(s, goal_id)
@@ -547,6 +550,10 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
             action = "cloned"
             if any(a.status == "idle" and a.health == "degraded" for a in pool):
                 why = "its idle agents are degraded"
+        elif off and s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active",
+                                                   Agent.room_key.in_(off))).first():
+            # an administrator disabled their room: a clone or a recruit would walk around that decision
+            raise RuntimeError(f"every {role} agent is in a disabled room; an administrator enables the room")
         elif s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "paused")).first():
             # an emergency stop (E1/E4) or an administrator paused this role's agents: recruiting a
             # replacement would walk around the stop
@@ -629,8 +636,9 @@ def _covering(s: Session, skills: list[str], writes: bool | None) -> tuple[Agent
     if not skills:
         return None
     best: tuple[Agent, float] | None = None
+    off = organization.disabled_rooms(s)
     for a in s.scalars(select(Agent).where(Agent.enabled, Agent.lifecycle == "active", Agent.parent_id.is_(None))):
-        if level(a.autonomy) == 0 or (writes and ("write" not in (a.permissions or []) or level(a.autonomy) < 2)):
+        if level(a.autonomy) == 0 or a.room_key in off or (writes and ("write" not in (a.permissions or []) or level(a.autonomy) < 2)):
             continue
         share = len(set(skills) & set(a.skills or {})) / len(set(skills))
         if share >= REUSE_COVERAGE and (best is None or share > best[1]
@@ -751,8 +759,7 @@ def list_rooms() -> list[dict[str, Any]]:
     with session() as s:
         rooms = s.scalars(select(Room).order_by(Room.id)).all()
         counts = dict(s.execute(select(Agent.room_key, func.count()).group_by(Agent.room_key)).all())
-        return [{"key": r.key, "name": r.name, "division": r.division, "description": r.description,
-                 "rotational": r.rotational, "agents": counts.get(r.key, 0)} for r in rooms]
+        return [organization.room_dict(r, counts.get(r.key, 0)) for r in rooms]
 
 
 EDITABLE = {"enabled", "model_pref", "skills", "playbook", "superior_id", "goal", "permissions", "autonomy", "plugins",

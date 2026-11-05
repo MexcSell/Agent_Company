@@ -65,6 +65,7 @@ async function deleteProjects() {
 async function projectForm(p = null) {
   const base = p ? "" : await api("/api/projects-defaults").then((d) => d.base).catch(() => "");
   const rooms = p && me.is_admin ? await api("/api/rooms").catch(() => []) : [];
+  const gms = p && me.is_admin ? (await api("/api/agents").catch(() => [])).filter((a) => a.lifecycle === "active" && (a.role === "general_manager" || a.id === p.manager_id)) : [];
   modal(`<h2>${icon("projects", 18)} ${p ? "Edit project" : "New project"}</h2><form id="pf">
     <label for="pf-name">Name</label><input id="pf-name" required value="${esc(p?.name || "")}" ${p?.protected ? "disabled" : ""}>
     ${p || !me.is_admin ? "" : `<label for="pf-path">Work folder (git repository; by default a new folder next to Agent Company)</label><div class="row nowrap"><input id="pf-path" class="grow" placeholder="${esc(base)}/my-project">${typeof pickFolder === "function" ? ib("folder", "Browse…", 'type="button" id="pf-browse"') : ""}</div>`}
@@ -73,7 +74,9 @@ async function projectForm(p = null) {
     ${me.is_admin ? `<label for="pf-checks">Quality commands (one per line)</label><textarea id="pf-checks" placeholder="uv run pytest -q">${esc((p?.quality_commands || []).join("\n"))}</textarea>` : ""}
     ${me.is_admin && p ? `<div class="row"><div class="grow"><label for="pf-stack">Stack (comma-separated)</label><input id="pf-stack" placeholder="python, fastapi" value="${esc((p.stack || []).join(", "))}"></div>
       <div class="grow"><label for="pf-skills">Required skills (comma-separated)</label><input id="pf-skills" placeholder="api, testing" value="${esc((p.required_skills || []).join(", "))}"></div></div>
-      <label>Participating rooms (none checked: every room; the planner only uses these rooms' roles)</label><div class="plug-picks">${rooms.map((r) => `<label class="plug"><input type="checkbox" data-room="${esc(r.key)}" ${(p.rooms || []).includes(r.key) ? "checked" : ""}><span>${esc(r.name)}</span></label>`).join("")}</div>
+      <label>Participating rooms (none checked: every room; the planner only uses these rooms' roles)</label><div class="plug-picks">${rooms.filter((r) => r.enabled || (p.rooms || []).includes(r.key)).map((r) => `<label class="plug"><input type="checkbox" data-room="${esc(r.key)}" ${(p.rooms || []).includes(r.key) ? "checked" : ""}><span>${esc(r.name)}${r.enabled ? "" : " (disabled)"}</span></label>`).join("")}</div>
+      ${gms.length > 1 ? `<div class="row"><div class="grow"><label for="pf-gm">General Manager (a change is kept in the position history)</label><select id="pf-gm">${gms.map((a) => `<option value="${a.id}" ${a.id === p.manager_id ? "selected" : ""}>${esc(a.name)}</option>`).join("")}</select></div>
+      <div class="grow"><label for="pf-gm-why">Reason for a change</label><input id="pf-gm-why"></div></div>` : ""}
       <div class="row"><div class="grow"><label for="pf-budget">Budget, $ (caps all its goals; 0 = none; $${(p.spent_usd || 0).toFixed(2)} used)</label><input id="pf-budget" type="number" min="0" step="0.01" value="${p.budget_usd || 0}"></div>
       <div class="grow"><label for="pf-deadline">Deadline</label><input id="pf-deadline" type="date" value="${esc((p.deadline || "").slice(0, 10))}"></div>
       <div class="grow"><label for="pf-prio">Priority (queue order)</label><select id="pf-prio">${["low", "normal", "high", "critical"].map((c) => `<option ${(p.priority || "normal") === c ? "selected" : ""}>${c}</option>`).join("")}</select></div></div>` : ""}
@@ -98,6 +101,7 @@ async function projectForm(p = null) {
         rooms: [...document.querySelectorAll("[data-room]:checked")].map((c) => c.dataset.room), budget_usd: +$("#pf-budget").value || 0,
         deadline: $("#pf-deadline").value || null });
     }
+    if ($("#pf-gm") && Number($("#pf-gm").value) !== p.manager_id) Object.assign(body, { manager_id: Number($("#pf-gm").value), manager_reason: $("#pf-gm-why").value });
     if (!p?.protected) body.name = $("#pf-name").value.trim();
     try {
       if (p) await api(`/api/projects/${p.id}`, { method: "PATCH", body });

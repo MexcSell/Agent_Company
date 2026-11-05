@@ -29,8 +29,8 @@ and SPEC-15 dashboard; SPEC-02 feeds SPEC-03 recruitment and SPEC-04 orchestrati
 | ID | Requirement | Pri | Status |
 | --- | --- | --- | --- |
 | S01-FR-01 | Company registration and configuration | P0 | skip: one organization per installation; settings via `prefs.py` |
-| S01-FR-02 | Department management (hierarchy, no cycles, history) | P0 | partial: rooms seeded in `org.py`; editing open → S01-R-01 |
-| S01-FR-03 | Executive positions independent of agent identity | P0 | partial: roles outlive agents (clones, retirement); position history open → S01-R-02 |
+| S01-FR-02 | Department management (hierarchy, no cycles, history) | P0 | done (`organization.create_room`, `update_room`, S01-R-01) |
+| S01-FR-03 | Executive positions independent of agent identity | P0 | done: roles outlive agents (clones, retirement); room leads and project GMs keep a position history (`position_changes`, S01-R-02) |
 | S01-FR-04 | Reporting structure, formal vs project collaboration | P0 | partial: `superior_id` (formal), `relationships` (collaboration) |
 | S01-FR-05 | Role and responsibility definitions | P0 | done (`org.ROLES` role specs) |
 | S01-FR-06 | Authority and permission management | P0 | partial: user permissions done; agent autonomy → SPEC-14 S14-R-02 |
@@ -40,28 +40,39 @@ and SPEC-15 dashboard; SPEC-02 feeds SPEC-03 recruitment and SPEC-04 orchestrati
 | S01-FR-10 | Decision and approval workflow | P0 | done for goals (SPEC-04 S04-R-02, `decisions.py`); delegation of approval rights → S01-R-03 |
 | S01-FR-11 | Transactional restructuring | P1 | gated |
 | S01-FR-12 | Immutable governance audit | P0 | done (`governance.audit`, `verify_audit`) |
-| S01-FR-13 | Organizational reports (JSON/CSV) | P1 | open → S01-R-04 |
+| S01-FR-13 | Organizational reports (JSON/CSV) | P1 | done (`organization.export`, `/api/org/export`, S01-R-04) |
 | S01-FR-14 | Versioned organizational policies | P0 | open → S01-R-05 |
 
 ## Specific requirements
 
-### S01-R-01 Room editing with history — FR-02
+### S01-R-01 Room editing with history — FR-02 — done
 - Administrators can create, rename, enable/disable rooms and set the parent room and the room's
   lead agent; a room cannot be its own ancestor; a room with running goals cannot be disabled.
 - Every change is audited with before/after values. Acceptance: a cycle is rejected.
+- Done 2026-11-05 in `organization.py`: `POST /api/rooms`, `PATCH /api/rooms/{key}` (audited `room_update` with
+  before/after), Agents → Rooms. "Running goals" means an agent of the room has a queued or running task of a goal
+  that is not final; the company GM's room cannot be disabled either. A disabled room's agents are not staffed
+  (`registry.staff` refuses instead of cloning or recruiting around it, `resolve_role` falls back, discovery skips
+  them) and a project cannot add a disabled room (it keeps one it listed). Rooms are never deleted.
+  Tests: `tests/test_organization.py`.
 
-### S01-R-02 Position history — FR-03
+### S01-R-02 Position history — FR-03 — done
 - When the lead of a room or a project's GM changes, record `(position, previous agent, new
   agent, effective at, reason)` so decisions stay attached to the position.
+- Done 2026-11-05: `position_changes` with positions `room:<key>:lead` and `project:<id>:gm` (also when a project is
+  created), `organization.positions`, `holder(position, at)`, `GET /api/org/positions`; a project's GM is
+  editable (`manager_id`, `manager_reason`) on the project form.
 
 ### S01-R-03 Delegation of approval rights — FR-09
 - An administrator can delegate a permission (e.g. approve merges for project X) to another user
   with scope (project) and expiry; revocation is immediate for new actions. Audited.
 - Agents can never receive delegated approval rights over their own work.
 
-### S01-R-04 Organization export — FR-13
+### S01-R-04 Organization export — FR-13 — done
 - `GET /api/org/export?format=json|csv`: rooms, agents (role, superior, lifecycle, certification
   level), relationships summary.
+- Done 2026-11-05 (admin-only, audited): JSON has all three; CSV is one table, `&table=rooms|agents|relationships`
+  (default agents). Agents → Rooms links them.
 
 ### S01-R-05 Policy versions — FR-14
 - Governance-relevant settings (command policy additions, budgets, approval rules, autonomy

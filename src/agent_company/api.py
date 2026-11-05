@@ -43,6 +43,7 @@ from agent_company import (
     mcp,
     mentoring,
     network,
+    organization,
     performance,
     prefs,
     projects,
@@ -288,6 +289,15 @@ class MachineBody(BaseModel):
 
 class MachineActBody(BaseModel):
     action: str
+
+
+class RoomBody(BaseModel):
+    key: str = Field(min_length=2, max_length=64)
+    name: str = Field(min_length=1, max_length=128)
+    division: str
+    description: str = ""
+    parent_key: str | None = None
+    lead_agent_id: int | None = None
 
 
 class AgentBody(BaseModel):
@@ -781,6 +791,55 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.get("/api/rooms")
     def rooms(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         return registry.list_rooms()
+
+    @app.post("/api/rooms")
+    def room_create(body: RoomBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = organization.create_room(body.key, body.name, body.division, body.description, body.parent_key,
+                                           body.lead_agent_id, actor=f"user:{admin['name']}")
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "room_create", out["key"], after=out)
+        return out
+
+    @app.patch("/api/rooms/{key}")
+    def room_update(key: str, changes: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                    ) -> dict[str, Any]:
+        """S01-R-01: name, description, division, parent_key, lead_agent_id, enabled; `reason` for the position
+        history when the lead changes."""
+        reason = str(changes.pop("reason", "") or "")
+        try:
+            before = organization.get_room(key)
+            out = organization.update_room(key, changes, f"user:{admin['name']}", reason)
+        except KeyError as e:
+            raise HTTPException(404, f"unknown room {key}") from e
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        field = {"parent_key": "parent"}
+        _audit(admin, "room_update", key, before={k: before.get(field.get(k, k)) for k in changes},
+               after={k: out.get(field.get(k, k)) for k in changes})
+        return out
+
+    @app.get("/api/org/positions")
+    def org_positions(position: str = "", limit: int = 200, _: dict[str, Any] = Depends(current_user)
+                      ) -> list[dict[str, Any]]:
+        return organization.positions(position, limit)
+
+    @app.get("/api/org/export")
+    def org_export(format: str = "json", table: str = "agents", admin: dict[str, Any] = Depends(admin_user)
+                   ) -> Any:  # noqa: A002
+        """S01-R-04: the organisation as JSON, or one table (rooms, agents, relationships) as CSV."""
+        if format not in {"json", "csv"}:
+            raise HTTPException(400, "format is json or csv")
+        _audit(admin, "org_export", format, after={"table": table} if format == "csv" else None)
+        if format == "json":
+            return organization.export()
+        try:
+            text = organization.export_csv(table)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        return Response(text, media_type="text/csv",
+                        headers={"Content-Disposition": f'attachment; filename="organisation-{table}.csv"'})
 
     @app.get("/api/agents")
     def agents(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
@@ -2267,7 +2326,7 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.patch("/api/projects/{project_id}")
     def project_update(project_id: int, changes: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
                        ) -> dict[str, Any]:
-        out = projects.update(project_id, changes)
+        out = projects.update(project_id, changes, actor=f"user:{admin['name']}")
         _audit(admin, "project_update", out["name"], after=changes)
         return out
 

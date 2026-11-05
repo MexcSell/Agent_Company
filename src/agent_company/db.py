@@ -49,6 +49,24 @@ class Room(Base):
     division: Mapped[str] = mapped_column(String(32))  # management|development|learning|research|security|business
     description: Mapped[str] = mapped_column(Text, default="")
     rotational: Mapped[bool] = mapped_column(Boolean, default=False)
+    # SPEC-01 S01-R-01 (organization.py): hierarchy, switch and lead, edited by administrators
+    parent_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)  # a disabled room's agents are never staffed
+    lead_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
+
+
+class PositionChange(Base):
+    """Who held a position and since when (SPEC-01 S01-R-02): `room:<key>:lead` or `project:<id>:gm`, so decisions
+    stay attached to the position when the agent holding it changes."""
+
+    __tablename__ = "position_changes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    position: Mapped[str] = mapped_column(String(96), index=True)
+    previous_agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    new_agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(128), default="system")
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
 
 class Agent(Base):

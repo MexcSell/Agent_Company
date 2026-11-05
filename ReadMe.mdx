@@ -251,6 +251,13 @@ is reliable; enable them on the Agents page. A plan that asks for a disabled rol
 gets the Developer (for write tasks) or QA (for read tasks) instead. Every agent
 reports to a superior (the General Manager at the top). Agent names cannot be edited.
 
+Administrators edit rooms on Agents → Rooms: add a room, rename it, place it under a
+parent room (a room can never end up inside itself), give it a lead and switch it
+off. A switched-off room's agents are not staffed, and a room cannot be switched
+off while its agents work on a goal. Changes of a room's lead or a project's
+General Manager are kept as a position history, so a decision stays attached to the
+position. The whole organisation exports as JSON or CSV (`/api/org/export`).
+
 ## Which agent uses which model
 
 The defaults put strong models on planning and design, a coding agent on code, a

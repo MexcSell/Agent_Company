@@ -30,6 +30,7 @@ async function viewOrg(quiet) {
   const attention = health.degraded.length || health.inactive.length ? `<button type="button" class="btn sm" id="a-attn" title="Degraded agents and agents idle long enough to review for retirement">${health.degraded.length ? `${health.degraded.length} degraded` : ""}${health.degraded.length && health.inactive.length ? " · " : ""}${health.inactive.length ? `${health.inactive.length} inactive` : ""}</button>` : "";
   $("#ag-tools").innerHTML = `${attention}<span class="muted">${agents.length} agents · ${all.filter((a) => a.status === "busy").length} working</span>
     ${retired ? `<label class="row" style="margin:0"><input type="checkbox" id="a-retired" style="width:auto" ${showRetired ? "checked" : ""}> retired (${retired})</label>` : ""}
+    ${me.is_admin ? ib("sitemap", "Rooms: hierarchy, leads, switches, position history and export", 'id="a-rooms"') : ""}
     ${me.is_admin ? ib("user_add", "Add an agent", 'id="a-new"', "primary") : ""}`;
   const byId = new Map(agents.map((a) => [a.id, a])), kids = new Map();
   agents.forEach((a) => { const p = byId.has(a.superior_id) ? a.superior_id : 0; if (!kids.has(p)) kids.set(p, []); kids.get(p).push(a); });
@@ -42,7 +43,7 @@ async function viewOrg(quiet) {
   };
   const roots = kids.get(0) || [];
   const body = $("#ag-body");
-  const listHtml = rooms.map((r) => { const m = agents.filter((a) => a.room === r.key); return m.length ? `<div class="ag-room"><h3>${esc(r.name)}${r.rotational ? ' <span class="pill">rotational</span>' : ""}</h3>${m.map((a) => `<div class="list-item agent-row" data-aid="${a.id}"><div class="row nowrap"><span class="avatar" style="width:26px;height:26px">${roleIcon(a.role)}</span><strong class="grow">${esc(a.name)}</strong>${a.health === "degraded" && a.lifecycle !== "retired" ? `<span class="pill failed" title="${esc(a.health_reason)}">degraded</span>` : ""}${a.lifecycle === "candidate" ? '<span class="pill pending" title="A recruit in its qualification run (SPEC-03): never staffed for real work until it passes">candidate</span>' : pill(a.lifecycle === "retired" ? "retired" : a.lifecycle === "paused" ? "paused" : a.enabled ? a.status : "disabled")}</div><div class="muted ellipsis">${esc(a.role)} · L${a.level} · ${a.tasks_done} done${a.in_trial ? " · trial" : ""}${a.parent_id ? " · clone" : ""}</div></div>`).join("")}</div>` : ""; }).join("");
+  const listHtml = rooms.map((r) => { const m = agents.filter((a) => a.room === r.key); return m.length ? `<div class="ag-room"><h3>${esc(r.name)}${r.rotational ? ' <span class="pill">rotational</span>' : ""}${r.enabled ? "" : ' <span class="pill failed" title="Its agents are not staffed until the room is enabled again">room disabled</span>'}</h3>${m.map((a) => `<div class="list-item agent-row" data-aid="${a.id}"><div class="row nowrap"><span class="avatar" style="width:26px;height:26px">${roleIcon(a.role)}</span><strong class="grow">${esc(a.name)}</strong>${a.health === "degraded" && a.lifecycle !== "retired" ? `<span class="pill failed" title="${esc(a.health_reason)}">degraded</span>` : ""}${a.lifecycle === "candidate" ? '<span class="pill pending" title="A recruit in its qualification run (SPEC-03): never staffed for real work until it passes">candidate</span>' : pill(a.lifecycle === "retired" ? "retired" : a.lifecycle === "paused" ? "paused" : a.enabled ? a.status : "disabled")}</div><div class="muted ellipsis">${esc(a.role)} · L${a.level} · ${a.tasks_done} done${a.in_trial ? " · trial" : ""}${a.parent_id ? " · clone" : ""}</div></div>`).join("")}</div>` : ""; }).join("");
   const orgHtml = `<ul class="org-tree">${roots.map(tree).join("")}</ul>`;
   if (!quiet || !$("#org-canvas")) {
     body.innerHTML = `<div class="ag-split"><section class="card ag-org"><div class="row"><h2 class="grow" style="margin:0">Organisation</h2><span class="muted">every layer, top to bottom · click an agent for its card</span></div><div class="org-canvas" id="org-canvas"><div class="org-scale" id="org-scale"></div></div></section>
@@ -55,6 +56,7 @@ async function viewOrg(quiet) {
   body.querySelectorAll("[data-aid]").forEach((el) => (el.onclick = () => agentModal(Number(el.dataset.aid))));
   $("#a-retired") && ($("#a-retired").onchange = (e) => { store.set("ac.retired", e.target.checked ? "1" : "0"); viewOrg(); });
   $("#a-new") && ($("#a-new").onclick = () => newAgentForm(rooms, all));
+  $("#a-rooms") && ($("#a-rooms").onclick = () => roomsModal());
   $("#a-attn") && ($("#a-attn").onclick = () => attentionModal(health));
 }
 
@@ -88,6 +90,47 @@ function newAgentForm(rooms, agents) {
     const skills = Object.fromEntries($("#na-skills").value.split(",").map((x) => x.split("=").map((y) => y.trim())).filter((x) => x[0]).map(([k, v]) => [k, Number(v) || 5]));
     try { await api("/api/agents", { method: "POST", body: { role: $("#na-role").value, title: $("#na-title").value, room: $("#na-room").value, superior_id: Number($("#na-sup").value) || null, skills, goal: $("#na-goal").value, writes: $("#na-writes").checked } }); $("#modal").hidden = true; viewAgents(); }
     catch (err) { toast(err.message); }
+  };
+}
+
+// Rooms (SPEC-01 S01-R-01, R-02, R-04): parent room, lead and switch per room, the position history, export.
+async function roomsModal(edit) {
+  const [rooms, agents, hist] = await Promise.all([api("/api/rooms"), api("/api/agents"), api("/api/org/positions?limit=50")]);
+  const names = new Map(agents.map((a) => [a.id, a.name])), byKey = new Map(rooms.map((r) => [r.key, r]));
+  const path = (r) => { const out = []; for (let x = r; x && !out.includes(x.key); x = byKey.get(x.parent)) out.unshift(x.key); return out.slice(0, -1).map((k) => byKey.get(k).name).join(" › "); };
+  const leads = agents.filter((a) => a.lifecycle === "active");
+  const form = (r) => `<form id="rm-f" class="card"><h3>${r ? `Edit ${esc(r.name)}` : "New room"}</h3>
+    ${r ? "" : '<label>Key (lowercase, e.g. platform_group)</label><input id="rm-key" required pattern="[a-z][a-z0-9_]{1,63}">'}
+    <label>Name</label><input id="rm-name" required value="${esc(r?.name || "")}">
+    <label>Division</label><select id="rm-div">${["management", "development", "learning", "research", "security", "business"].map((d) => `<option ${r?.division === d ? "selected" : ""}>${d}</option>`).join("")}</select>
+    <label>Parent room</label><select id="rm-parent"><option value="">none (top level)</option>${rooms.filter((x) => x.key !== r?.key).map((x) => `<option value="${esc(x.key)}" ${r?.parent === x.key ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>
+    <label>Lead</label><select id="rm-lead"><option value="">nobody</option>${leads.map((a) => `<option value="${a.id}" ${r?.lead_agent_id === a.id ? "selected" : ""}>${esc(a.name)}</option>`).join("")}</select>
+    ${r ? '<label>Reason (kept in the position history when the lead changes)</label><input id="rm-reason">' : ""}
+    <label>Description</label><input id="rm-desc" value="${esc(r?.description || "")}">
+    ${r ? `<label class="row" style="margin-top:8px"><input type="checkbox" id="rm-on" style="width:auto" ${r.enabled ? "checked" : ""}> Enabled (a disabled room's agents are not staffed; refused while its agents work on a goal)</label>` : ""}
+    <div class="row" style="margin-top:12px"><button class="btn primary">Save</button><button type="button" class="btn" id="rm-cancel">Cancel</button></div></form>`;
+  modal(`<div class="row"><h2 class="grow">${icon("sitemap", 18)} Rooms</h2>${ib("plus", "New room", 'id="rm-new"')}
+      <a class="btn" href="/api/org/export?format=json" download="organisation.json">JSON</a><a class="btn" href="/api/org/export?format=csv&table=agents" download>Agents CSV</a><a class="btn" href="/api/org/export?format=csv&table=rooms" download>Rooms CSV</a></div>
+    ${edit !== undefined ? form(byKey.get(edit)) : ""}
+    <table><tr><th>Room</th><th>Within</th><th>Lead</th><th class="num">Agents</th><th></th><th></th></tr>${rooms.map((r) => `<tr><td>${esc(r.name)}</td><td class="muted">${esc(path(r))}</td><td>${esc(names.get(r.lead_agent_id) || "")}</td><td class="num">${r.agents}</td><td>${r.enabled ? "" : '<span class="pill failed">disabled</span>'}</td><td>${ib("edit", "Edit", `data-rk="${esc(r.key)}"`)}</td></tr>`).join("")}</table>
+    <h3>Position history</h3>${hist.length ? `<table><tr><th>Position</th><th>From</th><th>To</th><th>Reason</th><th>By</th><th>When</th></tr>${hist.map((h) => `<tr><td>${esc(h.position)}</td><td>${esc(h.previous_agent || "")}</td><td>${esc(h.new_agent || "")}</td><td>${esc(h.reason)}</td><td class="muted">${esc(h.actor)}</td><td class="muted">${esc(h.effective_at.slice(0, 16).replace("T", " "))}</td></tr>`).join("")}</table>` : '<p class="muted">No lead or General Manager changes yet.</p>'}`);
+  $("#rm-new").onclick = () => roomsModal(null);
+  document.querySelectorAll("[data-rk]").forEach((b) => (b.onclick = () => roomsModal(b.dataset.rk)));
+  if (!$("#rm-f")) return;
+  $("#rm-cancel").onclick = () => roomsModal();
+  $("#rm-f").onsubmit = async (e) => {
+    e.preventDefault();
+    const r = byKey.get(edit), body = { name: $("#rm-name").value, division: $("#rm-div").value, description: $("#rm-desc").value, parent_key: $("#rm-parent").value || null, lead_agent_id: Number($("#rm-lead").value) || null };
+    try {
+      if (r) {
+        const cur = { name: r.name, division: r.division, description: r.description, parent_key: r.parent, lead_agent_id: r.lead_agent_id };
+        const changes = Object.fromEntries(Object.entries(body).filter(([k, v]) => v !== cur[k]));
+        if ($("#rm-on").checked !== r.enabled) changes.enabled = $("#rm-on").checked;
+        if ("lead_agent_id" in changes) changes.reason = $("#rm-reason").value;
+        await api(`/api/rooms/${encodeURIComponent(r.key)}`, { method: "PATCH", body: changes });
+      } else await api("/api/rooms", { method: "POST", body: { key: $("#rm-key").value, ...body } });
+      roomsModal(); viewAgents();
+    } catch (err) { toast(err.message); }
   };
 }
 
