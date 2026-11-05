@@ -64,6 +64,8 @@ How you run the company (shell commands; GM below stands for: {gm}):
   GM mcp                            MCP servers in Tools & MCP
   GM configure {project['id']}                  write the catalog into this project's .claude/
   GM goal {project['id']} "<goal>" --details "…" [--check "uv run pytest -q"] [--requirement REQ-001]
+       [--kind feature|bugfix|refactor|research|docs]   the workflow template (default: the planner picks)
+  GM team <goal id> [--add <role> --skills "a,b" | --release <agent id> | --back <agent id>] --reason "…"
   GM requirement {project['id']} "<text>" [--kind functional|non_functional|story|use_case] [--accept "…"]   a draft
   GM requirements {project['id']} [--trace]   the project's requirements; --trace: implemented, tested, merged
   GM study [<agent id>]             one learning visit: rewrites an agent's definition
@@ -114,7 +116,7 @@ def status() -> dict[str, Any]:
 
 
 def create_goal(project_id: int, title: str, details: str = "", checks: list[str] | None = None,
-                requirement_keys: list[str] | None = None) -> int:
+                requirement_keys: list[str] | None = None, kind: str = "") -> int:
     """A goal for the project, queued for the server's goal queue (which picks it up within seconds)."""
     from agent_company import loop
     from agent_company.projects import post
@@ -122,7 +124,7 @@ def create_goal(project_id: int, title: str, details: str = "", checks: list[str
     p = _project(project_id)
     gid = loop.create_goal(title[:200], details or title, repo_path=p["path"],
                            quality_commands=list(checks or p["quality_commands"]), project_id=project_id,
-                           extract_checks=True, requirement_keys=requirement_keys)
+                           extract_checks=True, requirement_keys=requirement_keys, kind=kind)
     post(project_id, f"The General Manager started goal #{gid}: {title}", "agent", goal_id=gid,
          agent_id=p["manager_id"])
     return gid
@@ -163,6 +165,14 @@ def main(argv: list[str]) -> None:
     go.add_argument("--details", default="")
     go.add_argument("--check", action="append", default=[])
     go.add_argument("--requirement", action="append", default=[])
+    go.add_argument("--kind", default="", choices=["", "feature", "bugfix", "refactor", "research", "docs"])
+    tm = sub.add_parser("team")
+    tm.add_argument("goal_id", type=int)
+    tm.add_argument("--add", default="", help="a role to add to the goal's team")
+    tm.add_argument("--skills", default="", help="comma-separated skills of the added role")
+    tm.add_argument("--release", type=int, default=None, help="the id of an agent to release")
+    tm.add_argument("--back", type=int, default=None, help="the id of a released agent to take back")
+    tm.add_argument("--reason", default="")
     rq = sub.add_parser("requirement")
     rq.add_argument("project_id", type=int)
     rq.add_argument("text")
@@ -227,7 +237,17 @@ def main(argv: list[str]) -> None:
             ids = list(s.scalars(select(Agent.id).where(Agent.enabled, Agent.lifecycle == "active", Agent.parent_id.is_(None))))
         out = {"written": catalog.export_claude(Path(proj["path"]), ids)}
     elif a.cmd == "goal":
-        out = {"goal_id": create_goal(a.project_id, a.title, a.details, a.check, a.requirement)}
+        out = {"goal_id": create_goal(a.project_id, a.title, a.details, a.check, a.requirement, a.kind)}
+    elif a.cmd == "team":  # S04-R-11: resize a goal's team; without an option, its history
+        from agent_company import teams
+
+        if a.release is not None:
+            out = teams.release(a.goal_id, a.release, a.reason, "general manager")
+        elif a.back is not None or a.add:
+            out = teams.add(a.goal_id, a.add, [x.strip() for x in a.skills.split(",") if x.strip()], a.reason,
+                            "general manager", agent_id=a.back)
+        else:
+            out = teams.history(a.goal_id)
     elif a.cmd in ("requirement", "requirements"):
         from agent_company import requirements
 

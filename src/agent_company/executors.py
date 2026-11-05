@@ -491,7 +491,9 @@ class OfflineExecutor(Executor):
                       output_tokens=estimate_tokens(text), cost=0.0, files=files)
 
     def _plan(self, req: Request) -> str:
-        return json.dumps(standard_plan(req.data.get("goal", "the goal")), indent=2)
+        from agent_company.strategies import fallback_plan
+
+        return json.dumps(fallback_plan(req.data.get("goal", "the goal"), req.data.get("kind", "")), indent=2)
 
     def _task(self, req: Request) -> str:
         title = req.data.get("title", "task")

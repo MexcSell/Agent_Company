@@ -177,6 +177,19 @@ told to converge; at 100% the goal pauses for an administrator (or fails, with
 proposals spawn: a child goal gets at most what its parent has left, and what it
 does not use returns to the parent when it ends.
 
+Workflow templates: a goal is a `feature`, `bugfix`, `refactor`, `research` or
+`docs` goal (`goal --kind`, the API's `kind`, or the planner picks one). The kind's
+template sets the roles its tasks may use, whether they may change files, the
+default checks, the iteration limit, whether tasks run in parallel or one at a time,
+and an independent QA review. A research goal changes no files and runs no quality
+commands; a refactoring protects existing tests and runs one task at a time; a docs
+goal may only change documentation. A plan that does not fit its template goes back
+to the planner once, then the template's own plan is used. Templates are versioned
+(`GET /api/strategies`, a new version with `POST /api/strategies/<kind>`); each goal
+shows the version it ran under. The goal view lists the goal's team: agents join when
+staffed; the General Manager (in its plan, or `gm team`) and administrators add a
+role, release an agent (it gets no further task of that goal) or take it back.
+
 When the same check keeps failing, the goal escalates one level per
 `escalate_after` iterations: back to the planner, then to the manager of the room
 whose agent wrote the code, then the executive GM, then a person (a notification).

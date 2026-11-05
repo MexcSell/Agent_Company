@@ -99,6 +99,8 @@ def main(argv: list[str] | None = None) -> None:
     g.add_argument("--protect-tests", action="store_true", help="refuse changes to existing test files")
     g.add_argument("--permit", action="append", default=[], choices=["dependencies", "config", "skip_tests"],
                    help="lift a change boundary: new dependencies, CI/.env edits, skipped tests (repeatable)")
+    g.add_argument("--kind", default="", choices=["", "feature", "bugfix", "refactor", "research", "docs"],
+                   help="workflow template (default: the planner picks one)")
     st = sub.add_parser("stop", help="emergency stop: needs no model and no running server")
     st.add_argument("--level", default="E5", choices=["E0", "E1", "E2", "E3", "E4", "E5"],
                     help="E0 executor, E1 agent, E2 goal, E3 project, E4 room, E5 everything (default)")
@@ -206,7 +208,7 @@ def main(argv: list[str] | None = None) -> None:
 
         gid = loop.create_goal(args.title, args.description, args.repo, args.url, args.check,
                                args.max_iterations, allowed_paths=args.allow, protect_tests=args.protect_tests,
-                               extract_checks=True, permits=args.permit)
+                               extract_checks=True, permits=args.permit, kind=args.kind)
         out = loop.run_goal(gid)
         g = loop._goal(gid)
         print(f"Goal {gid}: {out['status']} after {g.iteration} iteration(s)\n{g.result}\n"

@@ -19,7 +19,7 @@ from typing import Any
 from sqlalchemy import select
 
 from agent_company import checks as checks_mod
-from agent_company import contracts, worktrees
+from agent_company import contracts, strategies, worktrees
 from agent_company.config import settings
 from agent_company.db import Goal, Task, session
 
@@ -136,6 +136,8 @@ def baseline(goal_id: int) -> dict[str, Any]:
         goal = s.get(Goal, goal_id)
         assert goal is not None
         commands = list(goal.quality_commands or []) or list(settings().quality_commands)
+        if strategies.skips_checks(goal):  # S04-R-11: a template whose goals change no files runs no commands
+            commands = []
         worktree, done = Path(goal.worktree), dict(goal.baseline or {})
     out = dict(done)
     for cmd in commands:
@@ -154,6 +156,8 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
         tasks = s.scalars(select(Task).where(Task.goal_id == goal_id, Task.iteration == iteration)
                           .order_by(Task.id)).all()
         commands = list(goal.quality_commands or []) or list(settings().quality_commands)
+        if strategies.skips_checks(goal):
+            commands = []
         worktree, base = Path(goal.worktree), goal.base_branch
         allowed, protect, baseline = list(goal.allowed_paths or []), bool(goal.protect_tests), dict(goal.baseline or {})
         permits = list(goal.permits or [])

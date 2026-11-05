@@ -23,7 +23,10 @@ feature came from.
   rollback, handovers, checkpoint commits per writing task + worktree reconcile on resume, retry policy,
   re-plan, conflict review, escalation, behaviour rules, idempotent merge/push, trace; goals of one project topic
   run in order, `lane_ahead`); `workflow.py` (goal
-  state machine, `goal_transitions`); `blackboard.py` (versioned shared goal context, agent messages);
+  state machine, `goal_transitions`); `strategies.py` (S04-R-11 workflow templates per goal kind
+  bugfix|feature|refactor|research|docs, versioned: roles, writes, checks, iteration limit, execution mode, review
+  policy; the order or the planner picks, a plan must fit it) + `teams.py` (a goal's team: joined/added/released
+  history, released agents not staffed for that goal); `blackboard.py` (versioned shared goal context, agent messages);
   `network.py` (SPEC-12 relationship kinds with evidence: observed links from finished work,
   complementary specialists and a mentor candidate for new agents, administrator corrections, fair staffing
   inputs in `registry._rank`; `graph`/`overview` for the network view) + `mentoring.py` (a mentor per learning plan: reviews practice results, never certifies);
@@ -117,7 +120,7 @@ feature came from.
   in `data/tls/`, default) or HTTP, switched on Settings -> Connection (`transport.py` writes the
   nginx site, MANAGE_NGINX=1). The first (admin) account can only be registered from localhost.
   `systemctl restart|status agent-company`, log in `data/logs/agent-company.log`
-- `uv run python -m agent_company goal "<goal>" --check "<cmd>" [--allow 'src/*'] [--protect-tests] [--permit dependencies|config|skip_tests]`
+- `uv run python -m agent_company goal "<goal>" --check "<cmd>" [--allow 'src/*'] [--protect-tests] [--permit dependencies|config|skip_tests] [--kind feature|bugfix|refactor|research|docs]`
 - `uv run python -m agent_company improve list|weaknesses|benchmark [name]|create|start|deploy|rollback|cancel <id>` – verified self-evolution
 - `uv run python -m agent_company eval --suite smoke --label <name> [--repeats 3] [--model <name> --role <role>]` / `eval --compare a b`
 - `uv run python -m agent_company learn gaps|raise|plans|plan <agent> <skill>|start <id>|cancel <id>|experiments|metrics`
@@ -125,5 +128,5 @@ feature came from.
 - `uv run python -m agent_company stop [--level E0..E5 --scope X] [--lift|--status]` – emergency stop; writes the DB
   directly, works while the server is stuck
 - `uv run python -m agent_company host status|install-docker|docker-start|cleanup [--yes]|install-lxd|launch <name> [--container]|stop|delete <name>`
-- `uv run python -m agent_company gm status|agents|create-agent|add|mcp|configure|goal|study` – the GM's toolbox
+- `uv run python -m agent_company gm status|agents|create-agent|add|mcp|configure|goal|team|study` – the GM's toolbox
 - `uv run python -m agent_company "<request>"` – classic four-agent crew

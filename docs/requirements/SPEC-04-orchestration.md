@@ -36,9 +36,9 @@ orchestrator → `loop.py`; scheduler → `scheduler.run_dag`; team → agents s
 | S04-FR-21 | Enforce execution budgets | P0 | done (S04-R-09): goal cost, tokens, time and agents at once (pause or stop), child goals capped by the parent, per-task cost, turns and deadline (G-R-01) |
 | S04-FR-22 | Support human approval checkpoints | P0 | done (merge approval) |
 | S04-FR-23 | Record orchestration decisions | P0 | done (S04-R-02 `decisions.py`, S04-R-04 `goal_transitions`) |
-| S04-FR-24 | Support strategy selection | P1 | open → S04-R-11 |
-| S04-FR-25 | Support dynamic team resizing | P1 | open → S04-R-11 |
-| S04-FR-26 | Support workflow templates | P1 | open → S04-R-11 |
+| S04-FR-24 | Support strategy selection | P1 | done (S04-R-11, `strategies.py`): the order or the planner picks the kind; versions per kind |
+| S04-FR-25 | Support dynamic team resizing | P1 | done (S04-R-11, `teams.py`): add, release, take back; history kept |
+| S04-FR-26 | Support workflow templates | P1 | done (S04-R-11, `strategies.py`) |
 | S04-FR-27 | Self-evaluation of orchestration | P2 | open (after SPEC-13 experiments) |
 | S04-FR-28 | Recommend improved orchestration strategies | P2 | open (after SPEC-13 experiments) |
 | S04-FR-29 | Support multi-project concurrency | P1 | done (`GoalQueue` workers, `Goal.project_id`) |
@@ -47,7 +47,7 @@ orchestrator → `loop.py`; scheduler → `scheduler.run_dag`; team → agents s
 ## Specific requirements
 
 Status (2026-11-05): S04-R-01 done · S04-R-02 done · S04-R-03 done · S04-R-04 done · S04-R-05 done ·
-S04-R-06 done · S04-R-07 done · S04-R-08 done · S04-R-09 done · S04-R-10 done · S04-R-11 open ·
+S04-R-06 done · S04-R-07 done · S04-R-08 done · S04-R-09 done · S04-R-10 done · S04-R-11 done ·
 S04-R-12 partial. Details under each item.
 
 ### S04-R-01 Blackboard (shared, versioned goal context) — §10
@@ -231,7 +231,19 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
   default checks and iteration limits; the planner picks one and records the choice.
 - Team resizing: the GM may add an agent of a missing role mid-goal (recruit) or release one.
 - Acceptance: a goal created with `kind=research` runs without Developer tasks.
-- **Status: open.**
+- **Status: done** (`strategies.py`, `teams.py`, `tests/test_strategies.py`). Templates are versioned rows
+  (`strategies`, §20.4: roles, `writes`, `recruit`, checks `inherit|none`, iteration limit, execution
+  `parallel|sequential`, review `independent_qa|none`, protected tests, default scope, planner instructions); an
+  administrator saves or restores a version (`POST /api/strategies/{kind}`, audited) and every goal keeps a snapshot
+  of the version it ran under (`Goal.kind`, `Goal.strategy`, in the trace). The order names the kind
+  (`create_goal(kind=)`, API, `goal --kind`, `gm goal --kind`) and its defaults fill what the order left empty;
+  otherwise the planner names one in its plan and it can only tighten the goal (a lower iteration limit, protected
+  tests, a docs scope); a plan naming none gets an inferred label only. A plan that does not fit goes back to the
+  planner once, then the template's own plan is used. A research template runs no quality commands (no file
+  changes). Team resizing (§8.4): staffing records each agent's first task (`joined`); the GM's plan
+  (`"team": {"add", "release"}`), `gm team` or an administrator (`POST /api/goals/{id}/team`, audited) adds a role,
+  releases an agent (it gets no further task of the goal) or takes one back; rows are never rewritten. Open:
+  strategies as experiment targets (FR-27/28, via SPEC-13).
 
 ### S04-R-12 Execution trace and replay — FR-30, also SPEC-14 observability
 - `GET /api/goals/{id}/trace`: ordered transitions, tasks, runs (agent, model, tool calls,

@@ -23,7 +23,8 @@ from typing import Any
 from sqlalchemy import select
 
 from agent_company import (blackboard, budgets, contracts, decisions, executors, learning, network, quality,
-                           recruitment, registry, requirements, research, router, specs, usage, worktrees)
+                           recruitment, registry, requirements, research, router, specs, strategies, teams, usage,
+                           worktrees)
 from agent_company.config import settings
 from agent_company.db import Agent, Event, Goal, Task, log_event, session
 from agent_company.org import ROLES
@@ -39,7 +40,8 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                 protect_tests: bool = False, extract_checks: bool = False,
                 permits: list[str] | None = None, estimated_cost_usd: float = 0.0, topic: str = "general",
                 classification: str = "", trial: dict[str, Any] | None = None, budget_usd: float = 0.0,
-                budget_tokens: int = 0, max_active_agents: int = 0, requirement_keys: list[str] | None = None) -> int:
+                budget_tokens: int = 0, max_active_agents: int = 0, requirement_keys: list[str] | None = None,
+                kind: str = "") -> int:
     """Create a goal. `extract_checks` (only for trusted authors) adds the test/lint commands
     the description names in backticks when no quality commands are given. `classification` (S14-R-05) can
     only raise the level: the goal is at least as classified as its project and its attachments. `trial`
@@ -47,7 +49,9 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
     `budget_usd`, `budget_tokens` and `max_active_agents` are the goal's own budget (S04-R-09); a child goal's cost
     and tokens are capped to its parent's remainder, and no child is created when the parent has nothing left.
     `requirement_keys` (S08-R-01) name the project's requirements it implements; keys of the project named in the
-    title or description are added."""
+    title or description are added. `kind` (S04-R-11) names the workflow template: its iteration limit, protected
+    tests and scope apply where the order left them empty, and its plans must fit it; without one the planner
+    picks."""
     from agent_company.checks import extract_check_commands
     from agent_company.governance import check_command, stops
 
@@ -84,6 +88,12 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
         if set(req_keys) - known:
             raise ValueError(f"unknown requirement(s) {', '.join(sorted(set(req_keys) - known))} in project {project_id}")
     req_keys = sorted(set(req_keys) | set(requirements.keys_in(project_id, f"{title}\n{description}")))
+    template: dict[str, Any] = {}
+    if kind:
+        template = strategies.creation_defaults(strategies.check_kind(kind))
+        max_iterations = max_iterations or template["max_iterations"]
+        protect_tests = protect_tests or template["protect_tests"]
+        allowed_paths = allowed_paths or template["allowed_paths"]
     own = {"budget_usd": max(0.0, float(budget_usd or 0)), "budget_tokens": max(0, int(budget_tokens or 0))}
     if parent_goal_id is not None:
         own = budgets.for_child(parent_goal_id, own)
@@ -105,7 +115,8 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                  protect_tests=protect_tests, permits=sorted(set(permits or [])),
                  estimated_cost_usd=max(0.0, float(estimated_cost_usd or 0)), topic=topic or "general",
                  classification=level, trial=dict(trial or {}), max_active_agents=max(0, int(max_active_agents or 0)),
-                 requirement_keys=req_keys, **own)
+                 requirement_keys=req_keys, kind=strategies.check_kind(kind) if kind else "",
+                 strategy=template.get("strategy", {}), **own)
         s.add(g)
         s.flush()
         gid = g.id
@@ -487,15 +498,19 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
     gm = registry.staff("general_manager", ["planning"], goal.id)
     try:
         rooms, project_note = _project_context(goal)
+        tmpl = dict(goal.strategy or {}) if strategies.enforced(goal) else None  # S04-R-11
         with session() as s:
             q = select(Agent).where(Agent.enabled)
             roles = sorted({a.role for a in s.scalars(q.where(Agent.room_key.in_(rooms)) if rooms else q)})
+        if tmpl and strategies.ANY not in tmpl.get("roles", []):
+            roles = [r for r in roles if r in tmpl["roles"]]
         role_lines = "\n".join(f"- {r}: {ROLES[r].goal if r in ROLES else 'specialist'}" for r in roles)
         prompt = (f"Goal: {goal.title}\n{goal.description}\n\nIteration {iteration} of {goal.max_iterations}.\n"
                   + project_note
                   + (f"\nThe previous iteration failed the quality gate. Fix these findings:\n{feedback}\n"
                      if feedback else "")
                   + (f"\nResearch notes:\n{notes}\n" if notes else "")
+                  + strategies.planner_note(goal) + teams.planner_note(goal.id)
                   + f"\nAvailable roles:\n{role_lines}\n\n"
                   + blackboard.inbox(goal.id, "general_manager", gm.id)
                   + (learning.experience_context(gm.id, goal_id=goal.id, query=f"{goal.title} {goal.description}")
@@ -503,7 +518,8 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                   + PLAN_INSTRUCTIONS)
         for attempt in range(2):  # an invalid contract goes back to the planner once (S04-R-06)
             req = executors.Request(purpose="plan", role="general_manager", system=_system_for(gm), prompt=prompt,
-                                    workdir=Path(goal.worktree), data={"goal": goal.title, "feedback": feedback})
+                                    workdir=Path(goal.worktree), data={"goal": goal.title, "feedback": feedback,
+                                                                       "kind": (tmpl or {}).get("kind", "")})
             res, choice = _execute(gm, req, "plan", goal_id=goal.id)
             if not res.ok and "no model is cleared for" in res.error:  # S14-R-05: nothing may run this goal
                 raise RuntimeError(res.error)
@@ -511,6 +527,15 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                 data = contracts.extract_json(res.text)
                 tasks = data["tasks"] if isinstance(data, dict) else data
                 plan = contracts.validate_plan(tasks)
+                named = str(data.get("kind") or "").strip().lower() if isinstance(data, dict) else ""
+                if tmpl is None and named in strategies.KINDS:  # the planner picks the template (S04-R-11)
+                    tmpl = strategies.choose(goal.id, named, "planner", str(data.get("summary", ""))[:200])
+                if tmpl:
+                    bad = strategies.violations(tmpl, plan)
+                    if bad:
+                        raise ValueError(f"the plan does not fit the {tmpl['kind']} workflow template: "
+                                         + "; ".join(bad))
+                    plan = strategies.with_review(tmpl, plan)
                 _in_rooms(plan, rooms)
                 plan = _with_security_reviews(plan)
                 break
@@ -523,15 +548,22 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                     continue
                 log_event("plan", f"plan from {choice.name} was invalid ({e}); using the standard plan",
                           goal_id=goal.id, agent_id=gm.id)
-                plan = contracts.validate_plan(executors.standard_plan(goal.title)["tasks"])
+                kind = (tmpl or {}).get("kind", "")
+                plan = contracts.validate_plan(strategies.fallback_plan(goal.title, kind)["tasks"])
                 try:
                     _in_rooms(plan, rooms)
                 except ValueError as e:  # nothing to fall back to inside the project's rooms
                     raise RuntimeError(f"no valid plan within the project's rooms: {e}") from e
+                if tmpl is None:
+                    strategies.choose(goal.id, strategies.infer(goal.title, plan), "inferred")
                 _board_plan(goal, iteration, plan, "standard plan", gm.id)
                 _chat_plan(goal, iteration, plan, "standard plan (the model's plan was invalid)", gm.id)
                 return plan, gm.id
         summary = data.get("summary", "") if isinstance(data, dict) else ""
+        if tmpl is None:
+            strategies.choose(goal.id, strategies.infer(goal.title, plan), "inferred")
+        if isinstance(data, dict) and data.get("team"):  # S04-R-11: the GM resizes the team
+            teams.apply_plan(goal.id, data["team"], gm.name)
         _board_plan(goal, iteration, plan, summary, gm.id)
         if isinstance(data, dict) and data.get("decisions"):
             decisions.from_plan(goal.id, data["decisions"], gm.id)
@@ -817,6 +849,7 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             set_status(task_id, "failed", output=f"ERROR: {e}")
             return False
         writes = contract.writes and "write" in (agent.permissions or []) and executors.level(agent.autonomy) >= 2
+        teams.joined(goal.id, agent.id, role, task_id)  # S04-R-11: the goal's team history
 
         set_status(task_id, "running", agent_id=agent.id, role=role)
         try:
@@ -1156,6 +1189,8 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
             halted = _halted(goal_id)
             if halted:
                 return {"status": halted}
+            if iteration > _goal(goal_id).max_iterations:  # the planner's template lowered the limit (S04-R-11)
+                break
             _update_goal(goal_id, iteration=iteration)
             goal = _goal(goal_id)
             try:
@@ -1180,6 +1215,7 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                     plan, planner_id = _plan(goal, iteration, feedback, notes)
                 except registry.QuotaExceeded as e:  # the planner (or the researcher) is out of quota
                     return _out_of_quota(goal_id, str(e), report)
+                goal = _goal(goal_id)  # the plan may have chosen the workflow template (S04-R-11)
                 _cleared_for(goal_id, plan)
                 ids = _persist(goal_id, iteration, plan)
                 _spec_step(specs.write_plan, goal, iteration, plan)
@@ -1190,7 +1226,8 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
 
             _update_goal(goal_id, status="running", reason=f"iteration {iteration}: {len(ids)} task(s)")
             worker = _make_worker(goal, notes, feedback, started, planner_id)
-            agents = budgets.limits(_goal(goal_id))["agents"]  # S04-R-09: agents working at once
+            # S04-R-09: agents working at once; a sequential template (S04-R-11) runs one task at a time
+            agents = strategies.max_agents(goal, budgets.limits(_goal(goal_id))["agents"])
             run_dag(ids, worker, goal.worktree, lambda: cancelled(goal_id), max_agents=agents)
             if not _halted(goal_id):
                 reviews = _review_conflicts(goal_id, iteration)  # S04-R-03
@@ -1260,6 +1297,7 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                     _push(goal_id)
                 return {"status": status, "iterations": iteration, "report": report}
             feedback = report["feedback"]
+        goal = _goal(goal_id)
         kept = _keep_best(goal_id)
         _update_goal(goal_id, status="failed", result=_summary(goal_id, goal.max_iterations, report) + kept)
         _notify_goal(goal_id, "failed")
@@ -1830,9 +1868,10 @@ def trace(goal_id: int) -> dict[str, Any]:
         ops = [{"key": o.key, "status": o.status, "result": o.result, "at": o.updated_at.isoformat()}
                for o in s.scalars(select(Operation).where(Operation.key.like(f"goal:{goal_id}:%")))]
         head = {"id": g.id, "title": g.title, "status": g.status, "iteration": g.iteration,
-                "project_id": g.project_id, "history": g.history or []}
+                "project_id": g.project_id, "history": g.history or [], "kind": g.kind or "",
+                "strategy": dict(g.strategy or {})}
     out = {"goal": head, "transitions": workflow.history(goal_id), "tasks": tasks, "runs": runs, "gates": gates,
-           "operations": ops}
+           "operations": ops, "team": teams.history(goal_id)}
     out["decisions"] = decisions.list_decisions(goal_id=goal_id)
     return out
 

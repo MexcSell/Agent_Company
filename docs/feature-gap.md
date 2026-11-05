@@ -92,6 +92,7 @@ Machines code):
 | Durable recovery: resume interrupted goals after a restart; merge/push never repeated | SPEC04 §13.2 | done (`Goal.checkpoint`, `operations`, checkpoint commits and worktree reconcile, S04-R-05) |
 | Retry policy and escalation levels for failed tasks | SPEC04 §14 | done (retry by failure type, budget pause, re-plan, repeated-check escalation, S04-R-06; levels 1-5 routed to agent, goal GM, room manager, executive GM, a person, `escalation.py`, S04-R-07) |
 | Task contract fields: scope, risk, test plan, budget, deadline, requirement keys; findings and next actions | Designing guide §3 | done (`contracts.TaskContract`, G-R-01) |
+| Workflow templates per goal kind (bugfix, feature, refactor, research, docs) with versions; strategy picked by the order or the planner; team resizing with history | SPEC04 FR-24..26, §8.4, §20.4 | done (`strategies.py`, `teams.py`, S04-R-11) |
 | Execution trace per goal | SPEC04 FR-30, SPEC14 | partial (`/api/goals/{id}/trace`; tool calls open) → S04-R-12 |
 | Goal-chain depth limit for proposals | SPEC04 §9.4 | done (`max_goal_depth`, message budget, duplicates dropped, unanswered requests escalated, S04-R-08) |
 | Project registration fields (rooms, skills, stack, budget, deadline, priority) and lifecycle (pause, resume, archive, cancel, complete) | ASEAO05 FR-05..09 | done (`projects.set_status`, project budget caps its goals, priority queue, S05-R-06) |

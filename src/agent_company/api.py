@@ -54,6 +54,8 @@ from agent_company import (
     research,
     router,
     selfevolve,
+    strategies,
+    teams,
     terminal,
     training,
     transport,
@@ -72,6 +74,7 @@ def bootstrap() -> None:
     """Seed the catalog and load settings. Safe to call while a server is running."""
     registry.seed()
     router.seed()
+    strategies.seed()
     projects.seed()
     catalog.seed()
     prefs.load()
@@ -196,6 +199,20 @@ class GoalBody(BaseModel):
     protect_tests: bool = False
     permits: list[str] = Field(default_factory=list)  # change boundaries lifted (admins): dependencies, config
     estimated_cost_usd: float = Field(default=0.0, ge=0, le=10_000)  # twice this pauses the goal (S14-R-03)
+    kind: str = ""  # S04-R-11: bugfix|feature|refactor|research|docs; "" = the planner picks
+
+
+class GoalTeamBody(BaseModel):
+    action: str = Field(pattern="^(add|release)$")  # S04-R-11 team resizing
+    role: str = Field(default="", max_length=64)
+    skills: list[str] = Field(default_factory=list, max_length=10)
+    agent_id: int | None = None  # release it, or take a released agent back
+    reason: str = Field(default="", max_length=500)
+
+
+class StrategyBody(BaseModel):
+    body: dict[str, Any]  # every template field (strategies.FIELDS)
+    note: str = Field(default="", max_length=500)
 
 
 class GoalBudgetBody(BaseModel):
@@ -1883,7 +1900,7 @@ def create_app(start_background: bool = True) -> FastAPI:
                                    body.quality_commands, body.max_iterations, created_by=user["id"],
                                    allowed_paths=body.allowed_paths, protect_tests=body.protect_tests,
                                    extract_checks=user["is_admin"], permits=body.permits,
-                                   estimated_cost_usd=body.estimated_cost_usd)
+                                   estimated_cost_usd=body.estimated_cost_usd, kind=body.kind)
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
         if body.repo_path or body.quality_commands or body.permits:
@@ -1917,6 +1934,7 @@ def create_app(start_background: bool = True) -> FastAPI:
         d["decisions"] = decisions.list_decisions(goal_id=goal_id)
         d["blackboard"] = blackboard.read(goal_id)
         d["budget"] = budgets.summary(goal_id)
+        d["team"] = teams.history(goal_id)
         return d
 
     # --- knowledge items (SPEC-11): lessons with provenance; people review, agents never do ---
@@ -2201,6 +2219,48 @@ def create_app(start_background: bool = True) -> FastAPI:
             raise HTTPException(400, str(e)) from e
         _audit(admin, "goal_resume", goal_id)
         return {"ok": True}
+
+    @app.post("/api/goals/{goal_id}/team")
+    def goal_team(goal_id: int, body: GoalTeamBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        """Resize a goal's team (S04-R-11): add a role (or take a released agent back), or release an agent."""
+        actor = f"user:{admin['name']}"
+        try:
+            if body.action == "release":
+                if body.agent_id is None:
+                    raise ValueError("name the agent to release")
+                out = teams.release(goal_id, body.agent_id, body.reason, actor)
+            else:
+                if body.agent_id is None and not body.role.strip():
+                    raise ValueError("name a role to add, or a released agent to take back")
+                out = teams.add(goal_id, body.role, body.skills, body.reason, actor, agent_id=body.agent_id)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, f"goal_team_{body.action}", goal_id, after=body.model_dump(exclude_none=True))
+        return out
+
+    # --- workflow templates (S04-R-11): versioned per goal kind ---
+    @app.get("/api/strategies")
+    def strategy_list(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        return strategies.list_strategies()
+
+    @app.post("/api/strategies/{kind}")
+    def strategy_save(kind: str, body: StrategyBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            before = strategies.effective(kind)
+            out = strategies.save(kind, body.body, f"user:{admin['name']}", body.note)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "strategy_save", kind, before=before, after=out)
+        return out
+
+    @app.post("/api/strategies/{kind}/restore/{version}")
+    def strategy_restore(kind: str, version: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = strategies.restore(kind, version, f"user:{admin['name']}")
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "strategy_restore", f"{kind} v{version}", after={"version": out["version"]})
+        return out
 
     @app.get("/api/goals/{goal_id}/trace")
     def goal_trace(goal_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
@@ -2988,6 +3048,7 @@ def _goal_dict(g: Goal) -> dict[str, Any]:
             "estimated_cost_usd": g.estimated_cost_usd or 0.0, "budget_usd": g.budget_usd or 0.0,
             "budget_tokens": g.budget_tokens or 0, "max_active_agents": g.max_active_agents or 0,
             "paused_for": (g.checkpoint or {}).get("paused_for", ""), "requirement_keys": g.requirement_keys or [],
+            "kind": g.kind or "", "strategy": dict(g.strategy or {}),
             "created_at": g.created_at.isoformat(), "updated_at": g.updated_at.isoformat()}
 
 

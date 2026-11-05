@@ -513,7 +513,15 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
         off = organization.disabled_rooms(s)  # S01-R-01: a disabled room's agents are not staffed
         pool = [a for a in s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active"))
                 if level(a.autonomy) > 0 and a.room_key not in off]  # G0 observes only (S14-R-02)
-        quota = {a.id: over_quota(s, a) for a in pool}  # S02-R-03: the quota covers an agent and its clones
+        from agent_company import teams
+
+        gone = teams.released(s, goal_id)  # S04-R-11: released from this goal's team, with their clones
+        if gone and pool:
+            pool = [a for a in pool if a.id not in gone and a.parent_id not in gone]
+            if not pool:
+                raise RuntimeError(f"every {role} agent was released from goal #{goal_id}'s team; add one back "
+                                   "or plan without the role")
+        quota ={a.id: over_quota(s, a) for a in pool}  # S02-R-03: the quota covers an agent and its clones
         idle = [a for a in pool if _free(a, goal_id) and a.health != "degraded" and not quota[a.id]]  # S02-R-02
         team = _team_weights(s, goal_id)
         trainee = _trainee(s, goal_id, pool, role, writes)  # an exercise or experiment measures one agent (SPEC-13)

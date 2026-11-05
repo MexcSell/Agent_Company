@@ -434,6 +434,10 @@ class Goal(Base):
     # the project's conversation lane the order came from; its reports go there and its goals run in order
     topic: Mapped[str] = mapped_column(String(64), default="general")
     requirement_keys: Mapped[list[Any]] = mapped_column(default=list)  # S08-R-01: project requirements it implements
+    # S04-R-11: bugfix|feature|refactor|research|docs ("" until the order or the planner names one) and the
+    # workflow template (strategy) version it runs under, a snapshot with its source (strategies.py)
+    kind: Mapped[str] = mapped_column(String(16), default="")
+    strategy: Mapped[dict[str, Any]] = mapped_column(default=dict)
     # the order's classification (its attachments, its project at creation); the project's current one may raise it
     classification: Mapped[str] = mapped_column(String(16), default="internal")
     # eval goals only (SPEC-13): experiment_id + side, role -> model overrides, trainee_id (the agent staffed for
@@ -960,6 +964,39 @@ class PolicyVersion(Base):
     value: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"overrides": {...}, "values": {...}}
     author: Mapped[str] = mapped_column(String(128))
     note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Strategy(Base):
+    """A version of the workflow template (orchestration strategy) of one goal kind (SPEC-04 S04-R-11, §20.4): roles,
+    default checks, iteration limit, execution mode and review policy. strategies.py; old versions are kept."""
+
+    __tablename__ = "strategies"
+    __table_args__ = (UniqueConstraint("kind", "version"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    body: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="approved")  # approved|retired
+    author: Mapped[str] = mapped_column(String(128), default="system")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class GoalMember(Base):
+    """A change of a goal's team (SPEC-04 S04-R-11, §8.4): an agent joined (first staffed), was added or released, or
+    a role was requested (its recruitment waits). Rows are never changed, so earlier assignments stay. teams.py."""
+
+    __tablename__ = "goal_members"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    goal_id: Mapped[int] = mapped_column(Integer, index=True)
+    agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    role: Mapped[str] = mapped_column(String(64), default="")
+    action: Mapped[str] = mapped_column(String(16))  # joined|added|released|requested
+    reason: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(128), default="system")
+    iteration: Mapped[int] = mapped_column(Integer, default=0)
+    task_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
