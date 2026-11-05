@@ -20,7 +20,7 @@ feature came from.
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals, uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress;
   blockers and generated items are reconciled from goal state by `sync`); `learning.py` (knowledge items: provenance, screening, scoped ranked retrieval)
   + `evolution.py`; `performance.py` (defects, certification,
-  metrics); `evaluation.py` (eval harness); `research.py`; `governance.py` (audit, notifications,
+  metrics); `evaluation.py` (eval harness); `research.py` (crawl, knowledge, sources with monitoring rules: versions on change, intelligence events); `governance.py` (audit, notifications,
   command policy, emergency stops E0-E5, incidents, behaviour-rule alerts); `prefs.py` (DB settings); `gitsync.py` (push with each user's own GitHub token or SSH key, `data/git-keys/`); `files.py`; `supervisor.py` + `system.py`;
   `containers.py` (Docker and LXD VMs on the host: install, start, clean up; admin-only);
   `machines.py` (Machines view, from AXoR in /home/thomas/axor-3.0.zip: Linux/Windows KVM VMs as Docker

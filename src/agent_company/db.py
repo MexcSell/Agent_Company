@@ -516,7 +516,25 @@ class Document(Base):
     collected_by: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
     category: Mapped[str] = mapped_column(String(32), default="")  # kind of source (ASEAO06 §9)
     flags: Mapped[list[Any]] = mapped_column(default=list)  # prompt-injection signals (SPEC14 §9)
+    # change detection (ASEAO06 S06-R-02): a refetch with another hash is a new version, the old one is kept
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class DocumentVersion(Base):
+    """An earlier version of a collected page, kept when a refetch found it changed (S06-R-02)."""
+
+    __tablename__ = "document_versions"
+    __table_args__ = (UniqueConstraint("document_id", "version"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    title: Mapped[str] = mapped_column(Text, default="")
+    text: Mapped[str] = mapped_column(Text, default="")
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ResearchReport(Base):
@@ -545,6 +563,11 @@ class Source(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
+    # monitoring rules (S06-R-02): hourly|daily|weekly|monthly|manual, "" = the global rotation interval
+    interval: Mapped[str] = mapped_column(String(16), default="")
+    subject: Mapped[str] = mapped_column(Text, default="")  # words a change must mention to be an event; "" = any
+    notify_room: Mapped[str] = mapped_column(String(64), default="")  # whose agents hear of a relevant change
+    not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # Retry-After
 
 
 class User(Base):

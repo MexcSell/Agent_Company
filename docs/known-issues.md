@@ -118,3 +118,11 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 | K2 | The administrator's own Claude Code panel (Projects → General Manager, the Workspace) is not filtered by classification: it is the owner's tool, not an agent (CLAUDE.md). | by decision |
 | K3 | Whether a model is "local" is read from its address (localhost, 127.0.0.1, ::1) or provider (Ollama, vLLM); a model on another machine of your own network counts as hosted until it is cleared by hand. | by design |
 | K4 | A classification chosen for an order applies to the files attached to it; a file uploaded and never sent keeps the level chosen at upload. | by design |
+
+## Added 2026-11-05 (source monitoring, ASEAO06 S06-R-02)
+
+| # | Problem | Status |
+|---|---------|--------|
+| W1 | Sources are only visited while the rotation runs (Settings → `rotation_interval` > 0); with it at 0 (the default) per-source intervals do nothing and only the Run buttons fetch. | by design |
+| W2 | The rotation now wakes every 5 minutes (or its interval, if shorter) and takes one due source per wake-up, so every source is visited once per its interval; before, one source was visited per rotation interval in turn. With many hourly sources a wake-up still serves only one. | by design |
+| W3 | A change is "relevant" when the new page contains one of the subject's words anywhere, not when the changed lines do. | open (low) |

@@ -434,6 +434,24 @@ async function goalDetail(id, openIds = new Set()) {
 }
 
 // --- research -------------------------------------------------------------------
+// Monitoring rules of a research source (ASEAO06 S06-R-02): how often, which words make a change matter, whose
+// agents hear of it.
+const SRC_INTERVALS = [["", "rotation interval"], ["hourly", "hourly"], ["daily", "daily"], ["weekly", "weekly"], ["monthly", "monthly"], ["manual", "manual only"]];
+async function sourceForm(s) {
+  const rooms = await api("/api/rooms");
+  modal(`<h2>${icon("research", 18)} ${esc(s.url)}</h2><form id="sf">
+    <label for="sf-int">Check</label><select id="sf-int">${SRC_INTERVALS.map(([v, l]) => `<option value="${v}" ${s.interval === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+    <label for="sf-subj">Subject: a change is an event when the page mentions one of these words (empty: every change)</label><input id="sf-subj" value="${esc(s.subject)}">
+    <label for="sf-room">Tell the agents of this room about relevant changes</label><select id="sf-room"><option value="">nobody (notification only)</option>${rooms.map((r) => `<option value="${esc(r.key)}" ${s.notify_room === r.key ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select>
+    <div class="row"><div class="grow"><label for="sf-depth">Link depth</label><input id="sf-depth" type="number" min="0" max="3" value="${s.depth}"></div><div class="grow"><label for="sf-max">Max pages</label><input id="sf-max" type="number" min="1" max="200" value="${s.max_pages}"></div></div>
+    <label class="row" style="margin-top:8px"><input type="checkbox" id="sf-on" style="width:auto" ${s.enabled ? "checked" : ""}> Enabled</label>
+    <div class="row" style="margin-top:12px"><button class="btn icon primary" title="Save" aria-label="Save">${icon("save", 16)}</button></div></form>`);
+  $("#sf").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api(`/api/research/sources/${s.id}`, { method: "PATCH", body: { interval: $("#sf-int").value, subject: $("#sf-subj").value, notify_room: $("#sf-room").value, depth: +$("#sf-depth").value, max_pages: +$("#sf-max").value, enabled: $("#sf-on").checked } }); $("#modal").hidden = true; viewResearch(); } catch (err) { toast(err.message); }
+  };
+}
+
 async function viewResearch(quiet) {
   if (quiet && $("#r-crawl")) return; // keep forms and results stable
   const [docs, src, reports] = await Promise.all([api("/api/research/documents"), api("/api/research/sources"), api("/api/research/requests")]);
@@ -442,13 +460,13 @@ async function viewResearch(quiet) {
       <div class="row"><div class="grow"><label>Link depth (0 = this page only)</label><input id="r-depth" type="number" min="0" max="3" value="1"></div><div class="grow"><label>Max pages</label><input id="r-max" type="number" min="1" max="200" value="20"></div></div>
       <div class="row" style="margin-top:10px"><button class="btn primary">Collect</button></div></form><div id="r-out"></div></div>
     <div class="card"><h2>Rotation sources</h2><p class="muted">The external-data room visits these in turn${src.interval ? ` every ${src.interval}s` : " (set ROTATION_INTERVAL to run automatically)"}. Roster: ${src.roster.length} agent(s).</p>
-      ${src.sources.map((s) => `<div class="events"><div>${esc(s.url)} <span class="muted">depth ${s.depth} · ${ago(s.last_run_at)}</span></div></div>`).join("")}
-      ${me.is_admin ? `<form id="r-src" class="row" style="margin-top:8px"><input id="r-src-url" class="grow" type="url" required placeholder="https://news.example.com/"><button class="btn">Add</button><button class="btn" type="button" id="r-rotate">Run next</button></form>` : ""}</div></div>
+      <div class="events">${src.sources.map((s) => `<div class="row nowrap"><span class="grow ellipsis" title="${esc(s.url)}">${esc(s.url)} <span class="muted">${esc(s.interval || "rotation")}${s.subject ? ` · watching “${esc(s.subject)}”` : ""}${s.notify_room ? ` · tells ${esc(s.notify_room.replace(/_/g, " "))}` : ""} · depth ${s.depth} · ${ago(s.last_run_at)}${s.not_before && new Date(s.not_before) > new Date() ? ` · held until ${new Date(s.not_before).toLocaleString()}` : ""}${s.enabled ? "" : " · off"}</span></span>${me.is_admin ? ib("play", "Run this source now", `data-srun="${s.id}"`, "sm") + ib("edit", "Monitoring rules", `data-sedit="${s.id}"`, "sm") : ""}</div>`).join("")}</div>
+      ${me.is_admin ? `<form id="r-src" class="row" style="margin-top:8px"><input id="r-src-url" class="grow" type="url" required placeholder="https://news.example.com/"><select id="r-src-int" style="width:auto" title="How often to check it">${SRC_INTERVALS.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select><input id="r-src-subj" placeholder="subject words (optional)" style="max-width:180px"><button class="btn">Add</button><button class="btn" type="button" id="r-rotate">Run next</button></form>` : ""}</div></div>
     <div class="grid"><div class="card"><h2>Ask the research room</h2><form id="r-ask"><label>Question</label><textarea id="r-question" rows="2" required minlength="5" placeholder="Which agent framework fits a hierarchical team, and why?"></textarea>
       <label>Sources to read first (optional, one URL per line)</label><textarea id="r-urls" rows="2" placeholder="https://docs.crewai.com/"></textarea><div class="row" style="margin-top:8px"><button class="btn primary">Ask</button></div></form>
       <div class="events" style="margin-top:8px">${reports.map((r) => `<div class="row"><a href="#" data-report="${r.id}" class="grow">${esc(r.question)}</a>${pill(r.status)}<span class="muted">${r.sources.length} source(s) · ${ago(r.at)}</span></div>`).join("") || '<span class="muted">No reports yet.</span>'}</div></div>
     <div class="card"><h2>Search knowledge</h2><form id="r-search" class="row"><input id="r-q" class="grow" placeholder="What do we know about…"><button class="btn">Search</button></form><div id="r-hits"></div></div>
-    <div class="card"><h2>Collected pages (${docs.length})</h2><div class="events">${docs.slice(0, 80).map((d) => `<div><a href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">${esc(d.title || d.url)}</a> <span class="pill">${esc(d.category)}</span>${(d.flags || []).length ? ` <span class="pill failed" title="kept out of agent prompts">${esc(d.flags.join(", "))}</span>` : ""} <span class="muted">${fmt.format(d.chars)} chars · ${ago(d.at)}</span></div>`).join("") || '<span class="muted">Nothing collected yet.</span>'}</div></div></div></div>`;
+    <div class="card"><h2>Collected pages (${docs.length})</h2><div class="events">${docs.slice(0, 80).map((d) => `<div><a href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">${esc(d.title || d.url)}</a> <span class="pill">${esc(d.category)}</span>${(d.flags || []).length ? ` <span class="pill failed" title="kept out of agent prompts">${esc(d.flags.join(", "))}</span>` : ""} ${d.version > 1 ? ` <span class="pill info" title="changed since it was first collected">v${d.version}</span>` : ""} <span class="muted">${fmt.format(d.chars)} chars · ${ago(d.at)}</span></div>`).join("") || '<span class="muted">Nothing collected yet.</span>'}</div></div></div></div>`;
   $("#r-crawl").onsubmit = async (e) => {
     e.preventDefault(); $("#r-out").innerHTML = '<p class="muted">Collecting…</p>';
     try { const r = await api("/api/research/crawl", { method: "POST", body: { url: $("#r-url").value, depth: +$("#r-depth").value, max_pages: +$("#r-max").value } }); $("#r-out").innerHTML = `<p>Stored ${r.stored} of ${r.pages} page(s).</p>${r.errors.length ? `<pre>${esc(r.errors.map((x) => `${x.url}: ${x.error}`).join("\n"))}</pre>` : ""}`; setTimeout(() => viewResearch(), 1500); }
@@ -458,7 +476,9 @@ async function viewResearch(quiet) {
   $("#r-ask").onsubmit = async (e) => { e.preventDefault(); try { await api("/api/research/requests", { method: "POST", body: { question: $("#r-question").value, urls: $("#r-urls").value.split("\n").map((x) => x.trim()).filter(Boolean) } }); toast("Asked; the report appears here when it is ready"); setTimeout(() => viewResearch(), 1500); } catch (err) { toast(err.message); } };
   document.querySelectorAll("[data-report]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); const r = reports.find((x) => x.id === Number(a.dataset.report)); modal(`<h2>${esc(r.question)}</h2>${pill(r.status)}<div class="md">${typeof renderMarkdown === "function" ? renderMarkdown(r.report || "(not ready yet)") : `<pre>${esc(r.report)}</pre>`}</div>`); }));
   if (me.is_admin) {
-    $("#r-src").onsubmit = async (e) => { e.preventDefault(); try { await api("/api/research/sources", { method: "POST", body: { url: $("#r-src-url").value } }); viewResearch(); } catch (err) { toast(err.message); } };
+    $("#r-src").onsubmit = async (e) => { e.preventDefault(); try { await api("/api/research/sources", { method: "POST", body: { url: $("#r-src-url").value, interval: $("#r-src-int").value, subject: $("#r-src-subj").value } }); viewResearch(); } catch (err) { toast(err.message); } };
+    document.querySelectorAll("[data-srun]").forEach((b) => (b.onclick = async () => { try { const r = await api(`/api/research/sources/${b.dataset.srun}/run`, { method: "POST" }); toast(r.url ? `${r.stored} page(s): ${r.new || 0} new, ${r.changed?.length || 0} changed, ${r.events || 0} event(s)` : r.detail); viewResearch(); } catch (err) { toast(err.message); } }));
+    document.querySelectorAll("[data-sedit]").forEach((b) => (b.onclick = () => sourceForm(src.sources.find((s) => s.id === Number(b.dataset.sedit)))));
     $("#r-rotate").onclick = async () => { try { const r = await api("/api/research/rotate", { method: "POST" }); toast(r.url ? `Agent ${r.agent_id} visited ${r.url}: ${r.stored} page(s)` : r.detail); viewResearch(); } catch (err) { toast(err.message); } };
   }
 }

@@ -172,7 +172,9 @@ class CrawlBody(BaseModel):
 
 
 class SourceBody(CrawlBody):
-    pass
+    interval: str = ""  # hourly|daily|weekly|monthly|manual; "" = the rotation interval (S06-R-02)
+    subject: str = Field(default="", max_length=500)
+    notify_room: str = ""
 
 
 class ResearchBody(BaseModel):
@@ -1488,7 +1490,8 @@ def create_app(start_background: bool = True) -> FastAPI:
         with session() as s:
             return [{"id": d.id, "url": d.url, "title": d.title, "chars": len(d.text),
                      "source": d.source_url, "at": d.created_at.isoformat(),
-                     "category": d.category or research.classify_source(d.url), "flags": d.flags or []}
+                     "category": d.category or research.classify_source(d.url), "flags": d.flags or [],
+                     "version": d.version or 1}
                     for d in s.scalars(select(research.Document).order_by(research.Document.id.desc()).limit(300))]
 
     @app.get("/api/research/sources")
@@ -1497,8 +1500,26 @@ def create_app(start_background: bool = True) -> FastAPI:
                 "interval": settings().rotation_interval}
 
     @app.post("/api/research/sources")
-    def source_add(body: SourceBody, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
-        return research.add_source(body.url, body.depth, body.max_pages)
+    def source_add(body: SourceBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = research.add_source(body.url, body.depth, body.max_pages, body.interval, body.subject, body.notify_room)
+        _audit(admin, "source_add", out["url"], after={k: out[k] for k in ("interval", "subject", "notify_room")})
+        return out
+
+    @app.patch("/api/research/sources/{source_id}")
+    def source_update(source_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                      ) -> dict[str, Any]:
+        out = research.update_source(source_id, body)
+        _audit(admin, "source_update", out["url"], after=body)
+        return out
+
+    @app.post("/api/research/sources/{source_id}/run")
+    def source_run(source_id: int, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return research.rotation_tick(source_id=source_id) or {"ran": False, "detail": "source disabled or unknown, "
+                                                                                      "or no research agent"}
+
+    @app.get("/api/research/documents/{document_id}/versions")
+    def document_versions(document_id: int, _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        return research.document_versions(document_id)
 
     @app.post("/api/research/rotate")
     def rotate(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:

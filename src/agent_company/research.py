@@ -4,10 +4,18 @@ and visit registered sources on a rotation of research agents.
 Pipeline: new information (crawl) -> research (summaries) -> knowledge (documents)
 -> experiments (goal iterations) -> evaluation (quality gate) -> improved agents
 (lessons and playbooks, see learning.py).
+
+Monitoring (ASEAO06 S06-R-02): each source has an interval (hourly to monthly, or manual) and optionally a
+subject and a room. A refetched page whose content hash changed becomes a new version (the previous one is
+kept in `document_versions`); a change that mentions the subject is an intelligence event: an `events` row with
+a diff summary, a note to each agent of the source's room and a notification. `Retry-After` on 429/503 holds
+the source until then.
 """
 
 from __future__ import annotations
 
+import difflib
+import hashlib
 import ipaddress
 import os
 import re
@@ -23,7 +31,18 @@ from urllib.robotparser import RobotFileParser
 import httpx
 from sqlalchemy import or_, select
 
-from agent_company.db import Agent, Document, Lesson, ResearchReport, Room, Source, log_event, now, session
+from agent_company.db import (
+    Agent,
+    Document,
+    DocumentVersion,
+    Lesson,
+    ResearchReport,
+    Room,
+    Source,
+    log_event,
+    now,
+    session,
+)
 
 USER_AGENT = "AgentCompanyResearch/0.2 (+https://github.com/crewAIInc/crewAI)"
 MAX_BYTES = 2_000_000
@@ -141,6 +160,10 @@ def crawl(start_url: str, depth: int = 1, max_pages: int = 20, same_host: bool =
                     pages.append({"url": url, "error": f"redirect to {nxt} not followed"})
                 continue
             ctype = resp.headers.get("content-type", "")
+            if resp.status_code in (429, 503):  # rate limited: stop here and say when to come back (§13.2)
+                wait = _retry_after(resp.headers.get("retry-after", ""))
+                pages.append({"url": url, "error": f"HTTP {resp.status_code}", "retry_after": wait})
+                break
             if resp.status_code >= 400 or not ("html" in ctype or ctype.startswith("text/")):
                 pages.append({"url": url, "error": f"HTTP {resp.status_code} {ctype}".strip()})
                 continue
@@ -167,6 +190,20 @@ def crawl(start_url: str, depth: int = 1, max_pages: int = 20, same_host: bool =
         if own:
             c.close()
     return pages
+
+
+def _retry_after(value: str, default: int = 3600) -> int:
+    """Seconds from a Retry-After header (seconds or an HTTP date), at most a week."""
+    from email.utils import parsedate_to_datetime
+
+    value = (value or "").strip()
+    if value.isdigit():
+        return min(int(value), 7 * 86400)
+    try:
+        when = parsedate_to_datetime(value)
+        return max(0, min(int((when - now()).total_seconds()), 7 * 86400))
+    except (TypeError, ValueError):
+        return default
 
 
 def _robots_ok(c: httpx.Client, cache: dict[str, RobotFileParser], url: str) -> bool:
@@ -223,34 +260,99 @@ def injection_flags(text: str) -> list[str]:
     return [name for name, pattern in INJECTION if pattern.search(text or "")]
 
 
-def store(pages: list[dict[str, Any]], source_url: str, agent_id: int | None = None) -> int:
-    n = 0
+KEEP_VERSIONS = 5  # earlier versions kept per page
+
+
+def content_hash(title: str, text: str) -> str:
+    """Whitespace-insensitive, so a reflowed page is not a change."""
+    return hashlib.sha256(" ".join(f"{title}\n{text}".split()).encode()).hexdigest()
+
+
+def diff_summary(old: str, new: str, lines: int = 3) -> dict[str, Any]:
+    a = [x.strip() for x in old.splitlines() if x.strip()]
+    b = [x.strip() for x in new.splitlines() if x.strip()]
+    added, removed = [], []
+    for d in difflib.ndiff(a, b):
+        if d.startswith("+ "):
+            added.append(d[2:])
+        elif d.startswith("- "):
+            removed.append(d[2:])
+    return {"added": len(added), "removed": len(removed), "sample": [x[:160] for x in added[:lines]]}
+
+
+def store_pages(pages: list[dict[str, Any]], source_url: str, agent_id: int | None = None) -> dict[str, Any]:
+    """Store fetched pages. A page seen before with the same content hash only gets a new fetch time; with another
+    hash its previous version is kept and the page's version goes up. Returns counts and the changes."""
+    out: dict[str, Any] = {"stored": 0, "new": 0, "unchanged": 0, "changed": []}
     with session() as s:
         for page in pages:
             if page.get("error") or not page.get("text"):
                 continue
+            title, text = page.get("title", ""), page["text"][:200_000]
+            digest = content_hash(title, text)
             doc = s.scalars(select(Document).where(Document.url == page["url"])).first()
+            out["stored"] += 1
+            if doc is not None and (doc.content_hash or content_hash(doc.title, doc.text)) == digest:
+                doc.content_hash, doc.fetched_at = digest, now()
+                out["unchanged"] += 1
+                continue
             if doc is None:
-                doc = Document(url=page["url"])
+                doc = Document(url=page["url"], version=1)
                 s.add(doc)
-            doc.title, doc.text = page.get("title", ""), page["text"][:200_000]
+                out["new"] += 1
+            else:
+                s.add(DocumentVersion(document_id=doc.id, version=doc.version or 1, title=doc.title, text=doc.text,
+                                      content_hash=doc.content_hash or content_hash(doc.title, doc.text),
+                                      fetched_at=doc.fetched_at or doc.created_at))
+                old = s.scalars(select(DocumentVersion).where(DocumentVersion.document_id == doc.id)
+                                .order_by(DocumentVersion.version.desc()).offset(KEEP_VERSIONS)).all()
+                for v in old:
+                    s.delete(v)
+                out["changed"].append({"url": doc.url, "title": title or doc.title, "version": (doc.version or 1) + 1,
+                                       **diff_summary(doc.text, text), "text": text})
+                doc.version = (doc.version or 1) + 1
+            doc.title, doc.text, doc.content_hash, doc.fetched_at = title, text, digest, now()
             doc.source_url, doc.collected_by, doc.created_at = source_url, agent_id, now()
             doc.category = classify_source(page["url"])
             doc.flags = injection_flags(f"{doc.title}\n{doc.text}")
-            n += 1
-    return n
+            s.flush()
+            if out["changed"] and out["changed"][-1]["url"] == doc.url:
+                out["changed"][-1]["document_id"] = doc.id
+    return out
+
+
+def store(pages: list[dict[str, Any]], source_url: str, agent_id: int | None = None) -> int:
+    return store_pages(pages, source_url, agent_id)["stored"]
+
+
+def document_versions(document_id: int) -> list[dict[str, Any]]:
+    with session() as s:
+        d = s.get(Document, document_id)
+        if d is None:
+            raise KeyError(document_id)
+        cur = [{"version": d.version or 1, "title": d.title, "hash": d.content_hash, "chars": len(d.text),
+                "fetched_at": (d.fetched_at or d.created_at).isoformat(), "current": True}]
+        return cur + [{"version": v.version, "title": v.title, "hash": v.content_hash, "chars": len(v.text),
+                       "fetched_at": v.fetched_at.isoformat() if v.fetched_at else None, "current": False}
+                      for v in s.scalars(select(DocumentVersion).where(DocumentVersion.document_id == document_id)
+                                         .order_by(DocumentVersion.version.desc()))]
 
 
 def collect(url: str, depth: int = 1, max_pages: int = 20, agent_id: int | None = None,
             goal_id: int | None = None, client: httpx.Client | None = None,
-            allow_private: bool | None = None) -> dict[str, Any]:
+            allow_private: bool | None = None, keep_text: bool = False) -> dict[str, Any]:
     pages = crawl(url, depth, max_pages, client=client, allow_private=allow_private)
-    stored = store(pages, url, agent_id)
+    result = store_pages(pages, url, agent_id)
+    stored = result["stored"]
+    if not keep_text:  # the changed pages' text is for the monitoring rules only
+        result["changed"] = [{k: v for k, v in c.items() if k != "text"} for c in result["changed"]]
     errors = [p for p in pages if p.get("error")]
     flagged = [p["url"] for p in pages if not p.get("error") and injection_flags(f"{p.get('title', '')}\n{p.get('text', '')}")]
     log_event("research", f"collected {stored} page(s) from {url}" + (f"; {len(flagged)} flagged as possible prompt "
               "injection" if flagged else ""), goal_id=goal_id, agent_id=agent_id, errors=len(errors))
-    return {"url": url, "pages": len(pages), "stored": stored,
+    return {"url": url, "pages": len(pages), "stored": stored, "new": result["new"], "unchanged": result["unchanged"],
+            "changed": result["changed"],
+            "retry_after": max([p["retry_after"] for p in errors if p.get("retry_after") is not None], default=None),
             "errors": [{"url": p["url"], "error": p["error"]} for p in errors][:20],
             "titles": [p.get("title") or p["url"] for p in pages if not p.get("error")][:50],
             "flagged": flagged[:20]}
@@ -288,15 +390,52 @@ def _snippet(text: str, terms: list[str], width: int = 600) -> str:
 
 # --- Rotation -------------------------------------------------------------------
 
-def add_source(url: str, depth: int = 1, max_pages: int = 20) -> dict[str, Any]:
+INTERVALS = {"hourly": 3600, "daily": 86400, "weekly": 7 * 86400, "monthly": 30 * 86400, "manual": None}
+
+
+def _check_rules(s, interval: str, notify_room: str) -> None:  # noqa: ANN001
+    if interval and interval not in INTERVALS:
+        raise ValueError(f"interval is one of {', '.join(INTERVALS)} (or empty for the rotation interval)")
+    if notify_room and s.scalars(select(Room).where(Room.key == notify_room)).first() is None:
+        raise ValueError(f"unknown room {notify_room!r}")
+
+
+def add_source(url: str, depth: int = 1, max_pages: int = 20, interval: str = "", subject: str = "",
+               notify_room: str = "") -> dict[str, Any]:
     if urlparse(url).scheme not in {"http", "https"}:
         raise ValueError("only http(s) URLs")
     with session() as s:
+        _check_rules(s, interval, notify_room)
         src = s.scalars(select(Source).where(Source.url == url)).first()
         if src is None:
             src = Source(url=url)
             s.add(src)
         src.depth, src.max_pages, src.enabled = depth, max_pages, True
+        src.interval, src.subject, src.notify_room = interval, subject.strip()[:500], notify_room
+        s.flush()
+        return source_dict(src)
+
+
+def update_source(source_id: int, changes: dict[str, Any]) -> dict[str, Any]:
+    bad = set(changes) - {"depth", "max_pages", "enabled", "interval", "subject", "notify_room"}
+    if bad:
+        raise ValueError(f"not editable: {', '.join(sorted(bad))}")
+    with session() as s:
+        src = s.get(Source, source_id)
+        if src is None:
+            raise KeyError(source_id)
+        _check_rules(s, changes.get("interval", src.interval), changes.get("notify_room", src.notify_room))
+        if "depth" in changes:
+            src.depth = max(0, min(3, int(changes["depth"])))
+        if "max_pages" in changes:
+            src.max_pages = max(1, min(200, int(changes["max_pages"])))
+        if "enabled" in changes:
+            src.enabled = bool(changes["enabled"])
+        for k in ("interval", "notify_room"):
+            if k in changes:
+                setattr(src, k, str(changes[k] or ""))
+        if "subject" in changes:
+            src.subject = str(changes["subject"] or "").strip()[:500]
         s.flush()
         return source_dict(src)
 
@@ -304,7 +443,54 @@ def add_source(url: str, depth: int = 1, max_pages: int = 20) -> dict[str, Any]:
 def source_dict(src: Source) -> dict[str, Any]:
     return {"id": src.id, "url": src.url, "depth": src.depth, "max_pages": src.max_pages,
             "enabled": src.enabled, "last_run_at": src.last_run_at.isoformat() if src.last_run_at else None,
-            "last_agent_id": src.last_agent_id}
+            "last_agent_id": src.last_agent_id, "interval": src.interval or "", "subject": src.subject or "",
+            "notify_room": src.notify_room or "",
+            "not_before": src.not_before.isoformat() if src.not_before else None}
+
+
+def _due(src: Source, default_age: int, at) -> bool:  # noqa: ANN001
+    """Its own interval has passed (the rotation's when it has none); manual sources only run when asked."""
+    naive = at.replace(tzinfo=None)
+    if src.not_before is not None and src.not_before.replace(tzinfo=None) > naive:
+        return False
+    if src.interval == "manual":
+        return False
+    age = INTERVALS.get(src.interval) if src.interval else default_age
+    return src.last_run_at is None or src.last_run_at.replace(tzinfo=None) <= naive - timedelta(seconds=age or 0)
+
+
+def relevant(subject: str, title: str, text: str) -> bool:
+    """A change matters when the page mentions any of the subject's words (every change, without a subject)."""
+    words = [w.lower() for w in _WORD.findall(subject or "")]
+    if not words:
+        return True
+    low = f"{title}\n{text}".lower()
+    return any(w in low for w in words)
+
+
+def _intelligence(src_url: str, subject: str, room: str, agent_id: int, changes: list[dict[str, Any]]) -> int:
+    """One event per relevant change: an `events` row with the diff summary, a note to the room's agents (their
+    research lessons, read with their experience) and a notification."""
+    from agent_company.governance import notify
+
+    n = 0
+    for c in changes:
+        if not relevant(subject, c.get("title", ""), c.get("text", "")):
+            continue
+        n += 1
+        summary = (f"{c.get('title') or c['url']} changed (v{c['version']}: +{c['added']} / -{c['removed']} lines)"
+                   + (": " + " | ".join(c["sample"]) if c["sample"] else ""))
+        with session() as s:
+            log_event("intelligence", summary[:1000], agent_id=agent_id, s=s, url=c["url"], source=src_url,
+                      document_id=c.get("document_id"), version=c["version"], added=c["added"],
+                      removed=c["removed"], subject=subject)
+            ids = list(s.scalars(select(Agent.id).where(Agent.room_key == room, Agent.lifecycle == "active"))) \
+                if room else []
+            for aid in ids:
+                s.add(Lesson(agent_id=aid, text=f"Source change: {summary}"[:1000], outcome="research"))
+            notify(f"Changed: {c.get('title') or c['url']}"[:256], summary[:4000], level="info", source="research",
+                   admin_only=True, s=s)
+    return n
 
 
 def list_sources() -> list[dict[str, Any]]:
@@ -323,8 +509,9 @@ def rotation_roster() -> list[int]:
 
 
 def rotation_tick(min_age_seconds: int = 0, client: httpx.Client | None = None,
-                  allow_private: bool | None = None) -> dict[str, Any] | None:
-    """Give the next due source to the next agent on the roster. Returns what ran."""
+                  allow_private: bool | None = None, source_id: int | None = None) -> dict[str, Any] | None:
+    """Give the next due source (or `source_id`, due or not, manual ones too) to the next agent on the roster.
+    Returns what ran."""
     from agent_company.governance import stopped
 
     if stopped(executor="research"):  # E5, or E0 on web research
@@ -332,11 +519,11 @@ def rotation_tick(min_age_seconds: int = 0, client: httpx.Client | None = None,
     roster = rotation_roster()
     if not roster:
         return None
-    cutoff = now() - timedelta(seconds=min_age_seconds)
+    at = now()
     with session() as s:
         srcs = s.scalars(select(Source).where(Source.enabled)).all()
-        due = [x for x in srcs if x.last_run_at is None or x.last_run_at.replace(tzinfo=None)
-               <= cutoff.replace(tzinfo=None)]
+        due = [x for x in srcs if x.id == source_id] if source_id is not None else \
+            [x for x in srcs if _due(x, min_age_seconds, at)]
         if not due:
             return None
         src = min(due, key=lambda x: (x.last_run_at is not None,
@@ -346,11 +533,18 @@ def rotation_tick(min_age_seconds: int = 0, client: httpx.Client | None = None,
         idx = (roster.index(last) + 1) % len(roster) if last in roster else 0
         agent_id = roster[idx]
         src.last_run_at, src.last_agent_id = now(), agent_id
-        url, depth, max_pages = src.url, src.depth, src.max_pages
+        src_id, url, depth, max_pages = src.id, src.url, src.depth, src.max_pages
+        subject, room = src.subject or "", src.notify_room or ""
     try:
-        result = collect(url, depth, max_pages, agent_id=agent_id, client=client, allow_private=allow_private)
+        result = collect(url, depth, max_pages, agent_id=agent_id, client=client, allow_private=allow_private,
+                         keep_text=True)
     except (ValueError, httpx.HTTPError) as e:
-        result = {"url": url, "stored": 0, "errors": [{"url": url, "error": str(e)}]}
+        result = {"url": url, "stored": 0, "changed": [], "errors": [{"url": url, "error": str(e)}]}
+    result["events"] = _intelligence(url, subject, room, agent_id, result.get("changed") or [])
+    result["changed"] = [{k: v for k, v in c.items() if k != "text"} for c in result.get("changed") or []]
+    if result.get("retry_after") is not None:  # the site asked us to wait (§13.2)
+        with session() as s:
+            s.get(Source, src_id).not_before = now() + timedelta(seconds=result["retry_after"])
     with session() as s:
         s.add(Lesson(agent_id=agent_id, text=f"Visited {url}: stored {result['stored']} page(s).",
                      outcome="research"))
@@ -368,7 +562,9 @@ class RotationThread(threading.Thread):
         self.stop = threading.Event()
 
     def run(self) -> None:
-        while not self.stop.wait(self.interval):
+        # wake at least every 5 minutes so hourly sources are served; sources without an interval of their own
+        # still wait the rotation interval (min_age_seconds)
+        while not self.stop.wait(min(self.interval, 300)):
             try:
                 rotation_tick(min_age_seconds=self.interval)
             except Exception as e:  # noqa: BLE001 - keep the rota alive
