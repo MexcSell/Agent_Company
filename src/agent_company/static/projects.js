@@ -281,7 +281,7 @@ async function projectPlan(id) {
     <div class="ellipsis" title="${esc(r.text)}">${esc(r.text.split("\n")[0])}</div>${r.failing.length ? `<div class="muted">Failing: ${esc(r.failing.join(" · "))}</div>` : ""}${r.goals.length ? `<div class="row">${r.goals.map((g) => `<a href="#" data-goal="${g}">#${g}</a>`).join(" ")}</div>` : ""}</div>`;
   const reqOpen = box.querySelector("#req-sec")?.open;
   const reqs = tr ? `<section class="plan-sec"><details id="req-sec" ${reqOpen ? "open" : ""}><summary class="row nowrap"><h3 class="grow" style="margin:0;display:inline">Requirements</h3>
-      <span class="muted">${tr.counts.total} · ${tr.counts.implemented} implemented · ${tr.counts.tested} tested · ${tr.counts.merged} merged${tr.counts.conflicts ? ` · ${tr.counts.conflicts} in conflict` : ""}</span>
+      <span class="muted">${tr.counts.total} · ${tr.counts.implemented} implemented · ${tr.counts.tested} tested · ${tr.counts.merged} merged${tr.counts.untested ? ` · <span title="S09-R-06: agreed requirements no passing check covers in their current version: ${esc((tr.untested || []).join(", "))}">${tr.counts.untested} untested</span>` : ""}${tr.counts.conflicts ? ` · ${tr.counts.conflicts} in conflict` : ""}</span>
       ${admin ? ib("plus", "Add requirement", 'data-add="requirement"', "sm") + ib("download", "Import docs/requirements of the project", "data-req-import", "sm") : ""}</summary>
       <div class="list">${tr.requirements.map(req).join("") || '<p class="muted">No requirements yet. Goals name them by key (REQ-001) in their text.</p>'}</div></details></section>` : "";
   // Capability gap (SPEC-03 S03-R-01): available = sum of skill level/5 x free capacity x verification (a recruit's

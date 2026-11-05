@@ -305,7 +305,17 @@ def on_gate(goal_id: int, iteration: int, report: dict[str, Any]) -> None:
         tasks = list(s.scalars(select(Task).where(Task.goal_id == goal_id, Task.iteration == iteration)))
         per_task = {t.id: {str(k).upper() for k in (t.contract or {}).get("requirement_keys") or []} for t in tasks}
         goal_keys = {str(k).upper() for k in g.requirement_keys or []}
-        wanted = goal_keys.union(*per_task.values()) if per_task else goal_keys
+        # S09-R-06: a quality command or a task's acceptance command may name the requirements it tests
+        named = [(name[8:], {str(k).upper() for k in c["requirement_keys"]}, c) for name, c in checks.items()
+                 if name.startswith("command ") and c.get("requirement_keys")]
+        for t in tasks:
+            for a in (t.gate or {}).get("acceptance", []):
+                cond = a.get("condition") or {}
+                if cond.get("type") == "command" and cond.get("requirement_keys"):
+                    named.append((f"task {t.key}: {cond.get('run') or ''}",
+                                  {str(k).upper() for k in cond["requirement_keys"]}, a))
+        worked = goal_keys.union(*per_task.values())
+        wanted = worked.union(*(k for _, k, _ in named))
         reqs = _by_key(s, g.project_id, wanted)
         unknown = sorted(wanted - set(reqs))
         if unknown:
@@ -321,10 +331,14 @@ def on_gate(goal_id: int, iteration: int, report: dict[str, Any]) -> None:
                 _link(s, reqs[k], "task", f"task:{t.id}", goal_id, iteration, bool(c.get("passed")),
                       f"{t.title}: {t.status}")
         for name, c in checks.items():
-            if name.startswith("command "):
-                for r in reqs.values():
+            if name.startswith("command ") and not c.get("requirement_keys"):  # unnamed: the iteration's ones
+                for r in (reqs[k] for k in sorted(worked & set(reqs))):
                     _link(s, r, "check", name[8:], goal_id, iteration, bool(c.get("passed")),
                           str(c.get("detail", ""))[-500:])
+        for ref, keys, c in named:
+            for k in keys & set(reqs):
+                _link(s, reqs[k], "check", ref, goal_id, iteration, bool(c.get("passed")),
+                      str(c.get("detail", ""))[-500:])
 
 
 def _tested(s: Any, r: Requirement, goal_id: int | None = None) -> bool:
@@ -385,9 +399,12 @@ def traceability(project_id: int) -> dict[str, Any]:
                          "goals": sorted({x.goal_id for x in cur if x.goal_id}),
                          "earlier_versions_linked": any(x.version != r.version for x in links.get(r.id, []))})
     live = [x for x in rows if x["status"] != "retired"]
-    return {"project_id": project_id, "requirements": rows,
+    # S09-R-06: agreed requirements no passing check covers in their current version (drafts are not agreed yet)
+    untested = [x["key"] for x in live if x["status"] != "draft" and not x["tested"]]
+    return {"project_id": project_id, "requirements": rows, "untested": untested,
             "counts": {"total": len(live), "implemented": sum(x["implemented"] for x in live),
                        "tested": sum(x["tested"] for x in live), "merged": sum(bool(x["merged"]) for x in live),
+                       "untested": len(untested),
                        "conflicts": sum(bool(x["conflicts"]) for x in live),
                        "by_status": {st: sum(x["status"] == st for x in rows) for st in STATUSES}}}
 

@@ -22,7 +22,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from agent_company import (blackboard, budgets, contracts, decisions, executors, learning, network, quality,
+from agent_company import (adr, blackboard, budgets, contracts, decisions, executors, learning, network, quality,
                            recruitment, registry, requirements, research, router, sandbox, specs, strategies, teams,
                            usage, workflow, worktrees)
 from agent_company.config import settings
@@ -478,7 +478,8 @@ PLAN_INSTRUCTIONS = """Split the goal into task contracts. Answer with JSON only
                  {"type": "min_length", "value": 100}]}]}
 Optional task fields: "in_scope"/"out_of_scope" (path globs; changing an out_of_scope path fails the task),
 "risk_level": "low|medium|high" (high adds a security review), "test_plan": "...",
-"budget": {"cost_usd": 0.5, "turns": 30}, "deadline": seconds, "requirement_keys": ["..."],
+"budget": {"cost_usd": 0.5, "turns": 30}, "deadline": seconds, "requirement_keys": ["..."] (a "command"
+acceptance condition may also carry "requirement_keys": the requirements that test checks),
 "decision_topic": "..." (tasks that must each recommend on one question; disagreements are reviewed),
 "weight": 1 (its share of the goal's progress), "estimated_minutes": 20 (how long you expect the task to take).
 Optionally add "estimated_cost_usd" (the whole goal's expected model cost) and "decisions": [{"topic": "...", "question": "...", "alternatives": ["..."],
@@ -487,7 +488,8 @@ Optionally add "estimated_cost_usd" (the whole goal's expected model cost) and "
   "assumptions": ["..."], "limitations": ["where this may be wrong or what it does not cover"],
   "confidence": 0-1, "confidence_note": "why", "category": "operational|technical|organizational|financial|critical",
   "requires_human_approval": true|false}] for significant choices (technology, architecture, anything costly or
-hard to undo); critical ones always wait for a person. Label facts, measurements, inferences and hypotheses as such.
+hard to undo); critical ones always wait for a person; technical and critical ones become ADR files in docs/adr/.
+Label facts, measurements, inferences and hypotheses as such.
 Prefer few, well-scoped tasks. Include a QA review task: it verifies the logic (data flow of the normal,
 an edge and an error case), lists FINDING lines, and ends with an OUTCOME and "VERDICT: PASS" or
 "VERDICT: FAIL". Use an existing role when one fits; name a new
@@ -567,7 +569,8 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
             teams.apply_plan(goal.id, data["team"], gm.name)
         _board_plan(goal, iteration, plan, summary, gm.id)
         if isinstance(data, dict) and data.get("decisions"):
-            decisions.from_plan(goal.id, data["decisions"], gm.id)
+            made = decisions.from_plan(goal.id, data["decisions"], gm.id)
+            _spec_step(lambda g, _i, ids: adr.write(g.id, ids), goal, iteration, [d["id"] for d in made])  # S08-R-02
         if isinstance(data, dict):
             _set_estimate(goal.id, data.get("estimated_cost_usd"))
         log_event("plan", f"{gm.name} planned {len(plan)} task(s) with {choice.name}: {summary}"[:500],
@@ -1417,7 +1420,12 @@ def _record_history(goal_id: int, iteration: int, report: dict[str, Any]) -> Non
                      {"iteration": iteration, "commit": report.get("head"), "score": report.get("score", 0.0),
                       "passed": report["passed"], "scope_failed": "scope" in failed or out_of_scope,
                       "failed_checks": sorted(failed),
-                      "stages": {r["stage"]: r["status"] for r in report.get("stages", [])}}]
+                      "stages": {r["stage"]: r["status"] for r in report.get("stages", [])},
+                      # S09-R-04: what the gate itself ran, on which commit, with which result and toolchain
+                      "verification": [{k: c.get(k) for k in ("command", "stage", "commit", "exit_code", "timed_out",
+                                                              "duration_s", "passed", "isolation", "output_tail")}
+                                       for c in report.get("checks", []) if c.get("command")],
+                      "environment": report.get("environment") or {}}]
 
 
 def _escalate_repeated(goal_id: int, iteration: int) -> str:

@@ -168,6 +168,10 @@ Besides each task's contract and the reviewer's verdict, every iteration's chang
 | Scope | A changed file is outside the goal's allowed paths (`--allow 'src/*'`), or an existing test was changed or deleted while tests are protected (`--protect-tests`); new tests are always allowed |
 | Commands | A quality command exits non-zero |
 
+The gate runs the commands itself; an agent's "tests pass" never counts. For each
+command it keeps the commit it ran on, the exit code, the duration, the output tail
+and the Python/Node versions (the goal view's "Verification").
+
 Quality commands are first run on the **untouched code**. A command that already
 failed there is reported as pre-existing ("the goal may be to fix it"), and with
 `allow_preexisting_failures` it does not block the gate. An administrator's goal
@@ -212,9 +216,17 @@ the text, kind, acceptance criteria and a version; changing the text is a new ve
 that needs approval again. A goal names the requirements it implements (by key in its
 text, or `gm goal --requirement`), the planner sees them and puts their keys on tasks,
 and the gate and the merge record which tasks implemented, which checks tested and
-which commit merged each one. Two requirements that contradict each other become a
+which commit merged each one. A check can name what it tests: `[REQ-007] pytest -q`
+or `[integration REQ-003,REQ-004] pytest tests/it`; the planner's acceptance commands
+carry `requirement_keys`; the Plan tab counts agreed requirements no passing check
+covers as untested. Two requirements that contradict each other become a
 decision for a person. `python -m agent_company requirements import` loads
 `docs/requirements/` into the platform project.
+
+A technical or critical decision of a plan is also written as an Architecture Decision
+Record, `docs/adr/NNNN-title.md` in the goal's branch (NNNN = the decision's number), so
+it is merged and versioned with the code; a later decision on the same topic supersedes
+it and the earlier file says so.
 
 Every decision is a small report: the question, the options, the criteria they were
 compared on, the recommendation and its rationale, the evidence with its class (fact,

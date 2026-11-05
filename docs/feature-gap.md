@@ -103,12 +103,13 @@ Machines code):
 | Research requests with keywords, source preferences, priority, budget, deadline, recurrence, project/goal link and duplicate detection | ASEAO06 FR-03..08 | done (`research.submit`, `ReportThread`, S06-R-01) |
 | Research-to-innovation pipeline: findings become proposals | ASEAO06 §15 | open → S06-R-06 |
 | Hypotheses, root-cause analysis, predictions, decision center | ASEAO07 §9-13 | hypotheses done (`hypotheses.py`, tested by experiments, S07-R-03); decision reports with labelled evidence, limitations and independent review done (`decisions.report`, S07-R-01); root-cause analysis and predictions open → S07-R-02, R-04 |
-| Architecture Decision Records | ASEAO08 §7.2 | open → S08-R-02 |
-| Requirements traceability (requirement → task → test) | ASEAO08 §5.3, ASEAO09 §5.1 | done (`requirements.py`: versions, conflicts as decisions, links from tasks, checks and merges, S08-R-01); check commands naming keys open → S09-R-06 |
+| Architecture Decision Records | ASEAO08 §7.2 | done, adapted (`adr.py`: the plan's technical and critical decisions become `docs/adr/NNNN-title.md` in the goal's branch, superseding earlier ones, S08-R-02) |
+| Requirements traceability (requirement → task → test) | ASEAO08 §5.3, ASEAO09 §5.1 | done (`requirements.py`: versions, conflicts as decisions, links from tasks, checks and merges, S08-R-01; check commands and acceptance commands naming keys, untested requirements, S09-R-06) |
 | Code-review checklist with a logic-verification step (trace data flow; no approval for code that only looks clean) and de-duplicated comments | ASEAO08 §13, `extensions/analysis_results.md` | done (`quality.REVIEW_CHECKLIST`, `review_verdict`, `merge_findings`, S08-R-03) |
 | Change boundaries: no skipped tests, removed assertions, new dependencies or CI/.env edits without a permit | ASEAO08 §12.2 | done (`checks.boundary_violations`, S08-R-04) |
 | Quality gates as named stages; an open critical defect blocks the merge | ASEAO09 §13 | done (`quality.stages`, S09-R-01) |
 | Test-strategy selection by test category and risk | ASEAO09 §6-7 | open → S09-R-02 |
+| Independent verification: the gate re-runs every command and records commit, exit code, duration, output tail and toolchain versions | ASEAO09 §12 | done (`quality.evaluate`, `quality.environment`, goal history `verification`, S09-R-04) |
 | Innovation experiments, portfolio and technology radar | ASEAO10 §10-14, §21 | open → S10-R-02, S10-G-01..G-06 |
 | Knowledge graph of agents, projects, technologies and lessons | SPEC11 §7, 1.txt (Neo4j) | done (`kgraph.py`: edges as side effects, paged graph API, Knowledge → graph explorer; S11-R-07) |
 | Knowledge items with provenance; task-relevant, project-scoped retrieval | SPEC11 §3, §8 | done (`learning.retrieve`: FTS5, weights as settings guarded by the retrieval eval, standards and research documents in a task's package) → S11-R-01, S11-R-03, S11-R-08 |

@@ -96,7 +96,7 @@ def _row(d: Decision) -> dict[str, Any]:
             "evidence_labelled": [x | {"class": evidence_class(x)} if isinstance(x, dict)
                                   else {"ref": x, "class": "UNKNOWN"} for x in d.evidence or []],
             "assumptions": d.assumptions or [], "limitations": d.limitations or [], "confidence": d.confidence,
-            "confidence_note": d.confidence_note or "", "reviews": d.reviews or [],
+            "confidence_note": d.confidence_note or "", "reviews": d.reviews or [], "adr_path": d.adr_path or "",
             "category": d.category, "requires_human_approval": d.requires_human_approval, "status": d.status,
             "authorised": d.status == "approved", "important": important(d), "missing": missing(d),
             "escalation_level": d.escalation_level, "created_by_agent_id": d.created_by_agent_id,
@@ -159,7 +159,12 @@ def decide(decision_id: int, approve: bool, actor: str, note: str = "") -> dict[
             raise ValueError(f"decision is already {d.status}")
         d.status, d.approver, d.note, d.decided_at = ("approved" if approve else "rejected"), actor[:128], note[:2000], now()
         log_event("decision", f"decision #{d.id} {d.status} by {actor}", goal_id=d.goal_id, s=s, decision_id=d.id)
-        return _row(d)
+        out = _row(d)
+    if out["adr_path"]:  # S08-R-02: the ADR's status follows the decision
+        from agent_company import adr
+
+        adr.on_decided(decision_id)
+    return out
 
 
 def review(decision_id: int, actor: str, verdict: str, note: str = "", agent_id: int | None = None
@@ -193,7 +198,12 @@ def review(decision_id: int, actor: str, verdict: str, note: str = "", agent_id:
         log_event("decision", f"decision #{d.id} reviewed by {actor}: {verdict}"
                   + (" (now waits for a person)" if reopened else ""), goal_id=d.goal_id, agent_id=agent_id, s=s,
                   decision_id=d.id, verdict=verdict)
-        return _row(d)
+        out = _row(d)
+    if reopened and out["adr_path"]:  # S08-R-02: a disputed ADR is only proposed again
+        from agent_company import adr
+
+        adr.on_decided(decision_id)
+    return out
 
 
 def get(decision_id: int) -> dict[str, Any]:

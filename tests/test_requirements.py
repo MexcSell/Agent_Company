@@ -177,3 +177,39 @@ def test_requirements_api_checks_permissions_and_audits():
         assert app.post(f"/api/projects/{p['id']}/requirements/import").status_code == 400  # no docs folder
         actions = {x["action"] for x in app.get("/api/audit").json()["records"]}
         assert {"requirement_create", "requirement_status", "requirement_update"} <= actions
+
+
+def test_commands_name_the_requirements_they_test(monkeypatch):
+    """S09-R-06: a tagged quality command or a task's acceptance command tests only the keys it names."""
+    from agent_company import quality
+
+    assert quality.split_tag("[integration REQ-003, req-004] pytest it") == ("integration", ["REQ-003", "REQ-004"],
+                                                                             "pytest it")
+    assert quality.split_tag("[REQ-007] pytest") == ("unit", ["REQ-007"], "pytest")
+    assert quality.split_tag("[ -f x ] && true") == ("unit", [], "[ -f x ] && true")
+    assert quality.split_tag("[security] bandit") == ("security", [], "bandit")
+    p = projects.create("Keyed")
+    for text in ("Write a work log", "Say hello", "Count to three", "Draw a box"):
+        requirements.create(p["id"], text, status="approved")
+    requirements.create(p["id"], "Not agreed yet")
+    real = executors.standard_plan
+
+    def plan(goal):
+        out = real(goal)
+        out["tasks"][1]["requirement_keys"] = ["REQ-001", "REQ-002"]
+        out["tasks"][1]["acceptance"] = [{"type": "command", "run": "test -f WORKLOG.md",
+                                          "requirement_keys": ["req-003"]}]
+        return out
+
+    monkeypatch.setattr(executors, "standard_plan", plan)
+    gid = loop.create_goal("Log it", project_id=p["id"], max_iterations=1,
+                           quality_commands=["[REQ-001] test -f WORKLOG.md", "true"])
+    assert loop.run_goal(gid)["status"] == "awaiting_approval"
+    tr = requirements.traceability(p["id"])
+    t = {x["key"]: x for x in tr["requirements"]}
+    refs = {k: {x["ref"] for x in requirements.get(t[k]["id"], links=True)["links"] if x["kind"] == "check"}
+            for k in ("REQ-001", "REQ-002", "REQ-003")}
+    assert refs["REQ-001"] == {"test -f WORKLOG.md", "true"}
+    assert refs["REQ-002"] == {"true"}, "the keyed command is not REQ-002's test"
+    assert refs["REQ-003"] == {"task build: test -f WORKLOG.md"} and t["REQ-003"]["tested"]
+    assert tr["untested"] == ["REQ-004"] and tr["counts"]["untested"] == 1, "the draft is not counted"

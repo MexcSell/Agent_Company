@@ -12,7 +12,11 @@ REQUIRE_APPROVAL=0.
 
 from __future__ import annotations
 
+import functools
+import platform
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -77,15 +81,28 @@ def review_verdict(output: str) -> tuple[bool, str]:
 # decisions that wait for a person (it never fails the gate, it holds the merge).
 STAGES = ["requirements", "contract", "static", "security", "unit", "integration", "regression", "review", "governance"]
 COMMAND_STAGES = {"unit", "integration", "regression", "security", "static"}
-_STAGE_TAG = re.compile(r"^\s*\[([a-z_]+)\]\s*", re.I)
+_TAG = re.compile(r"^\s*\[([A-Za-z0-9_, -]+)\]\s*")
+_REQ_KEY = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d+$")
+
+
+def split_tag(cmd: str) -> tuple[str, list[str], str]:
+    """A command's tag: a stage and/or the requirement keys it tests (S09-R-06), then the command itself.
+    '[integration REQ-003, REQ-004] pytest tests/it' → ('integration', ['REQ-003', 'REQ-004'], 'pytest tests/it');
+    '[REQ-007] pytest' → ('unit', ['REQ-007'], 'pytest'). A bracket holding anything else is part of the command."""
+    m = _TAG.match(cmd)
+    if m:
+        words = [w for w in re.split(r"[\s,]+", m.group(1).strip()) if w]
+        stage = words[0].lower() if words and words[0].lower() in COMMAND_STAGES else ""
+        keys = [w.upper() for w in words[1 if stage else 0:]]
+        if words and all(_REQ_KEY.match(k) for k in keys):
+            return stage or "unit", list(dict.fromkeys(keys)), cmd[m.end():]
+    return "unit", [], cmd
 
 
 def split_stage(cmd: str) -> tuple[str, str]:
     """('integration', 'pytest tests/it') for '[integration] pytest tests/it'; untagged → unit."""
-    m = _STAGE_TAG.match(cmd)
-    if m and m.group(1).lower() in COMMAND_STAGES:
-        return m.group(1).lower(), cmd[m.end():]
-    return "unit", cmd
+    stage, _, run = split_tag(cmd)
+    return stage, run
 
 
 def _stage_of(check: str) -> str:
@@ -152,6 +169,29 @@ def baseline(goal_id: int) -> dict[str, Any]:
     return out
 
 
+TOOLCHAIN = {"python": ["python3", "--version"], "node": ["node", "--version"]}
+
+
+@functools.lru_cache(maxsize=1)
+def environment() -> dict[str, str]:
+    """The interpreter versions the check commands run with (S09-R-04): the sandbox's PATH binds the host's
+    toolchain read-only, so these are the versions inside it too. Missing tools are left out."""
+    path = sandbox.env_for()["PATH"]
+    out = {"platform": platform.platform(terse=True)}
+    for name, argv in TOOLCHAIN.items():
+        exe = shutil.which(argv[0], path=path)
+        if not exe:
+            continue
+        try:
+            p = subprocess.run([exe, *argv[1:]], capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        version = (p.stdout or p.stderr).strip().splitlines()
+        if p.returncode == 0 and version:
+            out[name] = version[0][:80]
+    return out
+
+
 def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
     with session() as s:
         goal = s.get(Goal, goal_id)
@@ -207,19 +247,26 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
     from agent_company.gitsync import identity_for
 
     sha = worktrees.commit_all(worktree, f"Goal {goal_id} iteration {iteration}", author=identity_for(ordered_by))
+    tested = worktrees.git(worktree, "rev-parse", "HEAD")  # the commit the commands below run on
     if base:
-        for c in checks_mod.run_static(worktree, base, allowed, protect, permits):
+        from agent_company import adr
+
+        for c in checks_mod.run_static(worktree, base, allowed, protect, permits, exempt=adr.paths(goal_id)):
             results.append(c | {"stage": _stage_of(c["check"])})
             if not c["passed"]:
                 feedback.append(f"{c['check'].capitalize()} check failed:\n{c['detail']}")
     for cmd in commands:
-        stage, run = split_stage(cmd)
+        stage, keys, run = split_tag(cmd)
         info: dict[str, Any] = {}
         ok, detail = contracts.run_command(run, worktree, settings().command_timeout, mode=mode, info=info)
         before = baseline.get(cmd)
         preexisting = not ok and before is not None and not before.get("passed")
+        # S09-R-04: the gate's own run is the evidence, never an agent's claim that the tests pass
         row = {"check": f"command {run}", "passed": ok, "detail": detail[-1500:], "stage": stage,
-               "baseline_passed": bool(before and before.get("passed")), "isolation": info.get("isolation", "")}
+               "baseline_passed": bool(before and before.get("passed")), "isolation": info.get("isolation", ""),
+               "command": run, "commit": tested, "exit_code": info.get("exit_code"),
+               "timed_out": bool(info.get("timed_out")), "duration_s": info.get("duration_s", 0.0),
+               "output_tail": info.get("output_tail", ""), "requirement_keys": keys}
         if preexisting:
             row["preexisting"] = True
             row["detail"] = "already failing before the agents started\n" + row["detail"]
@@ -240,6 +287,7 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
         "feedback": "\n\n".join(feedback),
         "commit": sha,
         "head": worktrees.git(worktree, "rev-parse", "HEAD"),
+        "environment": environment() if commands else {},
         "changed_files": worktrees.changed_files(worktree, base) if base else [],
         "needs_approval": passed and _require_approval(goal_id),
     }

@@ -54,5 +54,10 @@ def env(tmp_path, monkeypatch):
     api._signups.clear()  # the registration rate limit is per process; start each test fresh
     bootstrap()
     yield tmp_path
+    import threading
+
+    for t in threading.enumerate():  # a goal a test ran in the background (loop.enqueue) must not write into the
+        if t.name.removeprefix("goal-").isdigit():  # next test's database, whose goal ids start at 1 again
+            t.join(timeout=30)
     db.reset_engine()
     config.reset_settings()

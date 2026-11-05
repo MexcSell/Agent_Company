@@ -140,10 +140,13 @@ def _changed_with_status(worktree: Path, base: str) -> list[tuple[str, str]]:
     return rows
 
 
-def scope_violations(worktree: Path, base: str, allowed: list[str], protect_tests: bool) -> list[str]:
+def scope_violations(worktree: Path, base: str, allowed: list[str], protect_tests: bool,
+                     exempt: list[str] | None = None) -> list[str]:
+    """`exempt`: files the platform itself wrote for the goal (its ADRs, adr.paths)."""
     problems = []
+    exempt_set = set(exempt or [])
     for status, path in _changed_with_status(worktree, base):
-        if path.startswith((".claude/", ".mcp.json")):  # the goal's spec artifacts and Claude Code configuration
+        if path.startswith((".claude/", ".mcp.json")) or path in exempt_set:  # spec artifacts, Claude Code config
             continue
         if allowed and not any(fnmatch.fnmatch(path, pat) or path.startswith(pat.rstrip("*").rstrip("/") + "/")
                                for pat in allowed):
@@ -194,11 +197,11 @@ def boundary_violations(worktree: Path, base: str, permits: list[str] | None = N
 
 
 def run_static(worktree: Path, base: str, allowed: list[str], protect_tests: bool,
-               permits: list[str] | None = None) -> list[dict[str, Any]]:
+               permits: list[str] | None = None, exempt: list[str] | None = None) -> list[dict[str, Any]]:
     changed = [p for s, p in _changed_with_status(worktree, base) if s != "D"]
     secrets = scan_secrets(worktree, base)
     syntax = syntax_errors(worktree, changed)
-    scope = scope_violations(worktree, base, allowed, protect_tests)
+    scope = scope_violations(worktree, base, allowed, protect_tests, exempt)
     bounds = boundary_violations(worktree, base, permits)
     return [
         {"check": "secret scan", "passed": not secrets, "detail": "; ".join(secrets) or "no credentials added"},

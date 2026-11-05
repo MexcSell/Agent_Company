@@ -71,6 +71,19 @@ push only on `/sync`. The 13 engineering teams (§3) are **gated** (CLAUDE.md).
 - ADRs are versioned by git; a superseding ADR references the old one.
 - Acceptance: a goal whose plan includes a technology choice produces one ADR file and one
   decision record.
+- **Status: done, adapted** (`adr.py`, column `decisions.adr_path`; `tests/test_adr.py`). The loop writes the ADR
+  from the decision record instead of an Architect task (deterministic, and the record is the single source): every
+  `technical` or `critical` decision of the plan becomes `docs/adr/NNNN-<topic>.md` in the goal's worktree before
+  the plan checkpoint, so it is committed and merged with the branch. NNNN is the decision's id (unique when several
+  goals work on one repository at once; the ADR and its record name each other). Sections: context (the question),
+  options, criteria, decision, reasons with labelled evidence, consequences (assumptions, limitations, confidence);
+  status Accepted, Proposed (waits for a person), Rejected or Superseded. A later decision on the same topic of the
+  same project (of the same goal outside a project) names the earlier ADR (`Supersedes:`) and sets the earlier
+  file's status to `Superseded by …`; a re-plan repeating the same recommendation reuses the existing ADR. When a
+  person decides, or a review disputes an automatic approval, the status line follows (committed at once, only that
+  file, when the goal waits for approval; with the next checkpoint while it works). The gate's scope check accepts
+  exactly these files (`adr.paths`); a failure to write one is logged and never stops the goal. The goal page
+  shows each decision's ADR path.
 
 ### S08-R-03 Review checklist with logic verification — §13.2, §13.3, `analysis_results.md`
 - The QA review prompt and output contract change from a bare `VERDICT: PASS|FAIL` to:

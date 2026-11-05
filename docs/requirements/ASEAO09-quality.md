@@ -43,6 +43,12 @@ scope checks (`quality.py`, `checks.py`); defects opened/closed/reopened automat
 - The gate re-runs commands itself and records: commit SHA, command, exit code, duration, output
   tail, environment (Python/Node versions). Developer claims ("tests pass") are never accepted as
   evidence.
+- **Status: done** (`contracts.run_command` fills `info` with `exit_code` (None when refused or not run),
+  `timed_out`, `duration_s`, `output_tail`; `quality.evaluate` puts them on every command row with the `command`
+  and the `commit` it ran on, and `environment` (platform, `python3`/`node --version` on the sandbox's PATH, probed
+  once per process) on the report; `loop._record_history` keeps them per iteration as `verification` and
+  `environment`; the goal page shows "Verification"; `tests/test_verification.py`). The gate never reads an
+  agent's output as a test result: contract conditions and review verdicts are separate rows.
 
 ### S09-R-05 Agent evaluation dimensions — §8 (AT-019..021)
 - Eval reports keep separate dimensions: task completion, instruction/contract compliance,
@@ -55,6 +61,14 @@ scope checks (`quality.py`, `checks.py`); defects opened/closed/reopened automat
 ### S09-R-06 Test-to-requirement links — §5.1 (AT-002, AT-003)
 - Check commands and generated tests can name requirement keys (S08-R-01); the traceability
   report shows untested requirements.
+- **Status: done** (`quality.split_tag`, `contracts.Condition.requirement_keys`, `requirements.on_gate`,
+  `traceability()["untested"]`; `tests/test_requirements.py`). A quality command names keys in its tag, alone or
+  after the stage: `[REQ-007] pytest -q`, `[integration REQ-003,REQ-004] pytest tests/it` (a bracket holding
+  anything but a stage and keys stays part of the command, so `[ -f x ]` still runs). The planner's acceptance
+  `command` conditions (the generated tests) carry `"requirement_keys"`. A command naming keys is linked as a check
+  of those requirements only, also when no task named them; an unnamed command still tests all of the iteration's
+  requirements (the goal's and its tasks'). `untested`: requirements past draft and not retired with no passing
+  check on their current version, shown on the project's Plan tab.
 
 ### Not taken now
 - Load/stress/compatibility/accessibility testing (§7.7–7.10): `open`, per project via check

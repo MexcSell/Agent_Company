@@ -32,6 +32,12 @@ class Condition(BaseModel):
     pattern: str | None = None
     path: str | None = None
     run: str | None = None
+    requirement_keys: list[str] | None = None  # a command condition: the requirements it tests (S09-R-06)
+
+    @field_validator("requirement_keys")
+    @classmethod
+    def _keys(cls, v: list[str] | None) -> list[str] | None:
+        return [str(k).strip().upper()[:64] for k in v if str(k).strip()][:20] or None if v else None
 
     @field_validator("pattern")
     @classmethod
@@ -204,7 +210,10 @@ def run_command(cmd: str, workdir: Path, timeout: int,
                 on_refused: Callable[[str, str], None] | None = None, mode: str | None = None,
                 info: dict[str, Any] | None = None) -> tuple[bool, str]:
     """Run a check command in the worktree: in the L3 sandbox as `mode` (sandbox.MODES, default the company
-    setting) allows, with a filtered environment either way. `info` receives the isolation level and its note."""
+    setting) allows, with a filtered environment either way. `info` receives the isolation level and its note,
+    the exit code (None when it did not run), whether it timed out, the duration and the output tail (S09-R-04)."""
+    import time
+
     from agent_company import sandbox
     from agent_company.governance import audit, check_command
     from agent_company.worktrees import ensure_sandboxed
@@ -215,10 +224,15 @@ def run_command(cmd: str, workdir: Path, timeout: int,
         audit("quality-gate", "command_refused", cmd[:256], after={"reason": refused}, severity="high")
         if on_refused is not None:
             on_refused(cmd, refused)
+        if info is not None:
+            info.update(isolation="", exit_code=None, timed_out=False, duration_s=0.0, output_tail="")
         return False, f"`{cmd}` refused by the command policy: {refused}"
+    started = time.monotonic()
     res = sandbox.run(["/bin/sh", "-c", cmd], cwd, timeout, mode=mode, prepare=True)
     if info is not None:
-        info.update(isolation=res.isolation, isolation_note=res.note)
+        info.update(isolation=res.isolation, isolation_note=res.note, timed_out=res.timed_out,
+                    exit_code=res.returncode if res.isolation else None,
+                    duration_s=round(time.monotonic() - started, 2), output_tail=res.output[-800:])
     level = f" ({res.isolation})" if res.isolation else ""
     note = f"\n[{res.note}]" if res.note else ""
     if not res.isolation:

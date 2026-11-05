@@ -37,7 +37,8 @@ feature came from.
   inputs in `registry._rank`; `graph`/`overview` for the network view) + `mentoring.py` (a mentor per learning plan: reviews practice results, never certifies);
   `requirements.py` (ASEAO08 S08-R-01: project requirements with versions, links from
   tasks, checks and merges, `traceability`, conflicts as decisions, `import_docs` of `docs/requirements/`);
-  `decisions.py` (decision records; human ones block the merge; S07-R-01 reports: criteria, limitations, evidence
+  `decisions.py` (decision records; human ones block the merge; `adr.py` writes technical/critical ones as
+  `docs/adr/NNNN-title.md` ADRs in the goal's branch (S08-R-02), superseding earlier ones; S07-R-01 reports: criteria, limitations, evidence
   classes, independent reviews that send a disputed decision to a person); `escalation.py` (S04-R-07 levels 1-5 and their
   recipients: agent, goal GM, room manager, executive GM, a person; delivered as blackboard requests);
   `budgets.py` (S04-R-09 goal budgets: cost, tokens, agents at once; child goals capped by the parent's remainder); `projects.py` (projects with stack, skills, rooms, budget, deadline, priority and a lifecycle `set_status`; command window

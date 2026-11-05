@@ -1149,6 +1149,7 @@ class Decision(Base):
     limitations: Mapped[list[Any]] = mapped_column(default=list)
     confidence_note: Mapped[str] = mapped_column(Text, default="")
     reviews: Mapped[list[Any]] = mapped_column(default=list)
+    adr_path: Mapped[str] = mapped_column(String(256), default="")  # ASEAO08 S08-R-02: docs/adr/NNNN-title.md
     category: Mapped[str] = mapped_column(String(16), default="technical")
     requires_human_approval: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(16), default="submitted")
