@@ -43,6 +43,7 @@ from agent_company import (
     mcp,
     mentoring,
     network,
+    orchestration,
     organization,
     performance,
     policies,
@@ -573,8 +574,9 @@ class HypothesisStatusBody(BaseModel):
 
 
 class ExperimentBody(BaseModel):
-    target: str  # playbook|route
-    candidate: str  # the playbook text, or the catalog model for the route
+    target: str  # playbook|route|strategy
+    candidate: str  # the playbook text, the catalog model for the route, or a JSON object of template fields
+    # (a strategy experiment, S04-R-13; `role` is then the goal kind)
     agent_id: int | None = None
     role: str = ""
     hypothesis: str = ""
@@ -1779,6 +1781,8 @@ def create_app(start_background: bool = True) -> FastAPI:
                            ) -> dict[str, Any]:
         if body.target == "route" and not auth.can(admin, "manage_models"):
             raise PermissionError("route experiments need the manage_models permission")
+        if body.target == "strategy" and not admin["is_admin"]:  # templates are saved by administrators only
+            raise PermissionError("workflow template experiments are for administrators")
         out = experiments.propose(body.target, body.candidate, agent_id=body.agent_id, role=body.role,
                                   hypothesis=body.hypothesis, suite=body.suite, repeats=body.repeats,
                                   created_by=f"user:{admin['name']}")
@@ -1795,6 +1799,13 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.post("/api/experiments/{exp_id}/apply")
     def experiment_apply(exp_id: int, admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
         before = experiments.get(exp_id)
+        if before["target"] == "strategy":
+            if not admin["is_admin"]:
+                raise PermissionError("a workflow template is applied by an administrator")
+            out = experiments.apply(exp_id, f"user:{admin['name']}")
+            _audit(admin, "experiment_apply", exp_id, before={"strategy": before["baseline_version"]},
+                   after={"strategy": out["decision"], "changes": out["candidate"].get("changes")}, severity="high")
+            return out
         out = experiments.apply(exp_id, f"user:{admin['name']}")
         _audit(admin, "experiment_apply", exp_id, before={"route": before["baseline_version"]},
                after={"route": out["candidate"].get("model")}, severity="high")
@@ -2283,6 +2294,23 @@ def create_app(start_background: bool = True) -> FastAPI:
         _audit(admin, "strategy_save", kind, before=before, after=out)
         return out
 
+    # --- self-evaluation of orchestration (S04-R-13): reports per template version, recommended candidates ---
+    @app.get("/api/strategies/evaluation")
+    def strategy_evaluation(kind: str = "", _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        try:
+            return orchestration.evaluate(kind)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+
+    @app.post("/api/strategies/{kind}/recommend")
+    def strategy_recommend(kind: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = orchestration.recommend(kind, f"user:{admin['name']}")
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "strategy_recommend", kind, after={"recorded": out.get("recorded"), "changes": out["changes"]})
+        return out
+
     @app.post("/api/strategies/{kind}/restore/{version}")
     def strategy_restore(kind: str, version: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         try:
@@ -2300,6 +2328,47 @@ def create_app(start_background: bool = True) -> FastAPI:
             if g is None or (seen is not None and g.project_id is not None and g.project_id not in seen):
                 raise KeyError(goal_id)
         return loop.trace(goal_id)
+
+    # --- S08-R-05: software bill of materials (CycloneDX 1.5 JSON) ---
+    @app.get("/api/goals/{goal_id}/sbom")
+    def goal_sbom(goal_id: int, user: dict[str, Any] = Depends(current_user)) -> Response:
+        from agent_company import dependencies
+
+        with session() as s:
+            g = s.get(Goal, goal_id)
+            seen = _visible_project_ids(s, user)
+            if g is None or (seen is not None and g.project_id is not None and g.project_id not in seen):
+                raise KeyError(goal_id)
+            ev = s.scalars(select(Event).where(Event.goal_id == goal_id, Event.kind == "sbom")
+                           .order_by(Event.id.desc())).first()
+            sha, repo = ((ev.data or {}).get("commit", "") if ev else ""), g.repo_path
+        if not sha:
+            raise HTTPException(404, "no SBOM: the goal has not been merged")
+        path = dependencies.sbom_path(sha)
+        if not path.exists():  # written by an older version or removed: built again from the commit
+            path, _ = dependencies.store_sbom(repo, sha)
+        return Response(path.read_text(), media_type="application/vnd.cyclonedx+json", headers={
+            "Content-Disposition": f'attachment; filename="goal-{goal_id}-{sha[:10]}.cdx.json"'})
+
+    @app.get("/api/projects/{project_id}/sbom")
+    def project_sbom(project_id: int, rev: str = "HEAD", user: dict[str, Any] = Depends(current_user)) -> Response:
+        import json
+        import re
+
+        from agent_company import dependencies, worktrees
+
+        p = projects.get(project_id, user)
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/^~-]{0,199}", rev) or ".." in rev:
+            raise HTTPException(400, "rev is a branch, tag or commit")
+        if not p.path or not (Path(p.path) / ".git").exists():
+            raise HTTPException(400, "the project has no git repository")
+        try:
+            doc = dependencies.sbom(p.path, rev)
+        except worktrees.WorktreeError as e:
+            raise HTTPException(400, str(e)[:300]) from e
+        sha = doc["metadata"]["component"]["version"]
+        return Response(json.dumps(doc, indent=2), media_type="application/vnd.cyclonedx+json", headers={
+            "Content-Disposition": f'attachment; filename="{re.sub(r"[^A-Za-z0-9._-]+", "-", p.name)}-{sha[:10]}.cdx.json"'})
 
     @app.get("/api/events")
     def events(after: int = 0, goal_id: int | None = None, user: dict[str, Any] = Depends(current_user)

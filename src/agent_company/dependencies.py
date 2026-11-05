@@ -14,9 +14,17 @@ gate, and a record at the merge.
   an old advisory cannot fail every goal. `warn` lists them without failing, `off` runs no audit. An audit that
   could not run (tool missing, network down, unpinned requirements, sandbox required and unavailable) adds no gate
   row, only a note, so it never shows as a pass.
-- `on_merged` records the merged changes (the last iteration's) as a `dependencies` event.
-
-SBOM generation is not here (open, P2).
+- `on_merged` records the merged changes (the last iteration's) as a `dependencies` event and writes the SBOM of
+  the merged commit.
+- `sbom` is a CycloneDX 1.5 JSON software bill of materials of one commit, built from git objects only (no checkout,
+  no install, no build): every dependency manifest and lock file in the tree (`checks.MANIFESTS`, not inside
+  `node_modules/`, `.venv/`, `vendor/`) is itemised. A lock file's packages carry exact versions (the project's own
+  editable, virtual or workspace packages are left out); a manifest's entry carries its version only when it pins
+  one, else the specifier as a property, and is left out when a lock file in the same directory names the same
+  package. Each component has a package URL (pypi, npm, cargo, golang) and the manifests it came from. Formats that
+  are not itemised (setup.py, Pipfile, yarn/pnpm locks, Gemfile, composer) are listed under the metadata's
+  `unparsed` property. The serial number is derived from the repository and commit, so the same commit gives the
+  same document apart from its timestamp.
 """
 
 from __future__ import annotations
@@ -28,8 +36,11 @@ import shutil
 import subprocess
 import tempfile
 import tomllib
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import quote
 
 from agent_company import worktrees
 from agent_company.config import settings
@@ -331,15 +342,159 @@ def check(worktree: Path | str, base: str, mode: str | None = None) -> dict[str,
 
 
 def on_merged(goal_id: int, sha: str) -> list[dict[str, Any]]:
-    """Record the dependency changes the merge brought in (those of the goal's last gated iteration)."""
+    """Record the dependency changes the merge brought in (those of the goal's last gated iteration) and write the
+    SBOM of the merged commit."""
     from agent_company.db import Goal, session
 
     with session() as s:
         g = s.get(Goal, goal_id)
         last = (g.history or [{}])[-1] if g is not None and g.history else {}
+        repo = g.repo_path if g is not None else ""
     changed = list((last.get("dependencies") or {}).get("changes") or [])
     if changed:
         names = ", ".join(f"{c['name'] or c['manifest']} {c['change']}" for c in changed[:20])
         log_event("dependencies", f"merged {len(changed)} dependency change(s) ({sha[:10]}): {names}"[:1000],
                   goal_id=goal_id, commit=sha, changes=changed)
+    if repo:
+        try:
+            path, doc = store_sbom(repo, sha)
+            log_event("sbom", f"SBOM of {sha[:10]}: {len(doc['components'])} component(s)", goal_id=goal_id,
+                      commit=sha, path=str(path), components=len(doc["components"]))
+        except Exception as e:  # noqa: BLE001 - the merge happened; a failed SBOM is a note, not a failure
+            log_event("error", f"SBOM of {sha[:10]} failed: {type(e).__name__}: {e}"[:500], goal_id=goal_id)
     return changed
+
+
+# --- SBOM ---------------------------------------------------------------------------------------------------------
+
+SBOM_SKIP = re.compile(r"(^|/)(node_modules|\.venv|venv|vendor|\.git|site-packages)/")
+LOCK_FILES = {"uv.lock", "poetry.lock", "package-lock.json", "Cargo.lock", "go.mod"}
+PURL_TYPE = {"python": "pypi", "npm": "npm", "cargo": "cargo", "go": "golang"}
+MAX_COMPONENTS = 5000
+
+
+def _lock_packages(path: str, text: str) -> dict[str, str] | None:
+    """A lock file's third-party packages with their exact versions (not the project's own)."""
+    name = PurePosixPath(path).name
+    try:
+        if name in TOML_LOCKS:
+            out = {}
+            for p in tomllib.loads(text).get("package", []):
+                if not isinstance(p, dict) or not p.get("name"):
+                    continue
+                src = p.get("source")
+                if name == "Cargo.lock" and not src:
+                    continue  # a workspace member
+                if isinstance(src, dict) and ({"editable", "virtual", "directory", "path"} & set(src)):
+                    continue  # the project itself or a local path
+                out[p["name"]] = str(p.get("version", ""))
+            return out
+        if name == "package-lock.json":
+            data = json.loads(text)
+            pkgs = data.get("packages") or {}
+            if pkgs:
+                return {k.rsplit("node_modules/", 1)[-1]: str(v.get("version", "")) for k, v in pkgs.items()
+                        if k and "node_modules/" in k and isinstance(v, dict) and not v.get("link")}
+    except (ValueError, tomllib.TOMLDecodeError, AttributeError, TypeError):
+        return None
+    return parse(path, text)
+
+
+def _pinned(eco: str, spec: str) -> str:
+    """The exact version a manifest's specifier pins, else ""."""
+    spec = spec.split(";", 1)[0].strip()
+    if eco == "python":
+        m = re.fullmatch(r"===?\s*([A-Za-z0-9._+!-]+)", spec)
+        return m.group(1) if m else ""
+    if eco in ("npm", "cargo"):
+        m = re.fullmatch(r"=?\s*v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)", spec)
+        return m.group(1) if m else ""
+    return spec if eco == "go" else ""
+
+
+def purl(eco: str, name: str, version: str) -> str:
+    kind = PURL_TYPE.get(eco)
+    if not kind:
+        return ""
+    n = normalize(name, eco)
+    n = "/".join(quote(part, safe="") for part in n.split("/")) if eco in ("go", "npm") else quote(n, safe="")
+    return f"pkg:{kind}/{n}" + (f"@{quote(version, safe='')}" if version else "")
+
+
+def sbom(repo: Path | str, rev: str = "HEAD") -> dict[str, Any]:
+    """CycloneDX 1.5 JSON of the dependencies at `rev`, read from git objects only."""
+    from agent_company.checks import MANIFESTS
+
+    repo = Path(repo)
+    sha = worktrees.git(repo, "rev-parse", "--verify", f"{rev}^{{commit}}")
+    listing = worktrees.git(repo, "ls-tree", "-r", "--full-tree", sha)
+    files: list[str] = []
+    for line in listing.splitlines():
+        meta, _, path = line.partition("\t")
+        if MANIFESTS.search(path) and not SBOM_SKIP.search(path) and not meta.startswith("120000"):
+            files.append(path)  # a symlinked manifest is never followed
+    found: dict[tuple[str, str, str], dict[str, Any]] = {}  # (ecosystem, normalized name, version)
+    locked: dict[tuple[str, str, str], bool] = {}  # (directory, ecosystem, name) a lock file names
+    unparsed: list[str] = []
+    for path in sorted(files, key=lambda p: PurePosixPath(p).name not in LOCK_FILES):  # lock files first
+        text = _show(repo, sha, path)
+        if text is None:
+            continue
+        eco, lock = ecosystem(path), PurePosixPath(path).name in LOCK_FILES
+        items = _lock_packages(path, text) if lock else parse(path, text)
+        if items is None:
+            unparsed.append(path)
+            continue
+        folder = str(PurePosixPath(path).parent)
+        for name, spec in items.items():
+            key = normalize(name, eco)
+            if not lock and locked.get((folder, eco, key)):
+                continue  # the lock file's exact version stands for it
+            if lock:
+                locked[(folder, eco, key)] = True
+            version = spec if lock else _pinned(eco, spec)
+            c = found.setdefault((eco, key, version), {"eco": eco, "name": name, "version": version,
+                                                       "manifests": [], "specifiers": []})
+            c["manifests"].append(path)
+            if not lock and spec and spec != version:
+                c["specifiers"].append(spec)
+        if len(found) >= MAX_COMPONENTS:
+            break
+    components = []
+    for (eco, _key, version), c in sorted(found.items())[:MAX_COMPONENTS]:
+        ref = purl(eco, c["name"], version) or f"{eco}:{c['name']}@{version}"
+        comp: dict[str, Any] = {"type": "library", "bom-ref": ref, "name": c["name"]}
+        if version:
+            comp["version"] = version
+        if purl(eco, c["name"], version):
+            comp["purl"] = purl(eco, c["name"], version)
+        props = [{"name": "agent-company:ecosystem", "value": eco}]
+        props += [{"name": "agent-company:manifest", "value": m} for m in sorted(set(c["manifests"]))]
+        props += [{"name": "agent-company:specifier", "value": s} for s in sorted(set(c["specifiers"]))]
+        comp["properties"] = props
+        components.append(comp)
+    name = repo.resolve().name
+    meta_props = [{"name": "agent-company:commit", "value": sha}]
+    meta_props += [{"name": "agent-company:unparsed", "value": p} for p in unparsed]
+    return {"bomFormat": "CycloneDX", "specVersion": "1.5",
+            "serialNumber": f"urn:uuid:{uuid.uuid5(uuid.NAMESPACE_URL, f'{repo.resolve()}@{sha}')}", "version": 1,
+            "metadata": {"timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                         "tools": {"components": [{"type": "application", "name": "agent-company"}]},
+                         "component": {"type": "application", "bom-ref": f"repo:{name}@{sha}", "name": name,
+                                       "version": sha},
+                         "properties": meta_props},
+            "components": components}
+
+
+def sbom_path(sha: str) -> Path:
+    if not re.fullmatch(r"[0-9a-f]{7,64}", sha):
+        raise ValueError(f"not a commit id: {sha!r}")
+    return settings().data_dir / "sbom" / f"{sha}.cdx.json"
+
+
+def store_sbom(repo: Path | str, sha: str) -> tuple[Path, dict[str, Any]]:
+    doc = sbom(repo, sha)
+    path = sbom_path(doc["metadata"]["component"]["version"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc, indent=2))
+    return path, doc

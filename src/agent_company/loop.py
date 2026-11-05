@@ -51,7 +51,7 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
     `requirement_keys` (S08-R-01) name the project's requirements it implements; keys of the project named in the
     title or description are added. `kind` (S04-R-11) names the workflow template: its iteration limit, protected
     tests and scope apply where the order left them empty, and its plans must fit it; without one the planner
-    picks."""
+    picks. An eval goal's `trial["strategy"]` (S04-R-13: kind, version, body) is the template it runs under."""
     from agent_company.checks import extract_check_commands
     from agent_company.governance import check_command, stops
 
@@ -89,8 +89,16 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
             raise ValueError(f"unknown requirement(s) {', '.join(sorted(set(req_keys) - known))} in project {project_id}")
     req_keys = sorted(set(req_keys) | set(requirements.keys_in(project_id, f"{title}\n{description}")))
     template: dict[str, Any] = {}
-    if kind:
+    side = (trial or {}).get("strategy")
+    if side:  # S04-R-13: a strategy experiment's side runs under its own template, not the one in force
+        kind = strategies.check_kind(side["kind"])
+        body = strategies.validate(side["body"])
+        template = {"max_iterations": body["max_iterations"], "protect_tests": body["protect_tests"],
+                    "allowed_paths": list(body["allowed_paths"]),
+                    "strategy": {"kind": kind, "version": side["version"], **body, "source": "order"}}
+    elif kind:
         template = strategies.creation_defaults(strategies.check_kind(kind))
+    if template:
         max_iterations = max_iterations or template["max_iterations"]
         protect_tests = protect_tests or template["protect_tests"]
         allowed_paths = allowed_paths or template["allowed_paths"]

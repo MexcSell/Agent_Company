@@ -39,8 +39,8 @@ orchestrator → `loop.py`; scheduler → `scheduler.run_dag`; team → agents s
 | S04-FR-24 | Support strategy selection | P1 | done (S04-R-11, `strategies.py`): the order or the planner picks the kind; versions per kind |
 | S04-FR-25 | Support dynamic team resizing | P1 | done (S04-R-11, `teams.py`): add, release, take back; history kept |
 | S04-FR-26 | Support workflow templates | P1 | done (S04-R-11, `strategies.py`) |
-| S04-FR-27 | Self-evaluation of orchestration | P2 | open (after SPEC-13 experiments) |
-| S04-FR-28 | Recommend improved orchestration strategies | P2 | open (after SPEC-13 experiments) |
+| S04-FR-27 | Self-evaluation of orchestration | P2 | done (S04-R-13, `orchestration.evaluate`) |
+| S04-FR-28 | Recommend improved orchestration strategies | P2 | done (S04-R-13: `orchestration.recommend`, strategy experiments) |
 | S04-FR-29 | Support multi-project concurrency | P1 | done (`GoalQueue` workers, `Goal.project_id`) |
 | S04-FR-30 | Support execution replay and audit | P1 | done: `GET /api/goals/{id}/trace` with every run's tool calls (S04-R-12); a replay that re-runs a goal is not taken (runs are not deterministic) |
 
@@ -48,7 +48,7 @@ orchestrator → `loop.py`; scheduler → `scheduler.run_dag`; team → agents s
 
 Status (2026-11-05): S04-R-01 done · S04-R-02 done · S04-R-03 done · S04-R-04 done · S04-R-05 done ·
 S04-R-06 done · S04-R-07 done · S04-R-08 done · S04-R-09 done · S04-R-10 done · S04-R-11 done ·
-S04-R-12 partial. Details under each item.
+S04-R-12 done · S04-R-13 done. Details under each item.
 
 ### S04-R-01 Blackboard (shared, versioned goal context) — §10
 - New table `blackboard` in `db.py`: `goal_id`, `section`
@@ -242,8 +242,8 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
   planner once, then the template's own plan is used. A research template runs no quality commands (no file
   changes). Team resizing (§8.4): staffing records each agent's first task (`joined`); the GM's plan
   (`"team": {"add", "release"}`), `gm team` or an administrator (`POST /api/goals/{id}/team`, audited) adds a role,
-  releases an agent (it gets no further task of the goal) or takes one back; rows are never rewritten. Open:
-  strategies as experiment targets (FR-27/28, via SPEC-13).
+  releases an agent (it gets no further task of the goal) or takes one back; rows are never rewritten. Templates
+  are experiment targets since S04-R-13 (FR-27/28).
 
 ### S04-R-12 Execution trace and replay — FR-30, also SPEC-14 observability
 - `GET /api/goals/{id}/trace`: ordered transitions, tasks, runs (agent, model, tool calls,
@@ -257,6 +257,44 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
   with their exit code, file changes, MCP calls, web searches, usage from `turn.completed`; a Codex without events
   is read as plain text). HTTP models and the simulator make no tool calls. An output over the 5 M character cap
   keeps its head and tail, so the result event survives. The trace view lists the calls under each run.
+
+### S04-R-13 Self-evaluation of orchestration and recommended strategies — FR-27, FR-28, §20, AT-031..037
+- Evaluate every workflow template version (S04-R-11) from the live goals that ran under its rules (the order or
+  the planner chose the kind; an inferred kind is only a label; eval and improvement goals are left out): acceptance,
+  first-iteration passes, goals that used every iteration, iterations, time to the gate's answer, cost per accepted
+  goal, failed runs (retries), conflict reviews, plans replaced by the template's own, and the bottlenecks (most
+  frequent failed checks, roles with the most failed runs). Each figure with its sample size; no combined score.
+- Recommend: deterministic rules on the current version's evidence (at least 5 decided goals) propose a candidate
+  template, recorded as a SPEC-13 experiment with target `strategy`, its base version, changes, reasons and
+  evidence. The system never changes a template on its own.
+- §20.3 policy: a candidate may not turn on file changes or recruitment, drop the checks, the independent review or
+  protected tests, widen the template's paths or open it to any role; such a candidate is recorded `rejected` with
+  the violations. A person who wants that saves a version directly (`POST /api/strategies/{kind}`, admin, audited).
+- Experiment: both sides on the same suite and repeats as eval goals in scratch repositories (checks in the L3
+  sandbox); each side's template travels in the goal's trial, never through the template in force. Better = pass
+  rate up by `min_improvement` points, or §20.5 cheaper/faster by that much with pass rate, compliance and security
+  not lower. It then waits for an administrator.
+- Rollout: an administrator applies it as the kind's new version; a canary watches the final word of the next goals
+  under it and restores the previous version when the window can no longer reach its baseline.
+- Acceptance: AT-031 report with sample sizes; AT-032 recorded candidate; AT-033 isolated evaluation of both sides;
+  AT-034 policy violation rejected; AT-035 approval requested; AT-036 new version recorded; AT-037 rollback.
+- **Status: done** (`orchestration.py`, `tests/test_strategy_evolution.py`). Report: `orchestration.evaluate`
+  (latest 20 decided goals per version; `GET /api/strategies/evaluation`, `python -m agent_company strategies
+  evaluate [kind]`, Evolution → Orchestration strategies). Rules: one more iteration (≤ 10) when ≥ 30 % of the goals
+  used every iteration without passing; `sequential` when ≥ 30 % had a conflict review; `independent_qa` when a
+  template without review had < 80 % accepted. `recommend` runs after every decided live goal of the kind
+  (`workflow.set_status` → `orchestration.after_outcome`, errors logged, never in the way of the transition), and on
+  request (`POST /api/strategies/{kind}/recommend`, admin, audited; `strategies recommend <kind>`); it records nothing
+  while an experiment of the kind is open or when the same change to the same version was rejected or rolled back.
+  A person proposes one with `POST /api/experiments` (`target: strategy`, `role`: the kind, `candidate`: JSON of the
+  fields to change; administrators only). The experiment's hypothesis is concluded by its comparison (S07-R-03).
+  Eval goals take `trial["strategy"]` (kind, version, body) as their template, including its iteration limit (the
+  suite's own limit is not passed for strategy sides). Applying needs an administrator (`experiments.apply`, API
+  admin-only, audited `high`) and a candidate measured against the version still in force. The canary (3 goals)
+  counts approved / rejected / failed of goals under the deployed version, one outcome per goal (its last word);
+  awaiting approval does not count, the person's rejection being the quality signal. Its baseline is the previous
+  version's live acceptance rate, or the suite's baseline without live goals. If a newer version was saved meanwhile
+  nothing is restored, the experiment is only marked rolled back.
 
 ## Spec acceptance tests (§23) → requirements
 
@@ -279,7 +317,7 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
 | AT-026 | message delivery fails → retry, dead letter | S04-R-10 (messages are DB rows; no broker) |
 | AT-029 | approval revoked → protected action blocked | done (decision status checked at merge time) |
 | AT-030 | human emergency suspension | done (SPEC-14 S14-R-01) |
-| AT-031..037 | orchestration self-evolution | FR-27/28 via SPEC-13 S13-R-05 |
+| AT-031..037 | orchestration self-evolution | done: S04-R-13 (`tests/test_strategy_evolution.py`) |
 | §23.4 load tests | 10k agents, 1k events, large graphs | skip for now: establish a measured baseline first (single host) |
 
 ## Diagrams kept

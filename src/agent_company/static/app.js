@@ -407,6 +407,7 @@ async function goalDetail(id, openIds = new Set()) {
     GOAL_ACTIVE.includes(g.status) ? ib("stop", "Cancel the goal", 'data-act="cancel"', "danger") : "",
     me.is_admin && !["approved", "rejected", "cancelled"].includes(g.status) ? ib("settings", "Change the goal's budget (cost, tokens, agents at once)", 'data-budget="1"') : "",
     ib("clock", "Execution trace: every run, gate and operation in order", 'data-trace="1"'),
+    g.status === "approved" && g.branch ? ib("download", "Software bill of materials of the merged commit (CycloneDX JSON)", 'data-sbom="1"') : "",
   ].join("");
   // S04-R-09: the goal's budget per dimension; a goal's budget also covers the child goals its proposals spawn
   const b = g.budget || { limits: {}, used: {}, remaining: {} }, lim = b.limits || {};
@@ -472,6 +473,8 @@ async function goalDetail(id, openIds = new Set()) {
     try { await api(`/api/goals/${id}/team`, { method: "POST", body: { ...body, reason } }); goalDetail(id, openIds); } catch (err) { toast(err.message); }
   }));
   $("#goal-detail").querySelector("[data-trace]").onclick = () => goalTrace(id).catch((err) => toast(err.message));
+  const sb = $("#goal-detail").querySelector("[data-sbom]");
+  sb && (sb.onclick = () => { const a = document.createElement("a"); a.href = `/api/goals/${id}/sbom`; a.download = ""; document.body.append(a); a.click(); a.remove(); });
   const bb = $("#goal-detail").querySelector("[data-budget]");
   if (bb) bb.onclick = async () => {
     const own = b.own || {}, ask = (label, v) => prompt(`${label} (0 = the setting for every goal)`, String(v ?? 0));

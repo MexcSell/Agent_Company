@@ -19,7 +19,7 @@ feature came from.
   `executors.py` (tracked subprocesses: `terminate` for stops; `gate`, the tool gateway every run passes: permissions and
   `Agent.autonomy` G0-G4 decide writes, Bash and MCP tools, the isolation level L0-L2 and every tool call (Claude Code
   stream-json, Codex `--json`) are recorded on the `Run`), `dependencies.py` (S08-R-05: dependency changes per goal from git objects, `pip-audit`/`npm audit` at the gate's
-  security stage with network in the sandbox, `dependency_audit` off|warn|block, merge record), `sandbox.py` (S14-R-07 L3: quality, acceptance and
+  security stage with network in the sandbox, `dependency_audit` off|warn|block, merge record, CycloneDX SBOM of each merged commit in `data/sbom/`), `sandbox.py` (S14-R-07 L3: quality, acceptance and
   milestone commands and code benchmarks run agent-written code under bubblewrap: no network, the worktree writable
   with its `.git` read-only, `data/`/`.env` hidden, allow-listed env, systemd-scope limits; setting `sandbox`
   auto|required|off, a project only stricter, A2A goals required; a changed lock file is installed first with
@@ -33,7 +33,8 @@ feature came from.
   state machine, `goal_transitions`; task lifecycle stages `Task.stage` beside the execution status, S05-R-08); `strategies.py` (S04-R-11 workflow templates per goal kind
   bugfix|feature|refactor|research|docs, versioned: roles, writes, checks, iteration limit, execution mode, review
   policy; the order or the planner picks, a plan must fit it) + `teams.py` (a goal's team: joined/added/released
-  history, released agents not staffed for that goal); `blackboard.py` (versioned shared goal context, agent messages);
+  history, released agents not staffed for that goal) + `orchestration.py` (S04-R-13 self-evaluation per template
+  version, recommended templates as `strategy` experiments under the §20.3 policy, admin rollout, canary rollback); `blackboard.py` (versioned shared goal context, agent messages);
   `network.py` (SPEC-12 relationship kinds with evidence: observed links from finished work,
   complementary specialists and a mentor candidate for new agents, administrator corrections, fair staffing
   inputs in `registry._rank`; `graph`/`overview` for the network view) + `mentoring.py` (a mentor per learning plan: reviews practice results, never certifies);
@@ -138,6 +139,8 @@ feature came from.
 - `uv run python -m agent_company eval --suite smoke --label <name> [--repeats 3] [--model <name> --role <role>]` / `eval --compare a b`
 - `uv run python -m agent_company learn gaps|raise|plans|plan <agent> <skill>|start <id>|cancel <id>|experiments|metrics`
 - `uv run python -m agent_company requirements list|trace|import [--project <id>]` – requirements and traceability
+- `uv run python -m agent_company strategies evaluate [kind]|recommend <kind>` – self-evaluation of the workflow templates
+- `uv run python -m agent_company sbom [repo] [--rev HEAD] [--out file]` – CycloneDX SBOM of a commit
 - `uv run python -m agent_company stop [--level E0..E5 --scope X] [--lift|--status]` – emergency stop; writes the DB
   directly, works while the server is stuck
 - `uv run python -m agent_company host status|install-docker|docker-start|cleanup [--yes]|install-lxd|launch <name> [--container]|stop|delete <name>`

@@ -1,10 +1,13 @@
 """ASEAO08 S08-R-05: dependency changes, the audit at the gate, the record at the merge."""
 
 import json
+import secrets
 
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from agent_company import dependencies, executors, loop, performance, prefs, sandbox, worktrees
+from agent_company.api import create_app
 from agent_company.db import Event, Goal, session
 
 PIP_VULN = json.dumps({"dependencies": [
@@ -184,6 +187,51 @@ def test_the_gate_fails_the_security_stage_and_the_merge_records_the_changes(env
     with session() as s:
         ev = s.scalars(select(Event).where(Event.goal_id == gid, Event.kind == "dependencies")).one()
     assert ev.data["changes"][0]["after"] == "==2.5.0" and "requests changed" in ev.message
+    with session() as s:  # the SBOM of the merged commit
+        sb = s.scalars(select(Event).where(Event.goal_id == gid, Event.kind == "sbom")).one()
+    doc = json.loads(dependencies.sbom_path(sb.data["commit"]).read_text())
+    assert [c["purl"] for c in doc["components"]] == ["pkg:pypi/requests@2.5.0"]
+    assert doc["metadata"]["component"]["version"] == sb.data["commit"]
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as c:
+        c.post("/api/auth/register", json={"name": "luca", "device_secret": secrets.token_urlsafe(32)})
+        r = c.get(f"/api/goals/{gid}/sbom")
+        assert r.status_code == 200 and r.json()["serialNumber"] == doc["serialNumber"]
+        assert "attachment" in r.headers["content-disposition"]
+        assert c.get(f"/api/goals/{gid - 1}/sbom").status_code == 404, "a goal that was never merged has none"
+
+
+def test_the_sbom_lists_locked_and_pinned_dependencies_from_git_objects(env):
+    uv_lock = ('version = 1\n[[package]]\nname = "app"\nversion = "0.1.0"\nsource = { editable = "." }\n'
+               '[[package]]\nname = "Six"\nversion = "1.16.0"\nsource = { registry = "https://pypi.org/simple" }\n')
+    lock = json.dumps({"packages": {"": {"name": "web"}, "node_modules/@types/node": {"version": "20.1.0"},
+                                    "node_modules/local": {"link": True, "resolved": "../local"}}})
+    wt, _ = repo(env, {
+        "pyproject.toml": '[project]\nname = "app"\ndependencies = ["six>=1", "fastapi>=0.1"]\n',
+        "uv.lock": uv_lock,
+        "tools/requirements.txt": "requests==2.31.0\nflask\n",
+        "web/package.json": '{"dependencies": {"@types/node": "^20.0.0"}}',
+        "web/package-lock.json": lock,
+        "node_modules/x/package.json": '{"dependencies": {"evil": "1.0.0"}}',
+        "setup.py": "from setuptools import setup\n"})
+    src = env / "deps"
+    (src / "requirements.txt").symlink_to(src / "setup.py")
+    worktrees.git(src, "add", ".")
+    worktrees.git(src, "commit", "-q", "-m", "link")
+    (src / "tools" / "requirements.txt").write_text("requests==9.9.9\n")  # not committed: not in the SBOM
+    doc = dependencies.sbom(src)
+    assert doc["bomFormat"] == "CycloneDX" and doc["specVersion"] == "1.5"
+    by = {c["name"]: c for c in doc["components"]}
+    assert set(by) == {"Six", "fastapi", "requests", "flask", "@types/node"}, "not the project, node_modules, links"
+    assert by["Six"]["purl"] == "pkg:pypi/six@1.16.0", "the lock file's exact version stands for six>=1"
+    assert "version" not in by["fastapi"] and by["fastapi"]["purl"] == "pkg:pypi/fastapi"
+    assert {"name": "agent-company:specifier", "value": ">=0.1"} in by["fastapi"]["properties"]
+    assert by["requests"]["version"] == "2.31.0"
+    assert by["@types/node"]["purl"] == "pkg:npm/%40types/node@20.1.0"
+    props = doc["metadata"]["properties"]
+    assert {"name": "agent-company:unparsed", "value": "setup.py"} in props
+    assert dependencies.sbom(src)["serialNumber"] == doc["serialNumber"], "same commit, same serial number"
+    path, _ = dependencies.store_sbom(src, "HEAD")
+    assert path.parent == env / "data" / "sbom" and path.name.endswith(".cdx.json")
 
 
 def test_only_the_audit_gets_network_in_the_sandbox(env):

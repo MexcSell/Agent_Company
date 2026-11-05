@@ -136,13 +136,15 @@ def run_suite(suite: str | Path, label: str, repeats: int = 3, only: list[str] |
     tasks = [t for t in data["tasks"] if not only or t["name"] in only]
     final = data.get("kind") in {"final", "adversarial"}
     trial = dict(trial or {}) | ({"hide_checks": True} if final else {})
+    own_limit = final or not trial.get("strategy")  # a strategy side's iteration limit is under test (S04-R-13)
     for task in tasks:
         for rep in range(1, repeats + 1):
             repo = _seed_repo(label, task, rep)
             started = time.monotonic()
             gid = loop.create_goal(task["title"], task.get("description", task["title"]), str(repo),
                                    quality_commands=list(task.get("checks", [])),
-                                   max_iterations=1 if final else task.get("max_iterations"), origin="eval",
+                                   max_iterations=1 if final else task.get("max_iterations") if own_limit else None,
+                                   origin="eval",
                                    allowed_paths=task.get("allowed_paths"), protect_tests=task.get("protect_tests", False),
                                    trial=trial or None)
             loop.run_goal(gid)

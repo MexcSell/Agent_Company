@@ -21,7 +21,7 @@ import sys
 from dotenv import load_dotenv
 
 COMMANDS = {"serve", "goal", "crawl", "models", "agents", "approve", "crew", "rotate", "eval", "learn", "supervise", "host", "gm",
-            "stop", "improve"}
+            "stop", "improve", "requirements", "sbom", "strategies"}
 
 
 def _host(args: argparse.Namespace) -> None:
@@ -127,6 +127,13 @@ def main(argv: list[str] | None = None) -> None:
     le.add_argument("action", choices=["gaps", "raise", "plans", "plan", "start", "cancel", "experiments", "metrics"])
     le.add_argument("args", nargs="*", help="plan: <agent id> <capability> [final suite] [practice suite]; "
                                             "start/cancel: <plan id>")
+    sb = sub.add_parser("sbom", help="CycloneDX SBOM of a repository's dependencies at a commit (S08-R-05)")
+    sb.add_argument("repo", nargs="?", default=".", help="git repository (default: the current directory)")
+    sb.add_argument("--rev", default="HEAD")
+    sb.add_argument("--out", default="", help="write to this file instead of stdout")
+    st = sub.add_parser("strategies", help="self-evaluation of the workflow templates (SPEC-04 S04-R-13)")
+    st.add_argument("action", choices=["evaluate", "recommend"])
+    st.add_argument("kind", nargs="?", default="", help="goal kind (recommend: required)")
     a = sub.add_parser("approve")
     a.add_argument("goal_id", type=int)
     rq = sub.add_parser("requirements", help="project requirements and traceability (ASEAO08 S08-R-01)")
@@ -270,6 +277,27 @@ def main(argv: list[str] | None = None) -> None:
             out = experiments.list_experiments()
         else:
             out = training.metrics()
+        print(json.dumps(out, indent=2, default=str))
+    elif args.cmd == "sbom":
+        from agent_company import dependencies
+
+        from pathlib import Path
+
+        text = json.dumps(dependencies.sbom(args.repo, args.rev), indent=2)
+        if args.out:
+            Path(args.out).write_text(text)
+            print(f"{args.out}: {len(json.loads(text)['components'])} component(s)")
+        else:
+            print(text)
+    elif args.cmd == "strategies":
+        from agent_company import orchestration
+
+        if args.action == "recommend":
+            if not args.kind:
+                raise SystemExit("strategies recommend <kind>")
+            out = orchestration.recommend(args.kind, "cli")
+        else:
+            out = orchestration.evaluate(args.kind)
         print(json.dumps(out, indent=2, default=str))
     elif args.cmd == "rotate":
         from agent_company import research

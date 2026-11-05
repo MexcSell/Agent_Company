@@ -116,8 +116,8 @@ push only on `/sync`. The 13 engineering teams (§3) are **gated** (CLAUDE.md).
 
 ### S08-R-05 Dependency control — §15 (AT-021, AT-022)
 - On merge, record new/changed dependencies; when `pip-audit`/`npm audit` are installed, run them
-  as gate checks for changed manifests. SBOM generation: `open` (P2).
-- **Status: done** except the SBOM (`dependencies.py`: `changes`, `audit`, `check`, `on_merged`; setting
+  as gate checks for changed manifests. SBOM generation (P2).
+- **Status: done** (`dependencies.py`: `changes`, `audit`, `check`, `on_merged`; setting
   `dependency_audit` off|warn|block, a governance key; `tests/test_dependencies.py`). `changes` itemises every
   manifest and lock file the change touched (requirements files, `pyproject.toml` with optional dependencies,
   dependency groups and Poetry tables, `package.json`, `package-lock.json`, `uv.lock`, `poetry.lock`, `Cargo.toml`/
@@ -134,6 +134,16 @@ push only on `/sync`. The 13 engineering teams (§3) are **gated** (CLAUDE.md).
   goal history keeps `dependencies` (changes and notes) per iteration, the goal page shows them, and the merge
   logs the last iteration's changes as a `dependencies` event with the commit. An audit row is retested by the
   next gate, not by the defect `retest` (S09-R-03), which re-runs command checks only.
+  SBOM (`dependencies.sbom`, `store_sbom`): a CycloneDX 1.5 JSON document of one commit, read from git objects only
+  (no checkout, install or build). Every manifest and lock file in the tree is itemised except under
+  `node_modules/`, `.venv/`, `vendor/` and symlinked ones; lock files give exact versions (the project's own
+  editable/virtual/workspace packages and linked npm packages left out), a manifest's entry has a version only when
+  it pins one (else its specifier as a property) and gives way to a lock file in the same directory naming the same
+  package; package URLs for pypi, npm, cargo and golang; formats not itemised are listed as `unparsed`; the serial
+  number is derived from repository and commit. The merge writes `data/sbom/<commit>.cdx.json` and an `sbom` event;
+  `GET /api/goals/{id}/sbom` downloads it (goal page, merged goals; built again if the file is gone),
+  `GET /api/projects/{id}/sbom?rev=` builds one for any branch, tag or commit of a project the user can see, and
+  `python -m agent_company sbom [repo] [--rev] [--out]` on the command line.
 
 ### S08-R-06 Release candidates and rollback — §20 (AT-024..027) — gated
 - Agents never deploy (CLAUDE.md). Release candidates = approved merges with tag; rollback =

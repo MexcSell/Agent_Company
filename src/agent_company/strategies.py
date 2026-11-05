@@ -169,29 +169,32 @@ def list_strategies() -> list[dict[str, Any]]:
         return out
 
 
-def save(kind: str, body: dict[str, Any], author: str, note: str = "") -> dict[str, Any]:
+def save(kind: str, body: dict[str, Any], author: str, note: str = "", s: Session | None = None) -> dict[str, Any]:
     """A new version of the kind's template; the earlier ones stay (§20.4)."""
     kind = check_kind(kind)
     clean = validate(body)
-    with session() as s:
-        last = s.scalar(select(func.max(Strategy.version)).where(Strategy.kind == kind)) or 0
-        row = Strategy(kind=kind, version=last + 1, body=clean, author=author, note=note.strip()[:500])
-        s.add(row)
-        s.flush()
-        log_event("strategy", f"{author} saved {kind} template version {row.version}" + (f": {note}" if note else ""),
-                  s=s, goal_kind=kind, version=row.version)
-        return _row(row)
+    if s is None:
+        with session() as own:
+            return save(kind, clean, author, note, own)
+    last = s.scalar(select(func.max(Strategy.version)).where(Strategy.kind == kind)) or 0
+    row = Strategy(kind=kind, version=last + 1, body=clean, author=author, note=note.strip()[:500])
+    s.add(row)
+    s.flush()
+    log_event("strategy", f"{author} saved {kind} template version {row.version}" + (f": {note}" if note else ""),
+              s=s, goal_kind=kind, version=row.version)
+    return _row(row)
 
 
-def restore(kind: str, version: int, author: str) -> dict[str, Any]:
+def restore(kind: str, version: int, author: str, s: Session | None = None) -> dict[str, Any]:
     """Restore an earlier version: saved again as the newest one."""
     kind = check_kind(kind)
-    with session() as s:
-        old = s.scalars(select(Strategy).where(Strategy.kind == kind, Strategy.version == version)).first()
-        if old is None:
-            raise KeyError(f"{kind} v{version}")
-        body = copy.deepcopy(old.body)
-    return save(kind, body, author, f"restored version {version}")
+    if s is None:
+        with session() as own:
+            return restore(kind, version, author, own)
+    old = s.scalars(select(Strategy).where(Strategy.kind == kind, Strategy.version == version)).first()
+    if old is None:
+        raise KeyError(f"{kind} v{version}")
+    return save(kind, copy.deepcopy(old.body), author, f"restored version {version}", s)
 
 
 # --- selection ----------------------------------------------------------------------------------

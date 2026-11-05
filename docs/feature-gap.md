@@ -94,6 +94,7 @@ Machines code):
 | Retry policy and escalation levels for failed tasks | SPEC04 §14 | done (retry by failure type, budget pause, re-plan, repeated-check escalation, S04-R-06; levels 1-5 routed to agent, goal GM, room manager, executive GM, a person, `escalation.py`, S04-R-07) |
 | Task contract fields: scope, risk, test plan, budget, deadline, requirement keys; findings and next actions | Designing guide §3 | done (`contracts.TaskContract`, G-R-01) |
 | Workflow templates per goal kind (bugfix, feature, refactor, research, docs) with versions; strategy picked by the order or the planner; team resizing with history | SPEC04 FR-24..26, §8.4, §20.4 | done (`strategies.py`, `teams.py`, S04-R-11) |
+| Self-evaluation of orchestration: reports per template version, recommended templates as experiments under the §20.3 policy, administrator rollout with canary and rollback | SPEC04 FR-27/28, §20, AT-031..037 | done (`orchestration.py`, S04-R-13) |
 | Execution trace per goal | SPEC04 FR-30, SPEC14 | done (`/api/goals/{id}/trace` with each run's tool calls) → S04-R-12 |
 | Goal-chain depth limit for proposals | SPEC04 §9.4 | done (`max_goal_depth`, message budget, duplicates dropped, unanswered requests escalated, S04-R-08) |
 | Project registration fields (rooms, skills, stack, budget, deadline, priority) and lifecycle (pause, resume, archive, cancel, complete) | ASEAO05 FR-05..09 | done (`projects.set_status`, project budget caps its goals, priority queue, S05-R-06) |
@@ -109,7 +110,7 @@ Machines code):
 | Requirements traceability (requirement → task → test) | ASEAO08 §5.3, ASEAO09 §5.1 | done (`requirements.py`: versions, conflicts as decisions, links from tasks, checks and merges, S08-R-01; check commands and acceptance commands naming keys, untested requirements, S09-R-06) |
 | Code-review checklist with a logic-verification step (trace data flow; no approval for code that only looks clean) and de-duplicated comments | ASEAO08 §13, `extensions/analysis_results.md` | done (`quality.REVIEW_CHECKLIST`, `review_verdict`, `merge_findings`, S08-R-03) |
 | Change boundaries: no skipped tests, removed assertions, new dependencies or CI/.env edits without a permit | ASEAO08 §12.2 | done (`checks.boundary_violations`, S08-R-04) |
-| Dependency control: changed dependencies itemised per goal, `pip-audit`/`npm audit` at the gate's security stage (a vulnerability the change brought in fails), merged changes recorded; SBOM | ASEAO08 §15 | done except the SBOM (`dependencies.py`, S08-R-05) |
+| Dependency control: changed dependencies itemised per goal, `pip-audit`/`npm audit` at the gate's security stage (a vulnerability the change brought in fails), merged changes recorded; CycloneDX SBOM of every merged commit | ASEAO08 §15 | done (`dependencies.py`, S08-R-05) |
 | Quality gates as named stages; an open critical defect blocks the merge | ASEAO09 §13 | done (`quality.stages`, S09-R-01) |
 | Risk-based test strategy per goal: mandatory integration/security stages for high-risk goals, security review of sensitive areas, files with earlier failures | ASEAO09 §6 | done (`teststrategy.py`, S09-R-02) |
 | Test-strategy selection by test category and risk | ASEAO09 §6-7 | done (`teststrategy.py`, S09-R-02) |

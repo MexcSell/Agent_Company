@@ -226,11 +226,12 @@ class Experiment(Base):
 
     __tablename__ = "experiments"
     id: Mapped[int] = mapped_column(primary_key=True)
-    target: Mapped[str] = mapped_column(String(24))  # playbook|route
+    target: Mapped[str] = mapped_column(String(24))  # playbook|route|strategy (a workflow template, S04-R-13)
     agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # playbook experiments
-    role: Mapped[str] = mapped_column(String(64), default="")  # route experiments
+    role: Mapped[str] = mapped_column(String(64), default="")  # route experiments; the goal kind of a strategy
     baseline_version: Mapped[str] = mapped_column(String(128), default="")  # "v3" or the route's model
-    candidate: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"playbook": text} or {"model": name}
+    # {"playbook": text}, {"model": name} or {"kind", "base_version", "changes", "body", "reasons", "evidence"}
+    candidate: Mapped[dict[str, Any]] = mapped_column(default=dict)
     hypothesis: Mapped[str] = mapped_column(Text, default="")
     dataset: Mapped[dict[str, Any]] = mapped_column(default=dict)  # suite, repeats
     results: Mapped[dict[str, Any]] = mapped_column(default=dict)  # baseline, candidate, comparison, canary

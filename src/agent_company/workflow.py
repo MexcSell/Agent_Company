@@ -107,6 +107,15 @@ def set_status(s: Session, g: Goal, to: str, reason: str = "", actor: str = "sys
     s.add(GoalTransition(goal_id=g.id, from_status=cur, to_status=to, reason=reason[:500], actor=actor[:128]))
     if to in ("approved", "cancelled", "rejected", "paused", "failed"):
         _tasks_follow(s, g, to)
+    if g.kind and to in ("awaiting_approval", "approved", "rejected", "failed"):
+        from agent_company import orchestration
+
+        try:  # S04-R-13: the template's canary and self-evaluation; never in the way of the transition
+            orchestration.after_outcome(s, g, to)
+        except Exception as e:  # noqa: BLE001
+            from agent_company.db import log_event
+
+            log_event("error", f"orchestration self-evaluation after goal #{g.id}: {type(e).__name__}: {e}", s=s)
     return True
 
 

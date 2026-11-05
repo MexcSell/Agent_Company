@@ -94,11 +94,13 @@ the order is safety and correctness of that pipeline first, then management, the
    S07-R-02 root-cause analysis of failing goals. S09-R-03 defect priority and lifecycle, then
    S09-R-02 the risk-based test strategy per goal.
    S09-R-05 evaluation dimensions with sample sizes and the adversarial suite done 2026-11-05, then S08-R-05
-   dependency changes, audit at the gate and record at the merge (SBOM still open).
+   dependency changes, audit at the gate and record at the merge.
    ASEAO06 S06-R-03/R-04/R-06/R-07 done 2026-11-05: claim-level evidence checked against stored documents, an
    independent review of every report, approved claims as research knowledge items, research proposals.
-5. **Still open** (2026-11-05): S14-R-05's remainder (uploads, documents, model rule), S04-FR-27/28
-   orchestration self-evaluation, SE-R-21 retrieval strategy per query class; the gated rooms one at a time
+   S04-R-13 (FR-27/28) self-evaluation of orchestration done 2026-11-05: reports per workflow template version,
+   recommended candidates as strategy experiments under the §20.3 policy, an administrator's rollout with a canary.
+   The S08-R-05 SBOM (CycloneDX of every merged commit) done 2026-11-05.
+5. **Still open** (2026-11-05): SE-R-21 retrieval strategy per query class; the gated rooms one at a time
    (G-R-04); L3 for the agent CLIs themselves (they need network and their logins, see the threat model's known
    gaps).
 

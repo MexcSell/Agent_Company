@@ -1,13 +1,14 @@
 """Experiments: a candidate against the baseline on the same fixed suite (SPEC-13 S13-R-05, S13-R-06).
 
-  propose   a target (`playbook` of one agent, or the `route` of one role), the candidate (playbook text or a
-            catalog model), a hypothesis and the dataset (eval suite + repeats)
+  propose   a target (`playbook` of one agent, the `route` of one role, or the `strategy`: the workflow template
+            of one goal kind, orchestration.py), the candidate (playbook text, a catalog model, or the template
+            fields to change), a hypothesis and the dataset (eval suite + repeats)
   baseline  the suite runs with the current version
   candidate the same suite, the same repeats, with the candidate: eval goals carry the side in `Goal.trial`
   compare   pass rate, iterations (rework), seconds and cost per passed run of both sides, with sample sizes;
             the candidate is better only if it beats the baseline by `min_improvement` points
   review    who may deploy is the self-improvement policy (S13-R-04, `AUTONOMY`): a playbook goes on by the
-            automatic rule (S13-D-01), a route waits for an administrator
+            automatic rule (S13-D-01), a route or a strategy waits for an administrator
   canary    the deployed candidate is watched on live work for a window of outcomes; when its success rate
             drops below the baseline the previous version is restored automatically (LE-018)
   rollout   the window ends at or above the baseline
@@ -29,7 +30,7 @@ from sqlalchemy.orm import Session
 from agent_company.config import settings
 from agent_company.db import Agent, Experiment, Goal, Lesson, ModelEntry, Route, log_event, session
 
-TARGETS = ("playbook", "route")
+TARGETS = ("playbook", "route", "strategy")
 # §12.2: what the platform never changes on its own; the proposal path rejects them (SPEC-14 S14-R-02)
 RESTRICTED = ("governance", "security", "permissions", "budgets", "approvals", "policy")
 # S13-R-04: the self-improvement levels and who controls them
@@ -38,11 +39,12 @@ AUTONOMY = {
     "E1": ("identify capability gaps", "automatic"),
     "E2": ("propose a learning plan or an experiment", "automatic"),
     "E3": ("test in the sandbox (eval suite in scratch repositories)", "automatic within budget"),
-    "E4": ("recommend deployment", "automatic rule for playbooks (S13-D-01), an administrator for routes"),
-    "E5": ("deploy", "automatic only for playbooks; routes and models need an administrator"),
+    "E4": ("recommend deployment", "automatic rule for playbooks (S13-D-01), an administrator for routes and "
+           "workflow templates"),
+    "E5": ("deploy", "automatic only for playbooks; routes, models and workflow templates need an administrator"),
     "E6": ("change governance, security, permissions, budgets or approvals", "never autonomous"),
 }
-DEPLOY_BY = {"playbook": "system", "route": "administrator"}
+DEPLOY_BY = {"playbook": "system", "route": "administrator", "strategy": "administrator"}
 CANARY_WINDOW = 3
 FINAL = {"rolled_out", "rolled_back", "rejected", "failed"}
 _running: set[int] = set()
@@ -64,7 +66,7 @@ def check_target(target: str) -> str:
 
 
 def may_deploy(target: str, actor: str) -> bool:
-    """E5: a playbook may be deployed by the system's own rule; a route only by a person."""
+    """E5: a playbook may be deployed by the system's own rule; a route or a workflow template only by a person."""
     return DEPLOY_BY[check_target(target)] == "system" or actor.startswith("user:")
 
 
@@ -163,9 +165,16 @@ def propose(target: str, candidate: str, *, agent_id: int | None = None, role: s
         raise ValueError("repeats must be between 1 and 10")
     candidate = (candidate or "").strip()
     if not candidate:
-        raise ValueError("a candidate is required: the playbook text, or the model for the route")
+        raise ValueError("a candidate is required: the playbook text, the model for the route, or the template "
+                         "fields to change")
     with session() as s:
-        if target == "playbook":
+        if target == "strategy":  # S04-R-13: rejected at once when it breaks the §20.3 policy
+            from agent_company import orchestration
+
+            e = orchestration.record(s, role, orchestration.parse_changes(candidate),
+                                     reasons=[f"proposed by {created_by}"], evidence=None, hypothesis=hypothesis,
+                                     suite=suite, repeats=int(repeats), origin="user", created_by=created_by)
+        elif target == "playbook":
             a = s.get(Agent, agent_id) if agent_id else None
             if a is None:
                 raise KeyError(f"agent {agent_id}")
@@ -228,8 +237,18 @@ def start(exp_id: int) -> dict[str, Any]:
             if exp_id in _running:
                 return get(exp_id)
             _running.add(exp_id)
-        _spawn(lambda: run_route(exp_id))
+        _spawn(lambda: run_route(exp_id) if target == "route" else _run_strategy(exp_id))
     return get(exp_id)
+
+
+def _run_strategy(exp_id: int) -> dict[str, Any]:
+    from agent_company import orchestration
+
+    try:
+        return orchestration.run(exp_id)
+    finally:
+        with _running_lock:
+            _running.discard(exp_id)
 
 
 def run_route(exp_id: int) -> dict[str, Any]:
@@ -285,7 +304,8 @@ def role_success_rate(s: Session, role: str, n: int = 10) -> tuple[float, int]:
 
 
 def apply(exp_id: int, actor: str) -> dict[str, Any]:
-    """E5 for a route: an administrator deploys the candidate; the canary then watches live outcomes."""
+    """E5 for a route or a workflow template: an administrator deploys the candidate; the canary then watches
+    live outcomes."""
     from agent_company import router
 
     with session() as s:
@@ -296,6 +316,11 @@ def apply(exp_id: int, actor: str) -> dict[str, Any]:
             raise ValueError(f"experiment #{exp_id} is {e.status}, not waiting for review")
         if not may_deploy(e.target, actor):
             raise PermissionError(f"a {e.target} change is deployed by an {DEPLOY_BY[e.target]} (S13-R-04)")
+        if e.target == "strategy":
+            from agent_company import orchestration
+
+            orchestration.apply(s, e, actor)
+            return to_dict(e)
         if e.target != "route":
             raise ValueError("playbook candidates are deployed by the evolution loop's own rule")
         role, model, previous = e.role, e.candidate["model"], e.baseline_version
