@@ -120,7 +120,7 @@ window.WSP = window.WSP || {};
     </aside>
     <div class="wgut v" data-g="left" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
     <section class="wm">
-      <div class="we"><div class="we-bar"><div class="we-tabs" id="we-tabs" role="tablist"></div><span class="we-acts">${winBtns("editor")}</span></div><div class="we-hosts" id="we-hosts"></div></div>
+      <div class="we">${strip("editor", "Editor")}<div class="we-bar"><div class="we-tabs" id="we-tabs" role="tablist"></div><span class="we-acts">${winBtns("editor")}</span></div><div class="we-hosts" id="we-hosts"></div></div>
       <div class="wgut h" data-g="term" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
       <div class="wt" id="wt"></div>
     </section>
@@ -145,13 +145,19 @@ window.WSP = window.WSP || {};
     ["explorer", "editor", "terminal", "claude"].forEach((p) => { S.el.classList.toggle(`min-${p}`, min.has(p) && max !== p); S.el.classList.toggle(`max-${p}`, max === p); });
     S.el.classList.toggle("no-claude", S.noClaude);
     S.el.querySelectorAll(".win-btn[data-win=max]").forEach((b) => (b.innerHTML = svg(max === b.dataset.pane ? "M8 8h12v12H8zM4 16V4h12" : "M4 4h16v16H4z")));
-    const left = max === "explorer" ? "minmax(0, 1fr)" : max ? "0px" : min.has("explorer") ? "34px" : `${S.sizes.left}px`;
-    const right = S.noClaude ? "0px" : max === "claude" ? "minmax(0, 1fr)" : max ? "0px" : min.has("claude") ? "34px" : `${S.sizes.right}px`;
-    const mid = max === "explorer" || max === "claude" ? "0px" : "minmax(240px, 1fr)";
-    S.el.style.gridTemplateColumns = narrow ? "1fr" : `${left} ${max ? "0px" : "5px"} ${mid} ${max || S.noClaude ? "0px" : "5px"} ${right}`;
     const termOff = S.termHidden || max === "editor";
-    const rows = max === "terminal" ? "34px 0 minmax(0, 1fr)" : termOff ? "minmax(0, 1fr) 0 0"
-      : min.has("terminal") ? "minmax(0, 1fr) 0 32px" : min.has("editor") ? `34px 5px minmax(0, 1fr)` : `minmax(120px, 1fr) 5px ${S.sizes.term}px`;
+    // Editor and terminal both minimised: the centre column shrinks to a strip and a side window takes the room.
+    const midMin = !max && !narrow && min.has("editor") && (min.has("terminal") || termOff);
+    const grow = midMin ? (!S.noClaude && !min.has("claude") ? "claude" : !min.has("explorer") ? "explorer" : "") : "";
+    S.el.classList.toggle("mid-min", midMin);
+    const left = max === "explorer" || grow === "explorer" ? "minmax(0, 1fr)" : max ? "0px" : min.has("explorer") ? "34px" : `${S.sizes.left}px`;
+    const right = S.noClaude ? "0px" : max === "claude" || grow === "claude" ? "minmax(0, 1fr)" : max ? "0px" : min.has("claude") ? "34px" : `${S.sizes.right}px`;
+    const mid = max === "explorer" || max === "claude" ? "0px" : grow ? "34px" : midMin ? "minmax(34px, 1fr)" : "minmax(240px, 1fr)";
+    S.el.style.gridTemplateColumns = narrow ? "1fr" : `${left} ${max ? "0px" : "5px"} ${mid} ${max || S.noClaude ? "0px" : "5px"} ${right}`;
+    const rows = max === "terminal" ? "34px 0 minmax(0, 1fr)" : midMin ? (termOff ? "minmax(0, 1fr) 0 0" : "minmax(0, 1fr) 0 minmax(0, 1fr)")
+      : min.has("editor") && termOff ? "24px 0 0" : termOff ? "minmax(0, 1fr) 0 0"
+      : min.has("terminal") && min.has("editor") ? "24px 0 24px" : min.has("terminal") ? "minmax(0, 1fr) 0 24px"
+      : min.has("editor") ? "24px 0 minmax(0, 1fr)" : `minmax(120px, 1fr) 5px ${S.sizes.term}px`;
     S.el.querySelector(".wm").style.gridTemplateRows = rows;
     S.el.querySelector(".wm").classList.toggle("term-hidden", termOff);
     W.fitTerminals?.();

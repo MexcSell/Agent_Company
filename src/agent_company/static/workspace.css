@@ -382,6 +382,15 @@ table.csv .c4 { color: var(--t-kw); } table.csv .c5 { color: var(--t-num); } tab
 .win-strip { flex: 1; align-items: flex-start; justify-content: center; padding-top: 12px; border: 0; background: var(--panel); color: var(--muted); cursor: pointer; font: 700 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
 .win-strip span { writing-mode: vertical-rl; }
 .win-strip:hover { color: var(--accent); background: var(--panel-2); }
+/* centre windows: a thin horizontal strip each; both minimised, the centre column is one slim vertical strip */
+.wsp.min-editor .we > :not(.win-strip), .wsp.min-terminal .wt > :not(.win-strip) { display: none !important; }
+.wsp.min-editor .we > .win-strip, .wsp.min-terminal .wt > .win-strip { display: flex; }
+.wm .win-strip { align-items: center; justify-content: flex-start; padding: 0 12px; background: var(--panel-2); border-bottom: 1px solid var(--border); }
+.wm .win-strip span { writing-mode: horizontal-tb; }
+.wm .wt > .win-strip { border-bottom: 0; border-top: 1px solid var(--border); }
+.wsp.mid-min .wm .win-strip { align-items: flex-start; justify-content: center; padding: 12px 0 0; border: 0; }
+.wsp.mid-min .wm .wt > .win-strip { border-top: 1px solid var(--border); }
+.wsp.mid-min .wm .win-strip span { writing-mode: vertical-rl; }
 .wsp.max-explorer > :not(.wx), .wsp.max-claude > :not(.wc) { display: none; }
 .wsp.max-editor .wx, .wsp.max-editor .wc, .wsp.max-terminal .wx, .wsp.max-terminal .wc, .wsp.max-editor .wgut.v, .wsp.max-terminal .wgut.v { display: none; }
 .wsp.max-terminal .we-hosts, .wsp.min-editor .we-hosts { display: none; }

@@ -23,7 +23,7 @@ window.WSP = window.WSP || {};
 
   W.initTerminals = async (el) => {
     T.el = el;
-    el.innerHTML = `<div class="wt-bar"><div class="wt-tabs" role="tablist"></div>
+    el.innerHTML = `${W.winStrip ? W.winStrip("terminal", "Terminal") : ""}<div class="wt-bar"><div class="wt-tabs" role="tablist"></div>
       <button class="icon-btn sm" data-t="new" title="New terminal">${W.svg("M12 5v14M5 12h14")}</button>
       <button class="icon-btn sm" data-t="reconnect" title="Reconnect the terminal">${W.svg("M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7")}</button>
       <button class="icon-btn sm" data-t="clear" title="Clear">${W.svg("M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13")}</button>
@@ -77,7 +77,7 @@ window.WSP = window.WSP || {};
   };
   W.focusTerminal = () => T.active?.term.focus();
   W.fitTerminals = () => {
-    if (!T.active || !T.el?.isConnected || T.active.host.hidden) return;
+    if (!T.active || !T.el?.isConnected || T.active.host.hidden || !T.active.host.offsetParent) return;  // minimised: keep its size
     try { T.active.fit.fit(); } catch { /* not visible yet */ }
   };
 
