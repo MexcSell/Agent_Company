@@ -95,8 +95,9 @@ the order is safety and correctness of that pipeline first, then management, the
    S09-R-02 the risk-based test strategy per goal.
    S09-R-05 evaluation dimensions with sample sizes and the adversarial suite done 2026-11-05, then S08-R-05
    dependency changes, audit at the gate and record at the merge (SBOM still open).
-5. **Still open** (2026-11-05): S06-R-03/R-04/R-06/R-07 claim-level evidence, report review, research →
-   proposal pipeline and knowledge transfer, S14-R-05's remainder (uploads, documents, model rule), S04-FR-27/28
+   ASEAO06 S06-R-03/R-04/R-06/R-07 done 2026-11-05: claim-level evidence checked against stored documents, an
+   independent review of every report, approved claims as research knowledge items, research proposals.
+5. **Still open** (2026-11-05): S14-R-05's remainder (uploads, documents, model rule), S04-FR-27/28
    orchestration self-evaluation, SE-R-21 retrieval strategy per query class; the gated rooms one at a time
    (G-R-04); L3 for the agent CLIs themselves (they need network and their logins, see the threat model's known
    gaps).

@@ -76,10 +76,36 @@ registered sources (`rotation_tick`), robots.txt and public-host checks (`_robot
   the approved report (AT-015).
 - Disagreeing sources: both kept, dates and conditions compared, unresolved uncertainty stated;
   never pick the most frequent answer.
+- **Status: done** (`ResearchReport.claims`, `research.check_claims`, `_excerpt`, `conclude`, `_approved_text`;
+  `tests/test_research_review.py`). Claims are the report's numbered findings; the author cites `[n]` (supports) or
+  `[n:contradicts|partial|context|unrelated]` and quotes the passage. The check is deterministic: a quote must occur in
+  the stored document (case and whitespace aside; location = offset in the collapsed text), else at least
+  `SUPPORT_SHARE` (0.6) of the claim's terms; each evidence entry keeps `source_id`, URL, excerpt, location,
+  relationship and the document's retrieval date. Status per claim after the review: `verified` (backed, and a
+  reviewer of another model family or a person agreed), `supported` (backed, and a reviewer of the same family agreed;
+  kept, but marked "checked by the same model family" and stored as INFERENCE, not FACT), `contested` (one source
+  backs it, another backed source contradicts it: both are kept under "Uncertain" with their retrieval dates, not
+  resolved and not stored as knowledge), `unverified` (the reviewer did not agree) and `unsupported` (no excerpt backs
+  it). The approved report replaces the findings with the claims that held; `unverified` and `unsupported` ones are
+  dropped from it (AT-015) and stay visible only in the draft. Adapted: "a different provider" is a different model
+  family *when one is usable*; otherwise the claim is `supported`, not `verified`, so a single-provider install still
+  learns from reviewed reports without calling them independently verified.
 
 ### S06-R-04 Independent review of reports — §11 (AT-014)
 - Report status `draft→in_review→approved|rejected`; review by an agent other than the author
   and of a different provider. Only approved reports feed knowledge (SPEC-11) and goals.
+- **Status: done** (`ResearchReport.review`, `reviewed_by`, `reviewer_agent_id`, `review_provider`, `review_note`;
+  `research.review_report`, `decide_report`; `POST /api/research/requests/{id}/review` (admin, audited); Research →
+  report window: claims with their evidence, Approve/Reject). The review runs right after the author's run: another
+  research agent (`registry.staff` while the author is busy, so never the author) on a model of another provider
+  (`router.resolve(avoid_provider=)`) answers `C<n>: AGREE|DISAGREE` per claim and `VERDICT: APPROVE|REJECT`. An
+  approved report with no claim left is rejected. When nobody else can review, the model is not cleared for the
+  report's classification, or the reviewer gives no verdict, the report stays `in_review` and administrators are
+  notified; a person's approval counts as independent (`verified`), a rejection needs a reason. `review` is a column
+  beside the run `status` (queued|running|done|failed|expired), which the queue keeps using; `""` marks reports
+  written before reviews existed. Only an approved report becomes the `report://` document (search, task packages),
+  reaches its goal's blackboard, and feeds knowledge; a later rejected run of a recurring request leaves the last
+  approved document in place.
 
 ### S06-R-05 Rotation handover — §14
 - Each rotation turn writes a handover: active requests, completed work, unverified claims,
@@ -93,10 +119,24 @@ registered sources (`rotation_tick`), robots.txt and public-host checks (`_robot
 - An approved finding can become a proposal tagged `research` (existing proposal flow) with the
   report linked; the chain is research → verification → evaluation → proposal → (sandbox
   experiment, SPEC-13 S13-R-05) → approval → goal. Research never changes code directly.
+- **Status: done** (`Proposal.tag`, `Proposal.report_id`, `research._proposals`, `projects.settle_proposals(only=)`).
+  The author may end its recommendation with `PROPOSAL: <title> :: <why>` lines (at most 2 per report); on approval
+  each becomes a pending proposal tagged `research` with the report and the claims it rests on in its description,
+  on the report's goal. They take the normal path: the goal's end settles them (a person, or the GM under
+  `proposal_policy=superiors`; restricted ones always need a person), or at once when the goal has already ended.
+  An approved proposal becomes a goal like any other (approval, gate, merge). Not taken: a report without a goal
+  raises no proposal (`proposals.goal_id` is required, and a goal needs a repository), and the sandbox experiment
+  step is left to the person deciding (SPEC-13 experiments exist but are not created automatically).
 
 ### S06-R-07 Knowledge transfer — §16 (AT-019)
 - Approved report claims become `research` knowledge items with sources and review date
   (SPEC-11 S11-R-01).
+- **Status: done** (`research._transfer`). Each `verified` or `supported` claim of an approved report is a knowledge
+  item: kind `research`, evidence class FACT (verified) or INFERENCE (supported), sources `report:<id>` and the
+  `url:` of every backing document, the request's keywords as technologies, the report's project and goal, the
+  classification of its goal/project, `review_due_at` after `KNOWLEDGE_REVIEW_DAYS` (90). They are screened like
+  lessons (`learning.screen`), linked in the knowledge graph and checked for contradictions. Nothing is stored for a
+  secret project or goal; a claim already stored (a recurring report) is not stored again.
 
 ### S06-R-08 Recovery — AT-021
 - A report left `running` at restart is re-queued (same rule as goals, SPEC-04 S04-R-05).

@@ -540,6 +540,8 @@ class Proposal(Base):
     status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|approved|rejected
     decided_by: Mapped[str] = mapped_column(String(128), default="")
     spawned_goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tag: Mapped[str] = mapped_column(String(16), default="")  # research = from an approved report (S06-R-06)
+    report_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -784,6 +786,15 @@ class ResearchReport(Base):
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     runs: Mapped[int] = mapped_column(Integer, default=0)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    # its review (ASEAO06 S06-R-03/R-04): draft -> in_review -> approved|rejected; "" = written before reviews.
+    # Only an approved report reaches knowledge, the search and its goal.
+    review: Mapped[str] = mapped_column(String(16), default="")
+    claims: Mapped[list[Any]] = mapped_column(default=list)  # [{n, claim, evidence: [...], status, review}]
+    approved_report: Mapped[str] = mapped_column(Text, default="")  # the report with only the claims that held
+    reviewer_agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviewed_by: Mapped[str] = mapped_column(String(128), default="")
+    review_provider: Mapped[str] = mapped_column(String(32), default="")  # the reviewer's model family
+    review_note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

@@ -685,11 +685,25 @@ class OfflineExecutor(Executor):
 
     def _report(self, req: Request) -> str:
         docs = req.data.get("documents") or []
-        findings = "\n".join(f"{i}. {d['title'] or d['url']} is relevant [{i}]." for i, d in enumerate(docs, 1))
+
+        def quote(d: dict[str, Any]) -> str:  # the first words of the stored passage, for the claim check
+            words = " ".join(str(d.get("text", "")).replace('"', " ").split())[:90]
+            return words.rsplit(" ", 1)[0] if len(words) == 90 and " " in words else words
+
+        findings = "\n".join(f"{i}. {d['title'] or d['url']}: {quote(d)} [{i}] \"{quote(d)}\"" if len(quote(d)) >= 8
+                             else f"{i}. {d['title'] or d['url']} is relevant [{i}]." for i, d in enumerate(docs, 1))
         sources = "\n".join(f"[{i}] {d['title']} - {d['url']} - {d['category']}" for i, d in enumerate(docs, 1))
         return (f"## Objective\n{req.data.get('question', '')}\n\n## Findings\n{findings or 'No material was found.'}\n\n"
                 "## Gaps\nThe offline simulator does not read the material; configure a model for a real report.\n\n"
                 f"## Recommendation\nRead the sources below.\n\n## Sources\n{sources or '(none)'}\n")
+
+    def _report_review(self, req: Request) -> str:
+        """Agrees with the claims an excerpt backs (research.check_claims), approves when any is left."""
+        claims = req.data.get("claims") or []
+        lines = [f"C{c['n']}: AGREE" if c.get("support") != "unsupported" else
+                 f"C{c['n']}: DISAGREE no excerpt from a stored source backs it" for c in claims]
+        ok = any(c.get("support") != "unsupported" for c in claims)
+        return "\n".join([*lines, "VERDICT: APPROVE" if ok else "VERDICT: REJECT no claim is backed by its sources"])
 
     def _research(self, req: Request) -> str:
         docs = req.data.get("documents") or []

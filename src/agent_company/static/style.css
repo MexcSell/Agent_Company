@@ -87,6 +87,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .pill.detected { color: var(--bad); }
 .pill.fix_submitted { color: var(--warn); }
 .pill.retested, .pill.closed { color: var(--ok); }
+/* research reviews and claims (S06-R-03/R-04); draft and pending stay muted */
+.pill.in_review, .pill.supported, .pill.contested { color: var(--warn); }
+.pill.verified { color: var(--ok); }
+.pill.unverified, .pill.unsupported { color: var(--bad); }
 
 .list { display: flex; flex-direction: column; gap: 4px; }
 .list-item { padding: 8px 10px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }

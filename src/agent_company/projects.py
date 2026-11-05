@@ -881,7 +881,8 @@ def extract_proposals(goal_id: int, agent_id: int, output: str) -> int:
 def proposal_dict(p: Proposal, names: dict[int, str]) -> dict[str, Any]:
     return {"id": p.id, "goal_id": p.goal_id, "project_id": p.project_id, "agent": names.get(p.agent_id),
             "title": p.title, "description": p.description, "status": p.status, "decided_by": p.decided_by,
-            "spawned_goal_id": p.spawned_goal_id, "at": p.created_at.isoformat()}
+            "spawned_goal_id": p.spawned_goal_id, "tag": p.tag or "", "report_id": p.report_id,
+            "at": p.created_at.isoformat()}
 
 
 def list_proposals(user: dict[str, Any], status: str = "") -> list[dict[str, Any]]:
@@ -997,14 +998,16 @@ def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = Tr
     return out
 
 
-def settle_proposals(goal_id: int) -> None:
-    """After a goal ends: announce its proposals, or let the GM decide them."""
+def settle_proposals(goal_id: int, only: list[int] | None = None) -> None:
+    """After a goal ends: announce its proposals, or let the GM decide them. `only`: just these (research proposals
+    raised after the goal ended, S06-R-06)."""
     from agent_company import executors, router
     from agent_company.governance import notify
 
     with session() as s:
         pending = [(p.id, p.title, p.description) for p in s.scalars(
-            select(Proposal).where(Proposal.goal_id == goal_id, Proposal.status == "pending"))]
+            select(Proposal).where(Proposal.goal_id == goal_id, Proposal.status == "pending"))
+            if only is None or p.id in only]
         g = s.get(Goal, goal_id)
         gm = s.scalars(select(Agent).where(Agent.role == "general_manager", Agent.parent_id.is_(None))).first()
         goal_title = g.title if g else ""

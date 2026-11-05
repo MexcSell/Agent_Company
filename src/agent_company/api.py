@@ -2432,6 +2432,20 @@ def create_app(start_background: bool = True) -> FastAPI:
         rows = research.list_reports(project_id=project_id, goal_id=goal_id)
         return [r for r in rows if seen is None or r["project_id"] is None or r["project_id"] in seen]
 
+    @app.post("/api/research/requests/{report_id}/review")
+    def research_review(report_id: int, body: DecideBody, admin: dict[str, Any] = Depends(admin_user)
+                        ) -> dict[str, Any]:
+        """A person approves or rejects a report waiting for its review (ASEAO06 S06-R-04)."""
+        try:
+            out = research.decide_report(report_id, body.approve, f"user:{admin['name']}", body.note)
+        except KeyError as e:
+            raise HTTPException(404, "no such report") from e
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "research.review", f"report:{report_id}", after={"review": out["review"], "note": body.note},
+               severity="warning" if body.approve else "info")
+        return out
+
     @app.get("/api/research/search")
     def search(q: str, limit: int = 10, _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         return research.search(q, min(limit, 50))

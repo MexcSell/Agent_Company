@@ -93,7 +93,8 @@ def test_due_requests_run_by_priority_and_recurring_ones_come_back():
     late = research.request_report("How are browser extensions reviewed by stores?")
     assert research.due_reports() == [crit, soon, late, low]
     assert research.run_due_reports(limit=1) == [crit]
-    weekly = research.request_report("Weekly agent framework news?", recurring="weekly", priority="critical")
+    doc("https://docs.example/agents", "Agent framework news", "weekly agent framework news and release notes " * 5)
+    weekly =research.request_report("Weekly agent framework news?", recurring="weekly", priority="critical")
     assert research.run_due_reports(limit=1) == [weekly]
     with session() as s:
         r = s.get(ResearchReport, weekly)
