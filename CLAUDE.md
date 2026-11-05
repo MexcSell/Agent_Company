@@ -8,12 +8,16 @@ feature came from.
 
 - `src/agent_company/` – one module per service:
   `registry.py` + `org.py` (agents, rooms), `scheduler.py`, `router.py` (models, routes, fallback,
-  provider catalogs), `contracts.py`, `executors.py`, `worktrees.py`, `quality.py` + `checks.py`
-  (gate: contracts, verdicts, secrets, syntax, scope, baseline), `usage.py`; `loop.py` (circular
-  goal loop, budgets, best-iteration rollback, handovers); `projects.py` (projects, command window,
-  proposals, uploads); `learning.py` + `evolution.py`; `performance.py` (defects, certification,
+  provider catalogs), `contracts.py`, `executors.py` (tracked subprocesses: `terminate` for stops), `worktrees.py`,
+  `quality.py` + `checks.py` (gate: contracts, review verdicts with logic verification, secrets, syntax, scope,
+  change boundaries, baseline), `usage.py`; `loop.py` (circular goal loop, budgets, best-iteration rollback,
+  handovers, checkpoint resume, retry policy, behaviour rules, idempotent merge/push, trace); `workflow.py` (goal
+  state machine, `goal_transitions`); `blackboard.py` (versioned shared goal context, agent messages);
+  `decisions.py` (decision records; human ones block the merge); `projects.py` (projects, command window,
+  proposals, uploads); `learning.py` (knowledge items: provenance, screening, scoped ranked retrieval)
+  + `evolution.py`; `performance.py` (defects, certification,
   metrics); `evaluation.py` (eval harness); `research.py`; `governance.py` (audit, notifications,
-  command policy); `prefs.py` (DB settings); `gitsync.py` (push with each user's own GitHub token or SSH key, `data/git-keys/`); `files.py`; `supervisor.py` + `system.py`;
+  command policy, emergency stops E0-E5, incidents, behaviour-rule alerts); `prefs.py` (DB settings); `gitsync.py` (push with each user's own GitHub token or SSH key, `data/git-keys/`); `files.py`; `supervisor.py` + `system.py`;
   `containers.py` (Docker and LXD VMs on the host: install, start, clean up; admin-only);
   `machines.py` (Machines view, from AXoR in /home/thomas/axor-3.0.zip: Linux/Windows KVM VMs as Docker
   containers with a noVNC console relayed over a WebSocket; admin-only; cleanup never prunes them);
@@ -74,8 +78,10 @@ feature came from.
   in `data/tls/`, default) or HTTP, switched on Settings -> Connection (`transport.py` writes the
   nginx site, MANAGE_NGINX=1). The first (admin) account can only be registered from localhost.
   `systemctl restart|status agent-company`, log in `data/logs/agent-company.log`
-- `uv run python -m agent_company goal "<goal>" --check "<cmd>" [--allow 'src/*'] [--protect-tests]`
+- `uv run python -m agent_company goal "<goal>" --check "<cmd>" [--allow 'src/*'] [--protect-tests] [--permit dependencies|config|skip_tests]`
 - `uv run python -m agent_company eval --suite smoke --label <name> [--repeats 3]` / `eval --compare a b`
+- `uv run python -m agent_company stop [--level E0..E5 --scope X] [--lift|--status]` – emergency stop; writes the DB
+  directly, works while the server is stuck
 - `uv run python -m agent_company host status|install-docker|docker-start|cleanup [--yes]|install-lxd|launch <name> [--container]|stop|delete <name>`
 - `uv run python -m agent_company gm status|agents|create-agent|add|mcp|configure|goal|study` – the GM's toolbox
 - `uv run python -m agent_company "<request>"` – classic four-agent crew

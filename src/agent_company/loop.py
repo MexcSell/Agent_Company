@@ -401,7 +401,8 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
 
 def _board_plan(goal: Goal, iteration: int, plan: list[contracts.TaskContract], summary: str, gm_id: int) -> None:
     """The planner's part of the blackboard: the objective and the breakdown with its dependencies."""
-    blackboard.put(goal.id, "objective", "goal", f"{goal.title}\n\n{goal.description}"
+    blackboard.put(goal.id, "objective", "goal", goal.title + (f"\n\n{goal.description}"
+                                                               if goal.description.strip() != goal.title.strip() else "")
                    + (f"\n\nAllowed paths: {', '.join(goal.allowed_paths)}" if goal.allowed_paths else ""),
                    author_agent_id=gm_id)
     lines = [f"Iteration {iteration}: {summary}".strip()]

@@ -1,7 +1,7 @@
 # Requirements from `/home/luca/update/`
 
-Implementable requirements derived from every document in `/home/luca/update/`, checked against
-the code as of 2026-11-04. `docs/feature-gap.md` is the short status list; these files are the
+Implementable requirements derived from every document in `/home/luca/update/`, written against the
+code of 2026-11-04; statuses updated on 2026-11-05 after the safety and pipeline-quality work. `docs/feature-gap.md` is the short status list; these files are the
 detail an implementer works from.
 
 ## Files
@@ -55,14 +55,13 @@ Not used: `978-3-032-22940-3 (1).pdf` (no extractable text), `AXoR-Design-System
 The `.rtf` roadmap builds organisation first; this repository already has the core pipeline, so
 the order is safety and correctness of that pipeline first, then management, then expansion.
 
-1. **Safety and correctness now**: S14-R-01 emergency stop, S12-D-01 collaboration only from
-   verified outcomes, S13-D-01/D-02 stricter playbook promotion, S08-R-03 review with logic
-   verification, S08-R-04 change boundaries, S04-R-05 durable recovery, S04-R-06 retry policy,
-   S14-R-03 behaviour rules.
-2. **Pipeline quality**: S04-R-01 blackboard, S04-R-02 decision records, S04-R-04 workflow
-   states, S11-R-01/R-03/R-05 knowledge with provenance, scoped retrieval and poisoning
-   protection, S09-R-01 staged gates, S03-R-02 duplicate prevention, G-R-01 contract fields,
-   G-R-03 failure-mode tests, G-R-04 measured enablement gate.
+1. **Safety and correctness now**: done 2026-11-05 — S14-R-01, S14-R-04, S12-D-01, S13-D-01,
+   S08-R-03, S08-R-04. Still partial: S04-R-05 (worktree reconcile), S04-R-06 (deadline cap,
+   re-plan, budget pause), S14-R-03 (cost rule). Open: S13-D-02 (smoke suite before a live trial).
+2. **Pipeline quality**: done 2026-11-05 — S04-R-01 blackboard, S04-R-02 decision records,
+   S04-R-04 workflow states, S04-R-10 messages, S11-R-01, S11-R-05; partial S11-R-03, S04-R-12.
+   Left: S09-R-01 staged gates, S03-R-02 duplicate prevention, G-R-01 contract fields,
+   G-R-03 failure-mode tests, G-R-04 measured enablement gate, S04-R-03 conflict review.
 3. **Management**: ASEAO05 milestones, risks/blockers, insights, action items, topics; SPEC-02
    versions and health; S06-R-02 source monitoring; S14-R-04 incidents; S14-R-05 classification;
    SPEC-15 views.

@@ -31,7 +31,7 @@ Provisioning/Starting/Stopping collapse into a run's start and end.
 | S02-FR-07 | Associate an approved model | P0 | done (`model_pref`, routes) |
 | S02-FR-08 | Tool permission policies | P0 | done (`Agent.permissions`); gateway → S14-R-06 |
 | S02-FR-09 | Create and launch runtime instances | P0 | done (executor run per task) |
-| S02-FR-10 | Stop and restart runtimes | P0 | partial: per goal; per agent → S14-R-01 (E1) |
+| S02-FR-10 | Stop and restart runtimes | P0 | done: per goal (E2), per agent (E1, its processes ended), per room (E4), all (E5) — SPEC-14 S14-R-01 |
 | S02-FR-11 | Monitor runtime health | P0 | open → S02-R-02 |
 | S02-FR-12 | Manage sessions | P0 | done (`--resume`, `Task.session_id`) |
 | S02-FR-13 | Track resource consumption | P1 | done (`usage.py`, `Run`) |
@@ -39,7 +39,7 @@ Provisioning/Starting/Stopping collapse into a run's start and end.
 | S02-FR-15 | Clone from templates | P1 | done (`clone_agent`, role specs) |
 | S02-FR-16 | Controlled model replacement | P1 | done (routes, model test) |
 | S02-FR-17 | Runtime migration | P2 | skip (single host) |
-| S02-FR-18 | Automatic runtime recovery | P1 | partial → SPEC-04 S04-R-05 |
+| S02-FR-18 | Automatic runtime recovery | P1 | partial: goals resume after a restart (SPEC-04 S04-R-05), transient errors are retried (S04-R-06) |
 | S02-FR-19 | Retire without deleting history | P0 | done (`set_lifecycle`) |
 | S02-FR-20 | Complete lifecycle history | P0 | partial → S02-R-01 |
 | S02-FR-21 | Capability discovery | P1 | partial → SPEC-03 S03-R-02 |

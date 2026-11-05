@@ -37,7 +37,7 @@ and SPEC-15 dashboard; SPEC-02 feeds SPEC-03 recruitment and SPEC-04 orchestrati
 | S01-FR-07 | Company objectives decomposed to departments | P0 | gated (goals are per project) |
 | S01-FR-08 | Department KPIs | P1 | partial: room metrics in `performance.report` |
 | S01-FR-09 | Delegation (scope, expiry, revocable) | P0 | open → S01-R-03 |
-| S01-FR-10 | Decision and approval workflow | P0 | open → SPEC-04 S04-R-02 |
+| S01-FR-10 | Decision and approval workflow | P0 | done for goals (SPEC-04 S04-R-02, `decisions.py`); delegation of approval rights → S01-R-03 |
 | S01-FR-11 | Transactional restructuring | P1 | gated |
 | S01-FR-12 | Immutable governance audit | P0 | done (`governance.audit`, `verify_audit`) |
 | S01-FR-13 | Organizational reports (JSON/CSV) | P1 | open → S01-R-04 |

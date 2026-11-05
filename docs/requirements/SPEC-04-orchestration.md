@@ -22,29 +22,33 @@ orchestrator → `loop.py`; scheduler → `scheduler.run_dag`; team → agents s
 | S04-FR-07 | Dynamically form agent teams | P0 | done (`registry.staff`, `learning.link_team`) |
 | S04-FR-08 | Assign and delegate tasks | P0 | done |
 | S04-FR-09 | Support hierarchical supervisors | P0 | partial: GM plans, `Agent.superior_id` exists, no supervisor intervention → S04-R-07 |
-| S04-FR-10 | Support agent-to-agent communication | P0 | open → S04-R-10 |
+| S04-FR-10 | Support agent-to-agent communication | P0 | done (S04-R-10, `blackboard.extract_messages`/`inbox`) |
 | S04-FR-11 | Support parallel execution | P0 | done (`scheduler.run_dag`) |
 | S04-FR-12 | Support sequential execution | P0 | done |
-| S04-FR-13 | Maintain shared task context | P0 | open → S04-R-01 |
+| S04-FR-13 | Maintain shared task context | P0 | done (S04-R-01, `blackboard.py`) |
 | S04-FR-14 | Track task and team progress | P0 | done (`Task.status`, `/api/stream`) |
 | S04-FR-15 | Aggregate agent results | P0 | done (`loop._summary`) |
 | S04-FR-16 | Resolve conflicting outputs | P1 | open → S04-R-03 |
 | S04-FR-17 | Verify task completion | P0 | done (`contracts.check`, `quality.evaluate`) |
-| S04-FR-18 | Retry failed tasks | P0 | partial: iteration retry and escalation model only → S04-R-06 |
+| S04-FR-18 | Retry failed tasks | P0 | partial: transient-error retry with backoff, fresh-session restart, no retry of refusals (`loop._execute`); the rest of S04-R-06 open |
 | S04-FR-19 | Handle timeouts and cancellations | P0 | done (`loop.cancel`, command timeouts, `goal_time_budget`) |
-| S04-FR-20 | Recover interrupted workflows | P1 | partial: `GoalQueue.start` re-queues, iteration restarts from scratch → S04-R-05 |
+| S04-FR-20 | Recover interrupted workflows | P1 | done: a restart resumes the planned iteration without re-running finished tasks (S04-R-05) |
 | S04-FR-21 | Enforce execution budgets | P0 | partial: cost and time only → S04-R-09 |
 | S04-FR-22 | Support human approval checkpoints | P0 | done (merge approval) |
-| S04-FR-23 | Record orchestration decisions | P0 | partial: events only → S04-R-02 |
+| S04-FR-23 | Record orchestration decisions | P0 | done (S04-R-02 `decisions.py`, S04-R-04 `goal_transitions`) |
 | S04-FR-24 | Support strategy selection | P1 | open → S04-R-11 |
 | S04-FR-25 | Support dynamic team resizing | P1 | open → S04-R-11 |
 | S04-FR-26 | Support workflow templates | P1 | open → S04-R-11 |
 | S04-FR-27 | Self-evaluation of orchestration | P2 | open (after SPEC-13 experiments) |
 | S04-FR-28 | Recommend improved orchestration strategies | P2 | open (after SPEC-13 experiments) |
 | S04-FR-29 | Support multi-project concurrency | P1 | done (`GoalQueue` workers, `Goal.project_id`) |
-| S04-FR-30 | Support execution replay and audit | P1 | partial → S04-R-12 |
+| S04-FR-30 | Support execution replay and audit | P1 | partial: `GET /api/goals/{id}/trace` (S04-R-12) |
 
 ## Specific requirements
+
+Status (2026-11-05): S04-R-01 done · S04-R-02 done · S04-R-03 open · S04-R-04 done · S04-R-05 partial ·
+S04-R-06 partial · S04-R-07 partial · S04-R-08 partial · S04-R-09 open · S04-R-10 done · S04-R-11 open ·
+S04-R-12 partial. Details under each item.
 
 ### S04-R-01 Blackboard (shared, versioned goal context) — §10
 - New table `blackboard` in `db.py`: `goal_id`, `section`
@@ -61,6 +65,7 @@ orchestrator → `loop.py`; scheduler → `scheduler.run_dag`; team → agents s
   QA: objective, engineering, qa). Never the full conversation, never another goal's entries.
 - Acceptance: two writes based on the same version → the second is rejected; a Developer prompt
   contains the goal's `engineering` entries and no entries of another goal.
+- **Status: done** (`blackboard.py`, `tests/test_blackboard.py`).
 
 ### S04-R-02 Decision records — §12.2, also SPEC-01 FR-10, ASEAO07 §13.1, ASEAO08 §7.2
 - New table `decisions`: `goal_id`, `project_id`, `topic`, `alternatives` (list),
@@ -73,6 +78,8 @@ orchestrator → `loop.py`; scheduler → `scheduler.run_dag`; team → agents s
   decision cannot be merged.
 - API: `GET /api/decisions?goal_id=`, `POST /api/decisions/{id}/decide` (calls `_audit`).
 - Acceptance: a decision marked `requires_human_approval` blocks `loop.approve` until it is approved.
+- **Status: done** (`decisions.py`, goal page approve/reject; also forces `awaiting_approval` when
+  REQUIRE_APPROVAL=0).
 
 ### S04-R-03 Conflict resolution — §12.1
 - The orchestrator must never resolve conflicting outputs by taking the last one received.
@@ -83,6 +90,7 @@ orchestrator → `loop.py`; scheduler → `scheduler.run_dag`; team → agents s
   conflicts escalate (S04-R-07).
 - Acceptance: two task outputs with different recommendations on one topic → one review task and
   one decision record citing both task IDs.
+- **Status: open.**
 
 ### S04-R-04 Goal workflow state machine — §13.1
 
@@ -100,6 +108,8 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
 - New table `goal_transitions` (`goal_id`, `from`, `to`, `reason`, `actor`, `at`); every status
   change goes through one function that rejects transitions not listed above.
 - Acceptance: an illegal transition (e.g. `approved→running`) raises; each change writes one row.
+- **Status: done** (`workflow.py`; `planning`, `recovering`, `paused` added; pause/resume for
+  administrators, effective at the next step boundary).
 
 ### S04-R-05 Durable recovery — §13.2
 - On restart, a goal that was `running` resumes from its last checkpoint: tasks already `done` in
@@ -111,6 +121,10 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
 - Resumption re-checks budget and permissions first; history is preserved.
 - Acceptance: stop the process after task A of iteration 2 finished → restart → A is not
   executed again and the goal finishes; a merge interrupted after completion is not repeated.
+- **Status: partial.** Done: `Goal.checkpoint`, resume without re-running finished tasks, idempotency
+  keys for merge and push (`operations`), status written only after the gate result. Open: the worktree
+  is not reconciled with the last recorded commit (a task cut off mid-write leaves its partial edits,
+  and the rerun works on top of them).
 
 ### S04-R-06 Failure-specific retry policy — §14, §14.1
 
@@ -130,6 +144,11 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
   `retry_max_seconds` (60). Every retry has a cap and respects the goal deadline.
 - Acceptance: a fake executor raising a transient error twice then succeeding is retried with
   growing delays; a blocked command is not retried.
+- **Status: partial.** Done: transient errors (backoff with jitter, then the next model), executor
+  crash on a resumed session (once, fresh), blocked command (no retry), secret/scope (goal stopped,
+  incident). Open: the retry cap does not consider the goal deadline; invalid contract → re-plan;
+  missing capability → recruit; budget exhaustion still fails the goal instead of pausing it
+  (S04-R-09); same check failing in N iterations → escalate.
 
 ### S04-R-07 Escalation levels — §14.2
 - Levels: 1 assigned agent (retry), 2 goal GM (re-plan), 3 room manager, 4 executive GM of the
@@ -137,6 +156,9 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
 - Escalation depth is chosen by decision category (S04-R-02) and impact, not only by attempt
   count. Each escalation is an `events` row with `level`.
 - Acceptance: a `critical` decision escalates directly to level 5.
+- **Status: partial.** The level is chosen by category and recorded (`decisions.record`, `events`
+  kind `escalation`); critical goes to a person. Routing to levels 2–4 (GM, room manager, executive GM)
+  is open.
 
 ### S04-R-08 Communication-loop prevention — §9.4
 - Maximum proposal/goal chain depth (follow `Goal.parent_goal_id`; setting `max_goal_depth`,
@@ -144,6 +166,8 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
 - Per-task message budget for agent messages (S04-R-10), duplicate-message detection,
   escalation after repeated unanswered requests.
 - Acceptance: a proposal from a goal at depth 3 is recorded but not turned into a goal.
+- **Status: partial.** Done: `max_goal_depth`, per-task message budget (3), duplicate messages
+  dropped. Open: escalation after repeated unanswered requests.
 
 ### S04-R-09 Budget dimensions and allocation — §15, §15.1
 
@@ -157,6 +181,7 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
   need an administrator and are audited; unused budget returns to the parent.
 - Exhaustion pauses or stops according to a setting (`budget_exhausted_action`: `pause|stop`).
 - Acceptance: a child goal requesting more than the parent's remainder is capped.
+- **Status: open.**
 
 ### S04-R-10 Agent-to-agent messages — §9.2, §9.3
 - Message contract: `sender_agent_id`, `recipient_agent_id` or `channel`, `goal_id`, `task_id`,
@@ -166,17 +191,21 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
 - Large content is referenced by artifact or file path, not inlined.
 - Acceptance: a `request` from Developer to Architect appears in the Architect's next prompt and
   is linked to the task.
+- **Status: done** (`MESSAGE <kind> to <role>:` lines; `blackboard.extract_messages`, `inbox`).
 
 ### S04-R-11 Workflow templates, strategy selection, team resizing — FR-24/25/26
 - Templates per goal kind (`bugfix`, `feature`, `refactor`, `research`, `docs`) define roles,
   default checks and iteration limits; the planner picks one and records the choice.
 - Team resizing: the GM may add an agent of a missing role mid-goal (recruit) or release one.
 - Acceptance: a goal created with `kind=research` runs without Developer tasks.
+- **Status: open.**
 
 ### S04-R-12 Execution trace and replay — FR-30, also SPEC-14 observability
 - `GET /api/goals/{id}/trace`: ordered transitions, tasks, runs (agent, model, tool calls,
   duration, cost, errors), decisions, gate results, merges.
 - Acceptance: for a finished goal the trace names the agent and model of every run.
+- **Status: partial:** the acceptance holds (`loop.trace`, `/api/goals/{id}/trace`); tool calls per
+  run are not recorded.
 
 ## Spec acceptance tests (§23) → requirements
 
@@ -187,18 +216,18 @@ Transitions (from the diagram): `Created→Planning`; `Planning→Ready`;
 | AT-006, AT-007 | qualified candidates; unqualified agent → rejected | partial: staffing ranks but never rejects → SPEC-03 S03-R-02 (coverage threshold) |
 | AT-008..011 | group recorded; unauthorized member / delegation beyond authority → denied | S14-R-02, S14-R-06 |
 | AT-012, AT-013 | parallel and dependent execution | done (`scheduler.run_dag`) |
-| AT-014, AT-015 | message delivery recorded; unauthorized context denied | S04-R-10, S04-R-01 |
+| AT-014, AT-015 | message delivery recorded; unauthorized context denied | done (S04-R-10, S04-R-01) |
 | AT-016..018 | result stored; failed review → revision; passed → verified | done (gate, iterations); states S04-R-04 |
 | AT-019, AT-028 | budget exceeded / exhausted → policy action, pause or stop | S04-R-09, S04-R-06 |
 | AT-020 | cancel → pending work cancelled safely | done (`loop.cancel`) |
-| AT-021, AT-027 | worker crash / orchestrator restart → resume from durable state | S04-R-05 |
-| AT-022 | database unavailable → no false completion | S04-R-05 (status written only after the gate result is stored) |
-| AT-023 | duplicate event → no duplicate execution | S04-R-05 (idempotency keys) |
-| AT-024 | provider timeout → retry or fallback | S04-R-06 |
+| AT-021, AT-027 | worker crash / orchestrator restart → resume from durable state | done (S04-R-05) |
+| AT-022 | database unavailable → no false completion | done (status written only after the gate result is stored) |
+| AT-023 | duplicate event → no duplicate execution | done for merge and push (idempotency keys) |
+| AT-024 | provider timeout → retry or fallback | done (S04-R-06) |
 | AT-025 | agent unavailable → replacement or escalation | S04-R-07, SPEC-02 S02-R-02 |
 | AT-026 | message delivery fails → retry, dead letter | S04-R-10 (messages are DB rows; no broker) |
-| AT-029 | approval revoked → protected action blocked | S04-R-02 (decision status checked at merge time) |
-| AT-030 | human emergency suspension | SPEC-14 S14-R-01 |
+| AT-029 | approval revoked → protected action blocked | done (decision status checked at merge time) |
+| AT-030 | human emergency suspension | done (SPEC-14 S14-R-01) |
 | AT-031..037 | orchestration self-evolution | FR-27/28 via SPEC-13 S13-R-05 |
 | §23.4 load tests | 10k agents, 1k events, large graphs | skip for now: establish a measured baseline first (single host) |
 

@@ -21,6 +21,20 @@ Mapping: identities → `User` (humans), `Agent` (agents); permissions → `Agen
 | Agents never touch production; file changes only in `data/worktrees/` | `worktrees.ensure_sandboxed` |
 | Independent approval before merge (SEC-024 analogue) | `loop.approve` |
 
+## Status of the specific requirements (2026-11-05)
+
+| ID | Status |
+| --- | --- |
+| S14-R-01 | done (`governance.stop`/`lift`/`set_emergency`, `executors.terminate`, `live_processes`, `python -m agent_company stop`, `/api/stops`, top-bar stop; `tests/test_safety.py`) |
+| S14-R-02 | partial: agents can never approve a proposal touching permissions, autonomy, budgets, routes, settings or safety controls (`projects.restricted`, `decide(by_human=False)`); `Agent.autonomy` levels G0–G5 are open |
+| S14-R-03 | partial: rules for refused commands (pause + one alert), credentials in a change (stop + SEV-2), writes outside the worktree (SEV-2), repeated scope violations (stop + alert), failure rate > 70 % over 10 tasks (flag) are in (`governance.on_command_refused`, `loop._behaviour_rules`, `evolution._flag_unreliable`); "cost > 2× estimate" is open (goals carry no cost estimate) |
+| S14-R-04 | done (`incidents` table, `governance.open_incident`/`update_incident`, containment actions, closing needs a root cause and becomes a lesson, Incidents list in the Audit view) |
+| S14-R-05 | partial: projects and lessons are classified; secret projects store no lesson text; other projects never retrieve confidential+ lessons, and playbooks take only public/internal items (`learning.py`, `evolution.curate`). Uploads, documents, sources, and the model-level rule ("restricted only to allowed models") are open |
+| S14-R-06 | open |
+| S14-R-07 | partial: every executor run has a timeout and runs in its own process group (killed on timeout or stop); output beyond 5 M characters is cut after the run rather than ending it; the isolation level per run is not recorded; L3 open |
+| S14-R-08 | partial: `GET /api/goals/{id}/trace` names agent, model, executor, duration, cost and error of every run; tool calls per run and permissions used are not recorded |
+| S14-R-09 | open |
+
 ## Specific requirements
 
 ### S14-R-01 Emergency stop with levels — §12 (SEC-019..022)

@@ -17,6 +17,9 @@ graph is an edge table and search is SQLite FTS5. Revisit only if retrieval eval
 
 ## Specific requirements
 
+Status (2026-11-05): S11-R-01 done · S11-R-02 open · S11-R-03 partial · S11-R-04 open · S11-R-05 done ·
+S11-R-06 partial · S11-R-07 open · S11-R-08 open.
+
 ### S11-R-01 Knowledge items with type, evidence class and provenance — §3.1, §6.1
 - Extend `lessons` (via `_add_missing_columns`) or add `knowledge` with: `type`
   (`episodic|semantic|procedural|architectural|research|operational|capability|organizational|negative`),
@@ -27,6 +30,9 @@ graph is an edge table and search is SQLite FTS5. Revisit only if retrieval eval
 - Lessons from failures are stored as `negative` with environment and conditions; one failure is
   never generalised into a rule (§3.1.4).
 - Acceptance: KT-001, KT-002 — every new item names the goal/run it came from.
+- **Status: done** on `lessons` (`kind`, `evidence_class`, `project_id`, `task_id`, `sources` with goal,
+  task and commit, `technologies`, `status`, `version`, `supersedes_id`, `review_due_at`,
+  `classification`).
 
 ### S11-R-02 Structured experience reports — §9.1
 - After a task, the lesson step produces JSON: objective, actions, outcome, evidence refs,
@@ -49,6 +55,10 @@ graph is an edge table and search is SQLite FTS5. Revisit only if retrieval eval
 - Acceptance: KT-007, KT-009, KT-010, KT-018 — a goal of project B never sees a confidential
   lesson from project A; a newly cloned agent receives lessons of its template's history with
   their source goal IDs.
+- **Status: partial.** Done: scope filter before ranking, ranking by task-term coverage + who learned
+  it + recency, K-number and source goal per item, wrapped as data, retrieval logged; the acceptance
+  tests above pass (`tests/test_knowledge.py`). Open: FTS5, weights as settings, the contradiction
+  penalty, research documents and project standards in the package.
 
 ### S11-R-04 Contradiction handling — §6.3
 - When a new item states the opposite of an approved one on the same subject (same technology +
@@ -64,10 +74,15 @@ graph is an edge table and search is SQLite FTS5. Revisit only if retrieval eval
   `draft` and need review before retrieval; `episodic` items from passing gates may auto-approve.
 - No agent approves its own item. Rejection and rollback are possible per version.
 - Retrieval events are logged (item IDs per task) (KT-021).
+- **Status: done** (`learning.screen`, `learning.review`, `/api/knowledge`). There is no `draft` kind
+  yet that agents create (the lesson step only writes episodic/negative items, auto-approved after
+  screening).
 
 ### S11-R-06 Lifecycle: versioning, expiry, deletion — §10.3
 - New versions supersede old ones (KT-013); items past `review_due_at` drop out of retrieval
   until reviewed (KT-014); deletion removes the item, its FTS row and graph edges (KT-015).
+- **Status: partial:** review dates done (`learning.expire_due`, run by the evolution cycle, rebuilds
+  playbooks); superseding versions and deletion are open.
 
 ### S11-R-07 Knowledge graph (edge table) — §7
 - Table `kg_edges`: `src_type`, `src_id`, `rel`, `dst_type`, `dst_id`, `weight`, `evidence`,

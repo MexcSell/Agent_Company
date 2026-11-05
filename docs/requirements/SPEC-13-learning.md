@@ -23,8 +23,11 @@ evaluation*.
   and uncertainty. Fix: promote only if the candidate is strictly better by at least
   `min_improvement` (setting, default 10 points) **and** the benchmark suite (`eval`) does not
   regress; ties keep the current version.
+  **Partly fixed:** the `min_improvement` rule and "ties keep" are in (`evolution.after_task`); the
+  benchmark-suite check belongs to S13-D-02 and is open.
 - **S13-D-02** Candidate playbooks are tried directly on users' goals. §10.2 wants a sandbox/eval
   run first. Fix: run the candidate on the smoke suite before the live trial (S13-R-05).
+  **Open.**
 
 ## Specific requirements
 

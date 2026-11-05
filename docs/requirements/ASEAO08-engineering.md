@@ -65,6 +65,8 @@ push only on `/sync`. The 13 engineering teams (§3) are **gated** (CLAUDE.md).
 - The reviewer never reviews its own change (exists: different agent, different provider).
 - Acceptance: a fake review missing the logic-verification section is treated as FAIL by the
   gate; duplicate findings are merged.
+- **Status: done** (`quality.REVIEW_CHECKLIST`, `review_verdict`, `merge_findings`; the checklist is
+  added to every review task's prompt).
 
 ### S08-R-04 Change boundaries — §12.2 (AT-014, AT-018)
 - Extend `checks.py`: detect disabled/skipped tests added in the diff (`@pytest.mark.skip`,
@@ -72,6 +74,8 @@ push only on `/sync`. The 13 engineering teams (§3) are **gated** (CLAUDE.md).
   `pyproject.toml`/`package.json`/lock files (needs a decision record or task permission
   `dependencies`), and edits to protected configuration (`.env*`, CI files) unless allowed.
 - Acceptance: a diff adding `@pytest.mark.skip` to an existing test fails the gate.
+- **Status: done** (`checks.boundary_violations`, gate check `boundaries`; goal permits
+  `dependencies`, `config`, `skip_tests`, administrators only, `--permit` on the CLI).
 
 ### S08-R-05 Dependency control — §15 (AT-021, AT-022)
 - On merge, record new/changed dependencies; when `pip-audit`/`npm audit` are installed, run them

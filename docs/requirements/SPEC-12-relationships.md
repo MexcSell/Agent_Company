@@ -21,6 +21,7 @@ specialists, mentors and past collaborators, and that departments keep a shift s
   of outcome. §18.1: count verified outcomes, not participation. Fix: weight +0.1 only when the
   goal passed the gate, −0.05 (floor 0) when it failed for reasons attributed to the pair's
   tasks; repeated links from the same goal are not counted twice (AR-015).
+  **Fixed** (`learning.link_team`, `relationships.evidence`; `tests/test_safety.py`).
 - **S12-D-02** `_skill_score` gives an agent without history quality 0.5 and no exploration
   bonus, and a single failure lowers quality permanently. §11.3/§18.2: new agents need
   opportunities. Fix in S12-R-03.
@@ -74,6 +75,8 @@ specialists, mentors and past collaborators, and that departments keep a shift s
 - Collaboration scores come only from gate results and QA verdicts, never from message counts.
 - Duplicate/artificial records (same pair, same goal, repeated) are ignored (AR-015, AR-016).
 - Administrators can correct a relationship (audited).
+- **Status: partial.** Collaboration weight comes only from gate results and each goal counts once
+  (S12-D-01); the administrator correction is open.
 
 ### S12-R-07 Network view — §16 (P2)
 - Agent network view with paging (AR-009, AR-020): `open`.

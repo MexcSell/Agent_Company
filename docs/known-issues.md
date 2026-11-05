@@ -55,3 +55,14 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 | N6 | Non-administrators now see only projects they created (plus ones an administrator grants, or "all"). Users whose permissions were saved before keep `projects: "all"`. | by decision |
 | N7 | The File Manager is the Workspace's windows without Claude Code: both pages share one set of open files, terminals and explorer panes. | by design |
 | N8 | Explorer panes added with "+" refresh only on their refresh button (the main explorer polls). | open (low) |
+
+## Added 2026-11-05 (safety and pipeline quality)
+
+| # | Problem | Status |
+|---|---------|--------|
+| P1 | Pausing a goal takes effect at the next step boundary: tasks already started finish first (an emergency stop, by contrast, ends their processes). | by design |
+| P2 | The executor output limit (5 M characters) cuts the output after the run has ended; it does not stop a run while it produces output. The timeout does stop it. | open (low) |
+| P3 | Under E5, goals created during the stop stay queued; the queue's watcher offers them again every 5 s and they are held until the stop is lifted. | by design |
+| P4 | A restart resumes the planned iteration but does not reset the worktree to the last recorded commit: a task cut off mid-write leaves its partial edits, and its rerun starts on top of them. | open (S04-R-05) |
+| P5 | Reviews must now contain a "Logic verification" section and an approving OUTCOME; a model that answers with a bare `VERDICT: PASS` fails the gate until it follows the checklist in its prompt. | by design (S08-R-03) |
+| P6 | Proposals mentioning permissions, budgets, routes, settings, security, audit, credentials and similar words are left to a person even under the `superiors` policy; the word list is deliberately broad. | by design (S14-R-02) |

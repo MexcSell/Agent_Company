@@ -57,6 +57,10 @@ time, each with its own eval suite. `eval --compare` before/after must not regre
 - Suggested first servers: Context7 (current docs) for developer/research, Playwright for QA UI
   checks. GitHub MCP is not given to agents (pushing stays on `/sync`, CLAUDE.md).
 - Agents cannot add or change MCP servers (SPEC-14 S14-R-02). Changes are audited.
+- **Status: done** (`mcp.py`, Tools & MCP): administrators register servers (secrets encrypted, names
+  only shown), grants are per agent (or every agent) rather than per role, a run gets
+  `--mcp-config … --strict-mcp-config` with only its granted, tested servers and their allowed tools
+  added to `--allowedTools`; the GM's toolbox only lists servers.
 
 ### G-R-06 A2A interoperability — `1.txt`, `.rtf` §15 infrastructure, AWS guide — P2 `open`
 - Publish an A2A agent card describing the company's skills and accept A2A tasks as goals for

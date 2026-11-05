@@ -3,7 +3,8 @@
 Sources: `/home/luca/AgentForge` (Node control room), `/home/thomas/bit` (SWE agent,
 eval harness, local model), `/home/luca/update/` (ASEAO/SPEC documents, guides).
 Status: `done` = implemented in this repository, `skip` = deliberately not taken (reason given),
-`open` = worth doing later; IDs point to `docs/requirements/`.
+`partial` = part met (the rest named in the linked requirement), `open` = worth doing later; IDs point to
+`docs/requirements/`. Statuses checked against the code on 2026-11-05.
 
 ## From AgentForge
 
@@ -73,40 +74,45 @@ Machines code):
 | Prompt-injection flags on collected material; flagged pages kept out of prompts; material wrapped as untrusted data | SPEC14 §9, SPEC11 §10.4 | done (`research.injection_flags`) |
 | Knowledge provenance and source kinds (no single trust score, per ASEAO06 §9.2) | ASEAO06 §9, SPEC11 §6 | done (`research.classify_source`) |
 | Research requests producing a cited research report | ASEAO06 §5-6 | done (`research.request_report`, `run_report`) |
-| Team compatibility: prefer agents that worked well together | SPEC12 §7 | done (`registry._skill_score` team utility) |
+| Team compatibility: prefer agents that worked well together | SPEC12 §7 | done (`registry._skill_score` team utility; weight only from verified outcomes, once per goal, S12-D-01) |
 | Task handover package when work moves to another agent | SPEC12 §10 | done (`loop._handover`, `handovers` table) |
 | Capability certification from evaluations (L0-L5, expiry) | SPEC13 §9 | done (`performance.certification`) |
 | Defect records from failed checks, closed when fixed, reopened on regression | ASEAO09 §11 | done (`performance.track_defects`) |
 | Performance intelligence: agent, room and company metrics | ASEAO07 §15 | done (`performance.report`, Performance view) |
 | Agent lifecycle states (active, paused, retired) | SPEC02 §6 | done (`Agent.lifecycle`) |
 | Capability-gap calculation, agent template catalog, duplicate-agent prevention | SPEC03 §5, §8, §11.2 | open → S03-R-01..R-03 |
-| Blackboard: shared context per goal, with versioning | SPEC04 §10 | open → S04-R-01 |
-| Conflict resolution between agents' results, with decision records | SPEC04 §12 | open → S04-R-02, S04-R-03 |
-| Durable workflow state: resume interrupted goals after a restart | SPEC04 §13 | open → S04-R-04, S04-R-05 |
-| Retry policy and escalation levels for failed tasks | SPEC04 §14 | open → S04-R-06, S04-R-07 |
+| Blackboard: shared context per goal, with versioning; agent-to-agent messages on it | SPEC04 §9-10 | done (`blackboard.py`, S04-R-01, S04-R-10) |
+| Decision records (approval blocks the merge) | SPEC04 §12.2 | done (`decisions.py`, S04-R-02) |
+| Conflict resolution between agents' results | SPEC04 §12.1 | open → S04-R-03 |
+| Goal workflow states with a transition log; pause/resume | SPEC04 §13.1 | done (`workflow.py`, S04-R-04) |
+| Durable recovery: resume interrupted goals after a restart; merge/push never repeated | SPEC04 §13.2 | partial (`Goal.checkpoint`, `operations`; worktree reconcile open) → S04-R-05 |
+| Retry policy and escalation levels for failed tasks | SPEC04 §14 | partial (transient retry with backoff, no retry of refusals; escalation level by category) → S04-R-06, S04-R-07 |
+| Execution trace per goal | SPEC04 FR-30, SPEC14 | partial (`/api/goals/{id}/trace`; tool calls open) → S04-R-12 |
+| Goal-chain depth limit for proposals | SPEC04 §9.4 | done (`max_goal_depth`, S04-R-08 partial) |
 | Milestones, blockers and risks, insights, upcoming action items per project | ASEAO05 §7-10 | open → S05-R-01..R-04 |
 | Continuous monitoring of registered sources (beyond the rotation) | ASEAO06 §13 | open → S06-R-02 |
 | Research-to-innovation pipeline: findings become proposals | ASEAO06 §15 | open → S06-R-06 |
 | Hypotheses, root-cause analysis, predictions, decision center | ASEAO07 §9-13 | open → S07-R-01..R-04 |
 | Architecture Decision Records | ASEAO08 §7.2 | open → S08-R-02 |
 | Requirements traceability (requirement → task → test) | ASEAO08 §5.3, ASEAO09 §5.1 | open → S08-R-01, S09-R-06 |
-| Code-review checklist with a logic-verification step (trace data flow; no approval for code that only looks clean) and de-duplicated comments | ASEAO08 §13, `extensions/analysis_results.md` | open → S08-R-03 |
+| Code-review checklist with a logic-verification step (trace data flow; no approval for code that only looks clean) and de-duplicated comments | ASEAO08 §13, `extensions/analysis_results.md` | done (`quality.REVIEW_CHECKLIST`, `review_verdict`, `merge_findings`, S08-R-03) |
+| Change boundaries: no skipped tests, removed assertions, new dependencies or CI/.env edits without a permit | ASEAO08 §12.2 | done (`checks.boundary_violations`, S08-R-04) |
 | Quality gates as named stages; test-strategy selection by test category | ASEAO09 §6-7, §13 | open → S09-R-01, S09-R-02 |
 | Innovation experiments, portfolio and technology radar | ASEAO10 §10-14, §21 | open → S10-R-02, S10-G-01..G-06 |
 | Knowledge graph of agents, projects, technologies and lessons | SPEC11 §7, 1.txt (Neo4j) | open → S11-R-07 |
-| Memory hierarchy and hybrid knowledge retrieval | SPEC11 §4, §8 | open → S11-R-01, S11-R-03 |
+| Knowledge items with provenance; task-relevant, project-scoped retrieval | SPEC11 §3, §8 | done / partial (`learning.retrieve`; FTS5 and contradiction penalty open) → S11-R-01, S11-R-03 |
 | Contradiction handling between stored lessons | SPEC11 §6.3 | open → S11-R-04 |
-| Memory-poisoning protection for learned lessons | SPEC11 §10.4 | open → S11-R-05 |
+| Memory-poisoning protection for learned lessons | SPEC11 §10.4 | done (`learning.screen`, people review, S11-R-05) |
 | Agent mentoring and knowledge transfer | SPEC12 §9 | open → S12-R-04 |
 | Collaboration recommendation with bias and reputation-manipulation protection | SPEC12 §11, §18 | open → S12-R-03, S12-R-06 |
 | Autonomous learning planner and training-exercise generator | SPEC13 §6, §8 | open → S13-R-01, S13-R-02 |
-| A/B testing of playbook or model changes | SPEC13 §10.4 | open → S13-R-05 |
-| Agent behaviour monitoring and anomaly detection | SPEC14 §10 | open → S14-R-03 |
-| Security incident records and response | SPEC14 §11 | open → S14-R-04 |
-| Emergency shutdown with levels (agent, project, company); today only `/stop` per project | SPEC14 §12 | open → S14-R-01 |
-| Autonomy levels and action classification | SPEC14 §13 | open → S14-R-02 |
-| Information classification and data-handling rules | SPEC14 §5 | open → S14-R-05 |
-| MCP tool servers for agents | 1.txt, CDAF guide §11 | open → G-R-05 |
+| A/B testing of playbook or model changes | SPEC13 §10.4 | open → S13-R-05 (promotion now needs a clear improvement, S13-D-01) |
+| Agent behaviour monitoring with deterministic rules | SPEC14 §10 | partial (five rules; cost-vs-estimate open) → S14-R-03 |
+| Security incident records and response | SPEC14 §11 | done (`incidents`, Audit view, S14-R-04) |
+| Emergency shutdown with levels E0-E5 (executor, agent, goal, project, room, company), CLI and top-bar control | SPEC14 §12 | done (`governance.stop`, `python -m agent_company stop`, S14-R-01) |
+| Autonomy levels and action classification | SPEC14 §13 | partial (agents cannot approve authority-raising proposals; autonomy levels open) → S14-R-02 |
+| Information classification and data-handling rules | SPEC14 §5 | partial (projects and lessons; uploads, documents, model rule open) → S14-R-05 |
+| MCP tool servers for agents | 1.txt, CDAF guide §11 | done (`mcp.py`, Tools & MCP, G-R-05) |
 | A2A protocol for agent-to-agent messages | 1.txt | open → G-R-06 |
 
 ## Requested directly (Workspace home page, VS Code + Claude Code style)
