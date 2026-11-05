@@ -9,6 +9,7 @@ model is changed; agents idle longer than `inactive_days` are listed for retirem
 
 from __future__ import annotations
 
+import random
 import re
 import threading
 from typing import Any
@@ -390,14 +391,52 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")[:48] or "specialist"
 
 
-def _skill_score(agent: Agent, wanted: list[str], team: dict[int, float] | None = None) -> float:
-    """Team utility of one candidate (SPEC12 §7.3): skill coverage + experience + collaboration
-    evidence with the agents already on the goal + quality (success rate)."""
-    skills = agent.skills or {}
-    done, failed = agent.tasks_done or 0, agent.tasks_failed or 0
-    quality = done / (done + failed) if done + failed else 0.5
-    return (sum(skills.get(w, 0) for w in wanted) + 0.05 * agent.level + 2.0 * (team or {}).get(agent.id, 0.0)
-            + 1.0 * quality)
+EVIDENCE_MIN, QUALITY_WINDOW = 3, 20  # fewer verified outcomes are insufficient evidence; older ones decay
+WORKLOAD_COST = 0.2  # per goal the agent is already working on
+_random = random.random  # tests replace it
+
+
+def _quality(s: Session, ids: list[int]) -> dict[int, tuple[float | None, int]]:
+    """(success rate, outcomes) over each agent's last QUALITY_WINDOW verified task outcomes (the lesson step's
+    verdict per task). Fewer than EVIDENCE_MIN: no rate (insufficient evidence, not incompetence)."""
+    from agent_company.db import Lesson
+
+    out: dict[int, tuple[float | None, int]] = {}
+    for i in ids:
+        seen: dict[int, str] = {}
+        for task_id, outcome in s.execute(select(Lesson.task_id, Lesson.outcome).where(
+                Lesson.agent_id == i, Lesson.task_id.is_not(None), Lesson.kind.in_(("episodic", "negative")),
+                Lesson.outcome.in_(("success", "failure"))).order_by(Lesson.id.desc()).limit(3 * QUALITY_WINDOW)):
+            seen.setdefault(task_id, outcome)
+        outcomes = list(seen.values())[:QUALITY_WINDOW]
+        out[i] = (outcomes.count("success") / len(outcomes) if len(outcomes) >= EVIDENCE_MIN else None, len(outcomes))
+    return out
+
+
+def _rank(s: Session, agents: list[Agent], wanted: list[str], team: dict[int, float] | None = None
+          ) -> dict[int, dict[str, Any]]:
+    """Team utility of each candidate (SPEC-12 §7.3, §11.2, S12-R-03): skill coverage + experience + collaboration
+    evidence with the agents already on the goal + quality − workload. An agent without enough evidence gets the
+    pool's mean quality: neither a bonus nor a penalty."""
+    quality = _quality(s, [a.id for a in agents])
+    known = [q for q, _ in quality.values() if q is not None]
+    neutral = sum(known) / len(known) if known else 0.0
+    out = {}
+    for a in agents:
+        skills = a.skills or {}
+        q, n = quality[a.id]
+        parts = {"coverage": float(sum(skills.get(w, 0) for w in wanted)), "experience": round(0.05 * a.level, 3),
+                 "team": round(2.0 * (team or {}).get(a.id, 0.0), 3),
+                 "quality": round(q if q is not None else neutral, 3), "evidence": n,
+                 "workload": round(-WORKLOAD_COST * len(a.active_goals or []), 3)}
+        parts["score"] = round(parts["coverage"] + parts["experience"] + parts["team"] + parts["quality"]
+                               + parts["workload"], 3)
+        out[a.id] = parts
+    return out
+
+
+def _skill_score(s: Session, agent: Agent, wanted: list[str]) -> float:
+    return _rank(s, [agent], wanted)[agent.id]["score"]
 
 
 def _team_weights(s: Session, goal_id: int | None) -> dict[int, float]:
@@ -450,15 +489,21 @@ def resolve_role(role: str) -> tuple[str, str | None]:
 
 
 def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None,
-          writes: bool | None = None) -> Agent:
+          writes: bool | None = None, critical: bool = False, task_id: int | None = None) -> Agent:
     """Return an agent for the role and mark it busy.
 
-    Picks the best idle enabled agent by skill score. If all are busy the best one
-    is cloned; if the role does not exist a new specialist is recruited and linked
-    to similar agents so it can draw on their experience.
+    Picks the best idle enabled agent by team utility (`_rank`). With probability `explore_rate`, on a
+    non-critical task of a user's goal, the best idle agent without enough evidence is given the chance instead
+    (SPEC-12 S12-R-03). If all are busy the best one is cloned; if the role does not exist a new specialist is
+    recruited and linked to similar agents so it can draw on their experience. With `task_id` the decision, its
+    candidates and their scores are recorded in the task's contract (`staffing`, AR-018).
     """
+    from agent_company.config import settings
+
     skills = [_slug(x) for x in (skills or [])]
     why = ""
+    ranks: dict[int, dict[str, Any]] = {}
+    explored = False
     with _staff_lock, session() as s:
         pool = s.scalars(select(Agent).where(Agent.role == role, Agent.enabled, Agent.lifecycle == "active")).all()
         quota = {a.id: over_quota(s, a) for a in pool}  # S02-R-03: the quota covers an agent and its clones
@@ -470,8 +515,15 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
         elif trainee is not None and not quota[trainee.id]:  # busy: its clone, which merges back after the goal
             agent, action = _clone(s, trainee), "cloned"
         elif idle:
-            agent = max(idle, key=lambda a: _skill_score(a, skills, team))
+            ranks = _rank(s, idle, skills, team)
+            agent = max(idle, key=lambda a: ranks[a.id]["score"])
             action = "assigned"
+            new = [a for a in idle if ranks[a.id]["evidence"] < EVIDENCE_MIN]
+            g = s.get(Goal, goal_id) if goal_id else None
+            if (new and agent not in new and not critical and not (g is not None and g.origin == "eval")
+                    and _random() < settings().explore_rate):
+                agent, explored = max(new, key=lambda a: ranks[a.id]["score"]), True
+                why = f"exploration: {agent.name} has {ranks[agent.id]['evidence']} verified outcome(s) so far"
         elif pool:  # all busy, degraded or over quota: a fresh clone (a clone starts healthy, with its own runs)
             if all(quota.values()):  # a clone would spend from the same quota
                 raise QuotaExceeded(f"every {role} agent has used its daily quota ({next(iter(quota.values()))}); "
@@ -483,7 +535,8 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
                 raise RuntimeError(f"every {role} agent is degraded because its model fails its test; fix the "
                                    "model, give the agent another one, or reset its health")
             healthy = healthy or pool
-            agent = _clone(s, max(healthy, key=lambda a: _skill_score(a, skills, team)))
+            ranks = _rank(s, healthy, skills, team)
+            agent = _clone(s, max(healthy, key=lambda a: ranks[a.id]["score"]))
             action = "cloned"
             if any(a.status == "idle" and a.health == "degraded" for a in pool):
                 why = "its idle agents are degraded"
@@ -506,6 +559,17 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
         agent.active_goals = [*(agent.active_goals or []), goal_id or 0]
         agent.status = "busy"
         agent.last_active_at = now()
+        names = dict(s.execute(select(Agent.id, Agent.name).where(Agent.id.in_(list(ranks)))).all()) if ranks else {}
+        decision = {"action": action, "agent_id": agent.id, "agent": agent.name, "explored": explored, "why": why,
+                    "skills": skills, "critical": critical,
+                    "candidates": [{"id": i, "name": names.get(i), **p} for i, p in
+                                   sorted(ranks.items(), key=lambda x: -x[1]["score"])[:6]]}
+        if task_id is not None:
+            from agent_company.db import Task
+
+            t = s.get(Task, task_id)
+            if t is not None:
+                t.contract = {**(t.contract or {}), "staffing": decision}
         s.flush()
         s.expunge(agent)
     log_event("staff", f"{action} {agent.name} as {role}" + (f" ({why})" if why else ""), goal_id=goal_id,
@@ -533,7 +597,7 @@ def _covering(s: Session, skills: list[str], writes: bool | None) -> tuple[Agent
             continue
         share = len(set(skills) & set(a.skills or {})) / len(set(skills))
         if share >= REUSE_COVERAGE and (best is None or share > best[1]
-                                        or (share == best[1] and _skill_score(a, skills) > _skill_score(best[0], skills))):
+                                        or (share == best[1] and _skill_score(s, a, skills) > _skill_score(s, best[0], skills))):
             best = (a, share)
     return best
 

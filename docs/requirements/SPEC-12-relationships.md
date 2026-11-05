@@ -24,11 +24,11 @@ specialists, mentors and past collaborators, and that departments keep a shift s
   **Fixed** (`learning.link_team`, `relationships.evidence`; `tests/test_safety.py`).
 - **S12-D-02** `_skill_score` gives an agent without history quality 0.5 and no exploration
   bonus, and a single failure lowers quality permanently. §11.3/§18.2: new agents need
-  opportunities. Fix in S12-R-03.
+  opportunities. Fix in S12-R-03. **Fixed** (S12-R-03).
 
 ## Specific requirements
 
-Status (2026-11-05): S12-R-01 done · S12-R-02 done · S12-R-03 open · S12-R-04 open · S12-R-05 open ·
+Status (2026-11-05): S12-R-01 done · S12-R-02 done · S12-R-03 done · S12-R-04 open · S12-R-05 open ·
 S12-R-06 done · S12-R-07 open.
 
 ### S12-R-01 Relationship kinds with evidence — §2.2
@@ -70,6 +70,14 @@ S12-R-06 done · S12-R-07 open.
   tasks, the best-scoring new agent is chosen (AR-017).
 - Failures older than the last 20 tasks decay; one failure is not permanent incompetence.
 - Each staffing decision records its inputs and score in the task (`contract.staffing`) (AR-018).
+- **Status: done** (`registry._rank`, `staff`): score = skill coverage + experience (level) + collaboration with
+  the goal's team + quality − workload (0.2 per goal it already works on), after filtering by role, `enabled`,
+  `lifecycle=active`, free slot, health and quota. Quality is the success rate over the agent's last 20
+  verified task outcomes (older failures drop out); with fewer than 3 the agent gets the pool's mean quality.
+  With probability `explore_rate` (DB setting, default 0.1) a non-critical task (`risk_level` not `high`) of a
+  goal that is not an evaluation goes to the best idle agent with fewer than 3 outcomes. `contract.staffing`
+  holds the action, the chosen agent, whether it explored and the top candidates with each score part.
+  Project access is not a filter: agents are not scoped to projects in this deployment.
 
 ### S12-R-04 Mentoring — §9
 - A mentoring record: mentor, learner, topic (skill), learning objectives, gap assessment,

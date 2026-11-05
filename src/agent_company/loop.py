@@ -702,7 +702,8 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
         from agent_company.scheduler import set_status
 
         try:
-            agent = registry.staff(role, contract.skills, goal.id, writes=contract.writes)
+            agent = registry.staff(role, contract.skills, goal.id, writes=contract.writes,
+                                   critical=contract.risk_level == "high", task_id=task_id)
         except registry.QuotaExceeded as e:  # S02-R-03: the task waits; the goal pauses after the iteration
             set_status(task_id, "skipped", output=f"{QUOTA_SKIP}{e}")
             return False

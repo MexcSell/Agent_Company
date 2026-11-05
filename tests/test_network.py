@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from agent_company import learning, loop, network, registry
 from agent_company.api import create_app
-from agent_company.db import Agent, AuditEvent, Goal, LearningPlan, Relationship, log_event, session
+from agent_company.db import Agent, AuditEvent, Goal, LearningPlan, Relationship, Task, log_event, session
 
 
 def agent_of(role):
@@ -115,3 +115,56 @@ def test_an_administrator_corrects_a_relationship_and_it_is_audited():
         audit = s.scalars(select(AuditEvent).where(AuditEvent.action == "relationship_correct")).one()
         assert audit.after["reason"] == "paired on the QA rota"
         assert not audit.before, "the link did not exist before"
+
+
+# --- S12-R-03 fair team recommendation ----------------------------------------------------------
+
+def outcomes(agent_id, results, start=1000):
+    for i, ok in enumerate(results):
+        learning.learn(agent_id, None, f"outcome {start + i}", ok, ["python"], task_id=start + i)
+
+
+def test_a_new_agent_has_insufficient_evidence_not_a_penalty_and_old_failures_decay():
+    dev = agent_of("developer")
+    new = registry.create_agent("developer", "Developer B")["id"]
+    outcomes(dev, [True, True, False, True])
+    outcomes(new, [False], start=2000)  # one failure is not incompetence
+    with session() as s:
+        ranks = registry._rank(s, [s.get(Agent, dev), s.get(Agent, new)], ["python"])
+    assert ranks[dev]["quality"] == 0.75 and ranks[dev]["evidence"] == 4
+    assert ranks[new]["evidence"] == 1 and ranks[new]["quality"] == 0.75, "the pool's mean, neither 0 nor 0.5"
+    outcomes(dev, [False] * 5, start=3000)
+    outcomes(dev, [True] * 20, start=4000)  # the failures are older than the last 20 outcomes now
+    with session() as s:
+        assert registry._rank(s, [s.get(Agent, dev)], ["python"])[dev]["quality"] == 1.0
+
+
+def test_exploration_gives_a_new_agent_a_non_critical_task_only(monkeypatch):
+    dev = agent_of("developer")
+    new = registry.create_agent("developer", "Developer B")["id"]
+    outcomes(dev, [True] * 5)
+    with session() as s:
+        s.get(Agent, dev).skills = {**s.get(Agent, dev).skills, "python": 9}
+    first = registry.staff("developer", ["python"], loop.create_goal("normal"))
+    assert first.id == dev, "without exploration the evidence wins"
+    registry.release(dev)
+    monkeypatch.setattr(registry, "_random", lambda: 0.0)
+    assert registry.staff("developer", ["python"], loop.create_goal("high risk"), critical=True).id == dev
+    registry.release(dev)
+    eval_goal = loop.create_goal("an exercise", origin="eval")
+    assert registry.staff("developer", ["python"], eval_goal).id == dev, "evaluations never explore"
+    registry.release(dev)
+    picked = registry.staff("developer", ["python"], loop.create_goal("low risk"))
+    assert picked.id == new
+
+
+def test_each_staffing_decision_is_recorded_in_its_task():
+    gid = loop.create_goal("Add a hello function")
+    loop.run_goal(gid)
+    with session() as s:
+        tasks = list(s.scalars(select(Task).where(Task.goal_id == gid)))
+    staffing = {t.key: t.contract.get("staffing") for t in tasks}
+    build = staffing["build"]
+    assert build["action"] == "assigned" and build["agent_id"] == next(t.agent_id for t in tasks if t.key == "build")
+    assert build["candidates"] and {"coverage", "quality", "evidence", "workload", "score"} <= set(build["candidates"][0])
+    assert build["explored"] is False
