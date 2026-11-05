@@ -20,7 +20,7 @@ window.WSP = window.WSP || {};
   function makePanel(opt = {}) {
   const K = opt.key || "ac.wsp.claude";
   const ROOT = opt.root || (() => W.root());
-  const C = { el: null, convs: [], tab: "", drafts: {}, open: new Set(), history: [], hpos: -1, model: store.get(K + ".model") || "default",
+  const C = { el: null, convs: [], tab: "", drafts: {}, open: new Set(), history: [], hpos: -1, model: store.get(K + ".model") || "default", effort: store.get(K + ".effort") || "default",
     sessions: [], names: {}, view: { sid: "", events: [], next: 0, d: null }, info: "", cli: null, dtimer: 0, following: "",
     closed: new Set(), hist: { open: false, tab: "running", q: "", items: [], total: 0, at: 0, timer: 0 },
     logs: new Map(), provider: opt.provider || store.get(K + ".provider") || "claude", models: {} };
@@ -31,6 +31,10 @@ window.WSP = window.WSP || {};
   const newConv = (o = {}) => ({ id: `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, session: "", cwd: "", title: "", runs: [], provider: C.provider, ...o });
   const PROV = { claude: { label: "Claude Code", logo: "✳" }, codex: { label: "Codex", logo: "◎" }, copilot: { label: "Copilot", logo: "⬡" } };
   const provOf = (c) => (c?.provider && PROV[c.provider] ? c.provider : "claude");
+  // Short labels, as in Claude Code itself; the menu's tooltip says what they are.
+  const EFFORT = { default: "effort", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
+  // The chosen effort if this conversation's agent has it, else none (its CLI's own setting).
+  const effortOf = (c) => (C.effort !== "default" && (C.models[provOf(c)]?.efforts || []).includes(C.effort) ? C.effort : "");
   const saveConvs = () => store.set(K + ".convs", JSON.stringify(C.convs.map((c) => ({ id: c.id, session: c.session, cwd: c.cwd, title: c.title, provider: provOf(c),
     runs: c.runs.filter((r) => !r.divider && !r.transcript).map((r) => r.id).slice(-30) }))));
   const saveClosed = () => store.set(K + ".closed", JSON.stringify([...C.closed]));
@@ -50,6 +54,7 @@ window.WSP = window.WSP || {};
   const init = async (el) => {
     C.el = el;
     el.innerHTML = `<div class="wc-head"><span class="wc-logo" aria-hidden="true">✳</span><select id="wc-prov" class="wc-prov" aria-label="Agent" title="Which agent this conversation talks to"></select><span class="wc-dot" title="idle"></span><span class="grow"></span>
+        <select id="wc-effort" aria-label="Effort" title="Effort: how long the agent thinks before it answers. Higher is more thorough, slower and uses more tokens"></select>
         <select id="wc-model" aria-label="Model" title="Model"></select>
         <button class="icon-btn sm" id="wc-compact" title="Compact this conversation: Claude Code summarises it to cut token use (/compact)">${W.svg("M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7")}</button>
         <button class="icon-btn sm" id="wc-hist-btn" title="Sessions: running now and history (/history)" aria-expanded="false">${W.svg("M12 7v5l3 2M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4")}</button>
@@ -101,6 +106,8 @@ window.WSP = window.WSP || {};
     el.querySelector("#wc-new").onclick = () => { selectTab(blankConv().id); ta.focus(); };
     const sel = el.querySelector("#wc-model");
     sel.onchange = () => { C.model = sel.value; store.set(K + ".model", C.model); };
+    const eff = el.querySelector("#wc-effort");
+    eff.onchange = () => { C.effort = eff.value; store.set(K + ".effort", C.effort); };
     el.querySelector("#wc-prov").onchange = (e) => setProvider(e.target.value);
     el.querySelector("#wc-compact").onclick = () => compact();
     // Copy buttons, and keep track of which blocks the user expanded.
@@ -210,6 +217,11 @@ window.WSP = window.WSP || {};
     const sel = C.el.querySelector("#wc-model"), models = info?.models || ["default"];
     sel.innerHTML = models.map((m) => `<option value="${m}">${m === "default" ? "Default model" : m[0].toUpperCase() + m.slice(1)}</option>`).join("");
     sel.value = models.includes(C.model) ? C.model : "default";
+    // Effort: the agent's own levels; "default" leaves it to the CLI's setting. Hidden where there are none (Copilot).
+    const es = C.el.querySelector("#wc-effort"), efforts = info?.efforts || ["default"];
+    es.innerHTML = efforts.map((e) => `<option value="${e}">${EFFORT[e] || e}</option>`).join("");
+    es.value = efforts.includes(C.effort) ? C.effort : "default";
+    es.hidden = efforts.length < 2;
   }
   function setProvider(p) {
     const c = cur();
@@ -297,7 +309,7 @@ window.WSP = window.WSP || {};
     if (!cwd) return toast("Open a folder in the explorer first");
     try {
       const run = await api("/api/workspace/claude", { method: "POST", body: { prompt: prompt || "Look at the attached image(s).", cwd, session_id: c.session, title: c.title,
-        model: C.model === "default" ? "" : C.model, attachments: d.uploads.map((u) => u.id), provider: provOf(c), project_id: opt.projectId?.() ?? null } });
+        model: C.model === "default" ? "" : C.model, effort: effortOf(c), attachments: d.uploads.map((u) => u.id), provider: provOf(c), project_id: opt.projectId?.() ?? null } });
       c.session = run.session_id; c.cwd = run.cwd; c.title = c.title || run.title || "";
       C.history.push(run.prompt); C.hpos = -1;
       c.runs.push(run); saveConvs();
@@ -786,6 +798,7 @@ window.WSP = window.WSP || {};
       ["Started from", s.entrypoint || d?.entrypoint ? `${esc(ENTRY[s.entrypoint || d.entrypoint] || s.entrypoint || d.entrypoint)}${s.pid ? ` <span class="muted">· pid ${s.pid}${s.started ? ` · up ${since(s.started)}` : ""}</span>` : ""}` : ""],
       ["Folder", d?.cwd ? `<span class="mono">${esc(d.cwd)}</span>${d.git_branch ? ` <span class="wc-badge">⎇ ${esc(d.git_branch)}</span>` : ""}` : ""],
       ["Model", d?.model ? `<span class="mono">${esc(d.model)}</span>` : c ? esc(C.model === "default" ? "Default model" : C.model) : ""],
+      ["Effort", c && effortOf(c) ? esc(effortOf(c)) : ""],
       ["Permissions", d?.permission_mode ? esc(d.permission_mode) : ""],
       ["Context", d?.context_tokens ? `${fmtK(d.context_tokens)} tokens <span class="muted">in the last request</span>` : ""],
       ["Output", d?.output_tokens ? `${fmtK(d.output_tokens)} tokens${d.partial_history ? ' <span class="muted">(recent history)</span>' : ""}` : ""],

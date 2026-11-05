@@ -196,7 +196,10 @@ table.csv .c4 { color: var(--t-kw); } table.csv .c5 { color: var(--t-num); } tab
 .wc { display: flex; flex-direction: column; background: var(--panel); position: relative; }
 .wc.drop { box-shadow: inset 0 0 0 2px var(--claude); }
 .wc-head { display: flex; align-items: center; gap: 7px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--border); flex: none; white-space: nowrap; min-height: 41px; }
-.wc-head select { width: auto; font-size: 12px; padding: 2px 4px; }
+.wc-head select { width: auto; font-size: 12px; padding: 2px 4px; min-width: 0; flex: 0 1 auto; text-overflow: ellipsis; }
+/* A narrow panel: the agent's name gives way first (its logo stays), effort and model stay readable. */
+.wc-head .wc-prov { flex-shrink: 30; }
+#wc-effort { min-width: 62px; } #wc-model { min-width: 72px; }
 .wc-logo { color: var(--claude); font-size: 18px; line-height: 1; font-weight: 700; }
 .wc-logo.big { font-size: 40px; }
 .wc-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }

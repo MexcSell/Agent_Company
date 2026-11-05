@@ -207,9 +207,10 @@ def test_claude_panel_runs_resumes_and_attaches_images(admin, root, monkeypatch)
     monkeypatch.setattr(workspace, "make_title", lambda prompt: "Look around")
     info = admin.get("/api/workspace/claude").json()
     assert info["available"] is True and info["version"] == "2.1.310" and info["account"]["method"]
+    assert info["providers"][0]["efforts"] == ["default", "low", "medium", "high", "xhigh", "max"]
     up = admin.post("/api/uploads", files={"file": ("shot.png", b"\x89PNG\r\n\x1a\n", "image/png")}).json()
     run = admin.post("/api/workspace/claude", json={"prompt": "-rf what is here?", "cwd": str(root), "attachments": [up["id"]],
-                                                    "model": "sonnet"}).json()
+                                                    "model": "sonnet", "effort": "high"}).json()
     for _ in range(100):
         d = admin.get(f"/api/workspace/claude/{run['id']}").json()
         if d["status"] != "running":
@@ -221,6 +222,7 @@ def test_claude_panel_runs_resumes_and_attaches_images(admin, root, monkeypatch)
     cmd, kw = FakeProc.calls[0]
     assert kw["cwd"] == root and "--allowedTools" in cmd and "Bash" in cmd[cmd.index("--allowedTools") + 1]
     assert cmd[cmd.index("--model") + 1] == "sonnet" and "--add-dir" in cmd
+    assert cmd[cmd.index("--effort") + 1] == "high" and d["effort"] == "high"
     assert "-rf what is here?" not in cmd  # the prompt goes through stdin, never argv
     assert written[0].startswith("-rf what is here?") and "shot.png" in written[0]
     # A new conversation gets its session id up front, so the panel knows it before Claude Code answers.
@@ -234,13 +236,22 @@ def test_claude_panel_runs_resumes_and_attaches_images(admin, root, monkeypatch)
                                               "title": "Look around"})
     cmd2, _ = FakeProc.calls[1]
     assert cmd2[cmd2.index("--resume") + 1] == d["session_id"] and cmd2[cmd2.index("--name") + 1] == "Look around"
+    assert "--effort" not in cmd2  # no effort chosen: Claude Code's own setting
     # A conversation whose first prompt never reached Claude Code has no transcript: it starts under its id.
     admin.post("/api/workspace/claude", json={"prompt": "again", "cwd": str(root), "session_id": first})
     cmd3, _ = FakeProc.calls[2]
     assert "--resume" not in cmd3 and cmd3[cmd3.index("--session-id") + 1] == first
     assert admin.post("/api/workspace/claude", json={"prompt": "x", "session_id": "bad id; rm"}).status_code == 400
+    assert admin.post("/api/workspace/claude", json={"prompt": "x", "cwd": str(root), "effort": "huge"}).status_code == 400
     assert any(r["action"] == "workspace_claude" for r in admin.get("/api/audit").json()["records"])
     assert member_of(admin).post("/api/workspace/claude", json={"prompt": "x"}).status_code == 403
+
+
+def test_codex_effort_is_a_config_override():
+    run = workspace.Run("hi", "/tmp", "admin", "", "", [], provider="codex", effort="medium")
+    cmd = workspace._command(run)
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=medium" and cmd[-1] == "-"
+    assert "-c" not in workspace._command(workspace.Run("hi", "/tmp", "admin", "", "", [], provider="codex"))
 
 
 def test_make_title_asks_haiku_without_tools_and_falls_back(monkeypatch):

@@ -45,6 +45,10 @@ from typing import Any
 ALL_TOOLS = ["Bash", "Read", "Edit", "MultiEdit", "Write", "Glob", "Grep", "LS", "WebFetch", "WebSearch",
              "NotebookEdit", "TodoWrite", "Task"]
 MODELS = ["default", "opus", "sonnet", "haiku"]
+# Reasoning effort per agent ("default" leaves it to the CLI's own setting): `claude --effort`, Codex's
+# `model_reasoning_effort`. Copilot has none.
+EFFORTS = ["default", "low", "medium", "high", "xhigh", "max"]
+CODEX_EFFORTS = ["default", "low", "medium", "high"]
 MAX_RUNS = 40
 MAX_FIELD = 20_000
 _SESSION_RE = re.compile(r"[0-9a-fA-F-]{8,64}")
@@ -68,11 +72,11 @@ def available() -> dict[str, Any]:
             "account": _account(),
             "providers": [
                 {"id": "claude", "label": "Claude Code", "available": exe is not None, "models": MODELS,
-                 "version": _version(exe), "install": "npm i -g @anthropic-ai/claude-code"},
+                 "efforts": EFFORTS, "version": _version(exe), "install": "npm i -g @anthropic-ai/claude-code"},
                 {"id": "codex", "label": "Codex", "available": codex is not None, "models": CODEX_MODELS,
-                 "version": _version(codex), "install": "npm i -g @openai/codex, then `codex login`"},
+                 "efforts": CODEX_EFFORTS, "version": _version(codex), "install": "npm i -g @openai/codex, then `codex login`"},
                 {"id": "copilot", "label": "GitHub Copilot", "available": copilot is not None, "models": ["default"],
-                 "version": _version(copilot), "install": "npm i -g @github/copilot, then `copilot` to sign in"}]}
+                 "efforts": ["default"], "version": _version(copilot), "install": "npm i -g @github/copilot, then `copilot` to sign in"}]}
 
 
 _VERSION: dict[str, str] = {}
@@ -235,9 +239,9 @@ def normalise_codex(raw: dict[str, Any], state: dict[str, Any]) -> list[dict[str
 
 class Run:
     def __init__(self, prompt: str, cwd: str, owner: str, session_id: str, model: str, images: list[dict[str, Any]],
-                 title: str = "", provider: str = "claude", system: str = ""):
+                 title: str = "", provider: str = "claude", system: str = "", effort: str = ""):
         self.id = uuid.uuid4().hex[:12]
-        self.provider, self.system = provider, system
+        self.provider, self.system, self.effort = provider, system, effort
         self.prompt, self.cwd, self.owner, self.model, self.title = prompt, cwd, owner, model, title
         self.resume = bool(session_id)
         self.session_id = session_id or str(uuid.uuid4())  # known before Claude Code starts
@@ -256,7 +260,7 @@ class Run:
     def to_dict(self, after: int = 0) -> dict[str, Any]:
         with self.lock:
             return {"id": self.id, "prompt": self.prompt, "cwd": self.cwd, "status": self.status, "provider": self.provider,
-                    "session_id": self.session_id, "title": self.title, "model": self.model, "started": self.started,
+                    "session_id": self.session_id, "title": self.title, "model": self.model, "effort": self.effort, "started": self.started,
                     "ended": self.ended, "images": [{"id": i["id"], "name": i["name"]} for i in self.images],
                     "events": self.events[after:], "next": len(self.events)}
 
@@ -272,6 +276,8 @@ def _command(run: Run) -> list[str]:
             cmd += ["--add-dir", folder]
         if run.model and run.model != "default":
             cmd += ["-m", run.model]
+        if run.effort:
+            cmd += ["-c", f"model_reasoning_effort={run.effort}"]
         return cmd + (["resume", run.session_id, "-"] if run.resume else ["-"])
     cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits",
            "--allowedTools", ",".join(ALL_TOOLS)]
@@ -282,6 +288,8 @@ def _command(run: Run) -> list[str]:
         cmd += ["--name", run.title]
     if run.model and run.model != "default":
         cmd += ["--model", run.model]
+    if run.effort:
+        cmd += ["--effort", run.effort]
     if run.system:
         cmd += ["--append-system-prompt", run.system]
     return cmd
@@ -349,7 +357,8 @@ def _run_title(session_id: str) -> str:
 
 
 def start(prompt: str, cwd: str, owner: str, session_id: str = "", model: str = "",
-          images: list[dict[str, Any]] | None = None, title: str = "", provider: str = "claude", system: str = "") -> Run:
+          images: list[dict[str, Any]] | None = None, title: str = "", provider: str = "claude", system: str = "",
+          effort: str = "") -> Run:
     if not prompt.strip():
         raise ValueError("write a prompt first")
     if provider not in PROVIDERS:
@@ -372,8 +381,11 @@ def start(prompt: str, cwd: str, owner: str, session_id: str = "", model: str = 
                          "wait for it to finish, or stop it from the sessions window")
     if model and model not in MODELS and not re.fullmatch(r"[\w.\-\[\]]{2,80}", model):
         raise ValueError("bad model name")
+    effort = "" if effort == "default" else effort
+    if effort and effort not in (CODEX_EFFORTS if provider == "codex" else EFFORTS):
+        raise ValueError(f"unknown effort {effort!r} for {PROVIDERS[provider]}")
     title = re.sub(r"\s+", " ", title or "").strip()[:80]
-    run = Run(prompt, str(folder), owner, session_id, model, images or [], title, provider, system[:20000])
+    run = Run(prompt, str(folder), owner, session_id, model, images or [], title, provider, system[:20000], effort)
     # A conversation whose first prompt failed before Claude Code wrote anything starts afresh under its id.
     run.resume = bool(session_id) and (provider == "codex" or _transcript_path(session_id) is not None)
     if provider == "codex" and not session_id:
