@@ -520,6 +520,52 @@ class Notification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
 
+class Decision(Base):
+    """A recorded decision with its alternatives and evidence (decisions.py, SPEC-04 S04-R-02)."""
+
+    __tablename__ = "decisions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    goal_id: Mapped[int | None] = mapped_column(ForeignKey("goals.id", ondelete="CASCADE"), nullable=True, index=True)
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    topic: Mapped[str] = mapped_column(String(256))
+    alternatives: Mapped[list[Any]] = mapped_column(default=list)
+    recommendation: Mapped[str] = mapped_column(Text, default="")
+    reasoning: Mapped[str] = mapped_column(Text, default="")
+    evidence: Mapped[list[Any]] = mapped_column(default=list)  # blackboard/task/source references
+    assumptions: Mapped[list[Any]] = mapped_column(default=list)
+    confidence: Mapped[float] = mapped_column(Float, default=0.5)  # an estimate, labelled as such
+    category: Mapped[str] = mapped_column(String(16), default="technical")
+    requires_human_approval: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(16), default="submitted")
+    # draft|submitted|under_review|approved|rejected|escalated|expired|cancelled
+    escalation_level: Mapped[int] = mapped_column(Integer, default=0)  # S04-R-07: 1 agent .. 5 human
+    created_by_agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    approver: Mapped[str] = mapped_column(String(128), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class BlackboardEntry(Base):
+    """Shared, versioned context of one goal (blackboard.py, SPEC-04 S04-R-01). Rows are never overwritten:
+    a change is a new version, written only if it is based on the latest one."""
+
+    __tablename__ = "blackboard"
+    __table_args__ = (UniqueConstraint("goal_id", "section", "key", "version"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    goal_id: Mapped[int] = mapped_column(ForeignKey("goals.id", ondelete="CASCADE"), index=True)
+    section: Mapped[str] = mapped_column(String(16))  # objective|planning|research|engineering|qa|reports|messages
+    key: Mapped[str] = mapped_column(String(128))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    author_agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    task_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content: Mapped[str] = mapped_column(Text, default="")
+    sources: Mapped[list[Any]] = mapped_column(default=list)
+    meta: Mapped[dict[str, Any]] = mapped_column(default=dict)  # messages: from/to role, kind, delivered agent ids
+    review_status: Mapped[str] = mapped_column(String(16), default="draft")  # draft|reviewed|rejected
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class GoalTransition(Base):
     """One change of a goal's workflow state (workflow.py, SPEC-04 S04-R-04)."""
 

@@ -20,7 +20,8 @@ from typing import Any
 
 from sqlalchemy import select
 
-from agent_company import contracts, executors, learning, quality, registry, research, router, specs, usage, worktrees
+from agent_company import (blackboard, contracts, decisions, executors, learning, quality, registry, research, router,
+                           specs, usage, worktrees)
 from agent_company.config import settings
 from agent_company.db import Agent, Event, Goal, Task, log_event, session
 from agent_company.org import ROLES
@@ -329,6 +330,8 @@ def _research(goal: Goal, iteration: int, feedback: str) -> str:
         res, _ = _execute(agent, req, "research", goal_id=goal.id)
         notes = res.text if res.ok else ""
         if notes:
+            blackboard.put(goal.id, "research", f"iteration-{iteration}", notes, author_agent_id=agent.id,
+                           sources=[d["url"] for d in docs])
             learning.learn(agent.id, goal.id, f"Researched '{goal.title}' (iteration {iteration}).", True,
                            ["research"])
         return notes
@@ -345,6 +348,10 @@ PLAN_INSTRUCTIONS = """Split the goal into task contracts. Answer with JSON only
   "acceptance": [{"type": "file_exists", "path": "..."} | {"type": "command", "run": "..."} |
                  {"type": "contains", "value": "..."} | {"type": "regex", "pattern": "..."} |
                  {"type": "min_length", "value": 100}]}]}
+Optionally add "decisions": [{"topic": "...", "alternatives": ["..."], "recommendation": "...",
+  "reasoning": "...", "assumptions": ["..."], "confidence": 0-1, "category": "operational|technical|
+  organizational|financial|critical", "requires_human_approval": true|false}] for significant choices
+(technology, architecture, anything costly or hard to undo); critical ones always wait for a person.
 Prefer few, well-scoped tasks. Include a QA review task: it verifies the logic (data flow of the normal,
 an edge and an error case), lists FINDING lines, and ends with an OUTCOME and "VERDICT: PASS" or
 "VERDICT: FAIL". Use an existing role when one fits; name a new
@@ -373,6 +380,9 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
             tasks = data["tasks"] if isinstance(data, dict) else data
             plan = contracts.validate_plan(tasks)
             summary = data.get("summary", "") if isinstance(data, dict) else ""
+            _board_plan(goal, iteration, plan, summary, gm.id)
+            if isinstance(data, dict) and data.get("decisions"):
+                decisions.from_plan(goal.id, data["decisions"], gm.id)
             log_event("plan", f"{gm.name} planned {len(plan)} task(s) with {choice.name}: {summary}"[:500],
                       goal_id=goal.id, agent_id=gm.id)
             _chat_plan(goal, iteration, plan, summary, gm.id)
@@ -381,10 +391,22 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
             log_event("plan", f"plan from {choice.name} was invalid ({e}); using the standard plan",
                       goal_id=goal.id, agent_id=gm.id)
             plan = contracts.validate_plan(executors.standard_plan(goal.title)["tasks"])
+            _board_plan(goal, iteration, plan, "standard plan", gm.id)
             _chat_plan(goal, iteration, plan, "standard plan (the model's plan was invalid)", gm.id)
             return plan, gm.id
     finally:
         registry.release(gm.id)
+
+
+def _board_plan(goal: Goal, iteration: int, plan: list[contracts.TaskContract], summary: str, gm_id: int) -> None:
+    """The planner's part of the blackboard: the objective and the breakdown with its dependencies."""
+    blackboard.put(goal.id, "objective", "goal", f"{goal.title}\n\n{goal.description}"
+                   + (f"\n\nAllowed paths: {', '.join(goal.allowed_paths)}" if goal.allowed_paths else ""),
+                   author_agent_id=gm_id)
+    lines = [f"Iteration {iteration}: {summary}".strip()]
+    lines += [f"- {c.key} ({c.role}): {c.title}" + (f" after {', '.join(c.depends_on)}" if c.depends_on else "")
+              for c in plan]
+    blackboard.put(goal.id, "planning", "plan", "\n".join(lines), author_agent_id=gm_id)
 
 
 def _spec_step(fn: Any, goal: Goal, iteration: int, data: Any) -> None:
@@ -470,12 +492,14 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                       + (f"Research notes:\n{notes}\n\n" if notes else "")
                       + (f"Findings from the last failed attempt:\n{feedback}\n\n" if feedback else "")
                       + handover
+                      + blackboard.context_for(goal.id, role, exclude={contract.key, *contract.depends_on})
+                      + blackboard.inbox(goal.id, role, agent.id)
                       + learning.experience_context(agent.id)
                       + _attachment_note(goal)
                       + ("\n\nYou may change files in the working directory." if writes
                          else "\n\nDo not change files; answer in text.")
                       + ("\n\n" + REVIEW_CHECKLIST if role in REVIEW_ROLES else "")
-                      + "\n\n" + PROPOSAL_HELP + budget)
+                      + "\n\n" + PROPOSAL_HELP + "\n" + blackboard.MESSAGE_HELP + budget)
             req = executors.Request(purpose="task", role=role, system=_system_for(agent), prompt=prompt,
                                     workdir=Path(goal.worktree), writes=writes,
                                     data={"title": contract.title, "description": contract.description,
@@ -503,6 +527,11 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             from agent_company.projects import extract_proposals, post_for_goal
 
             raised = extract_proposals(goal.id, agent.id, output) if res.ok else 0
+            if res.ok:
+                blackboard.put(goal.id, blackboard.SECTION_OF_ROLE.get(role, "engineering"), contract.key,
+                               f"{contract.title} ({'done' if ok else 'failed'})\n{_brief(output, 1500)}",
+                               author_agent_id=agent.id, task_id=task_id)
+                blackboard.extract_messages(goal.id, task_id, contract.key, agent.id, role, output)
             post_for_goal(goal.id, f"{'Done' if ok else 'Failed'}: {contract.title}\n{_brief(output)}",
                           kind="result" if ok else "error", agent_id=agent.id, task_id=task_id, proposals=raised)
             return ok
@@ -744,7 +773,8 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                 if goal.origin == "eval":  # benchmark runs pass, but never merge, push or notify
                     _update_goal(goal_id, status="approved", result=_summary(goal_id, iteration, report))
                     return {"status": "approved", "iterations": iteration, "report": report}
-                status = "awaiting_approval" if report["needs_approval"] else "approved"
+                waiting = decisions.blocking(goal_id)
+                status = "awaiting_approval" if report["needs_approval"] or waiting else "approved"
                 _update_goal(goal_id, status=status, result=_summary(goal_id, iteration, report))
                 _notify_goal(goal_id, status)
                 if status == "approved":
@@ -929,6 +959,9 @@ def approve(goal_id: int, actor: str = "system") -> dict[str, Any]:
     g = _goal(goal_id)
     if g.status != "awaiting_approval":
         raise ValueError(f"goal is {g.status}, not awaiting approval")
+    waiting = decisions.blocking(goal_id)
+    if waiting:  # S04-R-02: checked at merge time, so a revoked approval blocks too
+        raise ValueError("decision(s) waiting for a person: " + ", ".join(f"#{d['id']} {d['topic']}" for d in waiting))
     sha = _merge(goal_id)
     _update_goal(goal_id, status="approved", reason=f"merged {sha[:10]}", actor=actor)
     from agent_company.projects import post_for_goal
@@ -1009,12 +1042,7 @@ def trace(goal_id: int) -> dict[str, Any]:
                 "project_id": g.project_id, "history": g.history or []}
     out = {"goal": head, "transitions": workflow.history(goal_id), "tasks": tasks, "runs": runs, "gates": gates,
            "operations": ops}
-    try:
-        from agent_company import decisions
-
-        out["decisions"] = decisions.list_decisions(goal_id=goal_id)
-    except ImportError:
-        out["decisions"] = []
+    out["decisions"] = decisions.list_decisions(goal_id=goal_id)
     return out
 
 

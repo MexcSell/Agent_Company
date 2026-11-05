@@ -20,8 +20,10 @@ from starlette.background import BackgroundTask
 from agent_company import (
     agentdefs,
     auth,
+    blackboard,
     catalog,
     containers,
+    decisions,
     evaluation,
     evolution,
     files,
@@ -341,6 +343,11 @@ class IncidentBody(BaseModel):
     goal_id: int | None = None
     agent_id: int | None = None
     project_id: int | None = None
+    note: str = Field(default="", max_length=2000)
+
+
+class DecideBody(BaseModel):
+    approve: bool
     note: str = Field(default="", max_length=2000)
 
 
@@ -1208,7 +1215,30 @@ def create_app(start_background: bool = True) -> FastAPI:
                 select(Event).where(Event.goal_id == goal_id).order_by(Event.id))]
         d["defects"] = performance.list_defects(goal_id=goal_id)
         d["transitions"] = workflow.history(goal_id)
+        d["decisions"] = decisions.list_decisions(goal_id=goal_id)
+        d["blackboard"] = blackboard.read(goal_id)
         return d
+
+    @app.get("/api/decisions")
+    def decisions_list(goal_id: int | None = None, status: str = "", user: dict[str, Any] = Depends(current_user)
+                       ) -> list[dict[str, Any]]:
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        return [d for d in decisions.list_decisions(goal_id, status)
+                if seen is None or d["project_id"] is None or d["project_id"] in seen]
+
+    @app.post("/api/decisions/{decision_id}/decide")
+    def decision_decide(decision_id: int, body: DecideBody, admin: dict[str, Any] = Depends(admin_user)
+                        ) -> dict[str, Any]:
+        try:
+            out = decisions.decide(decision_id, body.approve, f"user:{admin['name']}", body.note)
+        except KeyError as e:
+            raise HTTPException(404, str(e).strip("'")) from e
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "decision_decide", decision_id, after={"status": out["status"], "topic": out["topic"]},
+               severity="high" if out["requires_human_approval"] else "info")
+        return out
 
     @app.post("/api/goals/{goal_id}/approve")
     def goal_approve(goal_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:

@@ -1,0 +1,111 @@
+"""Decision records (docs/requirements/SPEC-04-orchestration.md S04-R-02, escalation S04-R-07).
+
+A decision names its topic, the alternatives considered, the recommendation, reasoning, evidence,
+assumptions and an estimated confidence. Decisions that need a person (`requires_human_approval`, and
+every `critical` one) block the goal's merge until an administrator approves them.
+
+Escalation levels (S04-R-07): 1 assigned agent, 2 goal GM, 3 room manager, 4 executive GM of the platform
+project, 5 human. The level follows the category, not only the attempt count: `critical` goes straight to 5.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from sqlalchemy import select
+
+from agent_company.db import Decision, Goal, log_event, now, session
+
+CATEGORIES = ["operational", "technical", "organizational", "financial", "critical"]
+OPEN = ("draft", "submitted", "under_review", "escalated")
+LEVEL_BY_CATEGORY = {"operational": 1, "technical": 2, "organizational": 3, "financial": 4, "critical": 5}
+
+
+def _row(d: Decision) -> dict[str, Any]:
+    return {"id": d.id, "goal_id": d.goal_id, "project_id": d.project_id, "topic": d.topic,
+            "alternatives": d.alternatives or [], "recommendation": d.recommendation, "reasoning": d.reasoning,
+            "evidence": d.evidence or [], "assumptions": d.assumptions or [], "confidence": d.confidence,
+            "category": d.category, "requires_human_approval": d.requires_human_approval, "status": d.status,
+            "escalation_level": d.escalation_level, "created_by_agent_id": d.created_by_agent_id,
+            "approver": d.approver, "note": d.note, "decided_at": d.decided_at.isoformat() if d.decided_at else None,
+            "at": d.created_at.isoformat()}
+
+
+def record(goal_id: int | None, topic: str, recommendation: str, alternatives: list[Any] | None = None,
+           reasoning: str = "", evidence: list[Any] | None = None, assumptions: list[Any] | None = None,
+           confidence: float = 0.5, category: str = "technical", requires_human_approval: bool = False,
+           agent_id: int | None = None) -> dict[str, Any]:
+    """Store a decision. Ones that need no person are approved at once (approver 'auto'); the rest wait."""
+    from agent_company.governance import notify
+
+    category = category if category in CATEGORIES else "technical"
+    human = bool(requires_human_approval) or category == "critical"
+    level = 5 if human else LEVEL_BY_CATEGORY[category]
+    with session() as s:
+        g = s.get(Goal, goal_id) if goal_id else None
+        d = Decision(goal_id=goal_id, project_id=g.project_id if g else None, topic=str(topic)[:256],
+                     alternatives=list(alternatives or [])[:10], recommendation=str(recommendation)[:4000],
+                     reasoning=str(reasoning)[:4000], evidence=list(evidence or [])[:20],
+                     assumptions=list(assumptions or [])[:20], confidence=max(0.0, min(1.0, float(confidence or 0))),
+                     category=category, requires_human_approval=human, escalation_level=level,
+                     status="escalated" if human else "approved", approver="" if human else "auto",
+                     decided_at=None if human else now(), created_by_agent_id=agent_id)
+        s.add(d)
+        s.flush()
+        out = _row(d)
+        if human:
+            log_event("escalation", f"decision #{d.id} '{d.topic}' needs a person (level 5)", goal_id=goal_id,
+                      agent_id=agent_id, s=s, level=5, decision_id=d.id)
+            notify(f"Decision needs approval: {d.topic}"[:256], f"{d.recommendation[:500]}", level="warning",
+                   source="decision", goal_id=goal_id, project_id=d.project_id, admin_only=True, s=s)
+        else:
+            log_event("decision", f"decision #{d.id} '{d.topic}': {d.recommendation[:200]}", goal_id=goal_id,
+                      agent_id=agent_id, s=s, level=level, decision_id=d.id)
+    return out
+
+
+def decide(decision_id: int, approve: bool, actor: str, note: str = "") -> dict[str, Any]:
+    with session() as s:
+        d = s.get(Decision, decision_id)
+        if d is None:
+            raise KeyError(f"decision {decision_id}")
+        if d.status not in OPEN:
+            raise ValueError(f"decision is already {d.status}")
+        d.status, d.approver, d.note, d.decided_at = ("approved" if approve else "rejected"), actor[:128], note[:2000], now()
+        log_event("decision", f"decision #{d.id} {d.status} by {actor}", goal_id=d.goal_id, s=s, decision_id=d.id)
+        return _row(d)
+
+
+def blocking(goal_id: int) -> list[dict[str, Any]]:
+    """Decisions that keep the goal from merging: a person must approve them first (also re-checked at merge
+    time, so a revoked approval blocks the merge, AT-029)."""
+    with session() as s:
+        return [_row(d) for d in s.scalars(select(Decision).where(Decision.goal_id == goal_id,
+                                                                  Decision.requires_human_approval))
+                if d.status != "approved"]
+
+
+def list_decisions(goal_id: int | None = None, status: str = "", limit: int = 200) -> list[dict[str, Any]]:
+    with session() as s:
+        q = select(Decision)
+        if goal_id is not None:
+            q = q.where(Decision.goal_id == goal_id)
+        if status:
+            q = q.where(Decision.status == status)
+        return [_row(d) for d in s.scalars(q.order_by(Decision.id.desc()).limit(limit))]
+
+
+def from_plan(goal_id: int, items: Any, agent_id: int | None) -> list[dict[str, Any]]:
+    """Decisions a planner put in its JSON plan (`"decisions": [...]`); malformed items are skipped."""
+    out = []
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict) or not it.get("topic") or not it.get("recommendation"):
+            continue
+        try:
+            conf = float(it.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            conf = 0.5
+        out.append(record(goal_id, it["topic"], it["recommendation"], it.get("alternatives"), it.get("reasoning", ""),
+                          it.get("evidence"), it.get("assumptions"), conf, str(it.get("category", "technical")),
+                          bool(it.get("requires_human_approval")), agent_id))
+    return out
