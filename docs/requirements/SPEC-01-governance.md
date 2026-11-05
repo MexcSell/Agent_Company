@@ -35,7 +35,7 @@ and SPEC-15 dashboard; SPEC-02 feeds SPEC-03 recruitment and SPEC-04 orchestrati
 | S01-FR-05 | Role and responsibility definitions | P0 | done (`org.ROLES` role specs) |
 | S01-FR-06 | Authority and permission management | P0 | partial: user permissions done; agent autonomy → SPEC-14 S14-R-02 |
 | S01-FR-07 | Company objectives decomposed to departments | P0 | gated (goals are per project) |
-| S01-FR-08 | Department KPIs | P1 | partial: room metrics in `performance.report` |
+| S01-FR-08 | Department KPIs | P1 | done (`kpis.py`, S01-R-06) |
 | S01-FR-09 | Delegation (scope, expiry, revocable) | P0 | done (`policies.delegate`, `allows`, S01-R-03) |
 | S01-FR-10 | Decision and approval workflow | P0 | done for goals (SPEC-04 S04-R-02, `decisions.py`); merge approval delegable per project (S01-R-03) |
 | S01-FR-11 | Transactional restructuring | P1 | gated |
@@ -96,3 +96,25 @@ and SPEC-15 dashboard; SPEC-02 feeds SPEC-03 recruitment and SPEC-04 orchestrati
   `budgets.limits`, `quality` (needs approval) and `recruitment.needs_approval`, so a company limit lowered later
   still wins. Not taken: per-project command rules (commands run without a project context) and an autonomy
   default (autonomy comes from the role template).
+
+### S01-R-06 Department KPIs — FR-08
+- Each KPI has a definition, a measurement formula, a target, a measurement interval, a data source, the
+  responsible department and its historical values; KPI results can be calculated, inspected and compared over
+  time with their underlying evidence. No single simplistic score judges an agent.
+- **Status: done** (`kpis.py`, tables `kpis` and `kpi_values`; `tests/test_kpis.py`). A KPI names its room, a
+  formula from `kpis.METRICS` (which fixes the data source and unit: task success rate, delivery rate, defect rate,
+  defect detection, verified research findings, incident resolution time, workforce utilization, demonstrated skill
+  improvement, cost per task), a target with a direction (higher/lower is better) and an interval
+  (daily/weekly/monthly). `measure` computes the value over the last interval and keeps it with the sample size,
+  the target in force, whether it was met and the ids of the records it counted (capped at 50 per kind); a period
+  with nothing to count has no value and is not judged; a changed target never re-judges earlier values.
+  `measure_due` (the `KpiThread`, every 10 minutes) measures each enabled KPI of an enabled room with an enabled,
+  active agent once per interval, so rooms whose roles are switched off are not judged. Defaults follow the
+  specification's examples (development: delivery rate ≥ 80 % and defect rate ≤ 0.5 per goal; research rooms:
+  verified findings; security: incident resolution ≤ 24 h; administration: utilization; study room: skill
+  improvement), seeded once per room and metric (a removed one is disabled and stays removed). `compare` gives the
+  series with the change between periods. API `GET /api/kpis`, `GET /api/kpis/{id}` (history and comparison),
+  administrators `POST /api/kpis`, `PATCH /api/kpis/{id}` (target, interval, name, definition, enabled),
+  `POST /api/kpis/{id}/measure`, all audited; Performance → Department KPIs (definition, formula and data source
+  on hover, latest value with its change, target, met/missed, the last eight values with the records they counted).
+  Objectives decomposed to departments (FR-07) stay gated.

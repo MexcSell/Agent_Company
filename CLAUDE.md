@@ -8,6 +8,8 @@ feature came from.
 
 - `src/agent_company/` – one module per service:
   `registry.py` + `org.py` (agents, rooms; configuration versions with rollback, health: degraded/inactive),
+  `kpis.py` (SPEC-01 FR-08 department KPIs: formula from `METRICS`, target, interval, values with evidence in
+  `kpi_values`, measured by the `KpiThread`; Performance → Department KPIs),
   `organization.py` (SPEC-01: room editing with parent, lead and switch, no cycles; a disabled room's agents are not
   staffed; position history `room:<key>:lead`/`project:<id>:gm`; organisation export JSON/CSV),
   `policies.py` (SPEC-01: delegated `approve_goals` per project with expiry, checked per call; versions of the

@@ -862,6 +862,43 @@ class Recruitment(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class Kpi(Base):
+    """A department KPI (SPEC-01 FR-08, kpis.py): definition, a formula from `kpis.METRICS` with its data source,
+    target, direction, measurement interval and the responsible room; values are kept in `kpi_values`."""
+
+    __tablename__ = "kpis"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    room_key: Mapped[str] = mapped_column(String(64), index=True)  # the responsible department
+    name: Mapped[str] = mapped_column(String(128))
+    definition: Mapped[str] = mapped_column(Text, default="")
+    metric: Mapped[str] = mapped_column(String(48))  # kpis.METRICS key: the formula and its data source
+    target: Mapped[float | None] = mapped_column(Float, nullable=True)
+    direction: Mapped[str] = mapped_column(String(8), default="higher")  # higher|lower is better
+    interval: Mapped[str] = mapped_column(String(16), default="weekly")  # daily|weekly|monthly
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(String(128), default="system")
+    last_measured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class KpiValue(Base):
+    """One measurement of a KPI over a period, with the target in force then and the records it counted."""
+
+    __tablename__ = "kpi_values"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kpi_id: Mapped[int] = mapped_column(ForeignKey("kpis.id", ondelete="CASCADE"), index=True)
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    value: Mapped[float | None] = mapped_column(Float, nullable=True)  # None: nothing to measure in the period
+    samples: Mapped[int] = mapped_column(Integer, default=0)
+    target: Mapped[float | None] = mapped_column(Float, nullable=True)
+    met: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    evidence: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"tasks": [ids], ...}, capped
+    measured_by: Mapped[str] = mapped_column(String(128), default="system")
+    measured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class Requirement(Base):
     """A project requirement (ASEAO08 S08-R-01): key, text, kind, acceptance criteria, a version with the earlier
     ones in `history`, and status draft -> approved -> implemented -> verified (retired from any). requirements.py."""

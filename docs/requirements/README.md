@@ -108,7 +108,7 @@ the order is safety and correctness of that pipeline first, then management, the
    (S10-R-03 and S05-R-10 confirmed as met by existing controls).
    S13-R-05 ranking weights as `retrieval` experiments (both retrieval evals and the fixed benchmark per side,
    an administrator applies and rolls back) done 2026-11-05, then ASEAO08 S08-FR-03 story and use-case templates
-   with their actors.
+   with their actors, then SPEC-01 S01-R-06 department KPIs.
 5. **Still open** (2026-11-05): the gated rooms one at a time
    (G-R-04); L3 for the agent CLIs themselves (they need network and their logins, see the threat model's known
    gaps).

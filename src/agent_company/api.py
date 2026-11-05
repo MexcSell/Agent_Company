@@ -36,6 +36,7 @@ from agent_company import (
     governance,
     hypotheses,
     kgraph,
+    kpis,
     learning,
     loop,
     machines,
@@ -79,6 +80,7 @@ def bootstrap() -> None:
     strategies.seed()
     projects.seed()
     catalog.seed()
+    kpis.seed()
     prefs.load()
 
 
@@ -598,6 +600,26 @@ class ExperimentBody(BaseModel):
     budget_usd: float = Field(default=0.0, ge=0, le=1000)  # what its eval runs may cost; 0 = no limit (S10-R-02)
 
 
+class KpiBody(BaseModel):
+    room: str = Field(min_length=1, max_length=64)
+    metric: str = Field(min_length=1, max_length=48)  # kpis.METRICS
+    target: float | None = Field(default=None, ge=0)
+    name: str = Field(default="", max_length=128)
+    definition: str = Field(default="", max_length=2000)
+    direction: str = Field(default="", pattern="^(|higher|lower)$")
+    interval: str = Field(default="weekly", pattern="^(daily|weekly|monthly)$")
+
+
+class KpiPatch(BaseModel):
+    name: str | None = Field(default=None, max_length=128)
+    definition: str | None = Field(default=None, max_length=2000)
+    target: float | None = Field(default=None, ge=0)
+    clear_target: bool = False
+    direction: str | None = Field(default=None, pattern="^(higher|lower)$")
+    interval: str | None = Field(default=None, pattern="^(daily|weekly|monthly)$")
+    enabled: bool | None = None
+
+
 class PlanBody(BaseModel):
     agent_id: int
     capability: str
@@ -724,6 +746,8 @@ def create_app(start_background: bool = True) -> FastAPI:
             app.state.reports.start()
             app.state.selfevolve = selfevolve.Monitor()
             app.state.selfevolve.start()
+            app.state.kpis = kpis.KpiThread()
+            app.state.kpis.start()
             threading.Thread(target=lambda: agentdefs.sync_all("registered"), daemon=True).start()
         yield
         if app.state.rotation:
@@ -734,6 +758,8 @@ def create_app(start_background: bool = True) -> FastAPI:
             app.state.reports.stop.set()
         if getattr(app.state, "selfevolve", None):
             app.state.selfevolve.stop.set()
+        if getattr(app.state, "kpis", None):
+            app.state.kpis.stop.set()
         terminal.close_all()
         workspace.stop_all()
 
@@ -1677,6 +1703,41 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.get("/api/performance")
     def performance_report(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         return performance.report()
+
+    # --- department KPIs (SPEC-01 FR-08, S01-R-06) ---
+    @app.get("/api/kpis")
+    def kpis_list(room: str = "", all: bool = False, _: dict[str, Any] = Depends(current_user)  # noqa: A002
+                  ) -> dict[str, Any]:
+        return {"kpis": kpis.list_kpis(room, include_disabled=all),
+                "metrics": [{"key": k, "label": m[0], "formula": m[1], "data_source": m[2], "unit": m[3],
+                             "direction": m[4]} for k, m in kpis.METRICS.items()],
+                "intervals": list(kpis.INTERVALS)}
+
+    @app.get("/api/kpis/{kpi_id}")
+    def kpi_detail(kpi_id: int, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return kpis.get(kpi_id) | {"comparison": kpis.compare(kpi_id)}
+
+    @app.post("/api/kpis")
+    def kpi_create(body: KpiBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = kpis.create(body.room, body.metric, body.target, name=body.name, definition=body.definition,
+                          direction=body.direction, interval=body.interval, actor=f"user:{admin['name']}")
+        _audit(admin, "kpi_create", out["id"], after={"room": out["room"], "metric": out["metric"],
+                                                      "target": out["target"], "interval": out["interval"]})
+        return out
+
+    @app.patch("/api/kpis/{kpi_id}")
+    def kpi_update(kpi_id: int, body: KpiPatch, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        before = kpis.get(kpi_id, history=0)
+        out = kpis.update(kpi_id, f"user:{admin['name']}", **body.model_dump(exclude_none=True))
+        keys = ("name", "target", "direction", "interval", "enabled")
+        _audit(admin, "kpi_update", kpi_id, before={k: before[k] for k in keys}, after={k: out[k] for k in keys})
+        return out
+
+    @app.post("/api/kpis/{kpi_id}/measure")
+    def kpi_measure(kpi_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = kpis.measure(kpi_id, f"user:{admin['name']}")
+        _audit(admin, "kpi_measure", kpi_id, after={"value": out["value"], "met": out["met"]})
+        return out
 
     @app.get("/api/evals")
     def evals(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:

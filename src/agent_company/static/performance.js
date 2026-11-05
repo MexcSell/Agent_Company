@@ -54,15 +54,49 @@ function operationsCard(o) {
   </table></div>`;
 }
 
+// SPEC-01 FR-08: department KPIs, each with its definition, formula, data source, target and interval; values over
+// time with the target they were judged against and the records they counted.
+const kpiFmt = (unit, v) => (v == null ? "–" : unit === "ratio" ? pct(v) : unit === "USD" ? money(v) : unit === "hours" ? `${Number(v).toFixed(1)} h` : String(Math.round(v * 100) / 100));
+function kpisCard(kp) {
+  const ev = (v) => Object.entries(v?.evidence || {}).map(([k, ids]) => `${k}: ${ids.join(", ")}`).join("\n");
+  const hist = (k) => [...k.history].reverse().slice(-8).map((v) => `<span class="${v.met === false ? "bad" : ""}" title="${esc(`${day(v.period_start)} – ${day(v.period_end)} · n=${v.samples} · target ${kpiFmt(k.unit, v.target)}\n${ev(v)}`)}">${v.value == null ? "·" : kpiFmt(k.unit, v.value)}${v.met === true ? "✓" : v.met === false ? "✗" : ""}</span>`).join(" ");
+  const row = (k) => `<tr><td>${esc(k.room_name)}</td><td title="${esc(`${k.definition}\nFormula: ${k.formula}\nData source: ${k.data_source}\nInterval: ${k.interval}`)}">${esc(k.name)}</td>
+      <td class="num" style="white-space:nowrap" title="${esc(k.latest ? `n=${k.latest.samples}\n${ev(k.latest)}` : "not measured yet")}">${kpiFmt(k.unit, k.latest?.value)}${k.change != null ? ` <span class="muted">${k.change >= 0 ? "+" : ""}${kpiFmt(k.unit === "ratio" ? "ratio" : "", k.change)}</span>` : ""}</td>
+      <td class="num" style="white-space:nowrap">${k.target == null ? "–" : `${k.direction === "higher" ? "≥" : "≤"} ${kpiFmt(k.unit, k.target)}`}</td><td>${k.latest?.met == null ? "" : pill(k.latest.met ? "done" : "failed").replace(/>[^<]+</, `>${k.latest.met ? "met" : "missed"}<`)}</td>
+      <td class="muted">${hist(k) || "–"}</td><td class="muted">${esc(k.interval)}</td>
+      <td>${me.is_admin ? `<span class="row nowrap">${ib("play", "Measure now", `data-kpi="measure" data-id="${k.id}"`, "sm")}${ib("edit", "Change the target", `data-kpi="target" data-id="${k.id}"`, "sm")}${ib("x", "Remove (disable)", `data-kpi="off" data-id="${k.id}"`, "sm")}</span>` : ""}</td></tr>`;
+  return `<div class="card" id="kpi-card"><div class="row nowrap"><h2 class="grow" style="margin:0">Department KPIs</h2>${me.is_admin ? ib("plus", "Add a KPI", 'id="kpi-add"', "sm") : ""}</div>
+    <p class="muted">Each room's measurements over its interval, never one score for an agent. Hover a KPI for its definition, formula and data source, a value for the records it counted; each value keeps the target it was judged against.</p>
+    <div class="table-wrap"><table><tr><th>Room</th><th>KPI</th><th class="num">Latest</th><th class="num">Target</th><th></th><th>History</th><th>Every</th><th></th></tr>${kp.kpis.map(row).join("") || '<tr><td colspan="8" class="muted">No KPIs defined.</td></tr>'}</table></div></div>`;
+}
+function kpisWire(kp) {
+  const again = () => viewPerformance();
+  const run = async (fn) => { try { await fn(); } catch (e) { toast(e.message); } again(); };
+  document.querySelectorAll("[data-kpi]").forEach((b) => (b.onclick = () => {
+    const id = b.dataset.id, k = kp.kpis.find((x) => String(x.id) === id);
+    if (b.dataset.kpi === "measure") run(() => api(`/api/kpis/${id}/measure`, { method: "POST" }));
+    else if (b.dataset.kpi === "target") { const v = prompt(`Target for ${k.name} (${k.direction} is better; empty = none)`, k.target ?? ""); if (v === null) return; run(() => api(`/api/kpis/${id}`, { method: "PATCH", body: v.trim() === "" ? { clear_target: true } : { target: Number(v) } })); }
+    else if (confirm(`Remove '${k.name}' of ${k.room_name}? Its history is kept.`)) run(() => api(`/api/kpis/${id}`, { method: "PATCH", body: { enabled: false } }));
+  }));
+  $("#kpi-add") && ($("#kpi-add").onclick = () => {
+    const room = prompt("Room key (e.g. development, security, analysis)", "development"); if (!room) return;
+    const metric = prompt(`Formula:\n${kp.metrics.map((m) => `${m.key} — ${m.label} (${m.unit}, ${m.direction} is better)`).join("\n")}`, kp.metrics[0].key); if (!metric) return;
+    const target = prompt("Target (empty = none)", ""); if (target === null) return;
+    const interval = prompt(`Interval: ${kp.intervals.join(", ")}`, "weekly"); if (!interval) return;
+    run(() => api("/api/kpis", { method: "POST", body: { room: room.trim(), metric: metric.trim(), interval: interval.trim(), target: target.trim() === "" ? null : Number(target) } }));
+  });
+}
+
 async function viewPerformance(quiet) {
   if (quiet && $("#ev-form")) return;
-  const [r, defects, certs, evals, rec] = await Promise.all([api("/api/performance"), api("/api/defects?status=open"), api("/api/certifications"), api("/api/evals"), api("/api/recruitment/effectiveness")]);
+  const [r, defects, certs, evals, rec, kp] = await Promise.all([api("/api/performance"), api("/api/defects?status=open"), api("/api/certifications"), api("/api/evals"), api("/api/recruitment/effectiveness"), api("/api/kpis").catch(() => null)]);
   const c = r.company;
   const k = (label, value) => `<div class="card kpi"><div class="label">${label}</div><div class="value">${value}</div></div>`;
   $("#view").innerHTML = `<div class="grid kpis">${k("Goals finished", `${c.finished} / ${c.goals}`)}${k("Pass rate", pct(c.pass_rate))}${k("Iterations to pass", c.avg_iterations_to_pass ?? "–")}${k("Cost per passed goal", c.cost_per_passed_goal === null ? "–" : money(c.cost_per_passed_goal))}${k("Open defects", c.open_defects)}</div>
     <div class="grid halves" style="margin-top:12px">
       <div class="grid"><div class="card"><h2>Open defects</h2><p class="muted">Detected → assigned (a writing task of the next iteration) → fix submitted → retested (the gate or a retest ran the check again in a fresh process) → closed at the merge. Priority 1 comes first.</p><div class="table-wrap"><table><tr><th>Priority</th><th>Severity</th><th>Status</th><th>Check</th><th>Goal</th><th>Iterations</th></tr>${defects.slice(0, 40).map((d) => `<tr><td>${me.is_admin ? `<select data-dprio="${d.id}" style="width:auto">${[1, 2, 3, 4, 5].map((p) => `<option ${p === d.priority ? "selected" : ""}>${p}</option>`).join("")}</select>` : `P${Number(d.priority)}`}</td><td>${pill(d.severity === "critical" || d.severity === "high" ? "failed" : "pending").replace(/>[^<]+</, `>${esc(d.severity)}<`)}</td><td>${pill(d.status)}${d.assignee ? `<div class="muted">${esc(d.assignee)}</div>` : ""}</td><td>${esc(d.check)}<div class="muted ellipsis" style="max-width:320px">${esc(d.detail.split("\n")[0])}</div>${me.is_admin ? `<div class="row" style="gap:4px;margin-top:4px">${defectActions(d)}</div>` : ""}</td><td><a href="#" data-goal="${d.goal_id}">#${d.goal_id}</a></td><td class="num">${d.first_iteration}–${d.last_iteration}</td></tr>`).join("") || '<tr><td colspan="6" class="muted">No open defects.</td></tr>'}</table></div></div>
       <div class="card"><h2>Rooms</h2><table><tr><th>Room</th><th class="num">Agents</th><th class="num">Tasks</th><th class="num">Completion</th><th class="num">Cost</th></tr>${r.rooms.map((x) => `<tr><td>${esc(x.name)}</td><td class="num">${x.agents}</td><td class="num">${x.tasks}</td><td class="num">${pct(x.completion_rate)}</td><td class="num">${money(x.cost)}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No work yet.</td></tr>'}</table></div>
+      ${kp ? kpisCard(kp) : ""}
       ${operationsCard(r.operations)}
       ${calibrationCard(r.calibration)}
       <div class="card"><h2>Eval harness</h2><p class="muted">Runs a suite of checkable tasks several times in fresh repositories; a task is solved only if every run passes. Compare labels to see whether a model or routing change helped.</p>
@@ -73,6 +107,7 @@ async function viewPerformance(quiet) {
       <div class="card"><h2>Certification</h2><p class="muted">L0 not evaluated · L2 simple tasks · L3 ordinary tasks alone · L4 advanced · L5 expert across demanding evaluations. Levels need repeated evidence and drop after ${90} days without new evidence.</p><div class="table-wrap"><table><tr><th>Agent</th><th>Skill family</th><th>Level</th><th class="num">Evidence</th></tr>${certs.filter((x) => x.level > 0).map((x) => `<tr><td>${esc(x.agent)}</td><td>${esc(x.skill_family)}</td><td><span class="pill ${x.level >= 3 ? "done" : "info"}" title="${esc(x.meaning)}">L${x.level}</span>${x.expired ? ' <span class="pill pending">expired</span>' : ""}</td><td class="num">${x.evidence.passed}/${x.evidence.outcomes} passed · ${x.evidence.goals} goals</td></tr>`).join("") || '<tr><td colspan="4" class="muted">No evidence yet.</td></tr>'}</table></div></div>
       <div class="card"><h2>Recruitment effectiveness</h2><p class="muted">Recruits that finished probation: ${rec.passed}/${rec.finished} passed (${pct(rec.pass_rate)}). A recruit passes after 3 verified tasks and is retired after 2 failed ones.${rec.qualification_runs ? ` Qualification runs: ${rec.qualified}/${rec.qualification_runs} passed; evaluation cost $${(rec.evaluation_cost_usd || 0).toFixed(2)}.` : ""}</p><div class="table-wrap"><table><tr><th>Recruit</th><th>Role</th><th>Probation</th><th class="num">Passed</th><th class="num">Failed</th></tr>${rec.recruits.map((x) => `<tr><td><a href="#" data-agent="${x.agent_id}">${esc(x.agent)}</a></td><td>${esc(x.role)}</td><td>${esc(x.state)}</td><td class="num">${x.passed_tasks ?? "–"}</td><td class="num">${x.failed_tasks}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No recruit yet.</td></tr>'}</table></div></div></div></div>`;
   document.querySelectorAll("[data-goal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); goalModal(Number(a.dataset.goal)); }));
+  kp && kpisWire(kp);
   document.querySelectorAll("[data-agent]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); agentModal(Number(a.dataset.agent)); }));
   bindDefectActions($("#view"), viewPerformance);
   document.querySelectorAll("[data-label]").forEach((a) => (a.onclick = async (e) => { e.preventDefault(); evalSummary(await api(`/api/evals/${encodeURIComponent(a.dataset.label)}`)); }));
