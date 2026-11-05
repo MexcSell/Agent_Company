@@ -6,7 +6,7 @@ Kinds are in `registry.KINDS`. Inferred ones come from profiles: `similar` (role
 certification) and becomes observed when a mentoring is recorded (mentoring.py). Observed kinds are written as
 side effects of finished work, never from message counts (§18.1):
 
-  reviewed_by     a QA or security task depended on a writer's task: writer reviewed_by reviewer
+  reviewed_by     a reviewing role's task (QA, security) depended on a writer's task: writer reviewed_by reviewer
   depends_on      any other task dependency between two agents: dependant depends_on dependency
   handover_to     a task moved to another agent between iterations (loop._handover)
   research_partner  two research tasks of a goal that passed the gate
@@ -26,8 +26,7 @@ from sqlalchemy.orm import Session
 
 from agent_company import registry
 from agent_company.db import Agent, Event, Lesson, Relationship, Task, log_event, now, session
-
-REVIEW_ROLES = {"qa", "security"}
+from agent_company.quality import REVIEW_ROLES
 OBSERVED_GAIN = 0.1
 COMPLEMENTARY = 3  # complementary specialists linked to a new agent
 

@@ -114,7 +114,9 @@ S11-R-06 done · S11-R-07 done · S11-R-08 open.
   (depth ≤ 3, nearest first) and pages the edges with the nodes they touch (KT-019). The Knowledge view has a
   graph explorer (from an item, or any `type:id`; click a node to centre on it). `DEPENDS_ON` between
   entities is not written yet (task dependencies are agent links in SPEC-12); research documents and incidents
-  are not linked yet.
+  are not linked yet. Known limitation: `kg_edges` has no unique index (`_add_missing_columns` cannot add one),
+  so two tasks of one goal running in parallel may both write the same `goal USED knowledge` edge; harmless
+  (it shows twice), a unique index is a later migration if it matters.
 
 ### S11-R-08 Retrieval evaluation — §8.3, KT-023
 - A small eval set (`evals/retrieval.json`: task → expected knowledge IDs) and a metric

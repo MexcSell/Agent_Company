@@ -172,7 +172,9 @@ The rest: `loop.py` (the circular goal loop), `projects.py` (projects, command
 window, proposals), `checks.py` (secret, syntax and scope checks), `learning.py` and
 `evolution.py` (lessons, versioned playbooks, experiments, clone merging),
 `experiments.py` (baseline-vs-candidate experiments, canary, rollback), `training.py`
-(capability gaps, learning plans, learning metrics),
+(capability gaps, learning plans, learning metrics), `network.py` (relationships between
+agents with their evidence), `mentoring.py` (mentors for learning plans), `kgraph.py`
+(the knowledge graph),
 `performance.py` (defects, certification, metrics), `evaluation.py` (eval harness),
 `research.py` (crawler, knowledge, source kinds, injection flags, reports, rotation),
 `governance.py` (audit log, notifications, command policy), `prefs.py` (settings),
@@ -311,8 +313,26 @@ models through Ollama (`ollama/<model>` plus `OLLAMA_API_BASE`). The Codex CLI
   goal, idle clones merge their XP, skills, task counts and lessons back into the
   original and retire. **Merge idle clones** on the Evolution page does the same
   for a whole role.
-- **Team compatibility:** staffing scores candidates by skill coverage, level,
-  success rate and how well they have worked with the agents already on the goal.
+- **Team compatibility and fair staffing:** staffing scores candidates by skill
+  coverage, level, how well they have worked with the agents already on the goal,
+  and quality (the success rate over their last 20 verified task outcomes, so old
+  failures fade), minus the goals they are already working on. An agent with fewer
+  than 3 outcomes gets the pool's average quality: no bonus, no penalty. Now and
+  then (`explore_rate`, default 10 %) a non-critical task of a user's goal goes to
+  such a new agent so it can build a record. Each task keeps its staffing decision
+  with every candidate's score.
+- **Relationships:** agents are linked by kind, each with the evidence that made
+  it: `similar` and `complementary_skill` (inferred from profiles), `collaborated`
+  (only goals that passed the gate), `reviewed_by`, `depends_on`, `handover_to`,
+  `research_partner` and `knowledge_contributor` (observed in finished work), and
+  `mentored_by`. Each piece of evidence counts once. A new agent is linked to
+  similar agents, to the specialists of other roles its peers work with, and to a
+  mentor candidate (the most certified agent of its role). Administrators can
+  correct a link's weight or expire it, with a reason, on the agent card's
+  Relationships tab (audited).
+- **Mentoring:** a learning plan gets a mentor when the learner has one. The mentor
+  reads the practice results and writes advice (what to study, what to practise);
+  people can add advice too. It never grades: only the final evaluation certifies.
 - **Handovers:** when a task is retried in the next iteration, the agent gets a
   handover package (previous agent, status, files changed, known problems, commit,
   next actions); a handover between two different agents is recorded on both cards.
@@ -470,6 +490,10 @@ they order are committed and merged under that identity and pushed to that branc
   lesson came from. Search, approve or reject, write a new version, or delete an
   item. Lessons that contradict each other appear side by side; you decide which
   holds (or both) and give a reason, and until then both rank lower in prompts.
+  The graph button (or a `type:id` such as `agent:3`, `goal:12`, `skill:testing`)
+  opens the knowledge graph around it: who created an item, what it applies to,
+  which goals used it, which tasks an agent was assigned, what supports a
+  decision. Click a node to centre on it.
 - **Goal trace**: the clock button on a goal shows every run, gate result,
   decision and operation on one time line, with totals per agent and model.
 - **Command policy**: quality commands, project commands and check commands are

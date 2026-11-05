@@ -74,7 +74,7 @@ Machines code):
 | Prompt-injection flags on collected material; flagged pages kept out of prompts; material wrapped as untrusted data | SPEC14 §9, SPEC11 §10.4 | done (`research.injection_flags`) |
 | Knowledge provenance and source kinds (no single trust score, per ASEAO06 §9.2) | ASEAO06 §9, SPEC11 §6 | done (`research.classify_source`) |
 | Research requests producing a cited research report | ASEAO06 §5-6 | done (`research.request_report`, `run_report`) |
-| Team compatibility: prefer agents that worked well together | SPEC12 §7 | done (`registry._skill_score` team utility; weight only from verified outcomes, once per goal, S12-D-01) |
+| Team compatibility: prefer agents that worked well together | SPEC12 §7 | done (`registry._rank` team utility; weight only from verified outcomes, once per goal, S12-D-01) |
 | Task handover package when work moves to another agent | SPEC12 §10 | done (`loop._handover`, `handovers` table) |
 | Capability certification from evaluations (L0-L5, expiry) | SPEC13 §9 | done (`performance.certification`) |
 | Defect records from failed checks, closed when fixed, reopened on regression | ASEAO09 §11 | done (`performance.track_defects`) |
