@@ -31,9 +31,9 @@ and SPEC-15 dashboard; SPEC-02 feeds SPEC-03 recruitment and SPEC-04 orchestrati
 | S01-FR-01 | Company registration and configuration | P0 | skip: one organization per installation; settings via `prefs.py` |
 | S01-FR-02 | Department management (hierarchy, no cycles, history) | P0 | done (`organization.create_room`, `update_room`, S01-R-01) |
 | S01-FR-03 | Executive positions independent of agent identity | P0 | done: roles outlive agents (clones, retirement); room leads and project GMs keep a position history (`position_changes`, S01-R-02) |
-| S01-FR-04 | Reporting structure, formal vs project collaboration | P0 | partial: `superior_id` (formal), `relationships` (collaboration) |
+| S01-FR-04 | Reporting structure, formal vs project collaboration | P0 | done: formal through `superior_id` and the room hierarchy (`parent_key`, leads, S01-R-01); project collaboration through each project's GM (`manager_id`, S05-R-09), a goal's team (`teams.py`, S04-R-11) and the observed relationships (`collaborated_with`, SPEC-12) |
 | S01-FR-05 | Role and responsibility definitions | P0 | done (`org.ROLES` role specs) |
-| S01-FR-06 | Authority and permission management | P0 | partial: user permissions done; agent autonomy → SPEC-14 S14-R-02 |
+| S01-FR-06 | Authority and permission management | P0 | done: user permissions, delegated approval rights (S01-R-03), agent permissions and autonomy G0-G4 through the tool gateway (SPEC-14 S14-R-02, S14-R-06) |
 | S01-FR-07 | Company objectives decomposed to departments | P0 | gated (goals are per project) |
 | S01-FR-08 | Department KPIs | P1 | done (`kpis.py`, S01-R-06) |
 | S01-FR-09 | Delegation (scope, expiry, revocable) | P0 | done (`policies.delegate`, `allows`, S01-R-03) |
