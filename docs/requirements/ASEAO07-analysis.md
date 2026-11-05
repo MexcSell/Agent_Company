@@ -61,6 +61,20 @@ reliable. The requirements below are the parts the core pipeline needs now.
 - Output: confirmed causes vs plausible contributing factors (never correlation as cause),
   corrective actions as proposals, and a follow-up check whether the action worked.
 - Stored as a knowledge item of type `operational` (SPEC-11).
+- **Status: done** (`rca.py`, from `loop._notify_goal`; `GET /api/goals/{id}` → `rca`, the goal page's "Root-cause
+  analysis"; `tests/test_rca.py`). Triggers: a goal failed with all its iterations used, or the same check (not a
+  per-plan `task …` check) failed in the last `STREAK` (3) finished goals of a project; the streak is analysed once
+  (again only after three more failing goals), and when both hold the streak analysis covers the goal. Benchmark
+  and improvement goals are left out. The platform collects the evidence: per goal its status and iterations, the
+  defects with their iterations and detail, the last iteration's tasks (role, agent, status/stage, dependencies,
+  estimated against actual minutes, failed conditions), failed runs, error and escalation events and the goal's
+  open blockers, each with a reference. The General Manager answers with `CONFIRMED:`, `CONTRIBUTING:`, `ACTION:`
+  and `FOLLOW_UP:` lines; a confirmed cause that cites no reference of the pack is kept as contributing with the
+  reason (correlation is not cause). The analysis is a knowledge item of kind `operational`, class `INFERENCE`,
+  screened like every lesson; up to three actions become pending proposals (only when the item passed the
+  screen). Follow-up: when a goal spawned from one of them ends, the action is marked `worked` (it passed and none
+  of the watched checks failed) or `did not work` with the checks still failing. Not taken: the analysis room
+  (gated); the General Manager analyses until it is enabled.
 
 ### S07-R-03 Hypotheses — §9 (AT-008)
 - `hypotheses` (or knowledge items of class `HYPOTHESIS`): statement, reason, supporting and

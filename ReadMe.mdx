@@ -455,6 +455,13 @@ models through Ollama (`ollama/<model>` plus `OLLAMA_API_BASE`). The Codex CLI
   file of tasks with seed files and check commands; eval goals never merge, push
   or notify. The offline simulator solves none of the bundled tasks, on purpose:
   they need real code.
+- **Root-cause analysis:** a goal that used all its iterations, or a check that failed
+  in three goals of a project in a row, gets an analysis: the platform collects the
+  evidence (defects, tasks with estimated and actual time, failed runs, errors,
+  blockers), the General Manager names confirmed causes (each citing that evidence;
+  without it a cause only counts as contributing) and corrective actions, which
+  become proposals. The analysis is stored as knowledge and shown on the goal page;
+  when an action's goal ends, it records whether the action worked.
 - **Estimate accuracy:** the planner's `estimated_minutes` per task and a goal's
   estimated cost are predictions; the Performance page compares them with the time
   the task's runs took (per role) and the goal's model cost: samples, median ratio,

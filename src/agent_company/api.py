@@ -48,6 +48,7 @@ from agent_company import (
     policies,
     prefs,
     projects,
+    rca,
     recruitment,
     registry,
     requirements,
@@ -1089,7 +1090,7 @@ def create_app(start_background: bool = True) -> FastAPI:
             if q is not None:
                 q.submit(goal)
             else:
-                threading.Thread(target=_run_quietly, args=(goal,), daemon=True).start()
+                threading.Thread(target=_run_quietly, args=(goal,), daemon=True, name=f"goal-{goal}").start()
         headers = {"WWW-Authenticate": 'Bearer realm="a2a"'} if status == 401 else None
         return JSONResponse(out, status_code=status, headers=headers)
 
@@ -1911,7 +1912,7 @@ def create_app(start_background: bool = True) -> FastAPI:
         if q is not None:
             q.submit(gid)
         else:
-            threading.Thread(target=_run_quietly, args=(gid,), daemon=True).start()
+            threading.Thread(target=_run_quietly, args=(gid,), daemon=True, name=f"goal-{gid}").start()
         return {"id": gid}
 
     @app.get("/api/goals/{goal_id}")
@@ -1937,6 +1938,7 @@ def create_app(start_background: bool = True) -> FastAPI:
         d["budget"] = budgets.summary(goal_id)
         d["team"] = teams.history(goal_id)
         d["time"] = management.goal_time(goal_id)  # S05-R-05
+        d["rca"] = rca.list_analyses(goal_id=goal_id)  # S07-R-02
         return d
 
     # --- knowledge items (SPEC-11): lessons with provenance; people review, agents never do ---

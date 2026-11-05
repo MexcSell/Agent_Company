@@ -308,7 +308,7 @@ class Lesson(Base):
     agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
     goal_id: Mapped[int | None] = mapped_column(ForeignKey("goals.id"), nullable=True)
     text: Mapped[str] = mapped_column(Text)
-    outcome: Mapped[str] = mapped_column(String(16))  # success|failure|research
+    outcome: Mapped[str] = mapped_column(String(16))  # success|failure|research|analysis (rca.py)
     # a knowledge item (SPEC-11 S11-R-01): kind, evidence class, provenance, review status, classification
     kind: Mapped[str] = mapped_column(String(16), default="episodic")
     # episodic|semantic|procedural|architectural|research|operational|capability|organizational|negative

@@ -62,7 +62,8 @@ def curate(s: Session, agent_id: int, failures_first: bool = False) -> str:
     # leave their project feed it (S11-R-05, SPEC-14 S14-R-05). Confidential lessons stay retrievable in their
     # own project only (learning.retrieve).
     cutoff = now().replace(tzinfo=None)
-    for lesson in s.scalars(select(Lesson).where(Lesson.agent_id == agent_id, Lesson.outcome != "research",
+    for lesson in s.scalars(select(Lesson).where(Lesson.agent_id == agent_id,
+                                                 Lesson.outcome.not_in(("research", "analysis")),
                                                  Lesson.status == "approved",
                                                  Lesson.classification.in_(["public", "internal"]))
                             .order_by(Lesson.id.desc()).limit(60)):
@@ -147,7 +148,8 @@ def _after_task(agent_id: int, success: bool) -> None:
             return
         _flag_unreliable(s, a)
         since = s.scalar(select(func.max(PlaybookVersion.created_at)).where(PlaybookVersion.agent_id == a.id))
-        q = select(func.count()).select_from(Lesson).where(Lesson.agent_id == a.id, Lesson.outcome != "research")
+        q = select(func.count()).select_from(Lesson).where(Lesson.agent_id == a.id,
+                                                            Lesson.outcome.not_in(("research", "analysis")))
         if since is not None:
             q = q.where(Lesson.created_at > since)
         fresh = s.scalar(q) or 0

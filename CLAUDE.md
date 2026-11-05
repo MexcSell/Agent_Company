@@ -56,7 +56,8 @@ feature came from.
   certification only from the harness; learning metrics); `selfevolve.py` (verified self-evolution of the platform's own code: improvement contracts, protected
   control plane, failure layers, a fixed benchmark from `benchmarks/` run on the base and candidate commits, approval,
   deploy via the safe restart, monitoring, rollback; docs/requirements/SELF-EVOLUTION.md); `performance.py` (defects, certification,
-  metrics); `evaluation.py` (eval harness); `research.py` (crawl, knowledge, sources with monitoring rules: versions on change, intelligence events; shifts on the
+  metrics, estimate accuracy); `rca.py` (S07-R-02 root-cause analysis of failed goals and repeated failing checks:
+  evidence pack, causes that must cite it, actions as proposals, follow-up); `evaluation.py` (eval harness); `research.py` (crawl, knowledge, sources with monitoring rules: versions on change, intelligence events; shifts on the
   rotation with handover packages, `research_shifts`; research requests with priority, deadline, budget, recurrence and
   duplicate detection, run by `ReportThread`); `governance.py` (audit, notifications,
   command policy, emergency stops E0-E5, incidents, behaviour-rule alerts); `prefs.py` (DB settings); `gitsync.py` (push with each user's own GitHub token or SSH key, `data/git-keys/`); `files.py`; `supervisor.py` + `system.py`;

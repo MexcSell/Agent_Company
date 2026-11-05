@@ -49,8 +49,8 @@ def test_every_lesson_of_a_goal_carries_a_structured_experience_report():
 def test_a_failed_task_reports_its_failures():
     gid = loop.create_goal("Broken", quality_commands=["test -f MISSING.md"], max_iterations=1)
     loop.run_goal(gid)
-    with session() as s:
-        items = s.scalars(select(Lesson).where(Lesson.goal_id == gid)).all()
+    with session() as s:  # the goal's root-cause analysis (rca.py) is an item of its own, without a task report
+        items = s.scalars(select(Lesson).where(Lesson.goal_id == gid, Lesson.outcome != "analysis")).all()
     assert items and all(i.report["outcome"] == "failed" and i.report["failures"] for i in items)
 
 

@@ -669,6 +669,20 @@ class OfflineExecutor(Executor):
                 f"'{req.data.get('skill', 'the skill')}' passed. Study {study}, then repeat the exercises that failed "
                 "before the final evaluation.")
 
+    def _rca(self, req: Request) -> str:
+        """Root-cause analysis (rca.py): the most repeated failing check as the confirmed cause, failed runs as
+        contributing; one corrective action."""
+        refs = [ref for ref, _ in req.data.get("items") or []]
+        watch = list(req.data.get("watch") or [])
+        lines = [f"CONFIRMED: '{c}' kept failing | check:{c}" for c in watch[:1] if f"check:{c}" in refs]
+        runs = [r for r in refs if r.startswith("run:")][:2]
+        lines.append("CONTRIBUTING: " + ("model runs failed | " + ", ".join(runs) if runs
+                                         else "the plan may have been too large for the iterations given"))
+        if watch:
+            lines += [f"ACTION: Make '{watch[0]}' pass before new work :: it failed in every iteration",
+                      f"FOLLOW_UP: '{watch[0]}' passes in the action's goal"]
+        return "\n".join(lines)
+
     def _report(self, req: Request) -> str:
         docs = req.data.get("documents") or []
         findings = "\n".join(f"{i}. {d['title'] or d['url']} is relevant [{i}]." for i, d in enumerate(docs, 1))

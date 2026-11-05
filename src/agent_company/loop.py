@@ -23,8 +23,8 @@ from typing import Any
 from sqlalchemy import select
 
 from agent_company import (adr, blackboard, budgets, contracts, decisions, executors, learning, network, quality,
-                           recruitment, registry, requirements, research, router, sandbox, specs, strategies, teams,
-                           usage, workflow, worktrees)
+                           rca, recruitment, registry, requirements, research, router, sandbox, specs, strategies,
+                           teams, usage, workflow, worktrees)
 from agent_company.config import settings
 from agent_company.db import Agent, Event, Goal, Task, log_event, session
 from agent_company.org import ROLES
@@ -1690,6 +1690,7 @@ def _notify_goal(goal_id: int, status: str) -> None:
             "failed": ("error", f"Goal #{g.id} failed after {g.iteration} iteration(s)")}[status]
     notify(text[1], g.title, level=text[0], source="goal", goal_id=g.id,
            project_id=getattr(g, "project_id", None))
+    rca.after_goal(goal_id, status)  # S07-R-02: follow up earlier analyses; analyse a failure when a trigger holds
 
 
 def _discard_iteration(goal_id: int, iteration: int) -> None:

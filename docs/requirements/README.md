@@ -90,7 +90,8 @@ the order is safety and correctness of that pipeline first, then management, the
    S04-R-12 with S14-R-08: every tool call of a CLI run in the trace, done 2026-11-05.
    S14-R-07 L3 isolation (bubblewrap sandbox for checks and benchmarks, with SE-R-22) done 2026-11-05.
    S09-R-04 independent verification evidence per gate command done 2026-11-05, then S09-R-06 checks naming the
-   requirements they test, and S08-R-02 Architecture Decision Records. S07-R-04 estimate accuracy per role.
+   requirements they test, and S08-R-02 Architecture Decision Records. S07-R-04 estimate accuracy per role, then
+   S07-R-02 root-cause analysis of failing goals.
 5. **Still open** (2026-11-05): the gated rooms one at a time (G-R-04); L3 for the agent CLIs themselves
    (they need network and their logins, see the threat model's known gaps).
 
