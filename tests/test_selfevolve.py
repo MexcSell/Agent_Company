@@ -231,3 +231,41 @@ def selfevolve_app():
     from agent_company.api import create_app
 
     return create_app(start_background=False)
+
+
+def test_improvement_goal_never_merges_by_itself(tmp_path, monkeypatch):
+    """Even with require_approval off and its decision approved early, only approve() (after verify) merges it."""
+    from agent_company import config
+
+    monkeypatch.setenv("REQUIRE_APPROVAL", "0")
+    config.reset_settings()
+    r = tmp_path / "p"
+    r.mkdir()
+    worktrees.git(r, "init", "-q", "-b", "main")
+    (r / "a.txt").write_text("x")
+    worktrees.git(r, "add", ".")
+    worktrees.git(r, "commit", "-q", "-m", "init")
+    head = worktrees.git(r, "rev-parse", "HEAD")
+    gid = loop.create_goal("Improve it", repo_path=str(r), quality_commands=[], origin="improvement")
+    d = decisions.record(gid, "Deploy", "after verification", requires_human_approval=True)
+    decisions.decide(d["id"], True, "someone")
+    loop.run_goal(gid)
+    assert loop._goal(gid).status == "awaiting_approval"  # a user goal here would auto-merge
+    assert worktrees.git(r, "rev-parse", "HEAD") == head
+
+
+def test_failed_auto_rollback_stops_and_waits_for_a_person(repo, monkeypatch):
+    from agent_company import supervisor
+
+    c = _contract(repo)
+    _fake_agents(monkeypatch, {"src/mylib/__init__.py": "ACC = 0.9\nLAT = 10\n"})
+    selfevolve.start(c["id"])
+    c = selfevolve.deploy(c["id"], "luca")
+    (repo / "src" / "mylib" / "__init__.py").write_text("ACC = 0.9\nLAT = 10\n# edited by hand\n")  # dirty tree
+    later = c["deployment"]["at"] + 5
+    monkeypatch.setattr(supervisor, "read_state", lambda: {"running": True, "last_error": "boom",
+                                                           "last_error_at": later, "last_restart": None})
+    selfevolve._monitor(c["id"])
+    c = selfevolve.get(c["id"])
+    assert c["status"] == "monitoring" and any("automatic rollback failed" in p for p in c["monitor"]["problems"])
+    assert selfevolve.advance() == 0  # not retried every tick

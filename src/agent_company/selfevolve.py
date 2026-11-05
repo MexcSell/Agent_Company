@@ -759,18 +759,28 @@ def _monitor(cid: int) -> None:
 
     c = get(cid)
     dep, mon = dict(c["deployment"]), dict(c["monitor"])
+    i = dep["candidate"] - 1
+    changed = (c["candidates"][i].get("report") or {}).get("changed_files", [])
+    needs_restart = any(f.startswith("src/") and f.endswith(".py") for f in changed)  # the supervisor watches *.py
     st = supervisor.read_state()
-    if st and st.get("running"):
+    if st and st.get("running") and needs_restart:
         failed_at = st.get("last_error_at") or 0
         if failed_at > dep["at"]:
             dep["check"] = f"refused: {st.get('last_error')}"[:500]
             _set(cid, deployment=dep)
+            problem = ""
             if settings().improvement_auto_rollback:
-                rollback(cid, "monitor", f"the safe restart refused the deployment: {st.get('last_error')}"[:500])
-            else:
-                with session() as s:
-                    notify(f"Improvement #{cid}: deployment refused", str(st.get("last_error"))[:1000],
-                           level="error", source="evolution", admin_only=True, s=s)
+                try:
+                    rollback(cid, "monitor", f"the safe restart refused the deployment: {st.get('last_error')}"[:500])
+                    return
+                except ValueError as e:  # e.g. uncommitted changes: stop retrying, a person takes over
+                    problem = f"automatic rollback failed: {e}"
+            _set(cid, monitor={**mon, "problems": [f"the safe restart refused the deployment: {st.get('last_error')}"
+                                                   [:500]] + ([problem] if problem else [])})
+            with session() as s:
+                notify(f"Improvement #{cid}: deployment refused", f"{st.get('last_error')}"[:800] + (
+                       f" {problem}" if problem else " Roll it back on Evolution -> Code evolution."),
+                       level="error", source="evolution", admin_only=True, s=s)
             return
         if (st.get("last_restart") or 0) <= dep["at"]:
             if time.time() - dep["at"] > 3 * 3600:
@@ -778,13 +788,14 @@ def _monitor(cid: int) -> None:
                 _set(cid, deployment=dep)
             return  # the restart waits for running goals
         dep["check"] = "running the new code"
+    elif not needs_restart:
+        dep["check"] = "live (no Python change, no restart needed)"
     else:
         dep["check"] = "not supervised: restart the service to load it"
     if "metrics" not in mon:
         with session() as s:
             bench = s.get(ImprovementContract, cid).benchmark
         got = measure(c["repo_path"], {"deployed": dep["sha"]}, bench, _work_dir(cid))["deployed"]
-        i = dep["candidate"] - 1
         verified = (c["candidates"][i].get("report") or {}).get("metrics", [])
         expected = {r["metric"]: r["candidate"] for r in verified}
         guard = compare(expected, got["metrics"], bench, {"min_score": -1e9, "max_regression": 100 *

@@ -1049,7 +1049,9 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                     _update_goal(goal_id, status="approved", result=_summary(goal_id, iteration, report))
                     return {"status": "approved", "iterations": iteration, "report": report}
                 waiting = decisions.blocking(goal_id)
-                status = "awaiting_approval" if report["needs_approval"] or waiting else "approved"
+                # an improvement candidate reaches main only through approve(): verified first (selfevolve)
+                held = waiting or goal.origin == "improvement"
+                status = "awaiting_approval" if report["needs_approval"] or held else "approved"
                 note = ""
                 if status == "approved":  # merge before the final state: a refused merge leaves it for a person
                     try:
