@@ -372,7 +372,11 @@ def _research(goal: Goal, iteration: int, feedback: str) -> str:
                   goal_id=goal.id)
     if not docs and iteration == 1:
         return ""
-    agent = registry.staff("research", ["research"], goal.id)
+    try:
+        agent = registry.staff("research", ["research"], goal.id)
+    except registry.QuotaExceeded as e:  # research notes are optional: go on without them
+        log_event("research", f"no research notes: {e}", goal_id=goal.id)
+        return ""
     try:
         listing = "\n\n".join(
             f'<document url="{d["url"]}" kind="{d["category"]}" collected="{d["collected_at"][:10]}">\n{d["text"]}\n</document>'
@@ -1224,12 +1228,17 @@ def resume_after_quota() -> list[int]:
     with session() as s:
         ids = [g.id for g in s.scalars(select(Goal).where(Goal.status == "paused"))
                if (g.checkpoint or {}).get("paused_for") == "quota" and (g.checkpoint or {}).get("paused_day", today) < today]
+    resumed = []
     for gid in ids:
         try:
             resume(gid, "quota reset")
-        except ValueError as e:  # still over budget, say
+            resumed.append(gid)
+        except ValueError as e:  # over its budget meanwhile: from now on it waits for an administrator, like that
+            with session() as s:
+                row = s.get(Goal, gid)
+                row.checkpoint = {**(row.checkpoint or {}), "paused_for": "budget", "paused_why": str(e)}
             log_event("goal", f"not resumed after the quota reset: {e}", goal_id=gid)
-    return ids
+    return resumed
 
 
 def _budget_skipped(goal_id: int, iteration: int) -> bool:

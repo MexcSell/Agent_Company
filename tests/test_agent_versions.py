@@ -271,3 +271,26 @@ def test_a_goal_waits_for_a_quota_and_resumes_the_next_day():
         lp.enqueue = lp_enqueue
     assert loop._goal(gid).status == "queued" and ran == [gid]
     assert loop.run_goal(gid)["status"] == "awaiting_approval"
+
+
+def test_a_quota_paused_goal_over_its_budget_waits_for_a_person_instead():
+    from agent_company import loop, prefs
+    from agent_company.db import Event, Goal
+
+    dev = _agent()
+    registry.update_agent(dev, {"daily_cost_quota_usd": 0.5})
+    _spend(dev, 0.6)
+    gid = loop.create_goal("Write the worklog", quality_commands=["test -f WORKLOG.md"])
+    assert loop.run_goal(gid)["status"] == "paused"
+    usage.record(model_name="Offline simulator", kind="offline", cost=5.0, agent_id=dev, goal_id=gid)
+    prefs.set_value("goal_budget_usd", 1.0)
+    with session() as s:
+        row = s.get(Goal, gid)
+        row.checkpoint = {**row.checkpoint, "paused_day": "2000-01-01"}
+    assert loop.resume_after_quota() == []
+    assert loop._goal(gid).checkpoint["paused_for"] == "budget"
+    with session() as s:
+        before = len(s.scalars(select(Event).where(Event.goal_id == gid)).all())
+    assert loop.resume_after_quota() == []
+    with session() as s:
+        assert len(s.scalars(select(Event).where(Event.goal_id == gid)).all()) == before, "not retried every 5 s"

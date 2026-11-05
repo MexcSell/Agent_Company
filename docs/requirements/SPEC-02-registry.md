@@ -105,5 +105,6 @@ heartbeat, they run per task), AT-016, AT-019 (paused, then resumed the next day
   works on any. The quota covers the agent and its clones together (a clone would otherwise bypass it), counts
   `Run.cost` since 00:00 UTC, and staffing neither clones nor reuses an agent past it. AT-019: a task whose role is
   out of quota is skipped, the iteration is not judged, and the goal is paused (`paused_for: quota`); it goes back
-  to the queue by itself on the next UTC day, or when an administrator raises the quota and resumes it. A planner
-  out of quota pauses the goal the same way. Both settings are configuration versions.
+  to the queue by itself on the next UTC day, or when an administrator raises the quota and resumes it (a goal
+  over its budget by then waits for an administrator as a budget pause). A planner out of quota pauses the goal the
+  same way; a research agent out of quota only means no research notes. Both settings are configuration versions.
