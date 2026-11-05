@@ -19,7 +19,7 @@ from typing import Any
 from sqlalchemy import select
 
 from agent_company import checks as checks_mod
-from agent_company import contracts, strategies, worktrees
+from agent_company import contracts, sandbox, strategies, worktrees
 from agent_company.config import settings
 from agent_company.db import Goal, Task, session
 
@@ -139,11 +139,14 @@ def baseline(goal_id: int) -> dict[str, Any]:
         if strategies.skips_checks(goal):  # S04-R-11: a template whose goals change no files runs no commands
             commands = []
         worktree, done = Path(goal.worktree), dict(goal.baseline or {})
+        mode = sandbox.mode_for(goal, s=s)
     out = dict(done)
     for cmd in commands:
         if cmd not in out:
-            ok, detail = contracts.run_command(split_stage(cmd)[1], worktree, settings().command_timeout)
-            out[cmd] = {"passed": ok, "detail": detail[-800:]}
+            info: dict[str, Any] = {}
+            ok, detail = contracts.run_command(split_stage(cmd)[1], worktree, settings().command_timeout,
+                                               mode=mode, info=info)
+            out[cmd] = {"passed": ok, "detail": detail[-800:], "isolation": info.get("isolation", "")}
     with session() as s:
         s.get(Goal, goal_id).baseline = out
     return out
@@ -162,6 +165,7 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
         allowed, protect, baseline = list(goal.allowed_paths or []), bool(goal.protect_tests), dict(goal.baseline or {})
         permits = list(goal.permits or [])
         ordered_by = goal.created_by
+        mode = sandbox.mode_for(goal, s=s)
         rows = [(t.key, t.title, t.role, t.status, t.output, dict(t.gate or {})) for t in tasks]
         from agent_company.recruitment import on_probation
 
@@ -210,11 +214,12 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
                 feedback.append(f"{c['check'].capitalize()} check failed:\n{c['detail']}")
     for cmd in commands:
         stage, run = split_stage(cmd)
-        ok, detail = contracts.run_command(run, worktree, settings().command_timeout)
+        info: dict[str, Any] = {}
+        ok, detail = contracts.run_command(run, worktree, settings().command_timeout, mode=mode, info=info)
         before = baseline.get(cmd)
         preexisting = not ok and before is not None and not before.get("passed")
         row = {"check": f"command {run}", "passed": ok, "detail": detail[-1500:], "stage": stage,
-               "baseline_passed": bool(before and before.get("passed"))}
+               "baseline_passed": bool(before and before.get("passed")), "isolation": info.get("isolation", "")}
         if preexisting:
             row["preexisting"] = True
             row["detail"] = "already failing before the agents started\n" + row["detail"]

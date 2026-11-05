@@ -692,9 +692,18 @@ Next.js front end only when one machine is no longer enough.
   and an agent at G0 runs nothing (agent card → Permissions; only administrators change
   them). Each run records its isolation level (L0 text, L1 read-only tools, L2 worktree
   writes), its tools and what was withheld, shown in the goal trace.
+- Quality commands, acceptance commands, milestone checks and code-improvement benchmarks
+  run the agents' code in the L3 sandbox (bubblewrap): no network, only system
+  directories and toolchains read-only, the worktree writable with its `.git` read-only,
+  no `data/` or `.env`, no credentials in the environment, memory/process/CPU limits.
+  Setting `sandbox`: `auto` (default; falls back to the host and marks the check `L2`),
+  `required` (never on the host) or `off`; a project may only tighten it, A2A work always
+  requires it. A changed `uv.lock`/`package-lock.json` is installed first, with network,
+  into the sandbox's own cache (`data/sandbox/home`). Security view shows its state.
 - Claude Code's Bash access is limited to tests and read-only git; Codex runs in its
-  `workspace-write` sandbox. This is not a container: for untrusted goals, run the
-  service in a disposable VM or container with no production credentials.
+  `workspace-write` sandbox. The agent CLIs themselves are not in the L3 sandbox: for
+  untrusted goals, run the service in a disposable VM or container with no production
+  credentials.
   Administrators can install Docker and launch LXD VMs from System view (or
   `python -m agent_company host ...`), and run Linux and Windows VMs with an in-browser
   console from the Machines view; agents cannot reach these controls.

@@ -482,6 +482,7 @@ def stop_level() -> str | None:
 def security_summary(alerts: int = 50) -> dict[str, Any]:
     """The Security view (SPEC-15 S15-R-03): incidents (open first, worst severity first), recent security
     alerts, refused commands per agent, active stops."""
+    from agent_company import sandbox
     from agent_company.db import Agent, Event
 
     items = sorted(list_incidents(), key=lambda i: (i["status"] == "closed", i["severity"], -i["id"]))
@@ -506,7 +507,7 @@ def security_summary(alerts: int = 50) -> dict[str, Any]:
             "open": sum(1 for i in items if i["status"] != "closed"),
             "alerts": notes, "refused": refused, "recent_refusals": recent,
             "stops": ([{"level": "E5", "scope": "company", **e5}] if e5 else []) + stops(),
-            "level": stop_level()}
+            "level": stop_level(), "sandbox": sandbox.status()}
 
 
 REFUSALS_BEFORE_PAUSE = 3

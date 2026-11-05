@@ -88,8 +88,9 @@ the order is safety and correctness of that pipeline first, then management, the
    S11-R-03 task-relevant retrieval (FTS5, weights as settings, project standards and research documents in a
    task's package) with S11-R-08 retrieval evaluation done 2026-11-05.
    S04-R-12 with S14-R-08: every tool call of a CLI run in the trace, done 2026-11-05.
-5. **Still open** (2026-11-05), in a sensible order: S14-R-07 L3 isolation; then the gated rooms one at a time
-   (G-R-04).
+   S14-R-07 L3 isolation (bubblewrap sandbox for checks and benchmarks, with SE-R-22) done 2026-11-05.
+5. **Still open** (2026-11-05): the gated rooms one at a time (G-R-04); L3 for the agent CLIs themselves
+   (they need network and their logins, see the threat model's known gaps).
 
 ![Specification dependency map](images/spec01-spec-dependency-map.png)
 

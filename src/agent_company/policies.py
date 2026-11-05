@@ -34,12 +34,14 @@ MAX_DAYS = 365
 GOVERNANCE_KEYS = ("require_approval", "goal_budget_usd", "goal_token_budget", "goal_agent_limit", "goal_time_budget",
                    "budget_exhausted_action", "recruit_requires_approval", "qualify_recruits", "proposal_policy",
                    "max_proposal_goals", "max_goal_depth", "candidate_smoke", "auto_push", "a2a_enabled",
-                   "blocked_commands")
+                   "blocked_commands", "sandbox", "sandbox_memory_mb", "sandbox_tasks", "sandbox_cpus", "sandbox_paths",
+                   "sandbox_env")
 # A project's own rules and what "stricter" means for each: a lower limit (0 = none), approval switched on, a later
 # step of the recruitment-approval order.
 LIMIT_KEYS = ("goal_budget_usd", "goal_token_budget", "goal_agent_limit")
 RECRUIT_ORDER = ("never", "permanent_only", "always")
-PROJECT_KEYS = (*LIMIT_KEYS, "require_approval", "recruit_requires_approval")
+PROJECT_KEYS = (*LIMIT_KEYS, "require_approval", "recruit_requires_approval", "sandbox")
+SANDBOX_ORDER = ("off", "auto", "required")
 
 
 def _aware(d: datetime) -> datetime:
@@ -259,6 +261,11 @@ def _check_project_rules(rules: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError(f"recruitment approval '{v}' is weaker than the company's '{company}'")
             if v == company:
                 continue
+        elif key == "sandbox":
+            if SANDBOX_ORDER.index(v) < SANDBOX_ORDER.index(company):
+                raise ValueError(f"sandbox '{v}' is weaker than the company's '{company}'")
+            if v == company:
+                continue
         elif key == "require_approval" and not v:
             continue
         if v:
@@ -315,4 +322,6 @@ def effective(key: str, project_id: int | None, s: Session | None = None) -> Any
         return True
     if key == "recruit_requires_approval":
         return max(company, own, key=RECRUIT_ORDER.index)
+    if key == "sandbox":
+        return max(company, own, key=SANDBOX_ORDER.index)
     return company

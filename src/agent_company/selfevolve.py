@@ -33,7 +33,6 @@ import json
 import re
 import shutil
 import statistics
-import subprocess
 import sys
 import threading
 import time
@@ -45,7 +44,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from agent_company import worktrees
+from agent_company import sandbox, worktrees
 from agent_company.config import REPO_ROOT, settings
 from agent_company.db import (Defect, EvalRun, Event, EvolutionEvent, Goal, ImprovementContract, Project, log_event,
                               now, session)
@@ -267,16 +266,19 @@ def run_benchmark(tree: Path, bench: dict[str, Any], work: Path) -> dict[str, An
     data.mkdir()
     env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(data), "PYTHONPATH": str(tree / "src"),
            "DATA_DIR": str(data), "BENCH_DATA_DIR": str(data), "EXECUTOR": "offline", "PYTHONDONTWRITEBYTECODE": "1"}
-    try:
-        r = subprocess.run([sys.executable, str(script)], check=False, cwd=tree, env=env, capture_output=True,
-                           text=True, timeout=settings().command_timeout)
-    except subprocess.TimeoutExpired as e:
-        raise RuntimeError(f"benchmark {bench['name']} timed out after {e.timeout}s") from e
+    timeout = settings().command_timeout
+    try:  # SE-R-22: in the L3 sandbox, the tree and the script read-only, only the fresh DATA_DIR writable
+        r = sandbox.run([sys.executable, str(script)], tree, timeout, writable=[data], readonly=[tree, script],
+                        env=env)
     finally:
         shutil.rmtree(data, ignore_errors=True)
+    if not r.isolation:
+        raise RuntimeError(f"benchmark {bench['name']} {r.note}")
+    if r.timed_out:
+        raise RuntimeError(f"benchmark {bench['name']} timed out after {timeout}s")
     if r.returncode:
-        raise RuntimeError(f"benchmark {bench['name']} exited {r.returncode}: {(r.stderr or r.stdout)[-1500:]}")
-    line = next((x for x in reversed(r.stdout.strip().splitlines()) if x.startswith("{")), "")
+        raise RuntimeError(f"benchmark {bench['name']} exited {r.returncode}: {r.output[-1500:]}")
+    line = next((x for x in reversed(r.output.strip().splitlines()) if x.startswith("{")), "")
     try:
         out = json.loads(line)
     except ValueError as e:

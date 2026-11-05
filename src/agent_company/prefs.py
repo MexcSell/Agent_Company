@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -58,6 +59,13 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "retrieval_w_author": (float, "Knowledge ranking: weight of who learned it (the agent itself, related agents)"),
     "retrieval_w_recency": (float, "Knowledge ranking: weight of recency"),
     "retrieval_w_contradiction": (float, "Knowledge ranking: rank lost by an item with an unresolved contradiction"),
+    "sandbox": (str, "Quality commands and benchmarks run agent-written code: 'auto' in the L3 sandbox (no network, "
+                     "only the worktree writable) when bubblewrap works, 'required' never outside it, 'off' on the host"),
+    "sandbox_memory_mb": (int, "Memory limit of a sandboxed command in MB (needs systemd-run)"),
+    "sandbox_tasks": (int, "Processes and threads a sandboxed command may run at once (needs systemd-run)"),
+    "sandbox_cpus": (float, "CPU cores a sandboxed command may use (needs systemd-run)"),
+    "sandbox_paths": (list, "Extra read-only paths (toolchains) visible in the sandbox, one per line"),
+    "sandbox_env": (list, "Extra environment variable names passed to checked commands, one per line"),
 }
 RETRIEVAL_KEYS = {k for k in SCHEMA if k.startswith("retrieval_w_")}
 LIMITS: dict[str, tuple[float, float]] = {
@@ -70,11 +78,13 @@ LIMITS: dict[str, tuple[float, float]] = {
     "approval_blocker_hours": (0, 720), "inactive_days": (1, 3650), "explore_rate": (0, 1),
     "improvement_min_score": (0, 100), "improvement_max_regression": (0, 100),
     "shift_seconds": (0, 7 * 86400),
+    "sandbox_memory_mb": (128, 262_144), "sandbox_tasks": (16, 65_536), "sandbox_cpus": (0.1, 256),
     **{k: (0, 10) for k in RETRIEVAL_KEYS},
 }
 CHOICES: dict[str, set[str]] = {"proposal_policy": {"user", "superiors"}, "executor": {"auto", "offline"},
                                 "transport": {"https", "http"}, "budget_exhausted_action": {"pause", "stop"},
-                                "recruit_requires_approval": {"never", "permanent_only", "always"}}
+                                "recruit_requires_approval": {"never", "permanent_only", "always"},
+                                "sandbox": {"off", "auto", "required"}}
 
 
 def _coerce(key: str, value: Any) -> Any:
@@ -88,6 +98,18 @@ def _coerce(key: str, value: Any) -> Any:
             value = [x.strip() for x in value.split("\n") if x.strip()]
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
             raise ValueError(f"{key} must be a list of strings")
+        if key == "sandbox_paths":
+            for path in value:
+                if not path.startswith("/") or path.rstrip("/") in {"", "/home", "/root", "/etc", "/var"}:
+                    raise ValueError(f"sandbox_paths: {path!r} must be an absolute path below a toolchain directory")
+                data = config.settings().data_dir
+                if data.is_relative_to(path) or Path(path).is_relative_to(data):
+                    raise ValueError(f"sandbox_paths: {path!r} would show the data directory to agent code")
+        if key == "sandbox_env":
+            from agent_company.sandbox import SECRETISH
+
+            if bad := [n for n in value if SECRETISH.search(n) or not n.replace("_", "").isalnum()]:
+                raise ValueError(f"sandbox_env: {', '.join(bad)} look like credentials or are not variable names")
         if key == "blocked_commands":
             import re
 

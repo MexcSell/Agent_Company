@@ -18,7 +18,11 @@ feature came from.
   provider catalogs, classification clearance per model), `contracts.py` (task contracts with scope, risk, budget, deadline; output lines),
   `executors.py` (tracked subprocesses: `terminate` for stops; `gate`, the tool gateway every run passes: permissions and
   `Agent.autonomy` G0-G4 decide writes, Bash and MCP tools, the isolation level L0-L2 and every tool call (Claude Code
-  stream-json, Codex `--json`) are recorded on the `Run`), `worktrees.py`,
+  stream-json, Codex `--json`) are recorded on the `Run`), `sandbox.py` (S14-R-07 L3: quality, acceptance and
+  milestone commands and code benchmarks run agent-written code under bubblewrap: no network, the worktree writable
+  with its `.git` read-only, `data/`/`.env` hidden, allow-listed env, systemd-scope limits; setting `sandbox`
+  auto|required|off, a project only stricter, A2A goals required; a changed lock file is installed first with
+  network into `data/sandbox/home`), `worktrees.py`,
   `quality.py` + `checks.py` (gate: contracts, review verdicts with logic verification, secrets, syntax, scope,
   change boundaries, baseline), `usage.py`; `loop.py` (circular goal loop, budgets that pause, best-iteration
   rollback, handovers, checkpoint commits per writing task + worktree reconcile on resume, retry policy,
@@ -99,7 +103,8 @@ feature came from.
 - Only the core pipeline (GM, Architect, Developer, QA) and the research rooms are enabled by
   default; other roles are registered but disabled until the pipeline is reliable.
 - Agents must not get access to production servers. Executors that change files run only inside
-  `data/worktrees/` (`worktrees.ensure_sandboxed`); commands pass `governance.check_command`;
+  `data/worktrees/` (`worktrees.ensure_sandboxed`); commands pass `governance.check_command` and run through
+  `contracts.run_command` (the L3 sandbox, never `subprocess` with the server's environment);
   merging needs approval; pushing only on `/sync` or AUTO_PUSH.
 - Exception, by decision of the owner: the Workspace terminal and Claude Code panel are the
   administrator's own tools, not goal-loop agents. They run host-wide as the server user (no

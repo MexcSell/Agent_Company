@@ -130,7 +130,7 @@ Machines code):
 | Emergency shutdown with levels E0-E5 (executor, agent, goal, project, room, company), CLI and top-bar control | SPEC14 §12 | done (`governance.stop`, `python -m agent_company stop`, S14-R-01) |
 | Autonomy levels and action classification | SPEC14 §13 | done (`Agent.autonomy` G0–G4, enforced by the tool gateway; only administrators change permissions or autonomy, S14-R-02) |
 | Threat model (STRIDE + AI threats) mapped to controls and tests; security simulations | SPEC14 PDF §19 | done (`docs/threat-model.md`, `tests/test_threats.py`, S14-R-09) |
-| Tool permission contracts: one gateway for every executor run; isolation level, tools and permissions recorded per run | SPEC14 §7.3, §8.2, §8.3 | done (`executors.gate`, `Run.isolation`, `Run.tool_calls`, S14-R-06, S14-R-08; L3 containers open, S14-R-07) |
+| Tool permission contracts: one gateway for every executor run; isolation level, tools and permissions recorded per run | SPEC14 §7.3, §8.2, §8.3 | done (`executors.gate`, `Run.isolation`, `Run.tool_calls`, S14-R-06, S14-R-08; L3 sandbox for checks and benchmarks, `sandbox.py`, S14-R-07) |
 | Information classification and data-handling rules | SPEC14 §5 | partial (projects and lessons; uploads, documents, model rule open) → S14-R-05 |
 | MCP tool servers for agents | 1.txt, CDAF guide §11 | done (`mcp.py`, Tools & MCP, G-R-05) |
 | A2A protocol for agent-to-agent messages | 1.txt | done (`a2a.py`: A2A 1.0 agent card, JSON-RPC tasks as goals for issued clients, G-R-06) |
@@ -148,7 +148,7 @@ Machines code):
 | Agent Score per agent with role weights | §7 | done (Performance view, SE-R-11) |
 | Fixed research-retrieval benchmark by query class | §9, §18 | done (`benchmarks/retrieval.py`, SE-R-17) |
 | Retrieval strategy learned per query class | §9 v4 | open → SE-R-21 |
-| Candidates in containers with network and resource limits | §12 | partial → SE-R-22 |
+| Candidates in containers with network and resource limits | §12 | done (benchmarks in the L3 sandbox, `sandbox.py`, SE-R-22) |
 | Fine-tuning, training models | §13 | skip (no training infrastructure) |
 
 ## Requested directly (Workspace home page, VS Code + Claude Code style)

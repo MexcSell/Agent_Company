@@ -212,8 +212,10 @@ def _check_dir(milestone_id: int) -> Path:
     return settings().worktrees_dir / f"milestone-{milestone_id}-check"
 
 
-def _run_commands(repo: str, milestone_id: int, commands: list[str]) -> list[tuple[bool, str]]:
+def _run_commands(repo: str, milestone_id: int, commands: list[str],
+                  project_id: int | None = None) -> list[tuple[bool, str]]:
     """Run the commands in a detached worktree of the project's HEAD (the sandbox), then remove it."""
+    from agent_company import sandbox
     from agent_company.contracts import run_command
 
     if not repo or not (Path(repo) / ".git").exists():
@@ -226,7 +228,8 @@ def _run_commands(repo: str, milestone_id: int, commands: list[str]) -> list[tup
     worktrees.git(repo, "worktree", "prune", check=False)
     try:
         worktrees.git(repo, "worktree", "add", "-q", "--detach", str(path), "HEAD")
-        return [run_command(c, path, settings().command_timeout) for c in commands]
+        mode = sandbox.mode_for(project_id=project_id)
+        return [run_command(c, path, settings().command_timeout, mode=mode) for c in commands]
     except worktrees.WorktreeError as e:
         return [(False, f"could not check out the project: {e}")] * len(commands)
     finally:
@@ -240,9 +243,9 @@ def check_milestone(milestone_id: int) -> dict[str, Any]:
         m = s.get(Milestone, milestone_id)
         if m is None:
             raise KeyError(f"milestone {milestone_id}")
-        repo = _project(s, m.project_id).path
+        repo, project_id = _project(s, m.project_id).path, m.project_id
         commands = [(i, c["text"]) for i, c in enumerate(m.criteria or []) if c["kind"] == "command"]
-    results = _run_commands(repo, milestone_id, [c for _, c in commands]) if commands else []
+    results = _run_commands(repo, milestone_id, [c for _, c in commands], project_id) if commands else []
     with session() as s:
         m = s.get(Milestone, milestone_id)
         crit = [dict(c) for c in m.criteria or []]

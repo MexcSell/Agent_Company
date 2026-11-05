@@ -23,8 +23,8 @@ from typing import Any
 from sqlalchemy import select
 
 from agent_company import (blackboard, budgets, contracts, decisions, executors, learning, network, quality,
-                           recruitment, registry, requirements, research, router, specs, strategies, teams, usage,
-                           workflow, worktrees)
+                           recruitment, registry, requirements, research, router, sandbox, specs, strategies, teams,
+                           usage, workflow, worktrees)
 from agent_company.config import settings
 from agent_company.db import Agent, Event, Goal, Task, log_event, session
 from agent_company.org import ROLES
@@ -908,7 +908,8 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             set_task_stage(task_id, "review", "acceptance conditions and contract limits")
             # the planner wrote the acceptance commands: a refusal counts against it
             acceptance = contracts.check(contract, output, Path(goal.worktree), settings().command_timeout,
-                                         on_refused=lambda cmd, why: on_command_refused(goal.id, planner_id, cmd, why))
+                                         on_refused=lambda cmd, why: on_command_refused(goal.id, planner_id, cmd, why),
+                                         mode=sandbox.mode_for(goal))
             acceptance += contracts.limits(contract, changed or res.files, usage.task_spend(task_id))
             ok = res.ok and all(c["passed"] for c in acceptance)
             set_status(task_id, "done" if ok else "failed", output=output[-50_000:], model_name=choice.name,

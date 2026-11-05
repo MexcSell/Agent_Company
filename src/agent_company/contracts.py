@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
@@ -160,17 +159,21 @@ def extract_json(text: str) -> Any:
 
 
 def check(contract: TaskContract, output: str, workdir: Path | None, timeout: int = 600,
-          on_refused: Callable[[str, str], None] | None = None) -> list[dict[str, Any]]:
-    """`on_refused(cmd, reason)` hears about commands the policy refused (behaviour rules, S14-R-03)."""
+          on_refused: Callable[[str, str], None] | None = None, mode: str | None = None) -> list[dict[str, Any]]:
+    """`on_refused(cmd, reason)` hears about commands the policy refused (behaviour rules, S14-R-03); `mode` is
+    the sandbox mode of command conditions (`sandbox.mode_for`)."""
     results = []
     for cond in contract.acceptance:
-        ok, detail = _check_one(cond, contract, output, workdir, timeout, on_refused)
-        results.append({"condition": cond.model_dump(exclude_none=True), "passed": ok, "detail": detail})
+        info: dict[str, Any] = {}
+        ok, detail = _check_one(cond, contract, output, workdir, timeout, on_refused, mode, info)
+        results.append({"condition": cond.model_dump(exclude_none=True), "passed": ok, "detail": detail}
+                       | ({"isolation": info["isolation"]} if info.get("isolation") else {}))
     return results
 
 
 def _check_one(cond: Condition, contract: TaskContract, output: str, workdir: Path | None,
-               timeout: int, on_refused: Callable[[str, str], None] | None = None) -> tuple[bool, str]:
+               timeout: int, on_refused: Callable[[str, str], None] | None = None, mode: str | None = None,
+               info: dict[str, Any] | None = None) -> tuple[bool, str]:
     if cond.type == "contains":
         ok = str(cond.value or "").lower() in output.lower()
         return ok, "" if ok else f"output does not mention {cond.value!r}"
@@ -193,15 +196,18 @@ def _check_one(cond: Condition, contract: TaskContract, output: str, workdir: Pa
         ok = workdir.resolve() in target.parents and target.exists()
         return ok, "" if ok else f"{cond.path} does not exist"
     if cond.type == "command":
-        return run_command(cond.run or "true", workdir, timeout, on_refused)
+        return run_command(cond.run or "true", workdir, timeout, on_refused, mode, info)
     return False, f"unknown condition {cond.type}"
 
 
 def run_command(cmd: str, workdir: Path, timeout: int,
-                on_refused: Callable[[str, str], None] | None = None) -> tuple[bool, str]:
-    from agent_company.worktrees import ensure_sandboxed
-
+                on_refused: Callable[[str, str], None] | None = None, mode: str | None = None,
+                info: dict[str, Any] | None = None) -> tuple[bool, str]:
+    """Run a check command in the worktree: in the L3 sandbox as `mode` (sandbox.MODES, default the company
+    setting) allows, with a filtered environment either way. `info` receives the isolation level and its note."""
+    from agent_company import sandbox
     from agent_company.governance import audit, check_command
+    from agent_company.worktrees import ensure_sandboxed
 
     cwd = ensure_sandboxed(workdir)
     refused = check_command(cmd)
@@ -210,15 +216,16 @@ def run_command(cmd: str, workdir: Path, timeout: int,
         if on_refused is not None:
             on_refused(cmd, refused)
         return False, f"`{cmd}` refused by the command policy: {refused}"
-    try:
-        import os
-
-        env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
-        proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
-    except subprocess.TimeoutExpired:
-        return False, f"`{cmd}` timed out after {timeout}s"
-    tail = (proc.stdout + proc.stderr)[-1500:]
-    return proc.returncode == 0, f"`{cmd}` exit {proc.returncode}\n{tail}".strip()
+    res = sandbox.run(["/bin/sh", "-c", cmd], cwd, timeout, mode=mode, prepare=True)
+    if info is not None:
+        info.update(isolation=res.isolation, isolation_note=res.note)
+    level = f" ({res.isolation})" if res.isolation else ""
+    note = f"\n[{res.note}]" if res.note else ""
+    if not res.isolation:
+        return False, f"`{cmd}` {res.note}"
+    if res.timed_out:
+        return False, f"`{cmd}` timed out after {timeout}s{level}{note}"
+    return res.returncode == 0, f"`{cmd}` exit {res.returncode}{level}{note}\n{res.output[-1500:]}".strip()
 
 
 def _matches(path: str, pattern: str) -> bool:
