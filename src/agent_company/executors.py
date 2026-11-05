@@ -130,6 +130,17 @@ def level(autonomy: str) -> int:
     return int(autonomy[1]) if re.fullmatch(r"G[0-4]", autonomy or "") else 1
 
 
+def tools_for(permissions: list[str] | None, autonomy: str) -> list[str]:
+    """The Claude Code tools an agent can be given at most (a writing run with MCP granted): what its definition
+    file and its exported subagent name. `network` adds none: agents get no web tools."""
+    n, perms = level(autonomy), set(permissions or [])
+    if n == 0:
+        return []
+    writes = "write" in perms and n >= 2
+    return (["Read", "Grep", "Glob"] + (["Edit", "Write"] if writes else [])
+            + (["Bash"] if writes and "shell" in perms else []) + (["MCP tools granted in Tools & MCP"] if n >= 3 else []))
+
+
 def gate(req: Request, kind: str) -> Grant:
     """What this run may use: the request's wishes cut down to the agent's permissions and autonomy level."""
     contract = TOOL_CONTRACTS.get(kind, ToolContract(("text",), 600))

@@ -115,6 +115,33 @@ def test_the_configure_step_writes_without_write_permission_but_gets_no_bash(cla
     assert "Edit" not in allowed(claude[1]), "only the configure step"
 
 
+def test_tool_contracts_limit_roles_and_can_require_approval(monkeypatch):
+    llm = executors.LLMExecutor(router.Choice("m", "llm", "x/y", "t"))
+    r = executors.Request(purpose="task", role="qa", system="", prompt="p", permissions=["read"], autonomy="G3")
+    monkeypatch.setitem(executors.TOOL_CONTRACTS, "llm", executors.ToolContract(("text",), 60, roles=("developer",)))
+    res = llm.run(r)
+    assert not res.ok and "not allowed for the role qa" in res.error and loop.NO_RETRY.search(res.error)
+    monkeypatch.setitem(executors.TOOL_CONTRACTS, "llm", executors.ToolContract(("text",), 60, requires_approval=True))
+    res = llm.run(r)
+    assert not res.ok and "need an approval" in res.error and loop.NO_RETRY.search(res.error)
+
+
+def test_definition_files_name_the_tools_the_gateway_gives():
+    from agent_company import agentdefs
+
+    with session() as s:
+        dev = s.scalars(select(Agent).where(Agent.role == "developer")).first()
+        research = s.scalars(select(Agent).where(Agent.role == "research")).first()
+        assert "tools: Read, Grep, Glob, Edit, Write, Bash" in agentdefs.render(dev)
+        dev.autonomy = "G1"
+        head = agentdefs.render(dev).split("\n---\n")[0]
+        assert "Edit" not in head and "Bash" not in head
+        assert "WebFetch" not in agentdefs.render(research), "network gives agents no web tools"
+        dev.autonomy = "G0"
+    _, text = agentdefs.claude_subagent(dev.id)
+    assert "tools: Read, Grep, Glob\n" in text, "never an empty tools line (that would mean every tool)"
+
+
 def test_e0_stop_covers_runs_that_do_not_pass_the_loop():
     governance.stop("E0", "llm", "test", "drill")
     res = executors.LLMExecutor(router.Choice("m", "llm", "x/y", "t")).run(

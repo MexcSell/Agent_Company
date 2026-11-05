@@ -26,11 +26,10 @@ from sqlalchemy import select
 
 from agent_company.config import settings
 from agent_company.db import Agent, log_event, session
+from agent_company.executors import tools_for
 
 _lock = threading.Lock()
 SECTION_RE = re.compile(r"^## (.+?)\n(.*?)(?=^## |\Z)", re.S | re.M)
-TOOLS_BY_PERMISSION = {"read": ["Read", "Grep", "Glob"], "write": ["Edit", "Write"], "shell": ["Bash"],
-                       "network": ["WebFetch", "WebSearch"]}
 
 
 def repo() -> Path:
@@ -63,10 +62,11 @@ def sections(text: str) -> dict[str, str]:
 def render(a: Agent, keep: dict[str, str] | None = None) -> str:
     """The definition file for an agent. Sections learning wrote (`keep`) are carried over."""
     keep = keep or {}
-    tools = sorted({t for p in (a.permissions or []) for t in TOOLS_BY_PERMISSION.get(p, [])})
+    tools = tools_for(a.permissions, a.autonomy)
     skills = ", ".join(f"{k} {v}" for k, v in sorted((a.skills or {}).items(), key=lambda x: -x[1]))
     head = (f"---\nname: {a.name}\nrole: {a.role}\ntitle: {a.title}\nroom: {a.room_key}\n"
-            f"model: {a.model_pref or 'route for ' + a.role}\ntools: {', '.join(tools)}\nautonomy: {a.autonomy or 'G3'}\n"
+            f"model: {a.model_pref or 'route for ' + a.role}\ntools: {', '.join(tools) or 'none (G0 observes)'}\n"
+            f"autonomy: {a.autonomy or 'G3'}\n"
             f"skills: {skills}\nplugins: {', '.join(a.plugins or [])}\nversion: {(a.definition_version or 0) + 1}\n---\n")
     parts = [f"# {a.name}", f"## Mission\n{a.goal.strip() or 'Do excellent work in your role.'}"]
     if (a.backstory or "").strip():
@@ -178,7 +178,8 @@ def claude_subagent(agent_id: int) -> tuple[str, str]:
         a = s.get(Agent, agent_id)
         if a is None:
             return "", ""
-        tools = sorted({t for p in (a.permissions or []) for t in TOOLS_BY_PERMISSION.get(p, [])})
+        # an empty `tools:` would give a Claude Code subagent every tool; at G0 it only reads
+        tools = [t for t in tools_for(a.permissions, a.autonomy) if not t.startswith("MCP")] or ["Read", "Grep", "Glob"]
         name = slug(a.role if a.parent_id is None else a.name)
         desc = re.sub(r"\s+", " ", f"{a.title}: {a.goal}")[:300]
         body = system_prompt(a)
