@@ -127,18 +127,29 @@ def _dimensions(s: Any, goal: Goal) -> dict[str, Any]:
     }
 
 
+def label_cost(label: str) -> float:
+    with session() as s:
+        return float(s.scalar(select(func.coalesce(func.sum(EvalRun.cost), 0.0)).where(EvalRun.label == label)) or 0.0)
+
+
 def run_suite(suite: str | Path, label: str, repeats: int = 3, only: list[str] | None = None,
-              trial: dict[str, Any] | None = None) -> dict[str, Any]:
+              trial: dict[str, Any] | None = None, budget_usd: float = 0.0) -> dict[str, Any]:
     """`trial` goes to every goal (experiment side, model overrides, trainee). A `final` suite hides its checks and
     gets one iteration: a second one would hand the agents the failed checks as findings. An `adversarial` suite
-    (S09-R-05) is run the same way, so a failed trap check never tells the agents what the trap was."""
+    (S09-R-05) is run the same way, so a failed trap check never tells the agents what the trap was.
+    `budget_usd` (0 = none, ASEAO10 S10-R-02): no further run starts once the label's runs cost that much; the
+    summary then says `stopped_on_budget` (one run may take it over the budget)."""
     data = load_suite(suite)
     tasks = [t for t in data["tasks"] if not only or t["name"] in only]
     final = data.get("kind") in {"final", "adversarial"}
     trial = dict(trial or {}) | ({"hide_checks": True} if final else {})
     own_limit = final or not trial.get("strategy")  # a strategy side's iteration limit is under test (S04-R-13)
+    stopped = False
     for task in tasks:
         for rep in range(1, repeats + 1):
+            if budget_usd > 0 and label_cost(label) >= budget_usd:
+                stopped = True
+                break
             repo = _seed_repo(label, task, rep)
             started = time.monotonic()
             gid = loop.create_goal(task["title"], task.get("description", task["title"]), str(repo),
@@ -160,6 +171,15 @@ def run_suite(suite: str | Path, label: str, repeats: int = 3, only: list[str] |
                               tokens=int(tokens), seconds=round(time.monotonic() - started, 2), score=score,
                               dimensions=_dimensions(s, g)))
             log_event("eval", f"{label}: {task['name']} run {rep} {g.status}", goal_id=gid)
+        if stopped:
+            break
+    if stopped:
+        log_event("eval", f"{label}: stopped on its budget of ${budget_usd:.2f}")
+        try:
+            return summary(label) | {"stopped_on_budget": True}
+        except KeyError:  # not one run fitted
+            return {"label": label, "runs": 0, "passed": 0, "pass_rate": None, "total_cost": 0.0,
+                    "stopped_on_budget": True}
     return summary(label)
 
 

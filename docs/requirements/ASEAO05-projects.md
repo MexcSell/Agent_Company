@@ -171,3 +171,9 @@ S05-R-06 done · S05-R-07 done · S05-R-08 done (adapted) · S05-R-09 done · S0
 
 ### S05-R-10 Restart and concurrency — AT-026, AT-027, AT-030
 - Covered by SPEC-04 S04-R-05; project updates use the open session (CLAUDE.md rule).
+- **Status: done** through S04-R-05: a restart marks working goals `recovering` and resumes them
+  (`tests/test_workflow.py::test_restart_marks_working_goals_recovering_and_they_resume`), finished tasks are not run
+  again and partial edits are dropped (`tests/test_loop.py::test_restart_after_a_finished_task_does_not_run_it_again`,
+  `test_a_restart_drops_the_partial_edits_of_a_task_cut_off_mid_write`), merge and push happen once
+  (`loop._once`); concurrent goals of one project run in topic order (G-R-07) and wait for overlapping paths (G-R-08,
+  `tests/test_leases.py`).

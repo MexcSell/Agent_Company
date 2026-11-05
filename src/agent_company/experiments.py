@@ -79,13 +79,30 @@ def to_dict(e: Experiment, names: dict[int, str] | None = None) -> dict[str, Any
             "created_at": e.created_at.isoformat(), "updated_at": e.updated_at.isoformat()}
 
 
+def source_commit() -> str:
+    """The platform's own commit the experiment was set up on (ASEAO10 S10-R-02: reproducible); "" outside git."""
+    from agent_company import worktrees
+    from agent_company.config import REPO_ROOT
+
+    try:
+        return worktrees.git(REPO_ROOT, "rev-parse", "HEAD")
+    except Exception:  # noqa: BLE001 - not a git checkout
+        return ""
+
+
 def record(s: Session, target: str, *, agent_id: int | None = None, role: str = "", baseline_version: str = "",
            candidate: dict[str, Any] | None = None, hypothesis: str = "", suite: str = "smoke", repeats: int = 1,
-           status: str = "proposed", origin: str = "evolution", created_by: str = "system") -> Experiment:
+           status: str = "proposed", origin: str = "evolution", created_by: str = "system",
+           budget_usd: float = 0.0) -> Experiment:
+    """`dataset` keeps what reproduces it: suite, repeats, the platform's commit and the budget (0 = none) its eval
+    runs may cost; the configuration compared is `baseline_version` against `candidate`."""
+    if budget_usd < 0:
+        raise ValueError("the budget cannot be negative")
     e = Experiment(target=check_target(target), agent_id=agent_id, role=role, baseline_version=baseline_version,
                    candidate=dict(candidate or {}), hypothesis=hypothesis[:2000],
-                   dataset={"suite": suite, "repeats": repeats}, status=status, origin=origin,
-                   created_by=created_by)
+                   dataset={"suite": suite, "repeats": repeats, "source_commit": source_commit(),
+                            "budget_usd": round(float(budget_usd), 4)},
+                   status=status, origin=origin, created_by=created_by)
     s.add(e)
     s.flush()
     from agent_company import hypotheses  # ASEAO07 S07-R-03: the experiment's hypothesis, under test
@@ -155,7 +172,8 @@ def get(exp_id: int) -> dict[str, Any]:
 
 
 def propose(target: str, candidate: str, *, agent_id: int | None = None, role: str = "", hypothesis: str = "",
-            suite: str = "smoke", repeats: int = 1, created_by: str = "system") -> dict[str, Any]:
+            suite: str = "smoke", repeats: int = 1, created_by: str = "system", budget_usd: float = 0.0
+            ) -> dict[str, Any]:
     """A user's experiment (E2). It runs nothing until it is started."""
     from agent_company import evaluation
 
@@ -173,14 +191,14 @@ def propose(target: str, candidate: str, *, agent_id: int | None = None, role: s
 
             e = orchestration.record(s, role, orchestration.parse_changes(candidate),
                                      reasons=[f"proposed by {created_by}"], evidence=None, hypothesis=hypothesis,
-                                     suite=suite, repeats=int(repeats), origin="user", created_by=created_by)
+                                     suite=suite, repeats=int(repeats), origin="user", created_by=created_by, budget_usd=budget_usd)
         elif target == "playbook":
             a = s.get(Agent, agent_id) if agent_id else None
             if a is None:
                 raise KeyError(f"agent {agent_id}")
             e = record(s, target, agent_id=a.id, role=a.role, baseline_version=f"v{a.playbook_version}",
                        candidate={"playbook": candidate[:8000]}, hypothesis=hypothesis, suite=suite,
-                       repeats=int(repeats), origin="user", created_by=created_by)
+                       repeats=int(repeats), origin="user", created_by=created_by, budget_usd=budget_usd)
         else:
             role = (role or "").strip()
             if not role:
@@ -190,7 +208,7 @@ def propose(target: str, candidate: str, *, agent_id: int | None = None, role: s
             r = s.get(Route, role)
             e = record(s, target, role=role, baseline_version=r.model_name if r else "",
                        candidate={"model": candidate}, hypothesis=hypothesis, suite=suite, repeats=int(repeats),
-                       origin="user", created_by=created_by)
+                       origin="user", created_by=created_by, budget_usd=budget_usd)
         out = e.id
     log_event("evolution", f"experiment #{out} proposed: {target} {role or agent_id} → {candidate[:60]}")
     return get(out)
@@ -251,25 +269,64 @@ def _run_strategy(exp_id: int) -> dict[str, Any]:
             _running.discard(exp_id)
 
 
+class OverBudget(RuntimeError):
+    pass
+
+
+def run_sides(exp_id: int, trials: dict[str, dict[str, Any]], label: Callable[[str], str]) -> dict[str, dict[str, Any]]:
+    """Baseline, then candidate, on the experiment's suite and repeats, within its budget (S10-R-02): the candidate
+    gets what the baseline left. A side stopped on the budget stops the experiment (`OverBudget`): an incomplete
+    side cannot be compared."""
+    from agent_company import evaluation
+
+    with session() as s:
+        e = s.get(Experiment, exp_id)
+        suite, repeats = e.dataset.get("suite", "smoke"), int(e.dataset.get("repeats", 1))
+        budget = float(e.dataset.get("budget_usd") or 0.0)
+    sides: dict[str, dict[str, Any]] = {}
+    spent = 0.0
+    for side in ("baseline", "candidate"):
+        with session() as s:
+            update(s, exp_id, status=side)
+        left = budget - spent
+        if budget > 0 and left <= 0:
+            raise OverBudget(f"stopped on its budget: ${spent:.4f} of ${budget:.2f} spent before the {side}")
+        summary = evaluation.run_suite(suite, label(side), repeats=repeats, trial=trials[side],
+                                       **({"budget_usd": left} if budget > 0 else {}))
+        spent += float(summary.get("total_cost") or 0.0)
+        sides[side] = side_metrics(summary) | {"dimensions": summary.get("dimensions") or {}}
+        with session() as s:
+            update(s, exp_id, **{side: sides[side]})
+        if summary.get("stopped_on_budget"):
+            raise OverBudget(f"stopped on its budget: ${spent:.4f} of ${budget:.2f} spent during the {side} "
+                             f"({summary.get('runs', 0)} of {repeats} repeat(s) per task)")
+    return sides
+
+
+def _stopped(exp_id: int, why: str) -> dict[str, Any]:
+    from agent_company.governance import notify
+
+    with session() as s:
+        update(s, exp_id, status="failed", decision=why)
+        notify(f"Experiment #{exp_id} stopped", why, level="warning", source="evolution", admin_only=True, s=s)
+        log_event("evolution", f"experiment #{exp_id} {why}", s=s)
+    return get(exp_id)
+
+
 def run_route(exp_id: int) -> dict[str, Any]:
     """Both sides of a route experiment. A better candidate is only recommended: an administrator applies it."""
-    from agent_company import evaluation
     from agent_company.governance import notify
 
     try:
         with session() as s:
             e = s.get(Experiment, exp_id)
             role, base, cand = e.role, e.baseline_version, e.candidate["model"]
-            suite, repeats = e.dataset.get("suite", "smoke"), int(e.dataset.get("repeats", 1))
-        sides: dict[str, dict[str, Any]] = {}
-        for side, model in (("baseline", base), ("candidate", cand)):
-            with session() as s:
-                update(s, exp_id, status=side)
-            trial = {"experiment_id": exp_id, "side": side} | ({"models": {role: model}} if model else {})
-            label = f"exp{exp_id}-{side}-{int(time.time() * 1000)}"
-            sides[side] = side_metrics(evaluation.run_suite(suite, label, repeats=repeats, trial=trial))
-            with session() as s:
-                update(s, exp_id, **{side: sides[side]})
+        trials = {side: {"experiment_id": exp_id, "side": side} | ({"models": {role: model}} if model else {})
+                  for side, model in (("baseline", base), ("candidate", cand))}
+        try:
+            sides = run_sides(exp_id, trials, lambda side: f"exp{exp_id}-{side}-{int(time.time() * 1000)}")
+        except OverBudget as stop:
+            return _stopped(exp_id, str(stop))
         cmp = compare(sides["baseline"], sides["candidate"])
         verdict = (f"recommend {cand} for {role}: {sides['candidate']['pass_rate']:.0%} vs "
                    f"{sides['baseline']['pass_rate']:.0%} (n={cmp['samples']['candidate']}/{cmp['samples']['baseline']})"

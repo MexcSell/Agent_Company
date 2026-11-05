@@ -173,7 +173,7 @@ async function learningPanel() {
       e.status === "review" && strat && r.comparison?.better ? `<button class="btn sm primary" data-ex="apply" data-id="${e.id}">Apply the template</button>` : "",
       ["proposed", "review"].includes(e.status) ? `<button class="btn sm ghost" data-ex="reject" data-id="${e.id}">Reject</button>` : "",
     ].join("") : "";
-    return `<tr><td class="num">${e.id}</td><td>${what}${e.hypothesis ? `<div class="muted ellipsis">${esc(e.hypothesis)}</div>` : ""}</td><td>${esc(e.dataset.suite || "")}</td><td class="num">${side(r.baseline)}</td><td class="num">${side(r.candidate)}</td>
+    return `<tr><td class="num">${e.id}</td><td>${what}${e.hypothesis ? `<div class="muted ellipsis">${esc(e.hypothesis)}</div>` : ""}</td><td>${esc(e.dataset.suite || "")}${e.dataset.budget_usd ? `<div class="muted">budget ${money(e.dataset.budget_usd)}</div>` : ""}${e.dataset.source_commit ? `<div class="muted" title="The platform's commit it was set up on">@${esc(e.dataset.source_commit.slice(0, 8))}</div>` : ""}</td><td class="num">${side(r.baseline)}</td><td class="num">${side(r.candidate)}</td>
       <td>${c ? `${Object.values(c.outcomes || {}).map((o) => (o ? "✓" : "✗")).join(" ") || "…"} <span class="muted">/ ${c.window} vs ${pct(c.baseline)}</span>` : ""}</td><td>${tag(e.status)}<div class="muted ellipsis">${esc(e.decision || "")}</div></td><td>${acts}</td></tr>`;
   };
   const plan = (p) => `<div class="row">${tag(p.status)}<span class="grow"><strong>#${p.id}</strong> ${esc(p.agent || p.agent_id)}: ${esc(p.capability)} L${p.current_level} → L${p.target_level}
@@ -211,6 +211,7 @@ async function learningPanel() {
     else { body.agent_id = Number(prompt("Agent id")); body.candidate = prompt("Candidate playbook (DO:/AVOID: lines)") || ""; }
     body.hypothesis = prompt("Hypothesis", "") || "";
     body.suite = prompt("Suite", "smoke") || "smoke";
+    if (body.target !== "playbook") { const b = prompt("Budget in USD for its eval runs (0 = no limit; it stops once both sides together cost that much)", "0"); if (b === null) return; body.budget_usd = Number(b) || 0; }
     try { await api("/api/experiments", { method: "POST", body }); toast("Experiment proposed"); } catch (e) { toast(e.message); }
     learningPanel();
   });

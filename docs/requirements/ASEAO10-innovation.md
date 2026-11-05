@@ -32,6 +32,18 @@ existing, minimal innovation path (`projects.extract_proposals`).
   hypothesis, metrics, dataset, source commit, configuration) so they are reproducible (AT-016,
   AT-017) and stop on budget (AT-025, AT-026).
 - Prototypes run only in worktrees/scratch repositories; never in production (AT-024).
+- **Status: done for the experiment path that exists** (`experiments.record`, `source_commit`, `run_sides`,
+  `OverBudget`; `evaluation.run_suite(budget_usd=)`, `label_cost`; `orchestration.run`; `POST /api/experiments` takes
+  `budget_usd`; Evolution → Experiments shows budget and commit; `tests/test_training.py`). Every experiment's
+  `dataset` keeps its suite, repeats, the platform's commit it was set up on and its budget; the configuration under
+  comparison is `baseline_version` against `candidate` (with the hypothesis, S07-R-03). Route and workflow-template
+  experiments run both sides through `run_sides`: no eval run starts once the experiment's runs cost its budget (one
+  run may take it over), the candidate gets what the baseline left, and a side stopped on the budget fails the
+  experiment with "stopped on its budget: $x of $y …" (an incomplete side is never compared) and notifies the
+  administrators. Playbook candidates run through the evolution loop's smoke trial and have no budget field. Eval and
+  experiment runs work in scratch repositories under `data/` and executors that change files only in
+  `data/worktrees/` (`worktrees.ensure_sandboxed`), their checks under the L3 sandbox (S14-R-07): never production.
+  Innovation-specific experiments (prototypes of the gated rooms) come with S10-G-01..06.
 
 ### S10-R-03 What may evolve autonomously — §16.2, §16.3
 Allowed (subject to SPEC-13 S13-R-04): team composition, scheduling, retrieval methods, model
@@ -39,6 +51,15 @@ routing proposals, prompt templates/playbooks, workflow templates, benchmark sel
 organisation. Never autonomous: authority, security policies, authentication, access control,
 approval requirements, audit retention, spending limits, production access, emergency stop
 (enforced by SPEC-14 S14-R-02).
+- **Status: done (by the controls below, no code of its own).** Autonomous: workflow templates and team size
+  (S04-R-11/R-13, `teams.py`), retrieval methods (`learning.learn_strategies`, SE-R-21), playbooks (`evolution.py`),
+  model-routing *proposals* (route experiments are only recommended; an administrator applies them). Never
+  autonomous: `experiments.check_target` refuses governance, security, permissions, budgets, approvals and policy
+  targets (E6, `PermissionError`); agents never approve a proposal touching authority, budgets, routes, settings or
+  safety controls (`projects.restricted`, `decide(by_human=False)`), nor one that would become a project (S10-R-01);
+  only an administrator changes an agent's permissions or autonomy (S14-R-02); the platform's control plane
+  (authentication, governance, the gate, deployment) is protected from improvement contracts (`selfevolve.COMPONENTS`
+  `protected`); emergency stops and audit are written only by people and the platform (S14-R-01, `governance.py`).
 
 ## Gated (enable with the innovation rooms)
 

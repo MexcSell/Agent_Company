@@ -54,7 +54,8 @@ feature came from.
   standards from the base branch and matching research documents; contradictions and versions as `kg_edges`,
   resolved by people)
   + `evolution.py` (playbook candidates are experiments); `experiments.py` (SPEC-13: baseline vs candidate on one eval
-  suite, review by the E0-E6 policy, canary, rollback; routes only applied by an administrator); `hypotheses.py`
+  suite, review by the E0-E6 policy, canary, rollback; routes only applied by an administrator; S10-R-02 the platform
+  commit in `dataset` and a `budget_usd` that stops route/template experiments); `hypotheses.py`
   (ASEAO07 S07-R-03: statements under test with evidence; an experiment's comparison concludes its hypothesis; an agent
   never marks one supported without a recorded test result); `training.py`
   (capability gaps, learning plans: practice + hidden final eval suites run by the trainee in scratch repos,

@@ -201,7 +201,7 @@ def candidate_body(kind: str, changes: dict[str, Any], s: Session) -> tuple[dict
 
 def record(s: Session, kind: str, changes: dict[str, Any], *, reasons: list[str], evidence: dict[str, Any] | None,
            hypothesis: str = "", suite: str = "smoke", repeats: int = 1, origin: str = "evolution",
-           created_by: str = "system") -> Experiment:
+           created_by: str = "system", budget_usd: float = 0.0) -> Experiment:
     """AT-032/034: the candidate as a strategy experiment, `proposed`, or `rejected` with the policy violations."""
     from agent_company import experiments
 
@@ -220,7 +220,8 @@ def record(s: Session, kind: str, changes: dict[str, Any], *, reasons: list[str]
     e = experiments.record(s, "strategy", role=kind, baseline_version=f"v{base['version']}",
                            candidate={"kind": kind, "base_version": base["version"], "changes": changes,
                                       "body": body, "reasons": reasons, "evidence": evidence or {}},
-                           hypothesis=text, suite=suite, repeats=repeats, origin=origin, created_by=created_by)
+                           hypothesis=text, suite=suite, repeats=repeats, origin=origin, created_by=created_by,
+                           budget_usd=budget_usd)
     if bad:
         experiments.update(s, e.id, status="rejected", decision="policy (§20.3): " + "; ".join(bad))
         log_event("evolution", f"strategy experiment #{e.id} rejected: {'; '.join(bad)}", s=s)
@@ -322,24 +323,20 @@ def compare(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, An
 
 def run(exp_id: int) -> dict[str, Any]:
     """Both sides of a strategy experiment; a better candidate only waits for an administrator."""
-    from agent_company import evaluation, experiments
+    from agent_company import experiments
     from agent_company.governance import notify
 
     try:
         with session() as s:
             e = s.get(Experiment, exp_id)
             sides_trial = {side: side_trial(e, side) for side in ("baseline", "candidate")}
-            kind, suite, repeats = e.candidate["kind"], e.dataset.get("suite", "smoke"), int(e.dataset.get("repeats", 1))
-        sides: dict[str, dict[str, Any]] = {}
-        for side in ("baseline", "candidate"):
-            with session() as s:
-                experiments.update(s, exp_id, status=side)
-            label = f"exp{exp_id}-{side}"
-            trial = {"experiment_id": exp_id, "side": side, "strategy": sides_trial[side]}
-            summary = evaluation.run_suite(suite, f"{label}-{_stamp()}", repeats=repeats, trial=trial)
-            sides[side] = experiments.side_metrics(summary) | {"dimensions": summary.get("dimensions") or {}}
-            with session() as s:
-                experiments.update(s, exp_id, **{side: sides[side]})
+            kind = e.candidate["kind"]
+        trials = {side: {"experiment_id": exp_id, "side": side, "strategy": sides_trial[side]}
+                  for side in ("baseline", "candidate")}
+        try:
+            sides = experiments.run_sides(exp_id, trials, lambda side: f"exp{exp_id}-{side}-{_stamp()}")
+        except experiments.OverBudget as stop:  # ASEAO10 S10-R-02
+            return experiments._stopped(exp_id, str(stop))
         cmp = compare(sides["baseline"], sides["candidate"])
         b, c = sides["baseline"]["pass_rate"] or 0, sides["candidate"]["pass_rate"] or 0
         verdict = (f"recommend the candidate {kind} template ({cmp['why']}): {c:.0%} vs {b:.0%} "

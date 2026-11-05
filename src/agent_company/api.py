@@ -591,6 +591,7 @@ class ExperimentBody(BaseModel):
     hypothesis: str = ""
     suite: str = "smoke"
     repeats: int = Field(default=1, ge=1, le=10)
+    budget_usd: float = Field(default=0.0, ge=0, le=1000)  # what its eval runs may cost; 0 = no limit (S10-R-02)
 
 
 class PlanBody(BaseModel):
@@ -1794,7 +1795,7 @@ def create_app(start_background: bool = True) -> FastAPI:
             raise PermissionError("workflow template experiments are for administrators")
         out = experiments.propose(body.target, body.candidate, agent_id=body.agent_id, role=body.role,
                                   hypothesis=body.hypothesis, suite=body.suite, repeats=body.repeats,
-                                  created_by=f"user:{admin['name']}")
+                                  created_by=f"user:{admin['name']}", budget_usd=body.budget_usd)
         _audit(admin, "experiment_propose", out["id"], after={"target": out["target"], "role": out["role"],
                                                              "agent_id": out["agent_id"]})
         return out

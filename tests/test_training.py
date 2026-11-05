@@ -353,3 +353,42 @@ def test_learning_api():
         assert "skills" in app.get("/api/certifications").json()[0]
         kinds = {x["name"]: x["kind"] for x in app.get("/api/evals").json()["suites"]}
         assert kinds["python-final"] == "final" and kinds["smoke"] == "benchmark"
+
+
+def test_experiments_record_their_commit_and_stop_on_their_budget(monkeypatch):
+    """ASEAO10 S10-R-02: reproducible (the platform's commit) and stopped on a budget (AT-025, AT-026)."""
+    from agent_company.db import EvalRun, session
+
+    router.add_model({"name": "New", "kind": "llm", "model_id": "openai/new"})
+    e = experiments.propose("route", "New", role="developer", repeats=3, budget_usd=0.25)
+    assert e["dataset"]["budget_usd"] == 0.25 and len(e["dataset"]["source_commit"]) == 40
+    with pytest.raises(ValueError):
+        experiments.propose("route", "New", role="developer", budget_usd=-1)
+    ran = []
+
+    def run_goal(gid):  # every eval run costs $0.10
+        ran.append(gid)
+        loop._update_goal(gid, status="planning", reason="test")
+        loop._update_goal(gid, status="failed", reason="test")
+
+    monkeypatch.setattr(loop, "run_goal", run_goal)
+    monkeypatch.setattr(evaluation, "label_cost", lambda label: 0.10 * len(ran))
+    out = evaluation.run_suite("smoke", "budgeted", repeats=3, budget_usd=0.25)
+    assert out["stopped_on_budget"] and len(ran) == 3, "stops before the next run once the label cost $0.25"
+    with session() as s:
+        assert s.query(EvalRun).filter(EvalRun.label == "budgeted").count() == 3
+
+    monkeypatch.setattr(experiments, "_spawn", lambda fn: fn())
+    calls = []
+
+    def suite(suite, label, repeats=3, only=None, trial=None, budget_usd=0.0):
+        calls.append(budget_usd)
+        return {"label": label, "runs": 2, "passed": 1, "pass_rate": 0.5, "avg_iterations": 1.0, "avg_seconds": 1.0,
+                "total_cost": 0.2, "cost_per_passed": 0.2, "stopped_on_budget": len(calls) == 2}
+
+    monkeypatch.setattr(evaluation, "run_suite", suite)
+    experiments.start(e["id"])
+    out = experiments.get(e["id"])
+    assert calls == [0.25, pytest.approx(0.05)], "the candidate gets what the baseline left"
+    assert out["status"] == "failed" and out["decision"].startswith("stopped on its budget")
+    assert "candidate" in out["decision"]

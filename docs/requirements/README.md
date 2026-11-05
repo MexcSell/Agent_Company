@@ -104,7 +104,8 @@ the order is safety and correctness of that pipeline first, then management, the
    done 2026-11-05.
    G-R-09 the mission digest after a goal done 2026-11-05, then SPEC-02 AT-014 (a refused launch is audited)
    and G-R-02 operational metrics, then ASEAO10 S10-R-01 (a product proposal needs its documented case)
-   and G-R-08 file leases between concurrent goals.
+   and G-R-08 file leases between concurrent goals, then S10-R-02 experiments with their commit and a budget
+   (S10-R-03 and S05-R-10 confirmed as met by existing controls).
 5. **Still open** (2026-11-05): the gated rooms one at a time
    (G-R-04); L3 for the agent CLIs themselves (they need network and their logins, see the threat model's known
    gaps).
