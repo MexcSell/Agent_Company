@@ -81,7 +81,10 @@ Acceptance: `tests/test_research_agent.py`.
 **Status: done (`router.resolve_chain` with `avoid_provider`, `router.run`)**
 
 When another family is asked for (the review of a research report, a reviewer of a developer's work), an agent CLI of
-another sign-in counts as well as an API model: Codex reviews what Claude wrote and the other way round.
+another sign-in counts as well as an API model: Codex reviews what Claude wrote and the other way round. For now only
+outside the goal loop (the research room's reviews): a code review there must run the tests, which Codex's read-only
+sandbox cannot (no writes, not even uv's cache), so `loop._execute` passes `other_cli=False` until goal 93 hands QA
+the gate's own output. Codex needed an ACL `u:root:x` on `/home/luca` (0750) to enter the worktrees at all.
 Acceptance: `tests/test_model_limits.py::test_another_family_can_be_an_agent_cli`.
 
 ### EL-R-04 A recurring failure becomes a proposed rule
