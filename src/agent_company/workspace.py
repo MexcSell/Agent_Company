@@ -70,15 +70,55 @@ PROVIDERS = {"claude": "Claude Code", "codex": "Codex", "copilot": "GitHub Copil
 def available() -> dict[str, Any]:
     exe = shutil.which("claude")
     codex, copilot = shutil.which("codex"), shutil.which("copilot")
+    catalog = router_models()
     return {"available": exe is not None, "path": exe or "", "models": MODELS, "version": _version(exe),
             "account": _account(),
             "providers": [
                 {"id": "claude", "label": "Claude Code", "available": exe is not None, "models": MODELS,
-                 "efforts": EFFORTS, "version": _version(exe), "install": "npm i -g @anthropic-ai/claude-code"},
+                 "catalog": catalog["claude"], "efforts": EFFORTS, "version": _version(exe),
+                 "install": "npm i -g @anthropic-ai/claude-code"},
                 {"id": "codex", "label": "Codex", "available": codex is not None, "models": CODEX_MODELS,
-                 "efforts": CODEX_EFFORTS, "version": _version(codex), "install": "npm i -g @openai/codex, then `codex login`"},
+                 "catalog": catalog["codex"], "efforts": CODEX_EFFORTS, "version": _version(codex),
+                 "install": "npm i -g @openai/codex, then `codex login`"},
                 {"id": "copilot", "label": "GitHub Copilot", "available": copilot is not None, "models": ["default"],
                  "efforts": ["default"], "version": _version(copilot), "install": "npm i -g @github/copilot, then `copilot` to sign in"}]}
+
+
+_ROUTER_KIND = {"claude_code": "claude", "codex": "codex"}
+
+
+def router_models() -> dict[str, list[dict[str, Any]]]:
+    """The Models page's Claude Code and Codex models, offered beside the CLI's own aliases: one with its own sign-in
+    (account) or another address (base URL) runs with it. Agents' gates (ENABLE_CLAUDE_CODE) do not apply here."""
+    from sqlalchemy import select
+
+    from agent_company import router
+    from agent_company.db import ModelEntry, session
+
+    out: dict[str, list[dict[str, Any]]] = {"claude": [], "codex": []}
+    with session() as s:
+        rows = s.scalars(select(ModelEntry).where(ModelEntry.kind.in_(list(_ROUTER_KIND)), ModelEntry.enabled.is_(True))
+                         .order_by(ModelEntry.id)).all()
+        for m in rows:
+            why = ""
+            if m.account and not (router.claude_config_dir(m.account) / ".credentials.json").is_file():
+                why = f"no Claude Code sign-in in data/claude-accounts/{m.account}"
+            out[_ROUTER_KIND[m.kind]].append({"name": m.name, "model_id": m.model_id, "account": m.account or "",
+                                              "remote": bool(m.base_url), "available": not why, "reason": why})
+    return out
+
+
+def _router_choice(name: str, provider: str) -> Any:
+    from sqlalchemy import select
+
+    from agent_company import router
+    from agent_company.db import ModelEntry, session
+
+    with session() as s:
+        m = s.scalars(select(ModelEntry).where(ModelEntry.name == name)).first()
+        if m is None or not m.enabled or _ROUTER_KIND.get(m.kind) != provider:
+            raise ValueError(f"no {PROVIDERS[provider]} model {name!r} on the Models page")
+        return router._choice(m, "chosen in the panel")
 
 
 _VERSION: dict[str, str] = {}
@@ -253,6 +293,10 @@ class Run:
         self.started, self.ended = time.time(), 0.0
         self.proc: subprocess.Popen[str] | None = None
         self.lock = threading.Lock()
+        # A Models-page model: its name, the CLI's environment (own sign-in, base URL) and its Claude config folder.
+        self.router_model = ""
+        self.env: dict[str, str] | None = None
+        self.home: Path | None = None
 
     def add(self, *events: dict[str, Any]) -> None:
         with self.lock:
@@ -262,7 +306,8 @@ class Run:
     def to_dict(self, after: int = 0) -> dict[str, Any]:
         with self.lock:
             return {"id": self.id, "prompt": self.prompt, "cwd": self.cwd, "status": self.status, "provider": self.provider,
-                    "session_id": self.session_id, "title": self.title, "model": self.model, "effort": self.effort, "started": self.started,
+                    "session_id": self.session_id, "title": self.title, "model": self.model, "router_model": self.router_model,
+                    "effort": self.effort, "started": self.started,
                     "ended": self.ended, "images": [{"id": i["id"], "name": i["name"]} for i in self.images],
                     "events": self.events[after:], "next": len(self.events)}
 
@@ -307,8 +352,30 @@ def _prompt_text(run: Run) -> str:
     return f"{prompt}\n\nAttached files (open them with the Read tool):\n{files}"
 
 
-def _env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if k not in {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"}}
+def _env(base: dict[str, str] | None = None) -> dict[str, str]:
+    return {k: v for k, v in (base or os.environ).items() if k not in {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"}}
+
+
+def _homes() -> list[Path]:
+    """Where Claude Code keeps transcripts: this host's sign-in, then the Models page's own sign-ins."""
+    from agent_company.config import settings
+
+    acc = settings().data_dir / "claude-accounts"
+    return [claude_home()] + (sorted(p for p in acc.iterdir() if p.is_dir()) if acc.is_dir() else [])
+
+
+def _carry_transcript(session_id: str, home: Path) -> bool:
+    """A conversation that moves to another sign-in takes its transcript along: the newest copy of it goes into
+    `home`, where `--resume` looks. False when it has none yet."""
+    hits = [p for h in _homes() for p in (h / "projects").glob(f"*/{session_id}.jsonl")]
+    if not hits:
+        return False
+    src = max(hits, key=lambda p: p.stat().st_mtime)
+    dst = home / "projects" / src.parent.name / src.name
+    if src != dst:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+    return True
 
 
 def _fallback_title(prompt: str) -> str:
@@ -360,7 +427,7 @@ def _run_title(session_id: str) -> str:
 
 def start(prompt: str, cwd: str, owner: str, session_id: str = "", model: str = "",
           images: list[dict[str, Any]] | None = None, title: str = "", provider: str = "claude", system: str = "",
-          effort: str = "") -> Run:
+          effort: str = "", router_model: str = "") -> Run:
     if not prompt.strip():
         raise ValueError("write a prompt first")
     if provider not in PROVIDERS:
@@ -381,6 +448,9 @@ def start(prompt: str, cwd: str, owner: str, session_id: str = "", model: str = 
     if busy is not None:
         raise ValueError(f"this conversation is still running in another process (pid {busy['pid']}): "
                          "wait for it to finish, or stop it from the sessions window")
+    choice = _router_choice(router_model, provider) if router_model else None
+    if choice is not None:
+        model = choice.model_id
     if model and model not in MODELS and not re.fullmatch(r"[\w.\-\[\]]{2,80}", model):
         raise ValueError("bad model name")
     effort = "" if effort == "default" else effort
@@ -388,8 +458,18 @@ def start(prompt: str, cwd: str, owner: str, session_id: str = "", model: str = 
         raise ValueError(f"unknown effort {effort!r} for {PROVIDERS[provider]}")
     title = re.sub(r"\s+", " ", title or "").strip()[:80]
     run = Run(prompt, str(folder), owner, session_id, model, images or [], title, provider, system[:20000], effort)
-    # A conversation whose first prompt failed before Claude Code wrote anything starts afresh under its id.
-    run.resume = bool(session_id) and (provider == "codex" or _transcript_path(session_id) is not None)
+    if choice is not None:
+        from agent_company.executors import claude_env
+        from agent_company.router import claude_config_dir
+
+        run.router_model = choice.name
+        if provider == "claude":
+            extra = claude_env(choice)
+            run.env = _env(extra) if extra else None
+            run.home = claude_config_dir(choice.account) if choice.account else None
+    # A conversation whose first prompt failed before Claude Code wrote anything starts afresh under its id; one
+    # that continues under another sign-in takes its transcript there.
+    run.resume = bool(session_id) and (provider == "codex" or _carry_transcript(session_id, run.home or claude_home()))
     if provider == "codex" and not session_id:
         run.session_id = ""  # Codex names its thread; known from its first event
     with _runs_lock:
@@ -399,7 +479,7 @@ def start(prompt: str, cwd: str, owner: str, session_id: str = "", model: str = 
             if old.status == "running":
                 stop(old.id)
     try:
-        run.proc = subprocess.Popen(_command(run), cwd=folder, env=_env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        run.proc = subprocess.Popen(_command(run), cwd=folder, env=run.env or _env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True, bufsize=1, start_new_session=True)
     except OSError as e:
         run.status, run.ended = "failed", time.time()
@@ -448,6 +528,11 @@ def _pump(run: Run, text: str) -> None:
         run.add({"kind": "error", "text": ("".join(stderr).strip() or f"{name} exited with code {code}")[-4000:]})
     if run.status == "running":
         run.status = "done" if code == 0 else "failed"
+    if run.home is not None:  # back to this host's sign-in, where the history, transcripts and resume look
+        try:
+            _carry_transcript(run.session_id, claude_home())
+        except OSError:
+            pass
     run.ended = time.time()
 
 

@@ -407,6 +407,7 @@ class ClaudeBody(BaseModel):
     cwd: str = ""
     session_id: str = ""
     model: str = ""
+    router_model: str = Field(default="", max_length=120)  # a Models-page model by name: its id, sign-in and address
     effort: str = Field(default="", max_length=16)  # low … max; empty: the CLI's own setting
     title: str = Field(default="", max_length=200)
     attachments: list[str] = Field(default_factory=list, max_length=10)
@@ -1657,11 +1658,12 @@ def create_app(start_background: bool = True) -> FastAPI:
             cwd, system = p["path"], gm.system_prompt(p)
         try:
             run = workspace.start(body.prompt, cwd, admin["name"], body.session_id, body.model, images,
-                                  body.title, body.provider, system, body.effort)
+                                  body.title, body.provider, system, body.effort, body.router_model)
         except RuntimeError as e:
             raise HTTPException(503, str(e)) from e
         _audit(admin, "workspace_claude", run.cwd, after={"run": run.id, "prompt": body.prompt[:200],
                                                          "provider": body.provider, "project": body.project_id,
+                                                         "model": run.router_model or run.model or "default",
                                                          "resume": body.session_id or None}, severity="high")
         return run.to_dict()
 

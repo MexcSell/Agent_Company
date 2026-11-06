@@ -161,7 +161,7 @@ function gmPanel(d) {
   if (!g) {
     const el = document.createElement("aside");
     el.className = "wc proj-gm";
-    const panel = WSP.makeClaudePanel({ key: `ac.proj.${d.id}.gm${prov === "claude" ? "" : "." + prov}`, root: () => d.path, projectId: () => d.id, provider: prov });
+    const panel = WSP.makeClaudePanel({ key: `ac.proj.${d.id}.gm${prov === "claude" ? "" : "." + prov}`, root: () => d.path, projectId: () => d.id, provider: prov, model: d.gm?.model });
     g = { el, panel, ready: panel.init(el) };
     gmPanels.set(key, g);
   }

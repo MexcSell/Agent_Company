@@ -23,7 +23,7 @@ window.WSP = window.WSP || {};
   function makePanel(opt = {}) {
   const K = opt.key || "ac.wsp.claude";
   const ROOT = opt.root || (() => W.root());
-  const C = { el: null, convs: [], tab: "", drafts: {}, open: new Set(), history: [], hpos: -1, model: store.get(K + ".model") || "default", effort: store.get(K + ".effort") || "default",
+  const C = { el: null, convs: [], tab: "", drafts: {}, open: new Set(), history: [], hpos: -1, model: store.get(K + ".model") || (opt.model ? `m:${opt.model}` : "default"), effort: store.get(K + ".effort") || "default",
     sessions: [], names: {}, view: { sid: "", events: [], next: 0, d: null }, info: "", cli: null, dtimer: 0, following: "",
     closed: new Set(), hist: { open: false, tab: "running", q: "", items: [], total: 0, at: 0, timer: 0 },
     logs: new Map(), provider: opt.provider || store.get(K + ".provider") || "claude", models: {}, usage: { d: null, at: 0, busy: false, err: "" }, act: { d: null, at: 0, busy: false, err: "" } };
@@ -69,9 +69,9 @@ window.WSP = window.WSP || {};
 
   const init = async (el) => {
     C.el = el;
-    el.innerHTML = `<div class="wc-head"><span class="wc-logo" aria-hidden="true">✳</span><select id="wc-prov" class="wc-prov" aria-label="Agent" title="Which agent this conversation talks to"></select><span class="wc-dot" title="idle"></span><span class="grow"></span>
-        <span class="wc-pick"><select id="wc-effort" aria-label="Effort" title="Effort: how long the agent thinks before it answers. Higher is more thorough, slower and uses more tokens"></select>
-        <select id="wc-model" aria-label="Model" title="Model"></select></span>
+    el.innerHTML = `<div class="wc-head"><span class="wc-agent"><span class="wc-logo" aria-hidden="true">✳</span><select id="wc-prov" class="wc-prov" aria-label="Agent" title="Which agent this conversation talks to"></select><span class="wc-dot" title="idle"></span></span><span class="grow"></span>
+        <span class="wc-mp"><button type="button" class="wc-mbtn" id="wc-mbtn" aria-haspopup="menu" aria-expanded="false" title="Model and effort for the next prompt"><span class="wc-mname"></span><span class="wc-meff"></span>${W.svg("M6 9l6 6 6-6")}</button>
+          <div class="wc-menu" id="wc-menu" role="menu" aria-label="Model and effort" hidden></div></span>
         <button class="icon-btn sm" id="wc-compact" title="Compact this conversation: Claude Code summarises it to cut token use (/compact)">${W.svg("M12 3v6M9 6l3 3 3-3M12 21v-6M9 18l3-3 3 3M4 12h16")}</button>
         <button class="icon-btn sm" id="wc-hist-btn" title="Sessions: running now and history (/history)" aria-expanded="false">${W.svg("M12 7v5l3 2M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4")}</button>
         <button class="icon-btn sm" id="wc-info-btn" title="Status, tasks and agents (/status, /tasks, /agents)" aria-expanded="false">${W.svg("M3 12h4l3-8 4 16 3-8h4")}</button>
@@ -120,10 +120,21 @@ window.WSP = window.WSP || {};
       if (text) mention(text.split("\n"));
     });
     el.querySelector("#wc-new").onclick = () => { selectTab(blankConv().id); ta.focus(); };
-    const sel = el.querySelector("#wc-model");
-    sel.onchange = () => { C.model = sel.value; store.set(K + ".model", C.model); };
-    const eff = el.querySelector("#wc-effort");
-    eff.onchange = () => { C.effort = eff.value; store.set(K + ".effort", C.effort); };
+    const mbtn = el.querySelector("#wc-mbtn"), menu = el.querySelector("#wc-menu");
+    mbtn.onclick = () => openMenu(menu.hidden);
+    menu.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-model],[data-effort]");
+      if (!b || b.disabled) return;
+      if (b.dataset.model) { C.model = b.dataset.model; store.set(K + ".model", C.model); openMenu(false); mbtn.focus(); }
+      else { C.effort = b.dataset.effort; store.set(K + ".effort", C.effort); }
+      renderProvider();
+    });
+    menu.addEventListener("keydown", (e) => {
+      const items = [...menu.querySelectorAll("button:not(:disabled)")], i = items.indexOf(document.activeElement);
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); openMenu(false); mbtn.focus(); }
+      else if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); items[(i + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus(); }
+    });
+    document.addEventListener("pointerdown", (e) => { if (!menu.hidden && !e.target.closest(".wc-mp")) openMenu(false); });
     el.querySelector("#wc-prov").onchange = (e) => setProvider(e.target.value);
     el.querySelector("#wc-compact").onclick = () => compact();
     // Copy buttons, and keep track of which blocks the user expanded.
@@ -242,19 +253,60 @@ window.WSP = window.WSP || {};
     if (!C.el) return;
     const c = cur(), p = c ? provOf(c) : "claude", info = C.models[p];
     const ps = C.el.querySelector("#wc-prov");
-    ps.innerHTML = Object.entries(PROV).map(([k, v]) => { const m = C.models[k]; return `<option value="${k}" ${m && !m.available ? "disabled" : ""}>${v.label}${m && !m.available ? " (not installed)" : ""}</option>`; }).join("");
-    ps.value = p; ps.disabled = !c || !!c.session || busy(c) || !!opt.provider;
+    const locked = !c || !!c.session || busy(c) || !!opt.provider;
+    // Locked, it lists only its agent: a select is as wide as its longest option.
+    ps.innerHTML = Object.entries(PROV).filter(([k]) => !locked || k === p).map(([k, v]) => { const m = C.models[k]; return `<option value="${k}" ${m && !m.available ? "disabled" : ""}>${v.label}${m && !m.available ? " (not installed)" : ""}</option>`; }).join("");
+    ps.value = p; ps.disabled = locked; fitSelect(ps);
     ps.title = c?.session ? "This conversation stays with its agent: start a new conversation for another" : "Which agent this conversation talks to";
     C.el.querySelector(".wc-head .wc-logo").textContent = PROV[p].logo;
     C.el.querySelector(".wc-head .wc-logo").dataset.p = p;
-    const sel = C.el.querySelector("#wc-model"), models = info?.models || ["default"];
-    sel.innerHTML = models.map((m) => `<option value="${m}">${m === "default" ? "Default model" : m[0].toUpperCase() + m.slice(1)}</option>`).join("");
-    sel.value = models.includes(C.model) ? C.model : "default";
-    // Effort: the agent's own levels; "default" leaves it to the CLI's setting. Hidden where there are none (Copilot).
-    const es = C.el.querySelector("#wc-effort"), efforts = info?.efforts || ["default"];
-    es.innerHTML = efforts.map((e) => `<option value="${e}">${EFFORT[e] || e}</option>`).join("");
-    es.value = efforts.includes(C.effort) ? C.effort : "default";
-    es.hidden = efforts.length < 2;
+    const m = modelOf(c), eff = effortOf(c);
+    const btn = C.el.querySelector("#wc-mbtn");
+    btn.querySelector(".wc-mname").textContent = m.label === PROV[p].label ? prettyModel(m.note) || m.label : m.label;
+    btn.querySelector(".wc-meff").textContent = eff;
+    btn.querySelector(".wc-meff").hidden = !eff;
+    btn.title = `Model: ${m.label}${m.note ? ` (${m.note})` : ""} · effort: ${EFFORT[eff || "default"]}. Applies to the next prompt`;
+    btn.disabled = !info;
+    if (!C.el.querySelector("#wc-menu").hidden) renderMenu();
+  }
+  // Models: the CLI's own aliases, then the Models page's models of this agent (`m:<name>`: the server runs them with
+  // their model id, their own sign-in or address). A conversation can change model between prompts.
+  const ALIAS = { default: "Default", opus: "Opus", sonnet: "Sonnet", haiku: "Haiku" };
+  function modelsOf(p) {
+    const info = C.models[p];
+    return [...(info?.models || ["default"]).map((v) => ({ v, label: ALIAS[v] || v, note: v === "default" ? `${PROV[p].label}'s own setting` : "", ok: true })),
+      ...(info?.catalog || []).map((x) => ({ v: `m:${x.name}`, label: x.name, note: x.model_id, ok: x.available, why: x.reason, router: true,
+        tag: [opt.model === x.name ? "the GM's model" : "", x.account ? `sign-in: ${x.account}` : x.remote ? "other address" : ""].filter(Boolean).join(" · ") }))];
+  }
+  // A select as wide as its chosen option, not its longest one, so the agent's name, chevron and dot stay together.
+  let measure = null;
+  function fitSelect(s) {
+    const cs = getComputedStyle(s);
+    measure ||= document.createElement("canvas").getContext("2d");
+    measure.font = cs.fontSize ? `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}` : "700 13px sans-serif";
+    s.style.width = `${Math.ceil(measure.measureText(s.options[s.selectedIndex]?.text || "").width) + (s.disabled ? 2 : 28)}px`;
+  }
+  // claude-opus-5-5 → Opus 5.5 (the chip beside an agent called "Claude Code" should not say "Claude Code" again).
+  const prettyModel = (id) => { const x = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(id || ""); return x ? `${x[1][0].toUpperCase()}${x[1].slice(1)} ${x[2]}${x[3] ? "." + x[3] : ""}` : id; };
+  const modelOf = (c) => { const list = modelsOf(c ? provOf(c) : "claude"); return list.find((x) => x.v === C.model && x.ok) || list[0]; };
+  function renderMenu() {
+    const c = cur(), p = c ? provOf(c) : "claude", list = modelsOf(p), sel = modelOf(c).v;
+    const efforts = C.models[p]?.efforts || ["default"], eff = effortOf(c) || "default";
+    const item = (x) => `<button type="button" role="menuitemradio" aria-checked="${x.v === sel}" data-model="${esc(x.v)}"${x.ok ? "" : ` disabled title="${esc(x.why)}"`}>
+      <span class="wc-mi-check" aria-hidden="true">${x.v === sel ? W.svg("M5 12l5 5L20 7") : ""}</span><span class="wc-mi-name">${esc(x.label)}</span>
+      <span class="wc-mi-note">${esc(x.ok ? x.note : x.why)}</span>${x.tag ? `<span class="wc-mi-tag">${esc(x.tag)}</span>` : ""}</button>`;
+    const mine = list.filter((x) => x.router);
+    C.el.querySelector("#wc-menu").innerHTML = `<div class="wc-mhead">Model</div>${list.filter((x) => !x.router).map(item).join("")}
+      ${mine.length ? `<div class="wc-mhead">Models page</div>${mine.map(item).join("")}` : ""}
+      ${efforts.length > 1 ? `<div class="wc-mhead">Effort <span>how long it thinks before answering</span></div>
+        <div class="wc-seg" role="group" aria-label="Effort" style="grid-template-columns: repeat(${efforts.length <= 4 ? efforts.length : 3}, 1fr)">${efforts.map((e) => `<button type="button" data-effort="${e}" aria-pressed="${e === eff}">${e === "default" ? "Default" : e}</button>`).join("")}</div>` : ""}
+      <div class="wc-mfoot">For the next prompt: the conversation keeps its history.</div>`;
+  }
+  function openMenu(open) {
+    const menu = C.el.querySelector("#wc-menu");
+    menu.hidden = !open;
+    C.el.querySelector("#wc-mbtn").setAttribute("aria-expanded", String(open));
+    if (open) { renderMenu(); (menu.querySelector('[aria-checked="true"]') || menu.querySelector("button"))?.focus(); }
   }
   function setProvider(p) {
     const c = cur();
@@ -340,9 +392,10 @@ window.WSP = window.WSP || {};
     }
     const cwd = c.cwd || ROOT();
     if (!cwd) return toast("Open a folder in the explorer first");
+    const m = modelOf(c);
     try {
       const run = await api("/api/workspace/claude", { method: "POST", body: { prompt: prompt || "Look at the attached image(s).", cwd, session_id: c.session, title: c.title,
-        model: C.model === "default" ? "" : C.model, effort: effortOf(c), attachments: d.uploads.map((u) => u.id), provider: provOf(c), project_id: opt.projectId?.() ?? null } });
+        model: m.router || m.v === "default" ? "" : m.v, router_model: m.router ? m.v.slice(2) : "", effort: effortOf(c), attachments: d.uploads.map((u) => u.id), provider: provOf(c), project_id: opt.projectId?.() ?? null } });
       c.session = run.session_id; c.cwd = run.cwd; c.title = c.title || run.title || "";
       C.history.push(run.prompt); C.hpos = -1;
       c.runs.push(run); saveConvs();
@@ -835,7 +888,7 @@ window.WSP = window.WSP || {};
       ["Session", d || s.name ? `${esc(s.name || "")} <span class="mono muted">${esc(viewSid() || "")}</span>` : ""],
       ["Started from", s.entrypoint || d?.entrypoint ? `${esc(ENTRY[s.entrypoint || d.entrypoint] || s.entrypoint || d.entrypoint)}${s.pid ? ` <span class="muted">· pid ${s.pid}${s.started ? ` · up ${since(s.started)}` : ""}</span>` : ""}` : ""],
       ["Folder", d?.cwd ? `<span class="mono">${esc(d.cwd)}</span>${d.git_branch ? ` <span class="wc-badge">⎇ ${esc(d.git_branch)}</span>` : ""}` : ""],
-      ["Model", d?.model ? `<span class="mono">${esc(d.model)}</span>` : c ? esc(C.model === "default" ? "Default model" : C.model) : ""],
+      ["Model", d?.model ? `<span class="mono">${esc(d.model)}</span>` : c ? esc(modelOf(c).label) : ""],
       ["Effort", c && effortOf(c) ? esc(effortOf(c)) : ""],
       ["Permissions", d?.permission_mode ? esc(d.permission_mode) : ""],
       ["Context", d?.context_tokens ? `${fmtK(d.context_tokens)} tokens <span class="muted">in the last request</span>` : ""],

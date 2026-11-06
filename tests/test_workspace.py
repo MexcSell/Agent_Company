@@ -276,6 +276,63 @@ def test_claude_panel_runs_resumes_and_attaches_images(admin, root, monkeypatch)
     assert member_of(admin).post("/api/workspace/claude", json={"prompt": "x"}).status_code == 403
 
 
+def test_claude_panel_runs_a_models_page_model_with_its_own_sign_in(admin, root, monkeypatch):
+    from agent_company import router
+    from agent_company.config import settings
+
+    sid = STREAM[0]["session_id"]
+    acct = settings().data_dir / "claude-accounts" / "claude"
+    router.add_model({"name": "claude_37", "kind": "claude_code", "model_id": "claude-opus-5-5", "account": "claude"})
+    router.add_model({"name": "Codex 5", "kind": "codex", "model_id": "gpt-5-codex"})
+    FakeProc.calls = []
+
+    def fake(cmd, **kw):  # Claude Code writes the conversation under the config folder it runs with
+        home = Path(kw["env"].get("CLAUDE_CONFIG_DIR") or os.environ["CLAUDE_CONFIG_DIR"])
+        (home / "projects" / "-x").mkdir(parents=True, exist_ok=True)
+        (home / "projects" / "-x" / f"{sid}.jsonl").write_text(f"{len(FakeProc.calls)}\n")
+        return FakeProc(cmd, **kw)
+
+    monkeypatch.setattr(workspace.shutil, "which", lambda _: "/usr/bin/claude")
+    monkeypatch.setattr(workspace.subprocess, "Popen", fake)
+    monkeypatch.setattr(workspace, "make_title", lambda prompt: "T")
+    provs = {p["id"]: p for p in admin.get("/api/workspace/claude").json()["providers"]}
+    mine = {m["name"]: m for m in provs["claude"]["catalog"]}
+    assert mine["claude_37"] == {"name": "claude_37", "model_id": "claude-opus-5-5", "account": "claude", "remote": False,
+                                 "available": False, "reason": "no Claude Code sign-in in data/claude-accounts/claude"}
+    assert [m["name"] for m in provs["codex"]["catalog"]] == ["Codex CLI", "Codex 5"]
+    acct.mkdir(parents=True)
+    (acct / ".credentials.json").write_text("{}")
+    assert {m["name"]: m for m in admin.get("/api/workspace/claude").json()["providers"][0]["catalog"]}["claude_37"]["available"]
+
+    def wait(run):
+        for _ in range(100):
+            d = admin.get(f"/api/workspace/claude/{run['id']}").json()
+            if d["status"] != "running":
+                return d
+            time.sleep(0.02)
+
+    # A conversation on this host's sign-in continues on claude_37: its model id, its sign-in, its transcript along.
+    host = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / "-x"
+    host.mkdir(parents=True)
+    (host / f"{sid}.jsonl").write_text("host\n")
+    run = admin.post("/api/workspace/claude", json={"prompt": "go on", "cwd": str(root), "session_id": sid, "router_model": "claude_37"}).json()
+    assert run["router_model"] == "claude_37" and run["model"] == "claude-opus-5-5"
+    wait(run)
+    cmd, kw = FakeProc.calls[0]
+    assert cmd[cmd.index("--model") + 1] == "claude-opus-5-5" and cmd[cmd.index("--resume") + 1] == sid
+    assert kw["env"]["CLAUDE_CONFIG_DIR"] == str(acct) and "CLAUDECODE" not in kw["env"]
+    # It ran there and came back to this host's history, where the panel and the next prompt find it.
+    assert (host / f"{sid}.jsonl").read_text() == "0\n"
+    wait(admin.post("/api/workspace/claude", json={"prompt": "and here", "cwd": str(root), "session_id": sid}).json())
+    cmd2, kw2 = FakeProc.calls[1]
+    assert "--resume" in cmd2 and "--model" not in cmd2 and kw2["env"].get("CLAUDE_CONFIG_DIR") == os.environ["CLAUDE_CONFIG_DIR"]
+    # Only a model of the conversation's own agent, by its name.
+    assert admin.post("/api/workspace/claude", json={"prompt": "x", "cwd": str(root), "router_model": "Codex 5"}).status_code == 400
+    assert admin.post("/api/workspace/claude", json={"prompt": "x", "cwd": str(root), "router_model": "nope"}).status_code == 400
+    assert any(r["action"] == "workspace_claude" and (r.get("after") or {}).get("model") == "claude_37"
+               for r in admin.get("/api/audit").json()["records"])
+
+
 def test_codex_effort_is_a_config_override():
     run = workspace.Run("hi", "/tmp", "admin", "", "", [], provider="codex", effort="medium")
     cmd = workspace._command(run)

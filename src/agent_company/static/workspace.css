@@ -209,19 +209,46 @@ table.csv .c4 { color: var(--t-kw); } table.csv .c5 { color: var(--t-num); } tab
 .wc { display: flex; flex-direction: column; background: var(--panel); position: relative; }
 .wc.drop { box-shadow: inset 0 0 0 2px var(--claude); }
 .wc-head { display: flex; align-items: center; gap: 7px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--border); flex: none; white-space: nowrap; min-height: 41px; }
-.wc-head select { width: auto; font-size: 12px; padding: 2px 4px; min-width: 0; flex: 0 1 auto; text-overflow: ellipsis; }
-/* A narrow panel: the agent's name gives way first (its logo stays), effort and model stay readable. */
-.wc-head .wc-prov { flex-shrink: 30; }
-.wc-pick { display: flex; gap: 6px; min-width: 0; }
-#wc-effort { min-width: 62px; } #wc-model { min-width: 72px; }
-/* A narrow panel: effort and model get a row of their own under the buttons, with their full names. */
+/* Left the agent (logo, name, status dot) as one unit; right the model chip, then the buttons. In a narrow panel
+   the model chip gives way first (its name ellipsised), the agent's name never. */
+.wc-head > .grow { flex: 1 1 0 !important; }  /* the spacer never pushes a button to the next row */
+.wc-agent { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.wc-mp { position: relative; display: flex; min-width: 64px; flex: 0 1 auto; }
+.wc-mbtn { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; height: 26px; padding: 0 6px 0 10px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.wc-mbtn:hover:not(:disabled), .wc-mbtn[aria-expanded="true"] { border-color: var(--muted); }
+.wc-mbtn:disabled { opacity: .6; cursor: default; }
+.wc-mbtn svg { width: 14px; height: 14px; flex: none; color: var(--muted); }
+.wc-mname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.wc-meff { flex: none; padding: 0 6px; border-radius: 999px; font-size: 11px; line-height: 17px; background: color-mix(in srgb, var(--claude) 14%, transparent); color: var(--claude); }
+.wc-meff[hidden] { display: none; }
+.wc-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: 300px; max-width: calc(100cqw - 16px); max-height: 70vh; overflow: auto;
+  padding: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgb(0 0 0 / .18); white-space: normal; }
+.wc-menu[hidden] { display: none; }
+.wc-mhead { padding: 8px 8px 4px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.wc-mhead span { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.wc-menu [data-model] { display: grid; grid-template-columns: 18px 1fr; column-gap: 6px; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px;
+  background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.wc-menu [data-model]:hover:not(:disabled), .wc-menu [data-model]:focus-visible { background: var(--hover); outline: none; }
+.wc-menu [data-model][aria-checked="true"] .wc-mi-name { font-weight: 600; }
+.wc-menu [data-model]:disabled { opacity: .5; cursor: not-allowed; }
+.wc-mi-check { grid-row: span 3; display: flex; align-items: flex-start; padding-top: 2px; color: var(--claude); }
+.wc-mi-check svg { width: 14px; height: 14px; }
+.wc-mi-note { font-size: 11.5px; color: var(--muted); font-family: var(--mono, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wc-mi-note:empty { display: none; }
+.wc-mi-tag { justify-self: start; margin-top: 3px; padding: 0 6px; border-radius: 999px; font-size: 11px; line-height: 17px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.wc-seg { display: grid; gap: 4px; padding: 2px 8px 6px; }
+.wc-seg button { padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; background: none; color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.wc-seg button:hover { border-color: var(--muted); }
+.wc-seg button[aria-pressed="true"] { border-color: var(--claude); background: color-mix(in srgb, var(--claude) 12%, transparent); color: var(--claude); font-weight: 600; }
+.wc-mfoot { margin: 4px 0 0; padding: 6px 8px 2px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--muted); }
 .wc { container-type: inline-size; }
-@container (max-width: 560px) {
+/* A narrow panel: the model chip gets a row of its own under the agent's name, whole. */
+@container (max-width: 520px) {
   .wc-head { flex-wrap: wrap; row-gap: 6px; }
-  .wc-pick { order: 10; flex: 1 0 100%; }
-  .wc-head > .grow { flex: 1 1 0 !important; }  /* the spacer and the agent's name never push a button to the next row */
-  .wc-head .wc-prov { flex: 1 1 0; min-width: 30px; max-width: max-content; }
-  .wc-pick select { flex: 0 1 auto; }
+  .wc-mp { order: 10; flex: 1 0 100%; }
+  .wc-mbtn { max-width: calc(100% - 8px); }
+  .wc-menu { right: auto; left: 0; }
 }
 .wc-logo { color: var(--claude); font-size: 18px; line-height: 1; font-weight: 700; }
 .wc-logo.big { font-size: 40px; }
@@ -231,9 +258,10 @@ table.csv .c4 { color: var(--t-kw); } table.csv .c5 { color: var(--t-num); } tab
 .wc-logs { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
 .wc-log { flex: 1; min-height: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; }
 .wc-log[hidden] { display: none; }
-.wc-prov { width: auto; font-size: 12.5px; font-weight: 700; padding: 2px 4px; border-color: transparent; background: transparent; }
+.wc-prov { width: auto; font-size: 13px; font-weight: 700; padding: 2px 4px; border-color: transparent; background: transparent; }
 .wc-prov:hover:not(:disabled) { border-color: var(--border); }
-.wc-prov:disabled { opacity: 1; color: var(--text); }
+/* A conversation that stays with its agent: the name is a label, not a dropdown that does nothing. */
+.wc-prov:disabled { opacity: 1; color: var(--text); appearance: none; -webkit-appearance: none; padding: 2px 0; cursor: default; }
 .wc-logo[data-p="codex"] { color: #10a37f; } .wc-logo[data-p="copilot"] { color: #8250df; }
 .cc-compact span { color: var(--tone-teal); font-weight: 600; }
 .cc-run { display: flex; flex-direction: column; gap: 8px; }
