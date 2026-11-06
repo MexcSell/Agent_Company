@@ -13,6 +13,7 @@ import shutil
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -89,6 +90,7 @@ class Choice:
     base_url: str = ""
     api_key_env: str = ""
     session_id: str = ""
+    account: str = ""
 
     @property
     def provider(self) -> str:
@@ -102,7 +104,7 @@ def model_dict(m: ModelEntry) -> dict[str, Any]:
             "input_cost": m.input_cost, "output_cost": m.output_cost,
             "daily_token_limit": m.daily_token_limit, "weekly_token_limit": m.weekly_token_limit,
             "enabled": m.enabled, "builtin": m.builtin, "notes": m.notes, "base_url": m.base_url,
-            "api_key_env": m.api_key_env, "session_id": m.session_id, "available": ok, "unavailable_reason": why,
+            "api_key_env": m.api_key_env, "session_id": m.session_id, "account": m.account, "available": ok, "unavailable_reason": why,
             "clearance": clearance(m), "clearance_set": bool(m.clearance),
             "terms": m.terms or {}, "terms_due": terms_due(m)}
 
@@ -266,7 +268,9 @@ def available(m: ModelEntry) -> tuple[bool, str]:
             return False, "set ENABLE_CLAUDE_CODE=1 to let agents run Claude Code"
         if not shutil.which("claude"):
             return False, "`claude` CLI not found on PATH"
-        if m.session_id and not claude_session_file(m.session_id):
+        if m.account and not (claude_config_dir(m.account) / ".credentials.json").is_file():
+            return False, f"no Claude Code sign-in in data/claude-accounts/{m.account}"
+        if m.session_id and not claude_session_file(m.session_id, m.account):
             return False, f"Claude Code session {m.session_id[:8]} not found on this host"
     elif m.kind == "codex":
         if not settings().enable_codex:
@@ -294,25 +298,39 @@ def available(m: ModelEntry) -> tuple[bool, str]:
 SESSION_RE = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 
 
-def claude_session_file(session_id: str) -> str:
-    """The transcript of a Claude Code session on this host (any project folder), or ''."""
+ACCOUNT_RE = r"[a-z0-9][a-z0-9._-]{0,63}"
+
+
+def claude_config_dir(account: str) -> Path:
+    """A claude_code model's own Claude Code sign-in (its CLAUDE_CONFIG_DIR): data/claude-accounts/<account>/."""
     import re
-    from pathlib import Path
+
+    if not re.fullmatch(ACCOUNT_RE, account) or ".." in account:
+        raise ValueError(f"invalid Claude Code account {account!r}")
+    return settings().data_dir / "claude-accounts" / account
+
+
+def claude_session_file(session_id: str, account: str = "") -> str:
+    """The transcript of a Claude Code session on this host (any project folder), or ''. Sessions belong to a
+    config folder: a model with its own account resumes only its own (an agent's `resume` id too)."""
+    import re
 
     if not re.fullmatch(SESSION_RE, session_id):
         return ""
-    root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+    home = claude_config_dir(account) if account else Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    root = home / "projects"
     return next((str(p) for p in root.glob(f"*/{session_id}.jsonl")), "")
 
 
 def _choice(m: ModelEntry, reason: str) -> Choice:
     return Choice(name=m.name, kind=m.kind, model_id=m.model_id, reason=reason, base_url=m.base_url or "",
-                  api_key_env=m.api_key_env or "", session_id=m.session_id or "")
+                  api_key_env=m.api_key_env or "", session_id=m.session_id or "", account=m.account or "")
 
 
 def _choice_from_dict(m: dict[str, Any]) -> Choice:
     return Choice(name=m["name"], kind=m["kind"], model_id=m["model_id"], reason="", base_url=m.get("base_url") or "",
-                  api_key_env=m.get("api_key_env") or "", session_id=m.get("session_id") or "")
+                  api_key_env=m.get("api_key_env") or "", session_id=m.get("session_id") or "",
+                  account=m.get("account") or "")
 
 
 def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = False,
@@ -411,7 +429,7 @@ def set_route(role: str, model_name: str, escalation: str | None = None) -> None
 
 
 MODEL_FIELDS = {"name", "kind", "model_id", "input_cost", "output_cost", "daily_token_limit",
-                "weekly_token_limit", "enabled", "notes", "base_url", "api_key_env", "session_id", "clearance"}
+                "weekly_token_limit", "enabled", "notes", "base_url", "api_key_env", "session_id", "account", "clearance"}
 
 
 def add_model(data: dict[str, Any]) -> dict[str, Any]:
@@ -428,6 +446,8 @@ def add_model(data: dict[str, Any]) -> dict[str, Any]:
     if data["kind"] == "llm" and not data.get("model_id"):
         raise ValueError("model_id is required (LiteLLM-style provider/model)")
     _check_endpoint(data)
+    if data.get("account") and data["kind"] != "claude_code":
+        raise ValueError("account is a Claude Code sign-in: only for claude_code models")
     with session() as s:
         if s.scalars(select(ModelEntry).where(ModelEntry.name == data["name"])).first():
             raise ValueError("a model with that name exists")
@@ -449,6 +469,8 @@ def update_model(model_id: int, data: dict[str, Any]) -> dict[str, Any]:
             raise KeyError(model_id)
         fields = MODEL_FIELDS - ({"name", "kind", "model_id"} if m.builtin else set())
         _check_endpoint(data)
+        if data.get("account") and data.get("kind", m.kind) != "claude_code":
+            raise ValueError("account is a Claude Code sign-in: only for claude_code models")
         for k, v in data.items():
             if k in fields:
                 setattr(m, k, v)
@@ -470,6 +492,11 @@ def _check_endpoint(data: dict[str, Any]) -> None:
     sid = data.get("session_id") or ""
     if sid and not re.fullmatch(SESSION_RE, sid):
         raise ValueError("session_id must be a Claude Code session id such as 3067d536-a81c-492b-9302-1b000247bdea")
+    if data.get("account"):
+        try:
+            claude_config_dir(data["account"])
+        except ValueError:
+            raise ValueError("account must be a folder name in data/claude-accounts/ such as claude-2") from None
 
 
 def test_model(model_id: int) -> dict[str, Any]:

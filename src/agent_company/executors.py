@@ -469,12 +469,17 @@ CLAUDE_BASH = ["Bash(pytest:*)", "Bash(python -m pytest:*)", "Bash(uv run:*)", "
 
 
 def claude_env(choice: Choice) -> dict[str, str] | None:
-    """Claude Code at another address: a claude_code model with a base URL (and optionally its key's variable)."""
+    """Claude Code at another address: a claude_code model with a base URL (and optionally its key's variable),
+    or with its own sign-in (`account`: its CLAUDE_CONFIG_DIR, where the CLI also refreshes the token)."""
     import os
 
-    if not choice.base_url and not choice.api_key_env:
+    if not choice.base_url and not choice.api_key_env and not choice.account:
         return None
     env = dict(os.environ)
+    if choice.account:
+        from agent_company.router import claude_config_dir
+
+        env["CLAUDE_CONFIG_DIR"] = str(claude_config_dir(choice.account))
     if choice.base_url:
         env["ANTHROPIC_BASE_URL"] = choice.base_url
     if choice.api_key_env and os.environ.get(choice.api_key_env):

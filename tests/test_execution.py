@@ -402,6 +402,30 @@ def test_claude_code_model_pinned_to_a_session(monkeypatch, tmp_path):
     assert router.resolve("developer", "Pinned").session_id == sid
 
 
+def test_claude_code_model_with_its_own_account(monkeypatch):
+    from agent_company.config import settings
+
+    monkeypatch.setattr(settings(), "enable_claude_code", True)
+    monkeypatch.setattr(router.shutil, "which", lambda name: f"/usr/bin/{name}")
+    for bad in ("../x", "a/b", "Up", ""):
+        with pytest.raises(ValueError):
+            router.claude_config_dir(bad)
+    with pytest.raises(ValueError):
+        router.add_model({"name": "Bad", "kind": "claude_code", "account": "../../etc"})
+    with pytest.raises(ValueError):
+        router.add_model({"name": "Api", "kind": "llm", "model_id": "x/y", "account": "claude-2"})
+    m = router.add_model({"name": "Second", "kind": "claude_code", "account": "claude-2"})
+    assert m["account"] == "claude-2" and m["available"] is False and "no Claude Code sign-in" in m["unavailable_reason"]
+    home = settings().data_dir / "claude-accounts" / "claude-2"
+    home.mkdir(parents=True)
+    (home / ".credentials.json").write_text("{}")
+    assert next(x for x in router.list_models() if x["name"] == "Second")["available"] is True
+    choice = router.resolve("developer", "Second")
+    assert choice.account == "claude-2"
+    assert executors.claude_env(choice)["CLAUDE_CONFIG_DIR"] == str(home)
+    assert executors.claude_env(router.Choice("Host", "claude_code", "", "t")) is None  # the host's own login
+
+
 def test_resumable_session_lookup():
     from agent_company.db import Task, now
 

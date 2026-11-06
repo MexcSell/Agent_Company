@@ -18,7 +18,8 @@ feature came from.
   `recruitment.py` (SPEC-03: capability gaps from verified proficiency, recruitment records with job descriptions,
   approval policy `recruit_requires_approval` that pauses the goal, probation with reviewed tasks; with `qualify_recruits` a
   new writing recruit is first a `candidate` that runs an eval suite, then approved or rejected), `scheduler.py`, `router.py` (models, routes, fallback,
-  provider catalogs, classification clearance per model; G-R-18 `ModelEntry.terms` (billing, context, tool calling, data
+  provider catalogs, classification clearance per model; a `claude_code` model's own sign-in `account`:
+  `data/claude-accounts/<account>/.credentials.json`, its CLAUDE_CONFIG_DIR; G-R-18 `ModelEntry.terms` (billing, context, tool calling, data
   terms, licence page) validated by `check_terms`, `terms_due` after 90 days without a person's check), `contracts.py` (task contracts with scope, risk, budget, deadline; output lines),
   `executors.py` (tracked subprocesses: `terminate` for stops; `gate`, the tool gateway every run passes: permissions and
   `Agent.autonomy` G0-G4 decide writes, Bash and MCP tools, the isolation level L0-L2 and every tool call (Claude Code
