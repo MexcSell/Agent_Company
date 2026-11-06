@@ -274,7 +274,8 @@ def smoke_trial(agent_id: int, repeats: int = 1) -> dict[str, float]:
                 _event(s, "rollback", a.id, f"{a.name}: candidate rolled back after the {suite} suite, "
                        f"v{a.playbook_version} kept")
                 experiments.update(s, exp_id, status="rolled_back", comparison=cmp,
-                                   decision=f"worse on the {suite} suite; v{a.playbook_version} kept")
+                                   decision=(f"breaks {', '.join(broken)} on the {suite} suite" if broken else
+                                             f"worse on the {suite} suite") + f"; v{a.playbook_version} kept")
         return results
     except Exception as e:  # noqa: BLE001 - a broken suite must not leave a candidate waiting forever
         log_event("error", f"smoke trial of agent {agent_id} failed: {type(e).__name__}: {e}", agent_id=agent_id)
