@@ -64,8 +64,11 @@ def test_learning_changes_the_agent_definition_file():
 
     gid = loop.create_goal("Teach")
     learning.learn(dev["id"], gid, "Always run the tests before reporting.", False, ["testing"])
+    learned = agentdefs.read(dev["id"])["text"]
     out = agentdefs.study(dev["id"])
     assert out["changed"] and out["model"] == "Offline simulator"
+    assert agentdefs.read(dev["id"])["text"] == learned, "a study rewrite waits for a person (G-R-19)"
+    agentdefs.apply_candidate(out["candidate_id"], "user:test")
     after = agentdefs.read(dev["id"])
     assert "Always run the tests before reporting." in agentdefs.sections(after["text"])["Working method"]
     assert len(after["history"]) > len(before["history"]), "every change is a commit in data/agents"

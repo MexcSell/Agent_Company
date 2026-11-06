@@ -422,9 +422,12 @@ def test_the_study_rotation_never_takes_confidential_lessons_or_reports_into_a_d
         s.flush()
         s.add(Document(url=f"report://{r.id}", title="Research report: python pricing", category="research report",
                        text="Closed python pricing details.", flags=[]))
-    agentdefs.study(dev)
+    out = agentdefs.study(dev)
     assert prompts and "pin the parser" in prompts[0]
     assert "half-even" not in prompts[0] and "Closed python pricing" not in prompts[0]
+    agentdefs.apply_candidate(out["candidate_id"], "user:test")  # G-R-19: the rewrite reaches the file once applied
+    text = agentdefs.read(dev)["text"]
+    assert "pin the parser" in text and "half-even" not in text and "Closed python pricing" not in text
 
 
 def test_the_instructors_verdict_is_recorded_and_decide_closes_compatible_pairs(monkeypatch):
