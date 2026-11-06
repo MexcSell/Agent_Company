@@ -19,7 +19,11 @@ feature came from.
   approval policy `recruit_requires_approval` that pauses the goal, probation with reviewed tasks; with `qualify_recruits` a
   new writing recruit is first a `candidate` that runs an eval suite, then approved or rejected), `scheduler.py`, `router.py` (models, routes, fallback,
   provider catalogs, classification clearance per model; a `claude_code` model's own sign-in `account`:
-  `data/claude-accounts/<account>/.credentials.json`, its CLAUDE_CONFIG_DIR; G-R-18 `ModelEntry.terms` (billing, context, tool calling, data
+  `data/claude-accounts/<account>/.credentials.json`, its CLAUDE_CONFIG_DIR; a model's own API key encrypted in
+  `api_key_enc` (only `key_hint` leaves the server); `model_type` API|CLI|Local; Test stores the provider's usage in
+  `status`; `model_info`/`/api/models/info` is what the Models page shows per model, as the Claude Code panel shows a
+  session (status, model, CLI version, account, usage windows: Claude plan via `workspace.claude_limits`, Codex plan
+  windows from its session files, OpenRouter key limits, own daily/weekly token limits; `limitCards` in app.js); `copilot` kind (GitHub Copilot CLI, `enable_copilot`), `cli_status`/`install_cli`; G-R-18 `ModelEntry.terms` (billing, context, tool calling, data
   terms, licence page) validated by `check_terms`, `terms_due` after 90 days without a person's check), `contracts.py` (task contracts with scope, risk, budget, deadline; output lines),
   `executors.py` (tracked subprocesses: `terminate` for stops; `gate`, the tool gateway every run passes: permissions and
   `Agent.autonomy` G0-G4 decide writes, Bash and MCP tools, the isolation level L0-L2 and every tool call (Claude Code

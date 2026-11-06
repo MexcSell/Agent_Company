@@ -4,6 +4,7 @@
                Write tasks return files as FILE blocks, which are written into the worktree.
   claude_code  `claude -p` in the worktree. Uses your Claude Code login or ANTHROPIC_API_KEY.
   codex        `codex exec` in the worktree with Codex's own sandbox.
+  copilot      `copilot -p` (GitHub Copilot CLI) in the worktree; only the granted tools are allowed.
   offline      Deterministic stand-in so the whole pipeline runs and is testable with no model.
 
 Executors that touch files only ever run inside a sandboxed worktree.
@@ -227,9 +228,10 @@ TOOL_CONTRACTS = {
     "llm": ToolContract(("text", "file_blocks"), 7200),
     "claude_code": ToolContract(("text", "read", "edit", "bash", "mcp"), 7200),
     "codex": ToolContract(("text", "read", "edit", "commands"), 7200, write_needs_shell=True),
+    "copilot": ToolContract(("text", "read", "edit", "commands"), 7200),
     "offline": ToolContract(("text", "file_blocks"), 600),
 }
-CLI_KINDS = {"claude_code", "codex"}
+CLI_KINDS = {"claude_code", "codex", "copilot"}
 
 
 def level(autonomy: str) -> int:
@@ -443,12 +445,15 @@ class LLMExecutor(Executor):
 
         import os
 
+        from agent_company.router import key_for
+
         kwargs: dict[str, Any] = {"timeout": self.timeout}
+        key = key_for(self.choice.name)  # the model's own key (Models page), else its variable's
         if self.choice.base_url:  # OpenAI-compatible server: llama-server, LM Studio, vLLM, ...
             kwargs["base_url"] = self.choice.base_url
-            kwargs["api_key"] = os.environ.get(self.choice.api_key_env, "") if self.choice.api_key_env else "local"
-        elif self.choice.api_key_env and os.environ.get(self.choice.api_key_env):
-            kwargs["api_key"] = os.environ[self.choice.api_key_env]
+            kwargs["api_key"] = key or ("" if self.choice.api_key_env else "local")
+        elif key:
+            kwargs["api_key"] = key
         llm = LLM(model=self.choice.model_id, **kwargs)
         system = req.system + ("\n\n" + FILE_BLOCK_HELP if req.writes else "")
         text = llm.call([{"role": "system", "content": system}, {"role": "user", "content": req.prompt}])
@@ -574,6 +579,38 @@ class CodexExecutor(Executor):
                       output_tokens=int(u.get("output_tokens") or 0) or estimate_tokens(text), ok=ok,
                       error="" if ok else (parsed["error"] or proc.stderr[-2000:] or "codex failed")[-2000:],
                       tool_calls=parsed["tool_calls"])
+
+
+# Copilot may run tests and inspect git, nothing else, through its shell tool (as CLAUDE_BASH).
+COPILOT_SHELL = ["shell(pytest)", "shell(python -m pytest)", "shell(uv run)", "shell(npm test)", "shell(npm run)",
+                 "shell(git status)", "shell(git diff)", "shell(ls)"]
+
+
+class CopilotExecutor(Executor):
+    """`copilot -p` (GitHub Copilot CLI) in the worktree, on the server's GitHub sign-in. In this mode a tool that is
+    not allowed is refused, so the grant decides: `write` for edits, COPILOT_SHELL for commands."""
+    kind = "copilot"
+
+    def tools(self, grant: Grant) -> list[str]:
+        return (["write"] if grant.writes else []) + (list(COPILOT_SHELL) if grant.shell else [])
+
+    def _run(self, req: Request) -> Result:
+        if req.workdir is None:
+            raise RuntimeError("Copilot needs a worktree")
+        cwd = ensure_sandboxed(req.workdir)
+        tools = self.tools(req.grant or Grant())
+        prompt = req.system + "\n\n" + req.prompt
+        cmd = ["copilot", "-p", prompt]
+        for t in tools:
+            cmd += ["--allow-tool", t]
+        cmd += ["--deny-tool", "shell(git push)"]
+        if self.choice.model_id:
+            cmd += ["--model", self.choice.model_id]
+        proc = self._spawn(cmd, req, cwd)
+        text = proc.stdout.strip()
+        return Result(text=text, input_tokens=estimate_tokens(prompt), output_tokens=estimate_tokens(text),
+                      ok=proc.returncode == 0, error=(proc.stderr or proc.stdout)[-2000:] if proc.returncode else "",
+                      tools=tools)
 
 
 def standard_plan(goal: str) -> dict[str, Any]:
@@ -740,7 +777,7 @@ class OfflineExecutor(Executor):
 
 
 EXECUTORS: dict[str, type[Executor]] = {
-    "llm": LLMExecutor, "claude_code": ClaudeCodeExecutor, "codex": CodexExecutor,
+    "llm": LLMExecutor, "claude_code": ClaudeCodeExecutor, "codex": CodexExecutor, "copilot": CopilotExecutor,
     "offline": OfflineExecutor,
 }
 

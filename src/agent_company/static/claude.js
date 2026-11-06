@@ -970,29 +970,14 @@ window.WSP = window.WSP || {};
         <td title="Cost at API prices${w.unpriced_tokens ? `; ${fmt.format(w.unpriced_tokens)} tokens of models without a price are not counted` : ""}"><b>${money2(w.cost)}</b>${w.unpriced_tokens ? "+" : ""}</td>
         <td title="Resets ${esc(new Date(at).toLocaleString())}">resets ${esc(when)} <span class="muted">· in ${left(rest)}</span></td></tr>`;
     };
-    return head + planLimits(U.d.plan, now) + `<table class="wc-usage"><tbody>${row("Today", U.d.daily)}${row("This week", U.d.weekly)}</tbody></table>
+    return head + planLimits(U.d.plan) + `<table class="wc-usage"><tbody>${row("Today", U.d.daily)}${row("This week", U.d.weekly)}</tbody></table>
       <p class="muted wc-usage-note">Cost at the API prices in Models (cache reads 0.1×, cache writes 1.25–2× input): a Claude subscription is not billed per token. Day from 00:00 UTC, week from Monday 00:00 UTC. Hover a row for the breakdown.</p>`;
   }
-  // A circular meter: how much of a plan limit is used; the colour follows Claude's own severity, the label says it too.
-  const SEV = { warning: "near the limit", critical: "at the limit", exceeded: "limit reached" };
-  const ring = (pct, sev) => {
-    const v = Math.max(0, Math.min(100, pct)), r = 15, len = 2 * Math.PI * r;
-    return `<svg class="wc-ring ${SEV[sev] ? esc(sev) : "normal"}" viewBox="0 0 36 36" aria-hidden="true"><circle class="trk" cx="18" cy="18" r="${r}"/>`
-      + (v > 0 ? `<circle class="val" cx="18" cy="18" r="${r}" stroke-dasharray="${(len * v / 100).toFixed(2)} ${len.toFixed(2)}" transform="rotate(-90 18 18)"/>` : "")
-      + `<text x="18" y="18">${Math.round(v)}%</text></svg>`;
-  };
-  // The Claude plan's limits, as Claude Code's /usage shows them: the 5-hour session and the week.
-  function planLimits(p, now) {
+  // The Claude plan's limits, as Claude Code's /usage shows them: the 5-hour session and the week (limitCards, app.js).
+  function planLimits(p) {
     if (!p) return "";
     if (!p.available) return `<p class="muted wc-usage-note">Plan limits: ${esc(p.reason || "unavailable")}.</p>`;
-    const card = (l) => {
-      const at = Date.parse(l.resets_at), pct = Math.round(l.percent);
-      const when = at ? new Date(at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "";
-      return `<div class="wc-limit" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${esc(l.label)}: ${pct}% used" title="${esc(l.label)}: ${pct}% of the plan's limit used${at ? `\nResets ${esc(new Date(at).toLocaleString())}` : ""}">
-        ${ring(l.percent, l.severity)}<div><b>${esc(l.label)}</b><div><b>${pct}%</b> <span class="muted">used</span>${SEV[l.severity] ? ` <span class="wc-badge ${esc(l.severity)}">${SEV[l.severity]}</span>` : ""}</div>
-        ${at ? `<div class="muted">resets ${esc(when)} · in ${left(Math.max(0, (at - now) / 1000))}</div>` : ""}</div></div>`;
-    };
-    return `<div class="wc-limits">${p.limits.map(card).join("")}</div>`;
+    return limitCards(p.limits);
   }
 
   // Every live Claude Code session on the host, for /agents and /tasks; read again every 4 s while one is open.

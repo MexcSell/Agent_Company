@@ -306,7 +306,7 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
         return (executors.Result(text="", ok=False, error=str(e)),
                 router.Choice(name="(not cleared)", kind="offline", model_id="", reason=str(e)))
     if req.workdir is None:  # CLI agents only run inside a worktree
-        chain = [c for c in chain if c.kind not in {"claude_code", "codex"}]
+        chain = [c for c in chain if c.kind not in executors.CLI_KINDS]
     if chain and chain[0].kind != "offline":
         # The simulator stands in only when no real model is usable. Once a real model is tried,
         # its failure must stand: placeholder work must never pass the gate in place of real work.
@@ -774,7 +774,7 @@ def _configure(goal: Goal) -> None:
             chain = router.resolve_chain(gm.role, gm.model_pref, classification=level)
         except router.NotCleared:  # planning will report it; no configure step
             return
-        if not chain or chain[0].kind not in {"claude_code", "codex"}:
+        if not chain or chain[0].kind not in {"claude_code", "codex"}:  # the CLIs that read .claude/
             return
         req = executors.Request(purpose="configure", role="general_manager", system=_system_for(gm),
                                 prompt=specs.configure_prompt(goal), workdir=Path(goal.worktree), writes=True,

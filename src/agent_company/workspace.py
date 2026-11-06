@@ -132,7 +132,8 @@ def _version(exe: str | None) -> str:
             out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10).stdout
         except Exception:  # noqa: BLE001 - the version is informational; never fail the panel over it
             out = ""
-        _VERSION[exe] = out.strip().split(" ")[0] if out.strip() else ""
+        v = re.search(r"\d+\.\d+[\w.+-]*", out)  # "2.1.310 (Claude Code)", "codex-cli 0.162.1"
+        _VERSION[exe] = v.group(0) if v else out.strip()[:40]
     return _VERSION[exe]
 
 
@@ -141,12 +142,16 @@ def claude_home() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
 
 
-def _account() -> dict[str, str]:
-    """How Claude Code signs in on this host (what `/status` shows as the account)."""
-    if os.environ.get("ANTHROPIC_API_KEY"):
+def _account(home: Path | None = None) -> dict[str, str]:
+    """How Claude Code signs in on this host (what `/status` shows as the account), or in another config folder
+    (a Models-page model's own sign-in, `home`)."""
+    if home is None and os.environ.get("ANTHROPIC_API_KEY"):
         return {"method": "API key (ANTHROPIC_API_KEY)"}
-    home = claude_home()
-    files = [home / ".claude.json"] if os.environ.get("CLAUDE_CONFIG_DIR") else [Path.home() / ".claude.json"]
+    if home is not None:
+        files = [home / ".claude.json"]
+    else:
+        home = claude_home()
+        files = [home / ".claude.json"] if os.environ.get("CLAUDE_CONFIG_DIR") else [Path.home() / ".claude.json"]
     for f in files:
         try:
             acct = json.loads(f.read_text()).get("oauthAccount") or {}
@@ -959,6 +964,7 @@ def host_activity(cwd: str = "") -> dict[str, Any]:
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"  # what Claude Code's own /usage reads
 LIMITS_TTL = 60.0
 _limits_cache: dict[str, Any] = {"key": None, "at": 0.0, "out": None}
+_other_limits: dict[str, dict[str, Any]] = {}  # the same per other config folder (a model's own sign-in)
 _LIMIT_LABELS = {"session": "5-hour session", "weekly_all": "Weekly limit"}
 
 
@@ -991,19 +997,19 @@ def _parse_limits(d: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def claude_limits() -> dict[str, Any]:
+def claude_limits(home: Path | None = None) -> dict[str, Any]:
     """How much of the Claude plan's limits is used (5-hour session, week), as Claude Code's /usage shows it.
 
-    Read with the host's Claude Code sign-in (~/.claude/.credentials.json); the token never leaves the server.
-    An API-key login has no plan limits."""
-    path = claude_home() / ".credentials.json"
+    Read with the host's Claude Code sign-in (~/.claude/.credentials.json), or another config folder's (`home`);
+    the token never leaves the server. An API-key login has no plan limits."""
+    path = (home or claude_home()) / ".credentials.json"
     try:
         st = path.stat()
         oauth = json.loads(path.read_text()).get("claudeAiOauth") or {}
     except (OSError, ValueError, AttributeError):
         return {"available": False, "reason": "Claude Code is not signed in with a Claude account", "limits": []}
     key = (str(path), st.st_mtime_ns)
-    c = _limits_cache
+    c = _limits_cache if home is None else _other_limits.setdefault(str(home), {"key": None, "at": 0.0, "out": None})
     if c["key"] == key and time.time() - c["at"] < LIMITS_TTL:
         return c["out"]
     token, plan = str(oauth.get("accessToken") or ""), str(oauth.get("subscriptionType") or "")

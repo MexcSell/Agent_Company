@@ -65,6 +65,27 @@ const roleIcon = (role) => icon(ROLE_ICON[role] || "specialist");
 const STOP_SCOPE = { E0: "an executor", E1: "an agent", E2: "a goal", E3: "a project", E4: "a room", E5: "the whole company" };  // governance.LEVELS
 const GOAL_ACTIVE = ["queued", "planning", "running", "recovering", "paused"];  // workflow.ACTIVE
 const pill = (s) => `<span class="pill ${esc(s)}">${esc(String(s).replace(/_/g, " "))}</span>`;
+// Usage limits as Claude Code's /usage shows them (Workspace Claude panel, Models page): per window a ring with the
+// share used, its label, a severity badge and when it resets. limits: [{label, percent, severity, resets_at (ISO)}].
+const LIMIT_SEV = { warning: "near the limit", critical: "at the limit", exceeded: "limit reached" };
+const timeLeft = (s) => { const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60); return d ? `${d} d ${h} h` : h ? `${h} h ${m} min` : `${m} min`; };
+const limitRing = (pct, sev) => {
+  const v = Math.max(0, Math.min(100, pct)), r = 15, len = 2 * Math.PI * r;
+  return `<svg class="wc-ring ${LIMIT_SEV[sev] ? esc(sev) : "normal"}" viewBox="0 0 36 36" aria-hidden="true"><circle class="trk" cx="18" cy="18" r="${r}"/>`
+    + (v > 0 ? `<circle class="val" cx="18" cy="18" r="${r}" stroke-dasharray="${(len * v / 100).toFixed(2)} ${len.toFixed(2)}" transform="rotate(-90 18 18)"/>` : "")
+    + `<text x="18" y="18">${Math.round(v)}%</text></svg>`;
+};
+function limitCards(limits) {
+  const now = Date.now();
+  const card = (l) => {
+    const at = Date.parse(l.resets_at || ""), pct = Math.round(l.percent);
+    const when = at ? new Date(at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "";
+    return `<div class="wc-limit" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${esc(l.label)}: ${pct}% used" title="${esc(l.label)}: ${pct}% of the limit used${at ? `\nResets ${esc(new Date(at).toLocaleString())}` : ""}">
+      ${limitRing(l.percent, l.severity)}<div><b>${esc(l.label)}</b><div><b>${pct}%</b> <span class="muted">used</span>${LIMIT_SEV[l.severity] ? ` <span class="wc-badge ${esc(l.severity)}">${LIMIT_SEV[l.severity]}</span>` : ""}</div>
+      ${at ? `<div class="muted">resets ${esc(when)} · in ${timeLeft(Math.max(0, (at - now) / 1000))}</div>` : ""}</div></div>`;
+  };
+  return `<div class="wc-limits">${limits.map(card).join("")}</div>`;
+}
 
 // --- storage-safe helpers -------------------------------------------------------
 const store = {

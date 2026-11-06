@@ -33,6 +33,7 @@ class Settings:
     require_approval: bool
     enable_claude_code: bool
     enable_codex: bool
+    enable_copilot: bool
     command_timeout: int
     rotation_interval: int
     host: str
@@ -147,6 +148,7 @@ def load_settings() -> Settings:
         require_approval=_bool("REQUIRE_APPROVAL", True),
         enable_claude_code=_bool("ENABLE_CLAUDE_CODE", False),
         enable_codex=_bool("ENABLE_CODEX", False),
+        enable_copilot=_bool("ENABLE_COPILOT", False),
         command_timeout=_int("COMMAND_TIMEOUT", 600),
         rotation_interval=_int("ROTATION_INTERVAL", 0),
         host=os.environ.get("HOST") or "127.0.0.1",

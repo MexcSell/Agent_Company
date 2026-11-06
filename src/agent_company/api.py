@@ -734,6 +734,12 @@ class RouteBody(BaseModel):
 class OpenRouterBody(BaseModel):
     id: str
     name: str | None = None
+    api_key: str = ""
+
+
+class LocalProbeBody(BaseModel):
+    url: str
+    api_key: str = ""
 
 
 def create_app(start_background: bool = True) -> FastAPI:
@@ -2569,7 +2575,33 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.post("/api/models")
     def model_add(data: dict[str, Any], admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
         out = router.add_model(data)
-        _audit(admin, "model_add", out["name"], after={"model_id": out["model_id"], "kind": out["kind"]})
+        _audit(admin, "model_add", out["name"], after={"model_id": out["model_id"], "kind": out["kind"],
+                                                         "own_key": out["key_set"]})
+        return out
+
+    @app.post("/api/models/local_probe")
+    def model_local_probe(body: LocalProbeBody, _: dict[str, Any] = Depends(allowed("manage_models"))
+                          ) -> dict[str, Any]:
+        try:
+            return {"models": router.local_models(body.url.strip(), body.api_key.strip())}
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"no answer from {body.url}: {e}") from e
+
+    @app.get("/api/models/info")
+    def models_info(_: dict[str, Any] = Depends(current_user)) -> dict[int, dict[str, Any]]:
+        return router.models_info()
+
+    @app.get("/api/models/cli/{tool}")
+    def model_cli_status(tool: str, _: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
+        return router.cli_status(tool)
+
+    @app.post("/api/models/cli/{tool}/install")
+    def model_cli_install(tool: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = router.install_cli(tool)
+        except RuntimeError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "cli_install", tool, after={"ok": out["ok"], "version": out["version"]})
         return out
 
     @app.patch("/api/models/{model_id}")
@@ -2578,7 +2610,7 @@ def create_app(start_background: bool = True) -> FastAPI:
         before = next((m["name"] for m in router.list_models() if m["id"] == model_id), None)
         out = router.update_model(model_id, data)
         _audit(admin, "model_update", out["name"], before={"name": before} if before != out["name"] else None,
-               after=data)
+               after={**data, "api_key": "(set)" if data["api_key"] else "(removed)"} if "api_key" in data else data)
         if before and before != out["name"]:  # agents' definition files name their model
             with session() as s:
                 ids = list(s.scalars(select(Agent.id).where(Agent.model_pref == out["name"])))
@@ -2605,16 +2637,18 @@ def create_app(start_background: bool = True) -> FastAPI:
         return {"role": role, "model_name": body.model_name}
 
     @app.get("/api/openrouter/models")
-    def openrouter_models(q: str = "", free: bool = False, _: dict[str, Any] = Depends(current_user)
-                          ) -> list[dict[str, Any]]:
+    def openrouter_models(q: str = "", free: bool = False, sort: str = "price",
+                          _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         try:
-            return router.openrouter_catalog(q, free)
+            return router.openrouter_catalog(q, free, sort=sort)
         except httpx.HTTPError as e:
             raise HTTPException(502, f"OpenRouter catalog unavailable: {e}") from e
 
     @app.post("/api/openrouter/models")
-    def openrouter_add(body: OpenRouterBody, _: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
-        return router.add_openrouter_model(body.id, body.name)
+    def openrouter_add(body: OpenRouterBody, admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
+        out = router.add_openrouter_model(body.id, body.name, body.api_key.strip())
+        _audit(admin, "model_add", out["name"], after={"model_id": out["model_id"], "own_key": out["key_set"]})
+        return out
 
     @app.get("/api/providers")
     def provider_list(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:

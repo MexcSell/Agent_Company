@@ -416,6 +416,10 @@ class ModelEntry(Base):
     # G-R-18: what routing and data handling depend on, as a person verified it (router.TERMS):
     # billing, context_window, tool_calling, trains_on_prompts, commercial_use, terms_url, verified_at
     terms: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # an API key entered on the Models page, encrypted (transport.encrypt_text); never sent back, only its hint
+    api_key_enc: Mapped[str] = mapped_column(Text, default="")
+    # the last Test: ok, error, checked_at and what the provider reports (plan or key usage, reset time)
+    status: Mapped[dict[str, Any]] = mapped_column(default=dict)
 
 
 class Route(Base):

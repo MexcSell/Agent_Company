@@ -163,3 +163,181 @@ def test_model_terms_are_validated_merged_and_verified_by_a_person():
         row = s.get(ModelEntry, m["id"])
         row.terms = {**row.terms, "verified_at": "2026-01-01T00:00:00+00:00"}
     assert next(x for x in router.list_models() if x["id"] == m["id"])["terms_due"], "older than 90 days"
+
+
+def test_own_api_key_is_encrypted_hinted_and_used(monkeypatch):
+    import pytest
+
+    from agent_company.db import ModelEntry, session
+
+    key = "sk-or-v1-0123456789abcdefYSUA"
+    m = router.add_model({"name": "Own key", "kind": "llm", "model_id": "openrouter/qwen/qwen3-coder:free",
+                          "api_key": key})
+    assert m["available"] is True, "its own key stands in for OPENROUTER_API_KEY"
+    assert m["key_set"] and m["key_hint"] == "sk-...YSUA" and key not in str(m)
+    with session() as s:
+        stored = s.get(ModelEntry, m["id"]).api_key_enc
+    assert stored and key not in stored, "stored encrypted"
+    assert router.key_for("Own key") == key
+    assert router.model_type(_entry(m["id"])) == "API"
+    router.update_model(m["id"], {"api_key": ""})
+    assert router.key_for("Own key") == "" and not next(x for x in router.list_models() if x["id"] == m["id"])["available"]
+    with pytest.raises(ValueError):
+        router.add_model({"name": "CLI with key", "kind": "codex", "api_key": key})
+    with pytest.raises(ValueError):
+        router.update_model(m["id"], {"api_key": "two words"})
+
+
+def _entry(model_id):
+    from agent_company.db import ModelEntry, session
+
+    with session() as s:
+        m = s.get(ModelEntry, model_id)
+        s.expunge(m)
+        return m
+
+
+def test_model_types_and_the_offline_simulator_stays_enabled():
+    import pytest
+
+    local = router.add_model({"name": "Here", "kind": "llm", "model_id": "openai/qwen", "base_url": "http://127.0.0.1:8080/v1"})
+    types = {x["name"]: x["type"] for x in router.list_models()}
+    assert types["Here"] == "Local" and types["Claude Opus 5.5"] == "API" and types["Codex CLI"] == "CLI"
+    assert types[router.OFFLINE] == "offline" and local["type"] == "Local"
+    off = next(x for x in router.list_models() if x["kind"] == "offline")
+    with pytest.raises(ValueError):
+        router.update_model(off["id"], {"enabled": False})
+    assert router.update_model(local["id"], {"enabled": False})["available"] is False
+
+
+def test_copilot_model_needs_its_switch_and_cli_and_runs_only_granted_tools(monkeypatch, tmp_path):
+    import subprocess
+
+    from agent_company import executors
+    from agent_company.config import settings
+
+    m = router.add_model({"name": "GitHub Copilot", "kind": "copilot"})
+    assert m["type"] == "CLI" and "ENABLE_COPILOT" in m["unavailable_reason"]
+    monkeypatch.setenv("ENABLE_COPILOT", "1")
+    reset_settings()
+    assert settings().enable_copilot
+    monkeypatch.setattr(router.shutil, "which", lambda exe: None)
+    assert "not found" in next(x for x in router.list_models() if x["id"] == m["id"])["unavailable_reason"]
+    seen = []
+
+    def spawn(self, cmd, req, cwd, env=None):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "done", "")
+
+    monkeypatch.setattr(executors.Executor, "_spawn", spawn)
+    monkeypatch.setattr(executors, "ensure_sandboxed", lambda p: p)
+    ex = executors.for_choice(router.Choice(name="GitHub Copilot", kind="copilot", model_id="", reason="t"))
+    req = executors.Request(purpose="task", role="developer", system="s", prompt="p", workdir=tmp_path, writes=True,
+                            permissions=["read", "write"], autonomy="G2")
+    req.grant = executors.gate(req, "copilot")
+    assert req.grant.writes and not req.grant.shell, "Copilot writes without a shell"
+    res = ex._run(req)
+    assert res.ok and res.text == "done"
+    cmd = seen[-1]
+    assert cmd[:2] == ["copilot", "-p"] and ["--allow-tool", "write"] == cmd[3:5]
+    assert not any(c.startswith("shell(") and c != "shell(git push)" for c in cmd)
+    req.grant = executors.gate(executors.Request(purpose="task", role="qa", system="s", prompt="p", workdir=tmp_path,
+                                                 permissions=["read"], autonomy="G2"), "copilot")
+    ex._run(req)
+    assert "write" not in seen[-1], "a read-only run allows no tool"
+
+
+def test_openrouter_sort_by_performance_and_text_models_only():
+    def handler(req):
+        return httpx.Response(200, json={"data": [
+            {"id": "a/small:free", "name": "Small", "context_length": 8192, "pricing": {"prompt": "0", "completion": "0"}},
+            {"id": "b/agent:free", "name": "Agent", "context_length": 262144, "supported_parameters": ["tools", "reasoning"],
+             "top_provider": {"max_completion_tokens": 65536}, "pricing": {"prompt": "0", "completion": "0"}},
+            {"id": "c/video", "name": "Video", "context_length": 131072, "pricing": {"prompt": "0", "completion": "0"},
+             "architecture": {"output_modalities": ["video"]}}]})
+
+    rows = router.openrouter_catalog(client=httpx.Client(transport=httpx.MockTransport(handler)), sort="performance")
+    assert [r["id"] for r in rows] == ["b/agent:free", "a/small:free"], "best first; a video model is no chat model"
+    assert rows[0]["tools"] and rows[0]["reasoning"] and rows[0]["score"] > rows[1]["score"]
+    assert [r["id"] for r in router.openrouter_catalog(free_only=True)] == ["a/small:free", "b/agent:free"], "by price"
+
+
+def test_openrouter_key_status_and_codex_limits(tmp_path):
+    import json
+    import time
+
+    def handler(req):
+        assert req.headers["authorization"] == "Bearer sk-k"
+        return httpx.Response(200, json={"data": {"usage": 3.0, "usage_daily": 0.5, "limit": 2.0,
+                                                  "limit_reset": "daily", "is_free_tier": False}})
+
+    st = router.openrouter_key_status("sk-k", httpx.Client(transport=httpx.MockTransport(handler)))
+    w = st["limits"][0]
+    assert w["used_percent"] == 25.0 and 0 < w["resets_at"] - time.time() <= 86400, "today's use of the daily limit"
+    assert router.openrouter_key_status("")["source"] == "error"
+    day = tmp_path / "sessions" / "2026" / "11" / "06"
+    day.mkdir(parents=True)
+    rl = {"primary": {"used_percent": 50.0, "window_minutes": 43200, "resets_at": time.time() + 3600},
+          "secondary": None, "plan_type": "free"}
+    (day / "rollout-x.jsonl").write_text(json.dumps({"type": "event_msg", "payload": {"type": "token_count",
+                                                                                       "rate_limits": rl}}) + "\n")
+    st = router.codex_limits(tmp_path)
+    assert st["plan"] == "free" and st["limits"][0]["used_percent"] == 50.0 and st["limits"][0]["label"] == "30-day limit"
+    assert "no plan limits" in router.codex_limits(tmp_path / "none")["detail"]
+
+
+def test_model_info_shows_status_cli_account_and_usage_windows(monkeypatch, tmp_path):
+    import base64
+    import json
+    import os
+    import time
+    from pathlib import Path
+
+    from agent_company.db import ModelEntry, session
+
+    m = router.add_model({"name": "Ringed", "kind": "llm", "model_id": "openai/x", "daily_token_limit": 200})
+    usage.record(model_name="Ringed", kind="llm", input_tokens=150, output_tokens=10)
+    info = router.models_info()[m["id"]]
+    assert info["status"] == "unavailable" and "OPENAI_API_KEY" in info["reason"]
+    assert info["account"] == {"method": "the server's key", "email": "OPENAI_API_KEY"}
+    w = info["limits"][0]
+    assert (w["label"], w["percent"], w["severity"]) == ("Daily token limit", 80.0, "warning")
+    assert info["tokens"] == {"today": 160, "week": 160}
+    # Codex: whose ChatGPT sign-in (never a token) and the plan's windows as Codex last reported them
+    home = Path(os.environ["CODEX_HOME"])
+    home.mkdir(parents=True)
+    claims = base64.urlsafe_b64encode(json.dumps({"email": "dev@example.com", "https://api.openai.com/auth": {
+        "chatgpt_plan_type": "plus"}}).encode()).decode().rstrip("=")
+    (home / "auth.json").write_text(json.dumps({"auth_mode": "chatgpt", "tokens": {"id_token": f"h.{claims}.sig",
+                                                                                  "access_token": "secret-access"}}))
+    day = home / "sessions" / "2026" / "11" / "06"
+    day.mkdir(parents=True)
+    rl = {"primary": {"used_percent": 18.0, "window_minutes": 300, "resets_at": time.time() + 3540},
+          "secondary": {"used_percent": 79.0, "window_minutes": 10080, "resets_at": time.time() + 84000},
+          "plan_type": "plus"}
+    (day / "rollout-a.jsonl").write_text(json.dumps({"payload": {"rate_limits": rl}}) + "\n")
+    codex = next(x for x in router.list_models() if x["kind"] == "codex")
+    info = router.models_info()[codex["id"]]
+    assert info["account"] == {"method": "ChatGPT account", "email": "dev@example.com", "plan": "plus"}
+    assert [(x["label"], x["percent"], x["severity"]) for x in info["limits"]] == [
+        ("5-hour session", 18.0, "normal"), ("Weekly limit", 79.0, "warning")]
+    assert "plus" in info["scope"] and info["cli"]["label"] == "Codex" and "secret-access" not in json.dumps(info)
+    with session() as s:
+        s.get(ModelEntry, codex["id"]).enabled = False
+    assert router.models_info()[codex["id"]]["status"] == "inactive"
+    off = next(x for x in router.list_models() if x["kind"] == "offline")
+    assert router.models_info()[off["id"]]["status"] == "available"
+
+
+def test_testing_an_unavailable_model_keeps_its_status():
+    m = router.add_model({"name": "Codex here", "kind": "codex"})
+    r = router.test_model(m["id"])
+    assert not r["ok"] and "ENABLE_CODEX" in r["error"]
+    st = next(x for x in router.list_models() if x["id"] == m["id"])["status"]
+    assert st["ok"] is False and st["source"] == "codex" and st["checked_at"]
+
+
+def test_a_refused_key_reads_plainly():
+    client = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(401, json={"error": "no"})))
+    st = router.provider_status(router.Choice("m", "llm", "openrouter/x/y", ""), "sk-bad", client)
+    assert st == {"source": "error", "detail": "usage not available: the key was refused (HTTP 401)"}
