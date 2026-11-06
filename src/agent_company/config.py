@@ -104,6 +104,8 @@ class Settings:
     dependency_audit: str = "block"
     # S02-FR-18: minutes before a degraded agent's model is probed again (doubling per failed probe); 0 = off
     health_recovery_minutes: int = 15
+    # G-R-15: hours between re-tests of every enabled MCP server, so a tool whose definition changed loses its allow
+    mcp_revalidate_hours: int = 24
     # ASEAO09 §7.7-7.10: gate stages every goal must run checks in (e.g. performance, accessibility)
     required_test_stages: list[str] = field(default_factory=list)
     # S11-R-04: the instructor's verdict on a flagged contradiction: off | advise | decide
@@ -186,6 +188,7 @@ def load_settings() -> Settings:
         dependency_audit=(os.environ.get("DEPENDENCY_AUDIT") or "block").lower(),
         contradiction_judge=(os.environ.get("CONTRADICTION_JUDGE") or "advise").lower(),
         health_recovery_minutes=_int("HEALTH_RECOVERY_MINUTES", 15),
+        mcp_revalidate_hours=_int("MCP_REVALIDATE_HOURS", 24),
         required_test_stages=[x.strip().lower() for x in (os.environ.get("REQUIRED_TEST_STAGES") or "").split(",")
                               if x.strip()],
         sandbox_memory_mb=_int("SANDBOX_MEMORY_MB", 4096),

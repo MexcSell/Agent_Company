@@ -76,6 +76,9 @@ SCHEMA: dict[str, tuple[type, str]] = {
                                      "with the model test, and a passing probe makes it healthy again (the wait "
                                      "doubles after each failed probe, at most 6 h; 0 = never, an administrator "
                                      "resets it)"),
+    "mcp_revalidate_hours": (int, "Hours between re-tests of every enabled MCP server: a tool whose description or "
+                                  "input schema changed is no longer allowed until an administrator ticks it again "
+                                  "(0 = only when Test is pressed)"),
     "required_test_stages": (list, "Gate stages every goal must run checks in, one per line: performance (load and "
                                    "stress), compatibility, accessibility, integration, …; the checks are the "
                                    "project's quality commands tagged with the stage, e.g. '[accessibility] npx "
@@ -95,6 +98,7 @@ LIMITS: dict[str, tuple[float, float]] = {
     "approval_blocker_hours": (0, 720), "inactive_days": (1, 3650), "explore_rate": (0, 1),
     "improvement_min_score": (0, 100), "improvement_max_regression": (0, 100),
     "shift_seconds": (0, 7 * 86400), "health_recovery_minutes": (0, 1440),
+    "mcp_revalidate_hours": (0, 720),
     "sandbox_memory_mb": (128, 262_144), "sandbox_tasks": (16, 65_536), "sandbox_cpus": (0.1, 256),
     **{k: (0, 10) for k in RETRIEVAL_KEYS},
 }

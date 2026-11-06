@@ -286,8 +286,12 @@ for room X" until theirs is written.
   test finds a known tool whose digest changed, the tool is no longer allowed until an administrator ticks it
   again; administrators get a notification and the security log an entry. A setting re-tests every enabled server
   on an interval, so a definition changed on the server side is found without anyone pressing Test.
-- **Status: open.** Acceptance: a tool whose description changes between two tests is not allowed after the second
-  and is marked changed; an unchanged allowed tool stays allowed; ticking it again clears the mark.
+- **Status: done** (`mcp.digest`, `mcp.test` keeps `digest` and `changed` per tool, `set_tools` clears the mark of a
+  ticked tool, `mcp.revalidate_due` + `McpThread`, setting `mcp_revalidate_hours` (24; 0 = only on Test); a security
+  event `mcp_tool_changed` and an administrator notification; a "changed" mark under Agents → Tools & MCP;
+  `tests/test_mcp_drift.py`). Acceptance: a tool whose description or input schema changes between two tests is
+  not allowed after the second and is marked changed; an unchanged allowed tool stays allowed; ticking it again
+  clears the mark; tools stored before digests were kept adopt their digest without losing their allow.
 
 ### G-R-16 Latency tail, tool failures and human overrides — Organization PDF §4 (suggested metrics)
 - `performance.operations` adds the p95 cycle time beside the median, the tool-call failure rate of agent runs

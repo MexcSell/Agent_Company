@@ -8,6 +8,10 @@ Taken from AXoR (/home/thomas/subnet-scout, backend/app/mcp_hub.py), reduced to 
 - Discovery: "Test" runs initialize + tools/list and keeps the tools. A tool starts **not allowed** unless the
   server marks it read-only (readOnlyHint) or the catalog entry says the server only reads; an administrator
   ticks the rest.
+- Drift (G-R-15): each tool keeps a digest of its definition (description, input schema, annotations). A re-test
+  that finds a known tool with another digest takes its allow away and marks it `changed` until an administrator
+  ticks it again: a server can change what an allowed tool says or takes without the name changing. `McpThread`
+  re-tests every enabled server each `mcp_revalidate_hours`.
 - Grants (`mcp_grants`): a server open to `everyone` is offered to every agent; otherwise only to granted agents.
 - Runtime: `claude_config(agent_id)` is the `--mcp-config` JSON for Claude Code (granted, enabled, tested
   servers only, with their allowed tools as `mcp__<slug>__<tool>` names). `call()` runs one tool and is
@@ -19,6 +23,7 @@ answer is JSON or an SSE stream. A local server never gets this service's enviro
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
@@ -30,12 +35,13 @@ import time
 import urllib.error
 import urllib.request
 from collections import deque
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
 
-from agent_company.db import Agent, McpCall, McpGrant, McpServer, now, session
+from agent_company.db import Agent, McpCall, McpGrant, McpServer, log_event, now, session
 
 PROTOCOL = "2025-06-18"
 TIMEOUT, LIST_TIMEOUT = 60, 30
@@ -418,8 +424,17 @@ def _loaded(server_id: int) -> tuple[dict[str, Any], dict[str, Any]]:
         return server_dict(row), _secrets(row)
 
 
+def digest(tool: dict[str, Any]) -> str:
+    """What a tool says and takes, as the server announced it: a change means the allow decision must be made again."""
+    body = {"description": tool.get("description") or "", "schema": tool.get("inputSchema") or {},
+            "annotations": tool.get("annotations") or {}}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+
+
 def test(server_id: int, allow: str = "read_only") -> dict[str, Any]:
-    """initialize + tools/list; keeps the tools, keeping earlier allow decisions."""
+    """initialize + tools/list; keeps the tools, keeping earlier allow decisions for tools that did not change."""
+    from agent_company.governance import notify
+
     server, secrets = _loaded(server_id)
     started = time.monotonic()
     try:
@@ -433,19 +448,72 @@ def test(server_id: int, allow: str = "read_only") -> dict[str, Any]:
             row = s.get(McpServer, server_id)
             row.status, row.last_error, row.tested_at = "error", str(e)[:2000], now()
         raise
-    before = {t["name"]: t.get("allowed") for t in server["tools"]}
-    kept = []
+    before = {t["name"]: t for t in server["tools"]}
+    kept, revoked = [], []
     for t in tools[:200]:
         ro = bool((t.get("annotations") or {}).get("readOnlyHint"))
-        allowed = before[t["name"]] if t.get("name") in before else (allow == "all" or ro)
-        kept.append({"name": t.get("name", ""), "description": (t.get("description") or "")[:500],
-                     "read_only": ro, "allowed": bool(allowed), "schema": t.get("inputSchema") or {}})
+        name, d = t.get("name", ""), digest(t)
+        old = before.get(name)
+        if old is None:
+            allowed, changed = allow == "all" or ro, False
+        elif old.get("digest") and old["digest"] != d:  # the same name, another definition (G-R-15)
+            allowed, changed = False, True
+            if old.get("allowed"):
+                revoked.append(name)
+        else:  # unchanged, or recorded before digests were kept
+            allowed, changed = bool(old.get("allowed")), bool(old.get("changed"))
+        kept.append({"name": name, "description": (t.get("description") or "")[:500], "read_only": ro,
+                     "allowed": bool(allowed), "schema": t.get("inputSchema") or {}, "digest": d, "changed": changed})
     with session() as s:
         row = s.get(McpServer, server_id)
         row.tools, row.status, row.last_error, row.tested_at = kept, "ok", "", now()
         s.add(McpCall(server_id=server_id, actor="test", tool="tools/list", ok=True,
                       duration=time.monotonic() - started))
+        if revoked:
+            names = ", ".join(revoked)
+            log_event("security", f"MCP server {row.name}: the definition of allowed tool(s) {names} changed; "
+                      "no longer allowed until an administrator allows them again", s=s, rule="mcp_tool_changed",
+                      server_id=server_id, tools=revoked)
+            notify(f"MCP tools changed on {row.name}", f"The description or input schema of {names} changed since "
+                   "they were allowed. They are no longer allowed: review them under Agents → Tools & MCP and tick "
+                   "them again if the change is expected.", level="warning", source="mcp", admin_only=True, s=s)
     return get_server(server_id)
+
+
+def revalidate_due(at: float | None = None) -> list[int]:
+    """Re-test every enabled server last tested `mcp_revalidate_hours` ago or more. Returns the ids tested."""
+    from agent_company.config import settings
+
+    hours = settings().mcp_revalidate_hours
+    if hours <= 0:
+        return []
+    cutoff = (at if at is not None else time.time()) - hours * 3600
+    with session() as s:
+        due = [r.id for r in s.scalars(select(McpServer).where(McpServer.enabled).order_by(McpServer.id))
+               if r.tested_at is not None  # SQLite hands datetimes back without their zone (UTC)
+               and (r.tested_at if r.tested_at.tzinfo else r.tested_at.replace(tzinfo=UTC)).timestamp() <= cutoff]
+    for sid in due:
+        try:
+            test(sid)
+        except Exception as e:  # noqa: BLE001 - one unreachable server must not stop the others
+            log_event("mcp", f"re-test of MCP server #{sid} failed: {str(e)[:300]}")
+    return due
+
+
+class McpThread(threading.Thread):
+    """Re-tests MCP servers that are due (G-R-15)."""
+
+    def __init__(self, every: int = 900) -> None:
+        super().__init__(daemon=True, name="mcp-revalidation")
+        self.every = every
+        self.stop = threading.Event()
+
+    def run(self) -> None:
+        while not self.stop.wait(self.every):
+            try:
+                revalidate_due()
+            except Exception as e:  # noqa: BLE001 - the next round tries again
+                log_event("error", f"MCP re-test round failed: {e}")
 
 
 def set_tools(server_id: int, allowed: list[str]) -> dict[str, Any]:
@@ -453,7 +521,9 @@ def set_tools(server_id: int, allowed: list[str]) -> dict[str, Any]:
         row = s.get(McpServer, server_id)
         if row is None:
             raise KeyError(server_id)
-        row.tools = [{**t, "allowed": t["name"] in set(allowed)} for t in row.tools or []]
+        ticked = set(allowed)  # an administrator's decision: a changed tool they tick is accepted as it is now
+        row.tools = [{**t, "allowed": t["name"] in ticked, "changed": bool(t.get("changed")) and t["name"] not in ticked}
+                     for t in row.tools or []]
     return get_server(server_id)
 
 

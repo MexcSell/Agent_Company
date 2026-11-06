@@ -756,6 +756,8 @@ def create_app(start_background: bool = True) -> FastAPI:
             app.state.selfevolve.start()
             app.state.kpis = kpis.KpiThread()
             app.state.kpis.start()
+            app.state.mcp = mcp.McpThread()
+            app.state.mcp.start()
             threading.Thread(target=lambda: agentdefs.sync_all("registered"), daemon=True).start()
         yield
         if app.state.rotation:
@@ -768,6 +770,8 @@ def create_app(start_background: bool = True) -> FastAPI:
             app.state.selfevolve.stop.set()
         if getattr(app.state, "kpis", None):
             app.state.kpis.stop.set()
+        if getattr(app.state, "mcp", None):
+            app.state.mcp.stop.set()
         terminal.close_all()
         workspace.stop_all()
 
