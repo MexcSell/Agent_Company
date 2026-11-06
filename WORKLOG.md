@@ -1,78 +1,63 @@
-# WORKLOG – Goal 22, REQ-005: knowledge import by a person
+# WORKLOG – REQ-006: each agent's run history on its card (goal 23, iteration 2)
 
-Status: build done (iteration 2, Auxiliary Developer); QA review pending.
-
-- Spec: `.claude/specs/0022-req-005-knowledge-import-by-a-person/spec.md`
-- Sandbox: the iteration-1 blocker (bwrap "Permission denied" on the worktree) did not recur in this session.
-- Note: at 20:14 an earlier version of this file described a finished build with test results. The source files
-  were at the base commit then: no `import_knowledge`, no `/api/knowledge/import`, no import tests, and every source
-  file had the same 20:13:38 timestamp, which suggests a reset. That text was replaced. What follows is only what
-  this session did and ran.
+## Before
+`static/agents.js` `agentModal` had five tabs (Profile, Definition, Playbook & history, Relationships, Versions).
+The only run information was the Stats table's count, tokens and cost. No endpoint returned an agent's runs.
 
 ## What changed
+- `src/agent_company/registry.py`
+  - `agent_runs(agent_id, offset, limit, visible)` returns one page of the agent's `Run` rows, newest first
+    (`Run.id desc`): `{total, offset, limit, runs}`. It clamps `offset >= 0` and `1 <= limit <= RUNS_PAGE_MAX (200)`.
+    `Goal` is outer-joined explicitly because `Run.goal_id` is not a foreign key. With `visible` set, only runs with
+    no goal, with a project-less (or deleted) goal, or with a goal in a visible project count, both in the page and
+    in `total`. Goal titles and tasks come from one `IN` lookup each per page. A row has goal, task, time, model,
+    executor, tokens, cost, duration, outcome ok|failed, the first 200 characters of the error and
+    `tool_call_count`. Rows do not include `tool_calls`.
+  - `agent_run(agent_id, run_id, visible)` returns the row plus the full error, the gateway fields (isolation, tools,
+    permissions, `withheld` from `dropped`, `denied_tools`), `tool_calls` and the `task` (id, key, title, status,
+    output, session_id) or null. It raises `KeyError` (404) for an unknown agent, a missing run, another agent's run,
+    or a run of a hidden project.
+  - `agent_detail`: `usage` now comes from SQL aggregates and no longer loads every run. The keys and rounding are
+    unchanged.
+- `src/agent_company/api.py`: `GET /api/agents/{id}/runs?offset=&limit=` and `GET /api/agents/{id}/runs/{run_id}`.
+  They use `current_user` (401 without an active session), like `/api/agents/{id}`, plus `_visible_project_ids`, as
+  `goal_trace` does. They are read-only, so there is no audit record.
+- `src/agent_company/static/agents.js`: a new **Runs** tab (`runsTab`) shows a table with When, Goal, Task, Model,
+  Tokens, Cost and Outcome (the error as the pill's title), 25 rows per page. Newer/Older buttons, disabled at either
+  end, sit around "x–y of total". When there are no runs it shows "No runs yet.". Clicking a row toggles a detail
+  row with a note that no transcript is stored, the task's output in a `<pre>`, the error, the gateway line and the
+  tool calls (pill done/failed, tool, input). Every value goes through `esc()`, and errors are shown with `toast`.
+- `tests/test_agent_runs.py`: 6 tests, described below.
+- `CLAUDE.md`: one clause on the agents.js Runs tab.
 
-| Spec § | File | Change |
-|---|---|---|
-| §1 | `src/agent_company/db.py` | `Lesson.outcome` comment adds `imported (REQ-005)`; no new columns |
-| §2–§4 | `src/agent_company/learning.py` | `import_knowledge()` with the parsers `_pieces`, `_front_matter`, `_chunks_markdown`, `_chunks_chat`, `_items_reports`, `_detect`, and the path helpers `_import_allowed`, `_import_files`, `_read_import`; `NoManager(ValueError)` |
-| §2 | `learning.review()` | approving an imported `draft` runs `_link_contradictions`, then `judge_contradictions` after the session |
-| §2 | `evolution.py`, `agentdefs.py`, `training.py` | `outcome="imported"` is kept out of the playbook (`curate`), the study prompt's lessons, and the skill counts (`known`) |
-| §5 | `src/agent_company/api.py` | `ImportPathBody`; `POST /api/knowledge/import` (multipart, admin, 413 over 2 MB) and `POST /api/knowledge/import/path` (admin), both placed before `/api/knowledge/{item_id}`; both call `_audit(admin, "knowledge_import", <name or path>, after=counts)`; `ValueError` → 400 (the global handler), `NoManager` → 409 |
-| §6 | `src/agent_company/__main__.py` | `learn import <path> [fmt]`: the path is resolved from the current directory, a directory means `folder`, actor `cli`, JSON output; a refused path exits with `learn import: <reason>` |
-| §7 | `src/agent_company/static/knowledge.js` | admin-only Import button (upload icon) in the review-queue card; `kImport()` modal (file, server path, format, classification, project, date); toast with the counts, then `viewKnowledge()`; `kSource` shows `user:`/`import:`/`file:`/`date:` as plain escaped labels, and links `url:` only for `http(s)` |
-| §8 | `CLAUDE.md`, `docs/threat-model.md` | a clause in the `learning.py` entry and in the `learn` command line; a threat row "Admin-imported text (REQ-005)" |
-| §9 | `tests/test_knowledge.py` | 10 new tests, fixtures written inline (nothing copied from `data/research/`) |
-
-### Behaviour
-- Every piece goes through `screen()`. Reports and chat pieces also have their report screened, as in `learn()`. A clean piece becomes `draft`; credential-like text becomes `quarantined`; instructions to agents become `rejected`. Each non-draft piece writes a `security` event with `rule="memory_poisoning"`, and each import writes one `knowledge` event.
-- Items are `Lesson(outcome="imported", agent_id=<root GM>, goal_id=None)`. Files, folders and chats are `kind="semantic"`; reports are `"episodic"`. `evidence_class` defaults to `INFERENCE`; `classification` is checked and raised to the project's level, and secret is refused. `sources` = `user:<name>`, `import:<format>`, `file:<label>`, `url:<…>` (chat, http(s) only), `date:<YYYY-MM-DD>` (the request's date, then front-matter, then the file's mtime, then today).
-- `retrieve()` is unchanged: it already takes only `status == "approved"`.
-- Paths are resolved, must lie inside `settings().data_dir`, and may not be under `tls`, `git-keys`, `claude-accounts` or a `.env*` name. A relative path is relative to `data_dir` (CLI paths are resolved from the current directory first). Each folder file is resolved and checked again, so a symlink that leads out raises `ValueError`. Symlinked folders are not followed. A single file must be `.md`, `.markdown`, `.txt` or `.json`.
-- Limits: 2 MB per file (an oversized folder file is left out and counted in `truncated`), 50 files (also counted in `truncated`), 500 items, 1000-character chunks. The result adds a `files` key to the spec's counts.
-- Deviation from the spec, on purpose: duplicates are checked against imported items in every review-queue status plus `approved`, not only `draft`/`approved`. Without this, re-importing a file would re-create its quarantined and rejected pieces.
+There is no DB change and no new executor or network path, so `docs/threat-model.md` is unchanged.
 
 ## How to verify
+1. `uv run pytest -q tests/test_agent_runs.py` covers:
+   - 401 without a session and for an unapproved guest, 200 once approved;
+   - paging of 7 runs at limit 3 (ids descending, no overlap, all 7 covered), offset 50 giving an empty page with
+     total 7, and clamping (limit 0 → 1, 10000 → 200, offset -5 → 0);
+   - the guest not seeing the run of the admin's project (total and detail 404) while the admin sees all three;
+   - 404 for an unknown agent and for another agent's run;
+   - the detail with full error, tool_calls and task.output;
+   - `agent_detail` usage equal to the seeded sums.
+2. `uv run pytest -q` runs the full suite serially (there is no xdist).
+3. In the dashboard, go to Agents, open an agent card and choose **Runs**. Page through with Newer/Older, and click
+   a row to see its output and tool calls.
 
-```
-uv run pytest -q tests/test_knowledge.py                         # serially (no xdist); read the summary line
-uv run pytest -q                                                 # the full suite
-uv run python -m agent_company learn import data/workspaces/<x>  # a folder → drafts in Knowledge → Review queue
-```
+## Results
+- `uv run pytest -q tests/test_agent_runs.py`: `6 passed in 3.06s`
+- `uv run pytest -q`: `749 passed in 315.37s (0:05:15)`
 
-Spec §9 → test (all in `tests/test_knowledge.py`):
-- 1, 2: `test_an_imported_markdown_file_waits_for_review_and_is_retrieved_only_after_approval`
-- 3: `test_imported_credentials_and_instructions_are_quarantined_or_rejected_and_never_retrieved`
-- 4: `test_a_chat_export_keeps_each_reply_in_its_turn_with_the_question_and_source`
-- 5: `test_imported_experience_reports_are_cleaned_and_need_a_lesson`
-- 6: `test_a_folder_under_the_data_directory_is_imported_and_paths_outside_are_refused` (also `..`, `/etc`, a folder symlink, a file symlink and `tls/`); CLI: `test_learn_import_cli_imports_a_folder_for_review_and_refuses_outside_paths`
-- 7: `test_importing_the_same_file_twice_skips_every_piece`
-- 8: `test_knowledge_import_api_is_admin_only_and_audited` (also 413, 400 for `/etc/passwd`, 409 without a GM)
-- 9: `test_an_approved_imported_item_never_reaches_the_gms_playbook_or_definition`
-- extra: `test_secret_text_and_bad_arguments_are_refused_before_anything_is_stored`
+Not run: `node --check` on agents.js, because running node needs approval in this session. The browser UI was not
+tried either.
 
-## Evidence (2026-11-06, this session)
-
-- `uv run pytest -q -p no:cacheprovider tests/test_knowledge.py` → `37 passed in 10.82s`
-- Full suite: see the re-verification below.
-- Not run: `node --check static/knowledge.js` (the command needed approval) and a Python linter (pyflakes/ruff are not installed). The JS was checked by reading only, and the UI was not exercised in a browser.
-
-## Re-verification (2026-11-06, iteration 2, second Auxiliary Developer session)
-
-The source changes above were found uncommitted in the worktree. They were checked again here, not assumed:
-- `uv run pytest -q -p no:cacheprovider tests/test_knowledge.py` → `37 passed in 12.35s`
-- Code read against the spec: `retrieve()` still filters `Lesson.status == "approved"` (`learning.py:399`), so drafts,
-  quarantined and rejected imports are never retrieved. Both API routes sit before `/api/knowledge/{item_id}` and use
-  `Depends(admin_user)` + `_audit(..., "knowledge_import", ...)`. The JS upload uses the same raw `fetch` + `FormData`
-  pattern as `projects.js:408`. The `upload` icon exists in `app.js:26`, and `me.is_admin` gates the button.
-- Full suite, serial: `uv run pytest -q -p no:cacheprovider` → `734 passed in 311.95s` (exit 0). This run began
-  just before the change below.
-- Change made in this session: `_import_allowed` now also refuses the data directory itself (`path="."` or
-  `data_dir`), because the spec says a path must lie *under* it. The folder test covers both
-  (`test_a_folder_under_the_data_directory_is_imported_and_paths_outside_are_refused`). After the change:
-  `uv run pytest -q -p no:cacheprovider tests/test_knowledge.py` → `37 passed in 11.12s`.
-- Behaviour kept on purpose: if a folder walk reaches a refused file (a symlink that leads out), the whole import
-  raises `ValueError` instead of skipping the file. Nothing is stored, because the check runs before the DB session
-  opens.
-- Secrets gate: the `ghp_` fixture in `tests/test_knowledge.py:484` is built by concatenation, so the gate's
-  GitHub-token pattern (`checks.py:31`) does not match the source text.
-- Still not run: `node --check` (needed approval again) and a browser test of the Import modal.
+## Re-verification (2026-11-06, iteration 2, Auxiliary Developer (Codex) #3)
+I found the changes above in the worktree, not yet committed, and checked them again here:
+- `uv run pytest -q -p no:cacheprovider tests/test_agent_runs.py` → `6 passed in 3.00s`
+- `uv run pytest -q -p no:cacheprovider` (serial) → `749 passed in 315.10s (0:05:15)`
+- Read against the spec: both routes use `Depends(current_user)` and `_visible_project_ids`, the same check as
+  `goal_trace` (`api.py:2554`). The `KeyError` the registry raises becomes 404 through the global handler
+  (`api.py:844`). The JS helpers `runsTab` uses (`esc`, `fmt`, `money`, `ago`, `ib`, `pill`, and the
+  `chevron_left`/`chevron_right` icons) exist in `app.js`, with the signatures it calls them with.
+- Still not run: `node --check` (needs approval) and a browser test of the Runs tab.

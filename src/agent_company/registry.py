@@ -1083,11 +1083,96 @@ def agent_detail(agent_id: int) -> dict[str, Any]:
         d["quota_reason"] = over_quota(s, a)
         d["trial_playbook"] = (a.experiment or {}).get("playbook")
         d["trial_outcomes"] = (a.experiment or {}).get("outcomes", [])
-        runs = s.scalars(select(Run).where(Run.agent_id == a.id)).all()
-        d["usage"] = {"runs": len(runs), "input_tokens": sum(r.input_tokens for r in runs),
-                      "output_tokens": sum(r.output_tokens for r in runs),
-                      "cost": round(sum(r.cost for r in runs), 6)}
+        n, tin, tout, cost = s.execute(select(
+            func.count(Run.id), func.coalesce(func.sum(Run.input_tokens), 0),
+            func.coalesce(func.sum(Run.output_tokens), 0), func.coalesce(func.sum(Run.cost), 0.0))
+            .where(Run.agent_id == a.id)).one()
+        d["usage"] = {"runs": int(n), "input_tokens": int(tin), "output_tokens": int(tout),
+                      "cost": round(float(cost), 6)}
         d["workload"] = workload(s, a.id)
+        return d
+
+
+# --- an agent's run history on its card (REQ-006) ----------------------------------------
+
+RUNS_PAGE_MAX = 200
+
+
+def _runs_query(agent_id: int, visible: set[int] | None, what: Any) -> Any:
+    """`what` over the agent's runs, joined to their goals; with `visible`, only runs without a goal, of a goal
+    without a project (or a deleted one) or of a project in it. `goal_id` is no foreign key: joined explicitly."""
+    from agent_company.db import Run
+
+    q = what.outerjoin(Goal, Goal.id == Run.goal_id).where(Run.agent_id == agent_id)
+    if visible is not None:
+        q = q.where(or_(Run.goal_id.is_(None), Goal.project_id.is_(None),
+                        Goal.project_id.in_(sorted(visible) or [-1])))
+    return q
+
+
+def _run_row(r: Any, goals: dict[int, str], tasks: dict[int, Any]) -> dict[str, Any]:
+    t = tasks.get(r.task_id) if r.task_id else None
+    return {"id": r.id, "goal_id": r.goal_id, "goal_title": goals.get(r.goal_id, "") if r.goal_id else "",
+            "task_id": r.task_id, "task_key": t.key if t else "", "task_title": t.title if t else "",
+            "model": r.model_name, "executor": r.kind, "purpose": r.purpose,
+            "input_tokens": r.input_tokens, "output_tokens": r.output_tokens,
+            "tokens": r.input_tokens + r.output_tokens, "cost": round(r.cost or 0.0, 6),
+            "duration": round(r.duration or 0.0, 2), "outcome": "ok" if r.ok else "failed",
+            "error": (r.error or "")[:200], "started_at": r.started_at.isoformat() if r.started_at else None,
+            "tool_call_count": len(r.tool_calls or [])}
+
+
+def _titles(s: Session, runs: list[Any]) -> tuple[dict[int, str], dict[int, Any]]:
+    """Goal titles and tasks of a page of runs, one IN lookup each."""
+    from agent_company.db import Task
+
+    gids = {r.goal_id for r in runs if r.goal_id}
+    tids = {r.task_id for r in runs if r.task_id}
+    goals = dict(s.execute(select(Goal.id, Goal.title).where(Goal.id.in_(gids))).all()) if gids else {}
+    tasks = {t.id: t for t in s.scalars(select(Task).where(Task.id.in_(tids)))} if tids else {}
+    return goals, tasks
+
+
+def agent_runs(agent_id: int, offset: int = 0, limit: int = 50,
+               visible: set[int] | None = None) -> dict[str, Any]:
+    """One page of the agent's runs, newest first (REQ-006). `visible`: project ids
+    the caller may see (None = everything, i.e. an administrator)."""
+    from agent_company.db import Run
+
+    offset, limit = max(0, offset), min(max(1, limit), RUNS_PAGE_MAX)
+    with session() as s:
+        if s.get(Agent, agent_id) is None:
+            raise KeyError(agent_id)
+        total = s.scalar(_runs_query(agent_id, visible, select(func.count(Run.id)).select_from(Run))) or 0
+        runs = list(s.scalars(_runs_query(agent_id, visible, select(Run))
+                              .order_by(Run.id.desc()).offset(offset).limit(limit)))
+        goals, tasks = _titles(s, runs)
+        return {"total": int(total), "offset": offset, "limit": limit,
+                "runs": [_run_row(r, goals, tasks) for r in runs]}
+
+
+def agent_run(agent_id: int, run_id: int, visible: set[int] | None = None) -> dict[str, Any]:
+    """One run with what was recorded: its task's output, error and tool calls."""
+    from agent_company.db import Run
+
+    with session() as s:
+        if s.get(Agent, agent_id) is None:
+            raise KeyError(agent_id)
+        r = s.get(Run, run_id)
+        if r is None or r.agent_id != agent_id:
+            raise KeyError(run_id)
+        if visible is not None and r.goal_id is not None:
+            g = s.get(Goal, r.goal_id)
+            if g is not None and g.project_id is not None and g.project_id not in visible:
+                raise KeyError(run_id)
+        goals, tasks = _titles(s, [r])
+        d = _run_row(r, goals, tasks)
+        t = tasks.get(r.task_id) if r.task_id else None
+        d.update(error=r.error or "", isolation=r.isolation or "", tools=list(r.tools or []),
+                 permissions=list(r.permissions or []), withheld=list(r.dropped or []),
+                 denied_tools=list(r.denied_tools or []), tool_calls=list(r.tool_calls or []),
+                 task={"id": t.id, "key": t.key, "title": t.title, "status": t.status, "output": t.output,
+                       "session_id": t.session_id} if t else None)
         return d
 
 

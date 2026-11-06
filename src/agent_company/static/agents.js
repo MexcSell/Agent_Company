@@ -147,7 +147,7 @@ async function agentModal(id, tab = "profile") {
     <optgroup label="Models">${m.models.map((x) => `<option value="${esc(x.name)}" ${x.name === a.model_pref ? "selected" : ""}>${esc(x.name)}${x.available ? "" : " (unavailable)"}</option>`).join("")}</optgroup>
     <optgroup label="Another agent (uses its model)">${others.map((x) => `<option value="agent:${x.id}" ${a.model_pref === `agent:${x.id}` ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</optgroup></select>`;
   const plugins = cat.filter((i) => ["plugin", "skill"].includes(i.kind));
-  const tabs = [["profile", "Profile"], ["definition", "Definition"], ["history", "Playbook & history"], ["links", "Relationships"], ["config", "Versions"]];
+  const tabs = [["profile", "Profile"], ["definition", "Definition"], ["history", "Playbook & history"], ["runs", "Runs"], ["links", "Relationships"], ["config", "Versions"]];
   modal(`<div class="row"><div class="avatar">${roleIcon(a.role)}</div><div class="grow"><h2 style="margin:0">${esc(a.name)}</h2><div class="muted">${esc(a.title)} · ${esc(a.room)} · configuration v${a.config_version} · definition v${a.definition_version}</div></div>${a.health === "degraded" ? '<span class="pill failed">degraded</span>' : ""}${pill(a.enabled ? a.status : "disabled")}</div>
     <div class="ag-tabs small" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-mtab="${k}" aria-selected="${tab === k}">${l}</button>`).join("")}</div><div id="a-tab"></div>`);
   document.querySelectorAll("[data-mtab]").forEach((b) => (b.onclick = () => agentModal(id, b.dataset.mtab)));
@@ -175,6 +175,7 @@ async function agentModal(id, tab = "profile") {
     return;
   }
   if (tab === "links") return relationshipsTab(box, a, all, admin);
+  if (tab === "runs") return runsTab(box, a);
   if (tab === "history") {
     box.innerHTML = `<h3>Playbook v${a.playbook_version}</h3><pre>${esc(a.playbook || "Empty: the agent learns from finished work.")}</pre>
       ${a.trial_playbook ? `<h3>Trial playbook (${a.trial_outcomes.length} task(s) so far)</h3><pre>${esc(a.trial_playbook)}</pre>` : ""}
@@ -221,6 +222,39 @@ async function agentModal(id, tab = "profile") {
   $("#a-pause") && ($("#a-pause").onclick = () => act("lifecycle", { state: a.lifecycle === "paused" ? "active" : "paused" }));
   $("#a-retire") && ($("#a-retire").onclick = () => act("lifecycle", { state: "retired" }, "Retire this agent permanently? Its history is kept."));
   $("#a-merge") && ($("#a-merge").onclick = () => act("merge", undefined, "Fold this clone's experience into its original and retire it?"));
+}
+
+// The agent's runs, newest first and paged, only of goals in projects the user may see; a row opens what was
+// recorded: the task's output, the error, the tool gateway's grant and the tool calls (REQ-006).
+async function runsTab(box, a, offset = 0) {
+  let p;
+  try { p = await api(`/api/agents/${a.id}/runs?offset=${offset}&limit=25`); } catch (e) { toast(e.message); return; }
+  const row = (r) => `<tr data-run="${r.id}" style="cursor:pointer"><td title="${esc(r.started_at || "")}">${ago(r.started_at)}</td>
+    <td>${r.goal_id ? `#${Number(r.goal_id)} ${esc(r.goal_title)}` : '<span class="muted">none</span>'}</td>
+    <td>${esc(r.task_title || r.task_key || r.purpose)}</td><td>${esc(r.model)} <span class="muted">${esc(r.executor)}</span></td>
+    <td class="num">${fmt.format(r.tokens)}</td><td class="num">${money(r.cost)}</td><td><span title="${esc(r.error)}">${pill(r.outcome)}</span></td></tr>`;
+  const end = p.offset + p.runs.length;
+  box.innerHTML = p.total ? `<table><tr><th>When</th><th>Goal</th><th>Task</th><th>Model</th><th class="num">Tokens</th><th class="num">Cost</th><th>Outcome</th></tr>${p.runs.map(row).join("")}</table>
+    <div class="row" style="margin-top:8px">${ib("chevron_left", "Newer runs", `id="ar-newer" ${p.offset > 0 ? "" : "disabled"}`, "sm")}<span class="muted">${p.offset + 1}–${end} of ${p.total}</span>${ib("chevron_right", "Older runs", `id="ar-older" ${end < p.total ? "" : "disabled"}`, "sm")}</div>`
+    : '<span class="muted">No runs yet.</span>';
+  if (!p.total) return;
+  $("#ar-newer").onclick = () => runsTab(box, a, Math.max(0, p.offset - p.limit));
+  $("#ar-older").onclick = () => runsTab(box, a, end);
+  const text = (v) => (typeof v === "string" ? v : JSON.stringify(v));
+  const list = (xs) => (xs && xs.length ? xs.map((x) => esc(text(x))).join(", ") : "none");
+  box.querySelectorAll("[data-run]").forEach((tr) => (tr.onclick = async () => {
+    const open = tr.nextElementSibling;
+    if (open && open.dataset.runDetail) { open.remove(); return; }
+    let d;
+    try { d = await api(`/api/agents/${a.id}/runs/${tr.dataset.run}`); } catch (e) { toast(e.message); return; }
+    const calls = d.tool_calls.map((c) => `<div>${pill(c.ok === false ? "failed" : "done")} <span class="k">${esc(c.tool)}</span><span class="muted ellipsis">${esc(text(c.input ?? ""))}</span></div>`).join("");
+    tr.insertAdjacentHTML("afterend", `<tr data-run-detail="1"><td colspan="7">
+      <p class="muted">No transcript is stored per run; this is the task's output and the recorded tool calls.</p>
+      ${d.task ? `<h3>Task ${esc(d.task.key)} · ${esc(d.task.title)} ${pill(d.task.status)}</h3><pre>${esc(d.task.output || "No output.")}</pre>` : ""}
+      ${d.error ? `<h3>Error</h3><pre>${esc(d.error)}</pre>` : ""}
+      <p class="muted">Gateway: isolation ${esc(d.isolation || "–")} · tools ${list(d.tools)} · permissions ${list(d.permissions)} · withheld ${list(d.withheld)} · denied ${list(d.denied_tools)} · ${Number(d.duration)} s</p>
+      <h3>Tool calls (${d.tool_calls.length})</h3><div class="events">${calls || '<span class="muted">None recorded.</span>'}</div></td></tr>`);
+  }));
 }
 
 // Relationships with their kind, where they come from (inferred from profiles, observed in verified work,
