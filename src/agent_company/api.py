@@ -41,6 +41,7 @@ from agent_company import (
     loop,
     machines,
     management,
+    marketplace,
     mcp,
     mentoring,
     network,
@@ -706,6 +707,21 @@ class RecruitDecisionBody(BaseModel):
     grant: bool = True  # also give the shell/network permissions held back for a new role
     reason: str = ""
     status: str = "rejected"  # rejected | cancelled (a person suspends the recruitment)
+
+
+class MarketImportBody(BaseModel):
+    url: str
+
+
+class MarketApproveBody(BaseModel):
+    grant: list[str] | None = None  # clamped by the import's permission ceiling
+    autonomy: str = ""
+    accept_licence: bool = False
+    acknowledge: bool = False
+
+
+class MarketRejectBody(BaseModel):
+    reason: str = ""
 
 
 class RecruitReviseBody(BaseModel):
@@ -2254,6 +2270,81 @@ def create_app(start_background: bool = True) -> FastAPI:
         _recruit_admin(user, "recruitment_revise", recruitment_id)
         out = _recruit_call(recruitment.revise, recruitment_id, body.changes, f"user:{user['name']}")
         _audit(user, "recruitment_revise", recruitment_id, after={"version": out["jd_version"]})
+        return out
+
+    # --- agent marketplace (REQ-002): untrusted packages become candidates an administrator decides ---
+    def _market_call(fn: Any, *args: Any, **kw: Any) -> dict[str, Any]:
+        try:
+            return fn(*args, **kw)
+        except KeyError as e:
+            raise HTTPException(404, f"import {args[0] if args else ''}") from e
+        except PermissionError as e:
+            raise HTTPException(403, str(e)) from e
+        except ValueError as e:  # ImportRefused included
+            raise HTTPException(400, str(e)) from e
+
+    def _market_import(out: dict[str, Any]) -> dict[str, Any]:
+        return _market_call(marketplace.create_candidate, out["id"]) if out["status"] == "converted" else out
+
+    @app.post("/api/marketplace/import")
+    def marketplace_import(body: MarketImportBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = _market_import(_market_call(marketplace.fetch_url, body.url, f"user:{admin['name']}"))
+        except HTTPException as e:
+            _audit(admin, "marketplace_import_refused", body.url[:200], after={"error": str(e.detail)[:300]},
+                   severity="warning")
+            raise
+        _audit(admin, "marketplace_import", out["id"],
+               after={"source": out["source"], "sha": out["source_sha"], "status": out["status"]})
+        return out
+
+    @app.post("/api/marketplace/upload")
+    async def marketplace_upload(file: UploadFile = File(...), admin: dict[str, Any] = Depends(admin_user)
+                                 ) -> dict[str, Any]:
+        data = await file.read(marketplace.MAX_BYTES + 1)
+        if len(data) > marketplace.MAX_BYTES:
+            raise HTTPException(413, "the package is too large")
+        name = file.filename or "package"
+        try:  # unpacked straight into its own new directory data/marketplace/<id>/src
+            out = _market_import(_market_call(marketplace.fetch_upload, data, name, f"user:{admin['name']}"))
+        except HTTPException as e:
+            _audit(admin, "marketplace_upload_refused", name[:200], after={"error": str(e.detail)[:300]},
+                   severity="warning")
+            raise
+        _audit(admin, "marketplace_upload", out["id"],
+               after={"source": out["source"], "sha": out["source_sha"], "status": out["status"]})
+        return out
+
+    @app.get("/api/marketplace")
+    def marketplace_list(status: str = "", _: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
+        return marketplace.list_imports(status)
+
+    @app.get("/api/marketplace/{import_id}")
+    def marketplace_detail(import_id: int, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _market_call(marketplace.get, import_id)
+        if out.get("agent_id"):
+            try:
+                d = agentdefs.read(out["agent_id"])
+                out["definition"] = {**d, "sections": agentdefs.sections(d["text"])}
+            except Exception:  # noqa: BLE001 - the definition is a view extra
+                out["definition"] = None
+        return out
+
+    @app.post("/api/marketplace/{import_id}/approve")
+    def marketplace_approve(import_id: int, body: MarketApproveBody, admin: dict[str, Any] = Depends(admin_user)
+                            ) -> dict[str, Any]:
+        out = _market_call(marketplace.approve, import_id, f"user:{admin['name']}", body.grant, admin=True,
+                           autonomy=body.autonomy, accept_licence=body.accept_licence, acknowledge=body.acknowledge)
+        _audit(admin, "marketplace_approve", import_id,
+               after={"agent_id": out["agent_id"], "permissions": out["ceiling"].get("permissions"),
+                      "autonomy": out["ceiling"].get("autonomy"), "requested": body.grant})
+        return out
+
+    @app.post("/api/marketplace/{import_id}/reject")
+    def marketplace_reject(import_id: int, body: MarketRejectBody, admin: dict[str, Any] = Depends(admin_user)
+                           ) -> dict[str, Any]:
+        out = _market_call(marketplace.reject, import_id, f"user:{admin['name']}", body.reason)
+        _audit(admin, "marketplace_reject", import_id, after={"status": out["status"], "reason": body.reason[:300]})
         return out
 
     @app.get("/api/recruitment/effectiveness")

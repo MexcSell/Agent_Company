@@ -9,7 +9,7 @@ let agentsTab = store.get("ac.agents.tab") || "org";
 
 async function viewAgents(quiet) {
   if (quiet && $("#ag-page") && agentsTab !== "org") return;  // the catalog tabs keep their forms
-  const tabs = [["org", "Organisation", "sitemap"], ["network", "Agent network", "network"], ["mcp", "Tools & MCP", "plug"], ["catalog", "Skills & plugins", "book"]];
+  const tabs = [["org", "Organisation", "sitemap"], ["network", "Agent network", "network"], ["mcp", "Tools & MCP", "plug"], ["catalog", "Skills & plugins", "book"], ...(me.is_admin ? [["market", "Marketplace", "source"]] : [])];
   if (!$("#ag-page") || !quiet) {
     $("#view").innerHTML = `<div class="ag-page" id="ag-page"><div class="ag-tabs" role="tablist">${tabs.map(([k, l, i]) => `<button role="tab" data-agtab="${k}" aria-selected="${agentsTab === k}">${icon(i, 16)} ${l}</button>`).join("")}
       <span class="grow"></span><span id="ag-tools"></span></div><div class="ag-body" id="ag-body"></div></div>`;
@@ -19,6 +19,7 @@ async function viewAgents(quiet) {
   if (agentsTab === "network") { $("#ag-tools").innerHTML = ""; return viewNetwork($("#ag-body")); }
   if (agentsTab === "mcp") return viewMcp();
   if (agentsTab === "catalog") return viewCatalog();
+  if (agentsTab === "market" && me.is_admin) return viewMarketplace();
   return viewOrg(quiet);
 }
 
@@ -343,6 +344,74 @@ function catalogForm(i = null) {
       else await api("/api/catalog", { method: "POST", body: { kind: $("#cf-kind").value, name: $("#cf-name").value, description: $("#cf-desc").value, content: $("#cf-content").value } });
       $("#modal").hidden = true; viewCatalog();
     } catch (err) { toast(err.message); }
+  };
+}
+
+// --- marketplace (REQ-002): external agent packages, fetched as data, qualified as candidates, decided by an admin ---
+async function viewMarketplace() {
+  $("#ag-tools").innerHTML = `<form id="mk-url" class="row" style="margin:0"><input id="mk-src" placeholder="https://… repository URL" style="width:22em">
+    ${ib("source", "Import from the repository URL", 'type="submit"', "primary")}</form>
+    <label class="btn icon" title="Upload a .zip or .tar.gz package" aria-label="Upload a package">${icon("upload", 16)}<input type="file" id="mk-file" accept=".zip,.tar.gz,.tgz,.tar" hidden></label>`;
+  const body = $("#ag-body");
+  const list = await api("/api/marketplace", { fresh: true });
+  body.innerHTML = `<div class="card" style="overflow:auto"><table class="tbl"><thead><tr><th>#</th><th>Name</th><th>Role</th><th>Status</th><th>Licence</th><th>Source</th><th>Sha</th></tr></thead><tbody>
+    ${list.map((i) => `<tr data-mk="${i.id}" style="cursor:pointer"><td>${i.id}</td><td>${esc(i.manifest.name || "")}</td><td>${esc(i.manifest.role || "")}</td><td><span class="pill st-${esc(i.status)}">${esc(i.status)}</span></td>
+      <td>${esc(i.licence)}</td><td title="${esc(i.source)}">${esc(i.source.slice(0, 60))}</td><td><code>${esc(i.source_sha.slice(0, 12))}</code></td></tr>`).join("") || `<tr><td colspan="7" class="muted">No imports yet</td></tr>`}</tbody></table></div><div id="mk-detail"></div>`;
+  body.querySelectorAll("[data-mk]").forEach((r) => (r.onclick = () => marketDetail(Number(r.dataset.mk))));
+  $("#mk-url").onsubmit = async (e) => {
+    e.preventDefault();
+    try { const out = await api("/api/marketplace/import", { method: "POST", body: { url: $("#mk-src").value.trim() } }); toast(`Import #${out.id}: ${out.status}`); viewMarketplace(); } catch (err) { toast(err.message); }
+  };
+  $("#mk-file").onchange = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const fd = new FormData(); fd.append("file", file);
+    try {
+      const res = await fetch("/api/marketplace/upload", { method: "POST", body: fd, credentials: "same-origin" });
+      const data = await res.json(); if (!res.ok) throw new Error(data.detail || res.statusText);
+      toast(`Import #${data.id}: ${data.status}`); viewMarketplace();
+    } catch (err) { toast(`${file.name}: ${err.message}`); }
+  };
+}
+
+async function marketDetail(id) {
+  const box = $("#mk-detail"), i = await api(`/api/marketplace/${id}`, { fresh: true });
+  const m = i.manifest || {}, c = i.ceiling || {}, sc = i.screen || {}, ev = i.eval || {};
+  const req = c.requested || m.permissions || [], granted = c.permissions || [];
+  const perms = [...new Set([...req, ...granted])].map((p) => `<tr><td>${esc(p)}</td><td>${req.includes(p) ? "requested" : ""}</td><td>${granted.includes(p) ? "granted" : `<span class="muted">not granted</span>`}</td></tr>`).join("");
+  const dims = Object.entries(ev.dimensions || {}).map(([k, v]) => `<li>${esc(k)}: ${esc(String(v && typeof v === "object" ? v.value ?? v.mean ?? "" : v))} <span class="muted">(n=${esc(String(v?.n ?? "?"))})</span></li>`).join("");
+  const sections = i.definition?.sections || {};
+  const levels = ["G0", "G1", "G2", "G3", "G4"].slice(0, ["G0", "G1", "G2", "G3", "G4"].indexOf(c.autonomy || "G1") + 1).reverse();
+  const decide = ["qualified", "qualifying", "converted"].includes(i.status);
+  box.innerHTML = `<div class="card" style="margin-top:12px"><h3>#${i.id} ${esc(m.name || "")} <span class="pill st-${esc(i.status)}">${esc(i.status)}</span></h3>
+    ${i.error ? `<p class="bad">${esc(i.error)}</p>` : ""}
+    <p class="muted">${esc(m.role || "")} · version ${esc(i.version || "?")} · by ${esc(i.author || "unknown")} · licence ${esc(i.licence)} · ${esc(i.kind)} ${esc(i.source)} <code>${esc(i.source_sha)}</code></p>
+    <details><summary>Manifest</summary><pre>${esc(JSON.stringify(m, null, 2))}</pre></details>
+    <h4>Permissions</h4><table class="tbl"><thead><tr><th>Permission</th><th>Package</th><th>Ceiling</th></tr></thead><tbody>${perms}</tbody></table>
+    <p class="muted">Autonomy: requested ${esc(m.autonomy || "—")}, ceiling ${esc(c.autonomy || "—")}</p>
+    <h4>Screen</h4><ul>${(sc.findings || []).map((f) => `<li><b>${esc(f.kind)}</b> ${esc(f.file)}: ${esc(f.detail)}</li>`).join("") || `<li class="muted">no findings</li>`}</ul>
+    <h4>Eval</h4><p>${esc(ev.status || "not run")}${ev.suite ? ` on ${esc(ev.suite)}` : ""}${ev.pass_rate != null ? `, pass rate ${Math.round(ev.pass_rate * 100)}% of ${esc(String(ev.runs ?? 0))} runs` : ""}</p><ul>${dims}</ul>
+    ${sections["Imported instructions"] ? `<details><summary>Imported instructions</summary><pre>${esc(sections["Imported instructions"])}</pre></details>` : ""}
+    ${sections.Provenance ? `<details open><summary>Provenance</summary><pre>${esc(sections.Provenance)}</pre></details>` : ""}
+    ${decide ? `<form id="mk-dec"><h4>Decision</h4>
+      <div class="row">${granted.map((p) => `<label class="row" style="margin:0"><input type="checkbox" name="grant" value="${esc(p)}" checked style="width:auto"> ${esc(p)}</label>`).join("")}
+      <select id="mk-aut" title="Autonomy, never above the ceiling">${levels.map((g) => `<option>${g}</option>`).join("")}</select></div>
+      ${i.licence === "unknown" ? `<label class="row"><input type="checkbox" id="mk-lic" required style="width:auto"> I accept a package without a known licence</label>` : ""}
+      ${sc.acknowledge ? `<label class="row"><input type="checkbox" id="mk-ack" required style="width:auto"> I have read the screen's findings</label>` : ""}
+      <div class="row"><input id="mk-reason" placeholder="Reason (reject)">
+      ${i.status === "qualified" ? ib("check", "Approve: enable the agent with the checked permissions", 'type="submit"', "primary") : ""}
+      ${ib("disable", "Reject: retire the candidate and delete the package", 'id="mk-rej"')}</div></form>` : ""}</div>`;
+  const form = $("#mk-dec"); if (!form) return;
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const grant = [...form.querySelectorAll("[name=grant]:checked")].map((x) => x.value);
+    try {
+      await api(`/api/marketplace/${id}/approve`, { method: "POST", body: { grant, autonomy: $("#mk-aut").value, accept_licence: !!$("#mk-lic")?.checked, acknowledge: !!$("#mk-ack")?.checked } });
+      toast("Approved"); await viewMarketplace(); marketDetail(id);
+    } catch (err) { toast(err.message); }
+  };
+  $("#mk-rej").onclick = async () => {
+    if (!confirm(`Reject import #${id}? The candidate is retired and the fetched package deleted.`)) return;
+    try { await api(`/api/marketplace/${id}/reject`, { method: "POST", body: { reason: $("#mk-reason").value } }); toast("Rejected"); viewMarketplace(); } catch (err) { toast(err.message); }
   };
 }
 

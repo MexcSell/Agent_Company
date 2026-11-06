@@ -2,6 +2,7 @@
 qualification through recruitment.py, administrator decisions and provenance in the agent definition."""
 
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -315,3 +316,102 @@ def test_reject_retires_and_deletes_src(tmp_path):
     assert a.lifecycle == "retired" and not a.enabled
     assert recruitment.get(out["recruitment_id"])["status"] == "rejected"
     assert [i["id"] for i in marketplace.list_imports("rejected")] == [out["id"]]
+
+
+def test_unknown_licence_needs_acceptance():
+    files = {k: v for k, v in sample_files().items() if k != "LICENSE"}
+    m = json.loads(files["agent-package.json"])
+    m.pop("licence")
+    files["agent-package.json"] = json.dumps(m).encode()
+    out = marketplace.fetch_upload(zip_bytes(files), "nolicence.zip", "admin")
+    assert out["licence"] == "unknown"
+    out = marketplace.create_candidate(out["id"])
+    with pytest.raises(ValueError, match="licence"):
+        marketplace.approve(out["id"], "admin", admin=True, acknowledge=True)
+    out = marketplace.approve(out["id"], "admin", admin=True, acknowledge=True, accept_licence=True)
+    assert out["status"] == "approved"
+    assert "licence: unknown" in agentdefs.sections(agentdefs.read(out["agent_id"])["text"])["Provenance"]
+
+
+# --- API and CLI --------------------------------------------------------------------------------
+
+def test_api_admin_only_audited_and_grant_clamped(tmp_path):
+    import secrets
+
+    from fastapi.testclient import TestClient
+    from sqlalchemy import select
+
+    from agent_company.api import create_app
+    from agent_company.db import AuditEvent
+
+    url = git_repo(SAMPLE, tmp_path)
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
+        app.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
+        other = TestClient(app.app)
+        s2 = secrets.token_urlsafe(32)
+        other.post("/api/auth/register", json={"name": "member", "device_secret": s2})
+        uid = next(u["id"] for u in app.get("/api/users").json() if u["name"] == "member")
+        app.post(f"/api/users/{uid}/approve")
+        other.post("/api/auth/device", json={"device_secret": s2})
+        assert other.post("/api/marketplace/import", json={"url": url}).status_code == 403
+        assert other.get("/api/marketplace").status_code == 403
+
+        out = app.post("/api/marketplace/import", json={"url": url}).json()
+        assert out["status"] == "qualified" and out["agent_id"]
+        iid = out["id"]
+        assert other.post(f"/api/marketplace/{iid}/approve", json={"acknowledge": True}).status_code == 403
+        assert other.post(f"/api/marketplace/{iid}/reject", json={}).status_code == 403
+        assert app.post(f"/api/marketplace/{iid}/approve", json={}).status_code == 400  # screen not acknowledged
+        detail = app.get(f"/api/marketplace/{iid}").json()
+        assert "Provenance" in detail["definition"]["sections"]
+        out = app.post(f"/api/marketplace/{iid}/approve",
+                       json={"grant": ["read", "shell", "network", "admin"], "autonomy": "G4", "acknowledge": True}
+                       ).json()
+        assert out["status"] == "approved" and out["ceiling"]["permissions"] == ["read", "shell"]
+        a = agent(out["agent_id"])
+        assert sorted(a.permissions) == ["read", "shell"] and a.autonomy == "G2" and a.enabled
+        assert app.get("/api/marketplace/9999").status_code == 404
+        assert app.post("/api/marketplace/import", json={"url": "https://127.0.0.1/x.git"}).status_code == 400
+
+        files = {"pkg/../../evil.txt": b"x", **sample_files()}
+        r = app.post("/api/marketplace/upload", files={"file": ("evil.zip", zip_bytes(files), "application/zip")})
+        assert r.status_code == 400
+        r = app.post("/api/marketplace/upload",
+                     files={"file": ("pkg.zip", zip_bytes(sample_files()), "application/zip")}).json()
+        rej = app.post(f"/api/marketplace/{r['id']}/reject", json={"reason": "duplicate"}).json()
+        assert rej["status"] == "rejected" and not marketplace.src_dir(r["id"]).exists()
+        assert r["id"] in [i["id"] for i in app.get("/api/marketplace", params={"status": "rejected"}).json()]
+    with session() as s:
+        acts = {e.action: e.actor for e in s.scalars(select(AuditEvent))}
+    for action in ("marketplace_import", "marketplace_approve", "marketplace_upload", "marketplace_reject",
+                   "marketplace_upload_refused", "marketplace_import_refused"):
+        assert action in acts, action
+    assert acts["marketplace_approve"] == "user:admin"
+
+
+def test_cli_import_list_show_approve_reject(tmp_path, capsys):
+    from sqlalchemy import select
+
+    from agent_company.__main__ import main
+    from agent_company.db import AuditEvent
+
+    main(["marketplace", "import", git_repo(SAMPLE, tmp_path)])
+    iid = json.loads(capsys.readouterr().out)["id"]
+    main(["marketplace", "list"])
+    assert f"#{iid}" in capsys.readouterr().out
+    main(["marketplace", "show", str(iid)])
+    assert json.loads(capsys.readouterr().out)["status"] == "qualified"
+    with pytest.raises(SystemExit, match="acknowledge"):
+        main(["marketplace", "approve", str(iid)])
+    main(["marketplace", "approve", str(iid), "--grant", "read,write,network", "--acknowledge"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "approved" and out["ceiling"]["permissions"] == ["read", "write"]
+    pkg = tmp_path / "pkg.zip"
+    pkg.write_bytes(zip_bytes(sample_files()))
+    main(["marketplace", "import", str(pkg)])
+    second = json.loads(capsys.readouterr().out)["id"]
+    main(["marketplace", "reject", str(second), "--reason", "duplicate"])
+    assert json.loads(capsys.readouterr().out)["status"] == "rejected"
+    with session() as s:
+        acts = [e.action for e in s.scalars(select(AuditEvent))]
+    assert acts.count("marketplace_import") == 2 and "marketplace_approve" in acts and "marketplace_reject" in acts
