@@ -19,11 +19,16 @@ feature came from.
   approval policy `recruit_requires_approval` that pauses the goal, probation with reviewed tasks; with `qualify_recruits` a
   new writing recruit is first a `candidate` that runs an eval suite, then approved or rejected), `scheduler.py`, `router.py` (models, routes, fallback,
   provider catalogs, classification clearance per model; a `claude_code` model's own sign-in `account`:
-  `data/claude-accounts/<account>/.credentials.json`, its CLAUDE_CONFIG_DIR; G-R-18 `ModelEntry.terms` (billing, context, tool calling, data
+  `data/claude-accounts/<account>/.credentials.json`, its CLAUDE_CONFIG_DIR; a model's own API key encrypted in
+  `api_key_enc` (only `key_hint` leaves the server); `model_type` API|CLI|Local; Test stores the provider's usage in
+  `status`; `model_info`/`/api/models/info` is what the Models page shows per model, as the Claude Code panel shows a
+  session (status, model, CLI version, account, usage windows: Claude plan via `workspace.claude_limits`, Codex plan
+  windows from its session files, OpenRouter key limits, own daily/weekly token limits; `limitCards` in app.js); `copilot` kind (GitHub Copilot CLI, `enable_copilot`), `cli_status`/`install_cli`; G-R-18 `ModelEntry.terms` (billing, context, tool calling, data
   terms, licence page) validated by `check_terms`, `terms_due` after 90 days without a person's check), `contracts.py` (task contracts with scope, risk, budget, deadline; output lines),
   `executors.py` (tracked subprocesses: `terminate` for stops; `gate`, the tool gateway every run passes: permissions and
   `Agent.autonomy` G0-G4 decide writes, Bash and MCP tools, the isolation level L0-L2 and every tool call (Claude Code
-  stream-json, Codex `--json`) are recorded on the `Run`), `dependencies.py` (S08-R-05: dependency changes per goal from git objects, `pip-audit`/`npm audit` at the gate's
+  stream-json, Codex `--json`) are recorded on the `Run`; FW-R-02 `StuckWatch` reads the stream while it runs and ends a run
+  that repeats the same call `stuck_repeat_limit` times or fails the same way `stuck_error_limit` times), `dependencies.py` (S08-R-05: dependency changes per goal from git objects, `pip-audit`/`npm audit` at the gate's
   security stage with network in the sandbox, `dependency_audit` off|warn|block, merge record, CycloneDX SBOM of each merged commit in `data/sbom/`), `sandbox.py` (S14-R-07 L3: quality, acceptance and
   milestone commands and code benchmarks run agent-written code under bubblewrap: no network, the worktree writable
   with its `.git` read-only, `data/`/`.env` hidden, allow-listed env, systemd-scope limits; setting `sandbox`
@@ -34,7 +39,11 @@ feature came from.
   for high-risk goals, staged command conditions the gate runs again), `usage.py`; `loop.py` (circular goal loop, budgets that pause, best-iteration
   rollback, handovers, checkpoint commits per writing task + worktree reconcile on resume, retry policy,
   re-plan, conflict review, escalation, behaviour rules, idempotent merge/push, trace; goals of one project topic
-  run in order, `lane_ahead`; G-R-08 overlapping `allowed_paths` of one repository wait, `paths_ahead`; G-R-09 mission digest `digest` in the result message); `workflow.py` (goal
+  run in order, `lane_ahead`; G-R-08 overlapping `allowed_paths` of one repository wait, `paths_ahead`; G-R-09 mission digest `digest` in the result message, with a `report` link once finished) + `mission.py`
+  (REQ-004 mission report of a finished goal: objective, plan, tasks done/failed/retried, checks and reviews, cost,
+  time vs `Goal.deadline`, limitations, lessons, RCA recommendations; each task verified|partial|failed only from
+  `Task.gate["acceptance"]` and gate review verdicts, never task output; `GET /api/goals/{id}/report[?format=md]`;
+  REQ-003 Simple mode: `User.ui_mode` simple|advanced, `/api/simple/missions` and `/api/simple/overview`); `workflow.py` (goal
   state machine, `goal_transitions`; task lifecycle stages `Task.stage` beside the execution status, S05-R-08); `strategies.py` (S04-R-11 workflow templates per goal kind
   bugfix|feature|refactor|research|docs, versioned: roles, writes, checks, iteration limit, execution mode, review
   policy; the order or the planner picks, a plan must fit it) + `teams.py` (a goal's team: joined/added/released
@@ -51,15 +60,23 @@ feature came from.
   classes, independent reviews that send a disputed decision to a person); `escalation.py` (S04-R-07 levels 1-5 and their
   recipients: agent, goal GM, room manager, executive GM, a person; delivered as blackboard requests);
   `budgets.py` (S04-R-09 goal budgets: cost, tokens, agents at once; child goals capped by the parent's remainder;
-  daily room budgets over a room's subtree are `Room.daily_budget_usd`, checked with the agent quota in `registry.over_quota`); `projects.py` (projects with stack, skills, rooms, budget, deadline, priority and a lifecycle `set_status`; command window
+  daily room budgets over a room's subtree are `Room.daily_budget_usd`, checked with the agent quota in `registry.over_quota`); `projects.py` (projects with a GitHub URL, filled from the repository's remote (`repo_remote`), stack, skills, rooms, budget, deadline, priority and a lifecycle `set_status`; command window
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals (S10-R-01: a
   `PROPOSAL[product]` becomes a project only with its documented case, decided by a person), uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress and goal times;
   blockers and generated items are reconciled from goal state by `sync`; a new project GM gets a handover package); `kgraph.py` (SPEC-11 knowledge graph: `kg_edges` written as side effects, the paged neighbourhood API);
+  `schedules.py` (FW-R-04: a project's goals ordered `hourly`/`daily HH:MM`/`weekly <day> HH:MM` UTC by the
+  `ScheduleThread`, origin `schedule`; skipped while the last one is open or the project is not active; Plan → Schedules);
+  `metrics.py` (FW-R-03: `GET /metrics` in the Prometheus format for an admin session or the hashed scrape token,
+  Settings → Metrics for Prometheus);
+  `repomap.py` (FW-R-01, after aider: the base branch's definitions ranked by use in other files, within
+  `repo_map_chars`, in the planner's prompt and each task's package via `learning.repo_map_context`);
   `learning.py` (knowledge items: provenance, experience reports, screening, scoped ranked retrieval over an FTS5
   index with `retrieval_w_*` weights guarded by `evals/retrieval.json` recall@5; SE-R-21 ranking procedure per query
   class (`query_class`, `retrieval_strategies` setting) learned on `evals/retrieval-classes.json` by `learn_strategies`; a task's package adds the project's
   standards from the base branch and matching research documents; contradictions and versions as `kg_edges`,
-  resolved by people)
+  resolved by people; REQ-005 `import_knowledge`: an admin imports a text/Markdown file, a folder inside `data_dir`,
+  a chat export or experience reports as `outcome="imported"` items under the root GM, screened and `draft` until a
+  person approves them, never in a playbook or definition file)
   + `evolution.py` (playbook candidates are experiments); `experiments.py` (SPEC-13: baseline vs candidate on one eval
   suite, review by the E0-E6 policy, canary, rollback; routes only applied by an administrator; G-R-11 a candidate that breaks a task the
   baseline solved is never better (`regressions`); S10-R-02 the platform
@@ -93,22 +110,22 @@ feature came from.
   `mcp.py` (Tools & MCP catalog, from AXoR's mcp_hub: stdio/HTTP servers, encrypted secrets, tool allow-list,
   per-agent grants, call log; G-R-15 a tool whose definition `digest` changed loses its allow and is marked `changed`,
   `McpThread` re-tests every `mcp_revalidate_hours`; bundled servers in `mcp_servers/`); `catalog.py` (skills, plugins, rules, commands,
-  hooks; exports a project's `.claude/`); `agentdefs.py` (each agent's versioned definition file in `data/agents/`,
+  hooks; exports a project's `.claude/`; FW-R-05 `import_skills` of a `<name>/SKILL.md` registry, screened, disabled until chosen); `agentdefs.py` (each agent's versioned definition file in `data/agents/`,
   its own git repo: the loop runs agents from it, learning and the study rotation rewrite it); `gm.py` (the General
   Manager as Claude Code: its instructions and the `python -m agent_company gm …` toolbox); `specs.py`
   (`.claude/specs/<slug>/` artifacts of every goal, the GM's `.claude/` configure step); `hooks.py` (TaskCreated,
   TaskCompleted, TeammateIdle → `data/logs/team-hooks.jsonl`, fail-open);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
-  (Workspace Claude Code panel: a tab per conversation of this browser session (new ones on the far left; earlier ones
-  only in the sessions window), titled by Haiku; a model menu (the CLI's aliases + the Models page's `claude_code`/`codex`
+  (Workspace Claude Code panel: a tab per conversation of this browser session (new ones on the far right; earlier ones
+  only in the sessions window, opened at their beginning), titled by Haiku; a model menu (the CLI's aliases + the Models page's `claude_code`/`codex`
   models, `router_model`: their id, sign-in and base URL; the transcript follows a conversation to another sign-in and
-  back) and effort, per prompt, also in a project's GM panel (default: the GM's model); each turn's prompt is a one-line
+  back; `/status`, `/tasks`, `/agents` follow a chosen model's own sign-in: `model_home`) and effort, per prompt, also in a project's GM panel (default: the GM's model); each turn's prompt is a one-line
   bar pinned to the top of the log (trimming the event window never drops it), tool calls and thinking fold into one
   "N steps" line, what the agent says and the result always show; other live host sessions only in the sessions window (a tab while one is
   opened), session history with resume/stop/delete); the Workspace explorer opens more file windows ("+", stacked or
   side by side) that share one code path, clipboard and drag and drop, and keeps its lists and open files while the server is
   unreachable, without a notice; the terminal keeps its screen, reconnects quietly from the last byte it has (`?after=`),
-  and a shell lost to a restart is replaced in place on the next input; `api.py`; `static/` (dashboard, plain JS, one file per area; `agents.js` (org chart, Agent network, Tools & MCP, Skills & plugins, agent card), `network.js` (the
+  and a shell lost to a restart is replaced in place on the next input; `api.py`; `static/` (dashboard, plain JS, one file per area; `agents.js` (org chart, Agent network, Tools & MCP, Skills & plugins, agent card; agent card Runs tab: paged runs, run detail with task output and tool calls (REQ-006)), `network.js` (the
   Agents page's Agent network tab: overview counts, paged relationship graph from `network.graph`),
   `models.js`; `knowledge.js` (Knowledge: items, review queue, contradictions, graph explorer); `security.js` (Security: stops, incidents,
   refused commands, alerts); rail order shared by all users via `/api/ui/nav_layout` (Settings → Navigation); Notifications,
@@ -172,12 +189,12 @@ feature came from.
 - `uv run python -m agent_company goal "<goal>" --check "<cmd>" [--allow 'src/*'] [--protect-tests] [--permit dependencies|config|skip_tests] [--kind feature|bugfix|refactor|research|docs]`
 - `uv run python -m agent_company improve list|weaknesses|benchmark [name]|create|start|deploy|rollback|cancel <id>` – verified self-evolution
 - `uv run python -m agent_company eval --suite smoke --label <name> [--repeats 3] [--model <name> --role <role>]` / `eval --compare a b` / `eval --review` (the scheduled benchmark review now)
-- `uv run python -m agent_company learn gaps|raise|plans|plan <agent> <skill>|start <id>|cancel <id>|experiments|metrics|retrieval|generate <skill> [practice|final] [count]|suites|approve <suite>`
+- `uv run python -m agent_company learn gaps|raise|plans|plan <agent> <skill>|start <id>|cancel <id>|experiments|metrics|retrieval|generate <skill> [practice|final] [count]|suites|approve <suite>|import <path in data/> [auto|text|markdown|chat|reports|folder]`
 - `uv run python -m agent_company requirements list|trace|import [--project <id>]` – requirements and traceability
 - `uv run python -m agent_company strategies evaluate [kind]|recommend <kind>` – self-evaluation of the workflow templates
 - `uv run python -m agent_company sbom [repo] [--rev HEAD] [--out file]` – CycloneDX SBOM of a commit
 - `uv run python -m agent_company stop [--level E0..E5 --scope X] [--lift|--status]` – emergency stop; writes the DB
   directly, works while the server is stuck
 - `uv run python -m agent_company host status|install-docker|docker-start|cleanup [--yes]|install-lxd|launch <name> [--container]|stop|delete <name>`
-- `uv run python -m agent_company gm status|agents|create-agent|add|mcp|configure|goal|team|study` – the GM's toolbox
+- `uv run python -m agent_company gm status|agents|create-agent|add|mcp|configure|goal|team|study|schedule|schedules` – the GM's toolbox
 - `uv run python -m agent_company "<request>"` – classic four-agent crew

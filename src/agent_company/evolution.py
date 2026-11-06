@@ -63,7 +63,7 @@ def curate(s: Session, agent_id: int, failures_first: bool = False) -> str:
     # own project only (learning.retrieve).
     cutoff = now().replace(tzinfo=None)
     for lesson in s.scalars(select(Lesson).where(Lesson.agent_id == agent_id,
-                                                 Lesson.outcome.not_in(("research", "analysis")),
+                                                 Lesson.outcome.not_in(("research", "analysis", "imported")),
                                                  Lesson.status == "approved",
                                                  Lesson.classification.in_(["public", "internal"]))
                             .order_by(Lesson.id.desc()).limit(60)):

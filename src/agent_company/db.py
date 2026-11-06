@@ -332,7 +332,7 @@ class Lesson(Base):
     agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
     goal_id: Mapped[int | None] = mapped_column(ForeignKey("goals.id"), nullable=True)
     text: Mapped[str] = mapped_column(Text)
-    outcome: Mapped[str] = mapped_column(String(16))  # success|failure|research|analysis (rca.py)
+    outcome: Mapped[str] = mapped_column(String(16))  # success|failure|research|analysis (rca.py)|imported (REQ-005)
     # a knowledge item (SPEC-11 S11-R-01): kind, evidence class, provenance, review status, classification
     kind: Mapped[str] = mapped_column(String(16), default="episodic")
     # episodic|semantic|procedural|architectural|research|operational|capability|organizational|negative
@@ -416,6 +416,10 @@ class ModelEntry(Base):
     # G-R-18: what routing and data handling depend on, as a person verified it (router.TERMS):
     # billing, context_window, tool_calling, trains_on_prompts, commercial_use, terms_url, verified_at
     terms: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # an API key entered on the Models page, encrypted (transport.encrypt_text); never sent back, only its hint
+    api_key_enc: Mapped[str] = mapped_column(Text, default="")
+    # the last Test: ok, error, checked_at and what the provider reports (plan or key usage, reset time)
+    status: Mapped[dict[str, Any]] = mapped_column(default=dict)
 
 
 class Route(Base):
@@ -438,6 +442,7 @@ class Goal(Base):
     worktree: Mapped[str] = mapped_column(Text, default="")
     iteration: Mapped[int] = mapped_column(Integer, default=0)
     max_iterations: Mapped[int] = mapped_column(Integer, default=3)
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # REQ-003, reported only
     urls: Mapped[list[Any]] = mapped_column(default=list)
     quality_commands: Mapped[list[Any]] = mapped_column(default=list)
     result: Mapped[str] = mapped_column(Text, default="")
@@ -595,6 +600,26 @@ class Milestone(Base):
     status: Mapped[str] = mapped_column(String(16), default="open")  # open|completed|cancelled
     overdue_notified: Mapped[bool] = mapped_column(Boolean, default=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Schedule(Base):
+    """A goal a project orders on a schedule (schedules.py, FW-R-04, after OpenHands automations)."""
+
+    __tablename__ = "schedules"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    details: Mapped[str] = mapped_column(Text, default="")
+    checks: Mapped[list[Any]] = mapped_column(default=list)  # quality commands; empty = the project's
+    kind: Mapped[str] = mapped_column(String(16), default="")  # workflow template; "" = the planner picks
+    interval: Mapped[str] = mapped_column(String(32))  # hourly | daily HH:MM | weekly <day> HH:MM (UTC)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")  # what the last due run did (created #n, skipped: why)
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -1072,6 +1097,8 @@ class User(Base):
     git_email: Mapped[str] = mapped_column(String(256), default="")
     git_branch: Mapped[str] = mapped_column(String(128), default="")
     git_token: Mapped[str] = mapped_column(Text, default="")  # GitHub token, encrypted (gitsync.set_token)
+    # REQ-003: the dashboard this user sees: simple|advanced; "" (accounts from before it existed) = advanced
+    ui_mode: Mapped[str] = mapped_column(String(16), default="")
 
 
 class UserSession(Base):

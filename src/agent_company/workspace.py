@@ -108,6 +108,22 @@ def router_models() -> dict[str, list[dict[str, Any]]]:
     return out
 
 
+def model_home(name: str) -> Path | None:
+    """The config folder of a Models-page model with its own Claude Code sign-in (what `/status`, `/tasks` and
+    `/agents` show while it is chosen in the panel); None for the host's own sign-in."""
+    if not name:
+        return None
+    from sqlalchemy import select
+
+    from agent_company import router
+    from agent_company.db import ModelEntry, session
+
+    with session() as s:
+        m = s.scalars(select(ModelEntry).where(ModelEntry.name == name)).first()
+        account = m.account if m is not None and m.kind == "claude_code" else ""
+    return router.claude_config_dir(account) if account else None
+
+
 def _router_choice(name: str, provider: str) -> Any:
     from sqlalchemy import select
 
@@ -132,7 +148,8 @@ def _version(exe: str | None) -> str:
             out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10).stdout
         except Exception:  # noqa: BLE001 - the version is informational; never fail the panel over it
             out = ""
-        _VERSION[exe] = out.strip().split(" ")[0] if out.strip() else ""
+        v = re.search(r"\d+\.\d+[\w.+-]*", out)  # "2.1.310 (Claude Code)", "codex-cli 0.162.1"
+        _VERSION[exe] = v.group(0) if v else out.strip()[:40]
     return _VERSION[exe]
 
 
@@ -141,12 +158,16 @@ def claude_home() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
 
 
-def _account() -> dict[str, str]:
-    """How Claude Code signs in on this host (what `/status` shows as the account)."""
-    if os.environ.get("ANTHROPIC_API_KEY"):
+def _account(home: Path | None = None) -> dict[str, str]:
+    """How Claude Code signs in on this host (what `/status` shows as the account), or in another config folder
+    (a Models-page model's own sign-in, `home`)."""
+    if home is None and os.environ.get("ANTHROPIC_API_KEY"):
         return {"method": "API key (ANTHROPIC_API_KEY)"}
-    home = claude_home()
-    files = [home / ".claude.json"] if os.environ.get("CLAUDE_CONFIG_DIR") else [Path.home() / ".claude.json"]
+    if home is not None:
+        files = [home / ".claude.json"]
+    else:
+        home = claude_home()
+        files = [home / ".claude.json"] if os.environ.get("CLAUDE_CONFIG_DIR") else [Path.home() / ".claude.json"]
     for f in files:
         try:
             acct = json.loads(f.read_text()).get("oauthAccount") or {}
@@ -589,15 +610,18 @@ def _alive(pid: int, proc_start: str) -> bool:
     return not proc_start or (len(fields) > 19 and fields[19] == str(proc_start))
 
 
-def sessions(refresh: bool = False, everywhere: bool = False) -> list[dict[str, Any]]:
+def sessions(refresh: bool = False, everywhere: bool = False, home: Path | None = None) -> list[dict[str, Any]]:
     """Every live Claude Code session on this host, busy ones first (from ~/.claude/sessions); `everywhere`: also
-    those running under the Models page's own sign-ins (a panel prompt on such a model outlives a restart too)."""
+    those running under the Models page's own sign-ins (a panel prompt on such a model outlives a restart too);
+    `home`: only those of one such sign-in."""
     global _sessions_cache
+    own = home is None or home == claude_home()
     at, cached = _sessions_cache
-    if not refresh and not everywhere and time.time() - at < SESSIONS_TTL:
+    if own and not refresh and not everywhere and time.time() - at < SESSIONS_TTL:
         return cached
     found: dict[str, dict[str, Any]] = {}
-    for f in (f for h in (_homes() if everywhere else [claude_home()]) for f in (h / "sessions").glob("*.json")):
+    homes = _homes() if everywhere else [claude_home() if own else home]
+    for f in (f for h in homes for f in (h / "sessions").glob("*.json")):
         try:
             d = json.loads(f.read_text())
             pid = int(d.get("pid") or 0)
@@ -615,7 +639,7 @@ def sessions(refresh: bool = False, everywhere: bool = False) -> list[dict[str, 
     for s in found.values():
         s["title"] = _title_of(s["session_id"])
     out = sorted(found.values(), key=lambda s: (s["status"] != "busy", -s["updated"]))
-    if not everywhere:
+    if own and not everywhere:
         _sessions_cache = (time.time(), out)
     return out
 
@@ -808,7 +832,9 @@ class _Transcript:
 
 
 def _transcript_path(session_id: str) -> Path | None:
-    hits = sorted((claude_home() / "projects").glob(f"*/{session_id}.jsonl"), key=lambda p: p.stat().st_mtime)
+    """The newest transcript of a session: the host's sign-in or a Models-page model's own (the conversation ran
+    there last)."""
+    hits = sorted((p for h in _homes() for p in (h / "projects").glob(f"*/{session_id}.jsonl")), key=lambda p: p.stat().st_mtime)
     return hits[-1] if hits else None
 
 
@@ -858,10 +884,10 @@ def _agent_from_meta(folder: Path, tid: str, m: dict[str, Any]) -> dict[str, Any
             "ended": ended, "tokens": 0, "tools": 0, "agent_id": agent_id}
 
 
-def _task_files(session_id: str) -> list[dict[str, str]]:
+def _task_files(session_id: str, home: Path | None = None) -> list[dict[str, str]]:
     """Claude Code's own task list of a session (TaskCreate / TaskUpdate): ~/.claude/tasks/<session>/<n>.json."""
     out = []
-    for f in (claude_home() / "tasks" / session_id).glob("*.json"):
+    for f in ((home or claude_home()) / "tasks" / session_id).glob("*.json"):
         try:
             t = json.loads(f.read_text())
         except (OSError, ValueError):
@@ -912,7 +938,8 @@ def session_status(session_id: str, after: int = 0) -> dict[str, Any]:
         # Started before the part of a long transcript that was read: only the meta file tells of them.
         agents = sorted((_agent_from_meta(tr.path.parent / session_id / "subagents", tid, m) for tid, m in metas.items()),
                         key=lambda a: a["started"]) + agents
-        snap["task_list"] = _task_files(session_id) or snap["task_list"]
+        home = tr.path.parent.parent.parent  # <home>/projects/<folder>/<session>.jsonl
+        snap["task_list"] = _task_files(session_id, home) or snap["task_list"]
     if live is None:  # the process is gone: what was still running did not report back
         for item in agents + tasks:
             if item["status"] == "running":
@@ -923,7 +950,7 @@ def session_status(session_id: str, after: int = 0) -> dict[str, Any]:
         open_calls = [c for c in pending if c["name"] not in {"Agent", "Task"} or c["id"] not in
                       {a["id"] for a in agents if a["background"]}]
         current = open_calls[-1] if open_calls else {"name": "", "input": {}, "since": snap["last_activity"]}
-    configured = _agent_files(claude_home()) + (_agent_files(Path(cwd) / ".claude") if cwd else [])
+    configured = _agent_files(tr.path.parent.parent.parent if tr else claude_home()) + (_agent_files(Path(cwd) / ".claude") if cwd else [])
     return {
         **snap, "session_id": session_id, "title": _title_of(session_id) if tr else "", "live": live is not None,
         "status": status, "process": live,
@@ -934,10 +961,11 @@ def session_status(session_id: str, after: int = 0) -> dict[str, Any]:
     }
 
 
-def host_activity(cwd: str = "") -> dict[str, Any]:
-    """Every live Claude Code session on this host and what runs in it: the overview under /agents and /tasks."""
+def host_activity(cwd: str = "", home: Path | None = None) -> dict[str, Any]:
+    """Every live Claude Code session on this host and what runs in it: the overview under /agents and /tasks;
+    `home`: those of a Models-page model's own sign-in (the model chosen in the panel)."""
     rows, agent_types = [], []
-    for s in sessions():
+    for s in sessions(home=home):
         try:
             d = session_status(s["session_id"], after=1 << 62)  # no events: only the state
         except (KeyError, ValueError):
@@ -949,7 +977,7 @@ def host_activity(cwd: str = "") -> dict[str, Any]:
                      "cwd": d["cwd"], "status": s["status"], "entrypoint": d["entrypoint"],
                      "agents": len(d["agents"]), "agents_running": run, "tasks_running": bg,
                      "todos_open": sum(t["status"] != "completed" for t in d["todos"] + d["task_list"])})
-    configured = _agent_files(claude_home()) + (_agent_files(Path(cwd) / ".claude") if cwd and Path(cwd).is_absolute() else [])
+    configured = _agent_files(home or claude_home()) + (_agent_files(Path(cwd) / ".claude") if cwd and Path(cwd).is_absolute() else [])
     return {"sessions": rows, "busy": sum(r["status"] == "busy" for r in rows),
             "agents_running": sum(len(r["agents_running"]) for r in rows),
             "tasks_running": sum(len(r["tasks_running"]) for r in rows),
@@ -959,6 +987,7 @@ def host_activity(cwd: str = "") -> dict[str, Any]:
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"  # what Claude Code's own /usage reads
 LIMITS_TTL = 60.0
 _limits_cache: dict[str, Any] = {"key": None, "at": 0.0, "out": None}
+_other_limits: dict[str, dict[str, Any]] = {}  # the same per other config folder (a model's own sign-in)
 _LIMIT_LABELS = {"session": "5-hour session", "weekly_all": "Weekly limit"}
 
 
@@ -991,19 +1020,19 @@ def _parse_limits(d: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def claude_limits() -> dict[str, Any]:
+def claude_limits(home: Path | None = None) -> dict[str, Any]:
     """How much of the Claude plan's limits is used (5-hour session, week), as Claude Code's /usage shows it.
 
-    Read with the host's Claude Code sign-in (~/.claude/.credentials.json); the token never leaves the server.
-    An API-key login has no plan limits."""
-    path = claude_home() / ".credentials.json"
+    Read with the host's Claude Code sign-in (~/.claude/.credentials.json), or another config folder's (`home`);
+    the token never leaves the server. An API-key login has no plan limits."""
+    path = (home or claude_home()) / ".credentials.json"
     try:
         st = path.stat()
         oauth = json.loads(path.read_text()).get("claudeAiOauth") or {}
     except (OSError, ValueError, AttributeError):
         return {"available": False, "reason": "Claude Code is not signed in with a Claude account", "limits": []}
     key = (str(path), st.st_mtime_ns)
-    c = _limits_cache
+    c = _limits_cache if home is None else _other_limits.setdefault(str(home), {"key": None, "at": 0.0, "out": None})
     if c["key"] == key and time.time() - c["at"] < LIMITS_TTL:
         return c["out"]
     token, plan = str(oauth.get("accessToken") or ""), str(oauth.get("subscriptionType") or "")
@@ -1205,7 +1234,7 @@ def delete_session(session_id: str) -> dict[str, Any]:
 # Read from the transcripts (subagents' too): each assistant message records its usage, repeated on every
 # line of the message, so it is counted once per (message id, request id). Files are read incrementally.
 # Windows are the Cost and Usage monitor's (usage.py): today and this week from 00:00 UTC, Monday.
-_usage_files: dict[str, dict[str, Any]] = {}
+_usage_files: dict[str, dict[str, dict[str, Any]]] = {}  # config folder -> transcript -> what was read
 _usage_lock = threading.Lock()
 _prices_cache: tuple[float, dict[str, tuple[float, float]]] = (0.0, {})
 
@@ -1262,17 +1291,20 @@ def _usage_scan(path: Path, entry: dict[str, Any]) -> None:
             max(0, int(u.get("cache_creation_input_tokens") or 0) - cw1h), cw1h)
 
 
-def claude_usage() -> dict[str, Any]:
-    """Tokens and their API-price cost today and this week, all Claude Code sessions on this host."""
+def claude_usage(home: Path | None = None) -> dict[str, Any]:
+    """Tokens and their API-price cost today and this week, all Claude Code sessions on this host (or of one
+    Models-page model's own sign-in, `home`)."""
     from agent_company import usage
 
     t = usage.now()
     d0, w0 = usage.day_start(t), usage.week_start(t)
     next_day, next_week = d0 + timedelta(days=1), w0 + timedelta(days=7)
     since = w0.timestamp()
+    home = home or claude_home()
     with _usage_lock:
+        files = _usage_files.setdefault(str(home), {})
         seen: set[str] = set()
-        for path in (claude_home() / "projects").glob("**/*.jsonl"):
+        for path in (home / "projects").glob("**/*.jsonl"):
             try:
                 st = path.stat()
             except OSError:
@@ -1281,18 +1313,18 @@ def claude_usage() -> dict[str, Any]:
                 continue
             key = str(path)
             seen.add(key)
-            entry = _usage_files.get(key)
+            entry = files.get(key)
             if entry is None or st.st_size < entry["offset"]:  # new, or rewritten shorter: read it again
-                entry = _usage_files[key] = {"offset": 0, "msgs": {}}
+                entry = files[key] = {"offset": 0, "msgs": {}}
             if st.st_size > entry["offset"]:
                 try:
                     _usage_scan(path, entry)
                 except OSError:
                     continue
-        for gone in set(_usage_files) - seen:
-            _usage_files.pop(gone, None)
+        for gone in set(files) - seen:
+            files.pop(gone, None)
         msgs: dict[Any, tuple[Any, ...]] = {}
-        for entry in _usage_files.values():
+        for entry in files.values():
             msgs.update(entry["msgs"])
     prices = _prices()
 
@@ -1325,7 +1357,7 @@ def claude_usage() -> dict[str, Any]:
                     "resets_in_seconds": max(0, int((resets - t).total_seconds()))}
 
     return {"daily": window(d0.timestamp(), next_day), "weekly": window(since, next_week),
-            "now": t.isoformat(), "files": len(_usage_files)}
+            "now": t.isoformat(), "files": len(files)}
 
 
 def warm_usage() -> None:

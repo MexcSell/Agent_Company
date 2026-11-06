@@ -71,6 +71,9 @@ How you run the company (shell commands; GM below stands for: {gm}):
      "Main flow:" with numbered steps, "Alternatives:", "Postconditions:")
   GM requirements {project['id']} [--trace]   the project's requirements; --trace: implemented, tested, merged
   GM study [<agent id>]             one learning visit: rewrites an agent's definition
+  GM schedule {project['id']} "<goal>" --every "daily 06:00" [--details "…"] [--check "…"] [--kind …]   a recurring goal (UTC;
+       hourly | daily HH:MM | weekly <mon..sun> HH:MM); GM schedules {project['id']}
+  GM import-skills <folder> [--only "a,b"] [--enable]   <folder>/<name>/SKILL.md skills into the catalog (screened)
   GM hypothesis "<statement>" --reason "…" --test "how to test it" --expect "…" [--project {project['id']}]
   GM hypotheses [--status proposed,testing]      hypotheses and their evidence
   GM hypothesis-status <id> <investigating|testing|rejected|inconclusive|archived> [--note "…"]
@@ -198,6 +201,19 @@ def main(argv: list[str]) -> None:
     hs.add_argument("hypothesis_id", type=int)
     hs.add_argument("status")
     hs.add_argument("--note", default="")
+    im = sub.add_parser("import-skills", help="FW-R-05: import <folder>/<name>/SKILL.md skills into the catalog")
+    im.add_argument("folder")
+    im.add_argument("--enable", action="store_true", help="enable them at once (default: disabled until chosen)")
+    im.add_argument("--only", default="", help="comma-separated skill names")
+    sc = sub.add_parser("schedule", help="FW-R-04: order a goal on a schedule")
+    sc.add_argument("project_id", type=int)
+    sc.add_argument("title")
+    sc.add_argument("--every", required=True, help="hourly | 'daily HH:MM' | 'weekly <mon..sun> HH:MM' (UTC)")
+    sc.add_argument("--details", default="")
+    sc.add_argument("--check", action="append", default=[])
+    sc.add_argument("--kind", default="", choices=["", "feature", "bugfix", "refactor", "research", "docs"])
+    sl = sub.add_parser("schedules")
+    sl.add_argument("project_id", type=int, nargs="?")
     dr = sub.add_parser("decision")
     dr.add_argument("decision_id", type=int)
     dv = sub.add_parser("decision-review")
@@ -270,6 +286,16 @@ def main(argv: list[str]) -> None:
             out = hypotheses.list_hypotheses(a.status)
         else:
             out = hypotheses.set_status(a.hypothesis_id, a.status, actor, a.note)
+    elif a.cmd == "import-skills":
+        out = catalog.import_skills(a.folder, a.enable, [x for x in a.only.split(",") if x.strip()], actor="gm")
+    elif a.cmd in ("schedule", "schedules"):
+        from agent_company import schedules
+
+        if a.cmd == "schedule":
+            _project(a.project_id)
+            out = schedules.create(a.project_id, a.title, a.every, a.details, a.check, a.kind)
+        else:
+            out = schedules.list_schedules(a.project_id)
     elif a.cmd == "decision":
         from agent_company import decisions
 

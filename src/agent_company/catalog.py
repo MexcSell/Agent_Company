@@ -145,6 +145,83 @@ def ensure(kind: str, names: list[str], created_by: str = "agent") -> list[str]:
     return added
 
 
+def _front_matter(text: str) -> tuple[dict[str, Any], str]:
+    """({name, description, triggers}, body) of a SKILL.md: simple `key: value` lines and `- item` lists."""
+    m = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", text, re.S)
+    if not m:
+        return {}, text
+    meta: dict[str, Any] = {}
+    key = ""
+    for line in m.group(1).splitlines():
+        item = re.match(r"^\s*-\s+(.+)$", line)
+        if item and key:
+            meta.setdefault(key, [])
+            if isinstance(meta[key], list):
+                meta[key].append(item.group(1).strip().strip("'\""))
+            continue
+        kv = re.match(r"^([A-Za-z_][\w-]*):\s*(.*)$", line)
+        if kv:
+            key = kv.group(1).lower()
+            meta[key] = kv.group(2).strip().strip("'\"") if kv.group(2).strip() else []
+    return meta, m.group(2)
+
+
+def import_skills(folder: str | Path, enable: bool = False, only: list[str] | None = None,
+                  actor: str = "") -> dict[str, Any]:
+    """FW-R-05 (after the OpenHands extensions registry): import `<folder>/<name>/SKILL.md` skills as catalog skills.
+    Only read; the folder must be inside `data/` or the folder that holds the projects. A skill whose text tries to
+    instruct agents beyond its subject (`research.injection_flags`) is refused; a name the company already uses for
+    an item from elsewhere is kept; an earlier import from the same folder is updated. Imported skills start
+    disabled unless `enable` (an administrator enables the ones a project needs)."""
+    from agent_company.config import settings
+    from agent_company.projects import default_base
+    from agent_company.research import injection_flags
+
+    root = Path(folder).expanduser().resolve()
+    allowed = [settings().data_dir.resolve(), default_base().resolve()]
+    if not any(root == a or a in root.parents for a in allowed) or not root.is_dir():
+        raise ValueError(f"import only from a folder inside {' or '.join(map(str, allowed))}")
+    source = f"import:{root}"[:256]
+    wanted = {n.strip().lower() for n in only or [] if n.strip()}
+    out: dict[str, Any] = {"imported": [], "updated": [], "refused": [], "skipped": []}
+    for f in sorted(root.glob("*/SKILL.md"))[:500]:
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")[:100_000]
+        except OSError as e:
+            out["refused"].append({"name": f.parent.name, "why": str(e)})
+            continue
+        meta, body = _front_matter(text)
+        name = str(meta.get("name") or f.parent.name).strip().lower()
+        if not NAME_RE.match(name):
+            name = f.parent.name.lower()
+        if wanted and name not in wanted:
+            continue
+        if not NAME_RE.match(name) or not body.strip():
+            out["refused"].append({"name": name, "why": "no valid name or an empty skill"})
+            continue
+        flags = injection_flags(text)
+        if flags:
+            out["refused"].append({"name": name, "why": "instructs agents beyond the skill: " + ", ".join(flags)})
+            continue
+        triggers = meta.get("triggers") if isinstance(meta.get("triggers"), list) else []
+        desc = " ".join(str(meta.get("description") or "").split())[:1500]
+        if triggers:
+            desc += f" Triggers: {', '.join(map(str, triggers[:12]))}."
+        with session() as s:
+            row = s.scalars(select(CatalogItem).where(CatalogItem.kind == "skill", CatalogItem.name == name)).first()
+            if row is not None and row.source != source:
+                out["skipped"].append({"name": name, "why": f"the catalog has a skill of that name ({row.source or 'own'})"})
+                continue
+            new = row is None
+        add("skill", name, desc, body.strip(), source, actor or "import", update=True)
+        if new:
+            with session() as s:
+                row = s.scalars(select(CatalogItem).where(CatalogItem.kind == "skill", CatalogItem.name == name)).first()
+                row.enabled = bool(enable)
+        out["imported" if new else "updated"].append(name)
+    return out
+
+
 def export_claude(root: Path, agent_ids: list[int] | None = None) -> list[str]:
     """Write the project's .claude/ configuration from the catalog. Returns the relative paths written."""
     from agent_company import agentdefs, mcp

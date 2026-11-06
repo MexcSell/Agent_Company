@@ -258,9 +258,11 @@ def study(agent_id: int | None = None) -> dict[str, Any]:
             nxt = next((a for a in agents if a.id == agent_id), None)
             if nxt is None:
                 raise KeyError(agent_id)
-        # a definition file serves every project: only public/internal lessons and reports reach it (S14-R-05)
+        # a definition file serves every project: only public/internal lessons and reports reach it (S14-R-05);
+        # items a person imported (REQ-005) are knowledge for tasks, not the agent's own experience
         lessons = [x.text for x in s.scalars(select(Lesson).where(Lesson.agent_id == nxt.id, Lesson.status == "approved",
-                                                                  Lesson.classification.in_(SHAREABLE))
+                                                                  Lesson.classification.in_(SHAREABLE),
+                                                                  Lesson.outcome != "imported")
                                              .order_by(Lesson.id.desc()).limit(12))]
         s.expunge(nxt)
     topic = " ".join(list((nxt.skills or {}).keys())[:6]) or nxt.role

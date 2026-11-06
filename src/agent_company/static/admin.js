@@ -23,6 +23,10 @@ function connectionCard(tls, row) {
       <button class="btn primary" id="tls-save">Switch</button>${row && row.overridden ? '<button class="btn" id="tls-reset">Reset to .env</button>' : ""}
       <a class="btn" href="/api/tls/ca.crt" download="agent-company-ca.crt">Download certificate (CA)</a></div>
     ${tls.managed ? "" : '<p class="muted">nginx is not managed by this server (MANAGE_NGINX=0): the setting is saved but nothing is reconfigured.</p>'}
+    <div class="row" style="margin-top:8px"><label for="tls-domains" class="muted">Domain names</label>
+      <input id="tls-domains" class="grow" placeholder="agent-company.internal, dash.lan" value="${esc((tls.domains || []).join(", "))}">
+      <button class="btn primary" id="tls-domains-save">Save</button></div>
+    <p class="muted">The names are added to the server certificate and to nginx. Every client computer needs a DNS record or a hosts-file entry that points the name to this server's IP address (see the ReadMe, “Own domain name”). Access by IP address keeps working. Leave the field empty to remove all names.</p>
     <table style="margin-top:8px"><tr><td class="muted">CA</td><td>${esc(tls.ca_name)} · valid until ${esc(tls.ca_valid_until)}</td></tr>
       <tr><td class="muted">CA fingerprint (SHA-256)</td><td class="mono" style="word-break:break-all">${esc(tls.ca_fingerprint)}</td></tr>
       <tr><td class="muted">Server certificate</td><td>${tls.cert_valid_until ? `valid until ${esc(tls.cert_valid_until)} (renewed automatically at startup) · ${tls.hosts.map(esc).join(", ")}` : "not created yet"}</td></tr></table>
@@ -70,8 +74,8 @@ function wireNavCard() {
 
 async function viewSettings(quiet) {
   if (quiet && $("#s-table")) return;
-  const [all, tls, versions] = await Promise.all([api("/api/settings"), api("/api/tls"), api("/api/policy/versions").catch(() => [])]);
-  const rows = all.filter((r) => r.key !== "transport");
+  const [all, tls, versions, mtok] = await Promise.all([api("/api/settings"), api("/api/tls"), api("/api/policy/versions").catch(() => []), api("/api/metrics/token").catch(() => null)]);
+  const rows = all.filter((r) => r.key !== "transport" && r.key !== "tls_domains");
   const input = (r) => r.type === "bool" ? `<select data-k="${r.key}"><option value="true" ${r.value ? "selected" : ""}>on</option><option value="false" ${r.value ? "" : "selected"}>off</option></select>`
     : r.choices.length ? `<select data-k="${r.key}">${r.choices.map((c) => `<option ${c === r.value ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`
     : r.type === "list" ? `<textarea data-k="${r.key}" rows="2">${esc((r.value || []).join("\n"))}</textarea>`
@@ -79,8 +83,16 @@ async function viewSettings(quiet) {
   $("#view").innerHTML = navCard() + connectionCard(tls, all.find((r) => r.key === "transport")) + `<div class="card"><h2>Settings</h2><p class="muted">Saved settings override <code>.env</code> and apply immediately. Reset returns a setting to its <code>.env</code> value.</p>
     <div class="table-wrap"><table id="s-table">${rows.map((r) => `<tr><td><strong>${esc(r.key)}</strong><div class="muted">${esc(r.description)}</div></td><td style="min-width:200px">${input(r)}</td><td class="row nowrap">${ib("save", "Save", `data-save="${r.key}"`, "sm primary")}${r.overridden ? ib("refresh", "Reset to the .env value", `data-reset="${r.key}"`, "sm") : ""}</td></tr>`).join("")}</table></div></div>
     <div class="card"><h2>Policy versions</h2><p class="muted">Every change of a governance setting (approval, budgets, recruitment approval, proposals, command rules, …) is kept as a version with its author. Restoring one is a change of its own. Projects add stricter rules on their edit form.</p>
-    ${versions.length ? `<div class="table-wrap"><table><tr><th class="num">Version</th><th>Change</th><th>By</th><th>When</th><th></th></tr>${versions.map((v, i) => `<tr><td class="num">${v.version}</td><td>${esc(v.note)}</td><td>${esc(v.author)}</td><td>${ago(v.created_at)}</td><td>${i ? `<button class="btn sm" data-restore="${v.version}">Restore</button>` : '<span class="muted">in force</span>'}</td></tr>`).join("")}</table></div>` : '<p class="muted">No governance setting changed yet.</p>'}</div>`;
+    ${versions.length ? `<div class="table-wrap"><table><tr><th class="num">Version</th><th>Change</th><th>By</th><th>When</th><th></th></tr>${versions.map((v, i) => `<tr><td class="num">${v.version}</td><td>${esc(v.note)}</td><td>${esc(v.author)}</td><td>${ago(v.created_at)}</td><td>${i ? `<button class="btn sm" data-restore="${v.version}">Restore</button>` : '<span class="muted">in force</span>'}</td></tr>`).join("")}</table></div>` : '<p class="muted">No governance setting changed yet.</p>'}</div>
+    ${mtok ? `<div class="card"><h2>Metrics for Prometheus</h2><p class="muted"><code>GET /metrics</code> answers goals, tasks, runs, tool calls, tokens, cost, gate results, open incidents, agents and stops in the Prometheus text format: for an administrator's session, or a scraper sending <code>Authorization: Bearer &lt;token&gt;</code>. The token is shown once; only its hash is kept. No label carries a title, a prompt or a path.</p>
+      <div class="row"><span class="grow">${mtok.set ? `Token set (…${esc(mtok.hint)})` : '<span class="muted">No token: only administrators\' sessions can read it.</span>'}</span>
+      <button class="btn sm" id="mt-new">${mtok.set ? "Replace token" : "Create token"}</button>${mtok.set ? '<button class="btn sm danger" id="mt-del">Revoke</button>' : ""}</div></div>` : ""}`;
   wireNavCard();
+  $("#mt-new") && ($("#mt-new").onclick = async () => {
+    if (mtok.set && !confirm("Replace the metrics token? Scrapers using the old one stop working.")) return;
+    try { const r = await api("/api/metrics/token", { method: "POST" }); prompt("The metrics token (shown only now): copy it into your Prometheus scrape config", r.token); viewSettings(); } catch (e) { toast(e.message); }
+  });
+  $("#mt-del") && ($("#mt-del").onclick = async () => { if (!confirm("Revoke the metrics token?")) return; await api("/api/metrics/token", { method: "DELETE" }).catch((e) => toast(e.message)); viewSettings(); });
   document.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = async () => {
     if (!confirm(`Restore the governance settings of version ${b.dataset.restore}?`)) return;
     try { await api("/api/policy/restore", { method: "POST", body: { scope: "company", version: Number(b.dataset.restore) } }); toast("Restored"); viewSettings(); } catch (e) { toast(e.message); }
@@ -92,6 +104,14 @@ async function viewSettings(quiet) {
   document.querySelectorAll("[data-reset]").forEach((b) => (b.onclick = async () => { await api(`/api/settings/${b.dataset.reset}`, { method: "DELETE" }); viewSettings(); }));
   $("#tls-save").onclick = () => switchTransport($("#tls-mode").value, false);
   $("#tls-reset") && ($("#tls-reset").onclick = () => switchTransport(null, true));
+  $("#tls-domains-save").onclick = async () => {
+    const value = $("#tls-domains").value.trim();  // empty: no own names (DELETE clears the tls_domains setting)
+    try {
+      await api("/api/settings/tls_domains", value ? { method: "PUT", body: { value } } : { method: "DELETE" });
+      toast(value ? "Domain names saved" : "Domain names removed");
+      viewSettings();
+    } catch (err) { toast(err.message); }
+  };
 }
 
 async function viewAudit() {

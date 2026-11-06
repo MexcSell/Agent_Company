@@ -13,8 +13,45 @@ function kSource(ref) {
   if (type === "goal") return `<a href="#" data-kgoal="${Number(val)}">goal #${Number(val)}</a>`;
   if (type === "knowledge") return `<a href="#" data-kitem="${Number(val)}">K${Number(val)}</a>`;
   if (type === "commit") return `<code title="${esc(val)}">${esc(val.slice(0, 10))}</code>`;
-  if (type === "url" || /^https?$/.test(type)) { const u = type === "url" ? val : ref; return `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u.replace(/^https?:\/\//, "").slice(0, 40))}</a>`; }
+  if (type === "url" || /^https?$/.test(type)) { const u = type === "url" ? val : ref; return /^https?:\/\//i.test(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u.replace(/^https?:\/\//, "").slice(0, 40))}</a>` : `<span class="muted">${esc(u)}</span>`; }
+  // provenance of imported items (REQ-005): plain labels, never links
+  if (K_REF_LABELS[type]) return `<span class="muted" title="${esc(ref)}">${K_REF_LABELS[type]} ${esc(val.slice(0, 60))}</span>`;
   return `<span class="muted">${esc(ref)}</span>`;
+}
+const K_REF_LABELS = { user: "by", import: "imported as", file: "file", date: "dated" };
+
+// REQ-005: a person imports knowledge. An uploaded file, or a file or folder inside the server's data directory;
+// every piece is screened and waits in the review queue, and none reaches a task before someone approves it.
+const K_FORMATS = [["auto", "detect the format"], ["markdown", "Markdown (a piece per heading)"], ["text", "plain text (paragraphs)"], ["chat", "chat export (## User / ## ChatGPT)"], ["reports", "experience reports (JSON)"], ["folder", "folder (its .md/.txt files)"]];
+async function kImport() {
+  const projects = await api("/api/projects").catch(() => []);
+  modal(`<h2>Import knowledge</h2><p class="muted">Each piece is screened and waits here as a draft. Nothing is retrieved for tasks until you approve it. Imported text is stored as data and never run.</p>
+    <form id="kif"><label for="kif-f">File (.md, .txt, .json; at most 2 MB)</label><input id="kif-f" type="file" accept=".md,.markdown,.txt,.json">
+      <label for="kif-p">…or a file or folder on the server, inside the data directory</label><input id="kif-p" placeholder="workspaces/old-project">
+      <label for="kif-fmt">Format</label><select id="kif-fmt">${K_FORMATS.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select>
+      <label for="kif-c">Classification</label><select id="kif-c">${["public", "internal", "confidential", "restricted"].map((c) => `<option ${c === "internal" ? "selected" : ""}>${c}</option>`).join("")}</select>
+      <label for="kif-pr">Project (optional)</label><select id="kif-pr"><option value="">none</option>${(projects || []).map((p) => `<option value="${Number(p.id)}">${esc(p.name)}</option>`).join("")}</select>
+      <label for="kif-d">Date (optional; otherwise the file's own)</label><input id="kif-d" type="date">
+      <div class="row" style="margin-top:12px"><button class="btn primary keep-text">Import</button></div></form>`);
+  $("#kif").onsubmit = async (e) => {
+    e.preventDefault();
+    const file = $("#kif-f").files[0], path = $("#kif-p").value.trim(), fmt = $("#kif-fmt").value;
+    const opt = { classification: $("#kif-c").value, date: $("#kif-d").value };
+    if ($("#kif-pr").value) opt.project_id = Number($("#kif-pr").value);
+    if (!file && !path) return toast("Choose a file or give a server path.");
+    try {
+      let r;
+      if (file) {
+        const fd = new FormData(); fd.append("file", file); fd.append("fmt", fmt === "folder" ? "auto" : fmt);
+        Object.entries(opt).forEach(([k, v]) => fd.append(k, String(v)));
+        const res = await fetch("/api/knowledge/import", { method: "POST", body: fd, credentials: "same-origin" });
+        r = await res.json().catch(() => ({})); if (!res.ok) throw new Error(r.detail || res.statusText);
+      } else r = await api("/api/knowledge/import/path", { method: "POST", body: { path, fmt, ...opt } });
+      $("#modal").hidden = true;
+      toast(`${r.draft} for review (${r.quarantined} quarantined, ${r.rejected} rejected, ${r.skipped} skipped${r.truncated ? `, ${r.truncated} over the limit` : ""})`);
+      viewKnowledge();
+    } catch (err) { toast(err.message); }
+  };
 }
 const kStatusPill = (s) => `<span class="pill ${s === "approved" ? "done" : s === "quarantined" || s === "rejected" ? "failed" : "pending"}">${esc(s)}</span>`;
 
@@ -57,7 +94,7 @@ async function viewKnowledge() {
         ${pairs.map((p) => `<div style="margin:10px 0"><div class="grid two">${p.old ? kCard(p.old) : '<span class="muted">(deleted)</span>'}${p.new ? kCard(p.new) : '<span class="muted">(deleted)</span>'}</div>
           ${p.judge ? `<div class="muted" style="margin-top:6px" title="${esc(p.judge.model || "")}">Judge (${esc(p.judge.agent || "instructor")}): <b>${esc(p.judge.verdict)}</b>${p.judge.reason ? " — " + esc(p.judge.reason) : ""}</div>` : ""}
           <div class="row" style="margin-top:6px"><span class="muted grow">#${p.id} · found ${ago(p.at)}</span><button class="btn sm keep-text" data-kres="${p.id}" data-how="keep_old">Older holds</button><button class="btn sm keep-text" data-kres="${p.id}" data-how="keep_both">Both hold</button><button class="btn sm keep-text" data-kres="${p.id}" data-how="keep_new">Newer holds</button></div></div>`).join("") || '<span class="muted">No open contradictions.</span>'}</div>
-      <div class="card"><h2>Review queue <span class="muted">${queue.length}</span></h2><p class="muted">Drafts wait for approval; quarantined items hold credential-like text (delete them); rejected items stay out of prompts.</p>
+      <div class="card"><div class="row nowrap"><h2 class="grow" style="margin:0">Review queue <span class="muted">${queue.length}</span></h2>${me.is_admin ? ib("upload", "Import knowledge (file, folder, chat export, reports)", 'id="k-import"', "sm") : ""}</div><p class="muted">Drafts wait for approval; quarantined items hold credential-like text (delete them); rejected items stay out of prompts.</p>
         <div class="grid">${queue.map((i) => kCard(i, `<div class="row" style="margin-top:6px">${actions(i)}</div>`)).join("") || '<span class="muted">Nothing to review.</span>'}</div></div>
       ${hypCard(hyps)}${rs ? rankCard(rs) : ""}</div>
       <div class="card"><h2>Items <span class="muted">${items.length}${items.length >= 300 ? "+" : ""}</span></h2><div class="table-wrap"><table><tr><th>#</th><th>Item</th><th>Status</th><th>Source</th><th></th></tr>
@@ -81,6 +118,8 @@ async function viewKnowledge() {
     $("#ksf").onsubmit = async (e) => { e.preventDefault(); try { await api(`/api/knowledge/${i.id}/supersede`, { method: "POST", body: { text: $("#ksf-t").value, note: $("#ksf-n").value } }); $("#modal").hidden = true; viewKnowledge(); } catch (err) { toast(err.message); } };
   }));
   hypBind(v, call);
+  const imp = v.querySelector("#k-import");
+  if (imp) imp.onclick = kImport;
   const rl = v.querySelector("#k-rlearn");
   if (rl) rl.onclick = async () => { rl.classList.add("busy"); try { const r = await api("/api/knowledge/retrieval/learn", { method: "POST" }); toast(Object.entries(r.applied).map(([c, s]) => `${c}=${s}`).join(", ") || "balanced for every class"); } catch (err) { toast(err.message); } viewKnowledge(); };
   v.querySelectorAll("[data-kres]").forEach((b) => (b.onclick = () => {

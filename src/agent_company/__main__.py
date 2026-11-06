@@ -177,12 +177,14 @@ def main(argv: list[str] | None = None) -> None:
                     "benchmark_budget_usd in Settings) and exit")
     le = sub.add_parser("learn", help="capability gaps, learning plans and experiments (SPEC-13)")
     le.add_argument("action", choices=["gaps", "raise", "plans", "plan", "start", "cancel", "experiments", "metrics",
-                                       "retrieval", "generate", "suites", "approve"],
+                                       "retrieval", "generate", "suites", "approve", "import"],
                     help="retrieval: learn the ranking procedure per query class (SE-R-21); generate: exercises "
-                         "written by the instructor, verified by the harness (S13-R-02)")
+                         "written by the instructor, verified by the harness (S13-R-02); import: a file or folder "
+                         "inside data/ as knowledge items for review (REQ-005)")
     le.add_argument("args", nargs="*", help="plan: <agent id> <capability> [final suite] [practice suite]; "
                                             "start/cancel: <plan id>; generate: <skill> [practice|final] [count]; "
-                                            "approve: <generated final suite>")
+                                            "approve: <generated final suite>; "
+                                            "import: <path> [auto|text|markdown|chat|reports|folder]")
     sb = sub.add_parser("sbom", help="CycloneDX SBOM of a repository's dependencies at a commit (S08-R-05)")
     sb.add_argument("repo", nargs="?", default=".", help="git repository (default: the current directory)")
     sb.add_argument("--rev", default="HEAD")
@@ -388,6 +390,19 @@ def main(argv: list[str] | None = None) -> None:
             from agent_company import learning
 
             out = learning.learn_strategies("cli")
+        elif args.action == "import":
+            from pathlib import Path
+
+            from agent_company import learning
+
+            if not a:
+                raise SystemExit("learn import <path> [auto|text|markdown|chat|reports|folder]")
+            target = Path(a[0]).expanduser().resolve()  # relative to where the command runs
+            fmt = "folder" if target.is_dir() else (a[1] if len(a) > 1 else "auto")
+            try:
+                out = learning.import_knowledge(None, fmt=fmt, actor="cli", path=str(target))
+            except ValueError as err:
+                raise SystemExit(f"learn import: {err}") from None
         else:
             out = training.metrics()
         print(json.dumps(out, indent=2, default=str))
