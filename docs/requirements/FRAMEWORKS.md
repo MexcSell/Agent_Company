@@ -87,13 +87,13 @@ Acceptance: a fake executor stream with five identical Bash calls ends with a `s
 terminated; four identical calls followed by a different one does not; three identical failing calls with the
 same error do.
 
-### FW-R-03 Metrics endpoint for Prometheus — open (planned: `metrics.py`, `GET /metrics`)
+### FW-R-03 Metrics endpoint for Prometheus — done (`metrics.py`, `GET /metrics`, Settings → Metrics for Prometheus)
 
 Source: Flowise `metrics/` (Prometheus, OpenTelemetry, Grafana). `GET /metrics` answers the Prometheus text format
 (version 0.0.4): goals by status, tasks by status, runs and tool calls by executor, tokens and cost today and in
 total, gate pass rate, open incidents by severity, the emergency-stop level, agents by health. Access: an
-administrator's session, or `Authorization: Bearer <metrics_token>` (setting, stored hashed; empty = token access
-off). No labels carry goal titles, prompts or paths. Audit: changing the token is audited.
+administrator's session, or `Authorization: Bearer <token>` (created on the Settings page, shown once, stored as its
+SHA-256; none = token access off). No labels carry goal titles, prompts or paths. Audit: changing the token is audited.
 
 Acceptance: without a session or token the endpoint answers 401; with the token it answers 200 with
 `agent_company_goals{status="queued"}` and the other families, each with `# HELP` and `# TYPE`; values match

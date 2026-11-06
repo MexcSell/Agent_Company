@@ -70,7 +70,7 @@ function wireNavCard() {
 
 async function viewSettings(quiet) {
   if (quiet && $("#s-table")) return;
-  const [all, tls, versions] = await Promise.all([api("/api/settings"), api("/api/tls"), api("/api/policy/versions").catch(() => [])]);
+  const [all, tls, versions, mtok] = await Promise.all([api("/api/settings"), api("/api/tls"), api("/api/policy/versions").catch(() => []), api("/api/metrics/token").catch(() => null)]);
   const rows = all.filter((r) => r.key !== "transport");
   const input = (r) => r.type === "bool" ? `<select data-k="${r.key}"><option value="true" ${r.value ? "selected" : ""}>on</option><option value="false" ${r.value ? "" : "selected"}>off</option></select>`
     : r.choices.length ? `<select data-k="${r.key}">${r.choices.map((c) => `<option ${c === r.value ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`
@@ -79,8 +79,16 @@ async function viewSettings(quiet) {
   $("#view").innerHTML = navCard() + connectionCard(tls, all.find((r) => r.key === "transport")) + `<div class="card"><h2>Settings</h2><p class="muted">Saved settings override <code>.env</code> and apply immediately. Reset returns a setting to its <code>.env</code> value.</p>
     <div class="table-wrap"><table id="s-table">${rows.map((r) => `<tr><td><strong>${esc(r.key)}</strong><div class="muted">${esc(r.description)}</div></td><td style="min-width:200px">${input(r)}</td><td class="row nowrap">${ib("save", "Save", `data-save="${r.key}"`, "sm primary")}${r.overridden ? ib("refresh", "Reset to the .env value", `data-reset="${r.key}"`, "sm") : ""}</td></tr>`).join("")}</table></div></div>
     <div class="card"><h2>Policy versions</h2><p class="muted">Every change of a governance setting (approval, budgets, recruitment approval, proposals, command rules, …) is kept as a version with its author. Restoring one is a change of its own. Projects add stricter rules on their edit form.</p>
-    ${versions.length ? `<div class="table-wrap"><table><tr><th class="num">Version</th><th>Change</th><th>By</th><th>When</th><th></th></tr>${versions.map((v, i) => `<tr><td class="num">${v.version}</td><td>${esc(v.note)}</td><td>${esc(v.author)}</td><td>${ago(v.created_at)}</td><td>${i ? `<button class="btn sm" data-restore="${v.version}">Restore</button>` : '<span class="muted">in force</span>'}</td></tr>`).join("")}</table></div>` : '<p class="muted">No governance setting changed yet.</p>'}</div>`;
+    ${versions.length ? `<div class="table-wrap"><table><tr><th class="num">Version</th><th>Change</th><th>By</th><th>When</th><th></th></tr>${versions.map((v, i) => `<tr><td class="num">${v.version}</td><td>${esc(v.note)}</td><td>${esc(v.author)}</td><td>${ago(v.created_at)}</td><td>${i ? `<button class="btn sm" data-restore="${v.version}">Restore</button>` : '<span class="muted">in force</span>'}</td></tr>`).join("")}</table></div>` : '<p class="muted">No governance setting changed yet.</p>'}</div>
+    ${mtok ? `<div class="card"><h2>Metrics for Prometheus</h2><p class="muted"><code>GET /metrics</code> answers goals, tasks, runs, tool calls, tokens, cost, gate results, open incidents, agents and stops in the Prometheus text format: for an administrator's session, or a scraper sending <code>Authorization: Bearer &lt;token&gt;</code>. The token is shown once; only its hash is kept. No label carries a title, a prompt or a path.</p>
+      <div class="row"><span class="grow">${mtok.set ? `Token set (…${esc(mtok.hint)})` : '<span class="muted">No token: only administrators\' sessions can read it.</span>'}</span>
+      <button class="btn sm" id="mt-new">${mtok.set ? "Replace token" : "Create token"}</button>${mtok.set ? '<button class="btn sm danger" id="mt-del">Revoke</button>' : ""}</div></div>` : ""}`;
   wireNavCard();
+  $("#mt-new") && ($("#mt-new").onclick = async () => {
+    if (mtok.set && !confirm("Replace the metrics token? Scrapers using the old one stop working.")) return;
+    try { const r = await api("/api/metrics/token", { method: "POST" }); prompt("The metrics token (shown only now): copy it into your Prometheus scrape config", r.token); viewSettings(); } catch (e) { toast(e.message); }
+  });
+  $("#mt-del") && ($("#mt-del").onclick = async () => { if (!confirm("Revoke the metrics token?")) return; await api("/api/metrics/token", { method: "DELETE" }).catch((e) => toast(e.message)); viewSettings(); });
   document.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = async () => {
     if (!confirm(`Restore the governance settings of version ${b.dataset.restore}?`)) return;
     try { await api("/api/policy/restore", { method: "POST", body: { scope: "company", version: Number(b.dataset.restore) } }); toast("Restored"); viewSettings(); } catch (e) { toast(e.message); }

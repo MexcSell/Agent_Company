@@ -3371,6 +3371,40 @@ def create_app(start_background: bool = True) -> FastAPI:
         _audit(admin, "ui_layout", key, after={"value": value})
         return {"key": key, "value": value}
 
+    # --- Prometheus metrics (FW-R-03): an administrator's session or the scrape token ---
+    @app.get("/metrics", include_in_schema=False)
+    def prometheus_metrics(request: Request) -> Response:
+        from agent_company import metrics
+
+        bearer = request.headers.get("authorization", "")
+        if not (bearer.lower().startswith("bearer ") and metrics.token_ok(bearer[7:].strip())):
+            u = auth.user_for_token(_session_token(request))
+            if u is None or not u["is_admin"]:
+                raise HTTPException(401, "metrics need an administrator's session or the metrics token")
+        return Response(metrics.render(), media_type="text/plain; version=0.0.4; charset=utf-8")
+
+    @app.get("/api/metrics/token")
+    def metrics_token_status(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        from agent_company import metrics
+
+        return metrics.token_status()
+
+    @app.post("/api/metrics/token")
+    def metrics_token_create(admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        from agent_company import metrics
+
+        token = metrics.create_token()
+        _audit(admin, "metrics_token_create", "metrics", after={"hint": token[-4:]}, severity="high")
+        return {"token": token, "hint": token[-4:]}
+
+    @app.delete("/api/metrics/token")
+    def metrics_token_revoke(admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        from agent_company import metrics
+
+        metrics.revoke_token()
+        _audit(admin, "metrics_token_revoke", "metrics", severity="high")
+        return metrics.token_status()
+
     @app.get("/api/projects-defaults")
     def projects_defaults(path: str = "", user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         # `path`: a work folder chosen in the form (administrators); its GitHub remote fills in the URL.
