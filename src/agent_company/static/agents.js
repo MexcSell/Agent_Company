@@ -9,7 +9,7 @@ let agentsTab = store.get("ac.agents.tab") || "org";
 
 async function viewAgents(quiet) {
   if (quiet && $("#ag-page") && agentsTab !== "org") return;  // the catalog tabs keep their forms
-  const tabs = [["org", "Organisation", "sitemap"], ["network", "Agent network", "network"], ["mcp", "Tools & MCP", "plug"], ["catalog", "Skills & plugins", "book"], ...(me.is_admin ? [["market", "Marketplace", "source"]] : [])];
+  const tabs = [["org", "Organisation", "sitemap"], ["network", "Agent network", "network"], ["mcp", "Tools & MCP", "plug"], ["catalog", "Skills & plugins", "book"], ...(me.is_admin ? [["market", "Marketplace", "git"]] : [])];
   if (!$("#ag-page") || !quiet) {
     $("#view").innerHTML = `<div class="ag-page" id="ag-page"><div class="ag-tabs" role="tablist">${tabs.map(([k, l, i]) => `<button role="tab" data-agtab="${k}" aria-selected="${agentsTab === k}">${icon(i, 16)} ${l}</button>`).join("")}
       <span class="grow"></span><span id="ag-tools"></span></div><div class="ag-body" id="ag-body"></div></div>`;
@@ -350,7 +350,7 @@ function catalogForm(i = null) {
 // --- marketplace (REQ-002): external agent packages, fetched as data, qualified as candidates, decided by an admin ---
 async function viewMarketplace() {
   $("#ag-tools").innerHTML = `<form id="mk-url" class="row" style="margin:0"><input id="mk-src" placeholder="https://… repository URL" style="width:22em">
-    ${ib("source", "Import from the repository URL", 'type="submit"', "primary")}</form>
+    <button type="submit" class="btn icon primary" title="Import from the repository URL" aria-label="Import from the repository URL">${icon("git", 16)}</button></form>
     <label class="btn icon" title="Upload a .zip or .tar.gz package" aria-label="Upload a package">${icon("upload", 16)}<input type="file" id="mk-file" accept=".zip,.tar.gz,.tgz,.tar" hidden></label>`;
   const body = $("#ag-body");
   const list = await api("/api/marketplace", { fresh: true });
@@ -401,8 +401,8 @@ async function marketDetail(id) {
       ${i.licence === "unknown" ? `<label class="row"><input type="checkbox" id="mk-lic" required style="width:auto"> I accept a package without a known licence</label>` : ""}
       ${sc.acknowledge ? `<label class="row"><input type="checkbox" id="mk-ack" required style="width:auto"> I have read the screen's findings</label>` : ""}
       <div class="row"><input id="mk-reason" placeholder="Reason (reject)">
-      ${approvable ? ib("check", "Approve: enable the agent with the checked permissions", 'type="submit"', "primary") : ""}
-      ${ib("disable", "Reject: retire the candidate and delete the package", 'id="mk-rej"')}</div></form>` : ""}</div>`;
+      ${approvable ? `<button type="submit" class="btn icon primary" title="Approve: enable the agent with the checked permissions" aria-label="Approve: enable the agent with the checked permissions">${icon("check", 16)}</button>` : ""}
+      ${ib("x", "Reject: retire the candidate and delete the package", 'id="mk-rej"')}</div></form>` : ""}</div>`;
   const form = $("#mk-dec"); if (!form) return;
   form.onsubmit = async (e) => {
     e.preventDefault();

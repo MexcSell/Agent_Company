@@ -133,9 +133,24 @@ def test_url_import_gives_manifest_and_candidate_and_runs_no_package_code(tmp_pa
     assert not market.marker.exists(), "no file from the package was executed"
 
 
+def resolving(monkeypatch, *addrs: str) -> list:
+    """socket.getaddrinfo answers with `addrs` (no network); returns the looked-up (host, port) pairs."""
+    import socket
+    asked = []
+
+    def fake(host, port, *a, **k):
+        asked.append((host, port))
+        return [(socket.AF_INET6 if ":" in ip else socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))
+                for ip in addrs]
+    monkeypatch.setattr(socket, "getaddrinfo", fake)
+    return asked
+
+
 def test_url_checks(monkeypatch):
+    resolving(monkeypatch, "93.184.216.34")
     for url in ("http://example.com/x.git", "https://127.0.0.1/x.git", "https://user:pw@example.com/x.git",
-                "ext::sh -c touch% /tmp/x", "ssh://git@example.com/x.git", "https://10.0.0.1/x", "-u"):
+                "ext::sh -c touch% /tmp/x", "ssh://git@example.com/x.git", "https://10.0.0.1/x", "-u",
+                "https://example.com:99999/x.git"):
         with pytest.raises(ImportRefused):
             marketplace.check_url(url)
     monkeypatch.setattr(marketplace, "ALLOW_FILE_URLS", False)
@@ -143,14 +158,155 @@ def test_url_checks(monkeypatch):
         marketplace.check_url("file:///etc")
 
 
+def test_checked_address_is_pinned_for_the_clone(monkeypatch):
+    monkeypatch.setattr(marketplace, "git_version", lambda: (2, 43, 0))
+    asked = resolving(monkeypatch, "93.184.216.34")
+    url, pin = marketplace.check_url("https://example.com/x.git")
+    assert pin == ("example.com", 443, "93.184.216.34") and asked == [("example.com", 443)]
+    cmd = marketplace.clone_command(url, Path("/tmp/d"), pin)
+    assert "http.curloptResolve=example.com:443:93.184.216.34" in cmd
+    resolving(monkeypatch, "2606:2800:220:1:248:1893:25c8:1946")
+    url, pin = marketplace.check_url("https://example.com:8443/x.git")
+    assert "http.curloptResolve=example.com:8443:[2606:2800:220:1:248:1893:25c8:1946]" in \
+        marketplace.clone_command(url, Path("/tmp/d"), pin)
+    with pytest.raises(ImportRefused, match="checked address"):  # https is never cloned unpinned
+        marketplace.clone_command("https://example.com/x.git", Path("/tmp/d"))
+
+
+def test_private_or_mixed_address_refused(monkeypatch):
+    monkeypatch.setattr(marketplace, "git_version", lambda: (2, 43, 0))
+    for addrs in (("10.0.0.1",), ("127.0.0.1",), ("93.184.216.34", "192.168.1.5"), ("::1",), ("169.254.169.254",)):
+        resolving(monkeypatch, *addrs)
+        with pytest.raises(ImportRefused, match="not a public host"):
+            marketplace.fetch_url("https://rebind.example/x.git", "admin")
+    with session() as s:
+        assert s.query(AgentImport).count() == 0, "a refused URL leaves no import record"
+
+
+def test_old_git_refuses_https_imports(monkeypatch):
+    resolving(monkeypatch, "93.184.216.34")
+    monkeypatch.setattr(marketplace, "git_version", lambda: (2, 36, 9))
+
+    def no_clone(*a, **k):
+        raise AssertionError("no git command may run")
+    monkeypatch.setattr(marketplace.subprocess, "run", no_clone)
+    with pytest.raises(ImportRefused, match="2.37"):
+        marketplace.fetch_url("https://example.com/x.git", "admin")
+    with session() as s:
+        assert s.query(AgentImport).count() == 0
+
+
+def test_git_version_parsed_once(monkeypatch):
+    calls = []
+
+    class R:
+        stdout = "git version 2.39.3 (Apple Git-146)\n"
+
+    def run(cmd, **k):
+        calls.append(cmd)
+        return R()
+    monkeypatch.setattr(marketplace, "_git_version", None)
+    monkeypatch.setattr(marketplace.subprocess, "run", run)
+    assert marketplace.git_version() == (2, 39, 3) and marketplace.git_version() == (2, 39, 3)
+    assert calls == [["git", "--version"]]
+
+
 def test_clone_flags_and_no_hooks():
-    cmd = marketplace.clone_command("https://example.com/x.git", Path("/tmp/d"))
+    pin = ("example.com", 443, "93.184.216.34")
+    cmd = marketplace.clone_command("https://example.com/x.git", Path("/tmp/d"), pin)
     joined = " ".join(cmd)
     for flag in ("core.hooksPath=/dev/null", "--no-recurse-submodules", "--depth 1", "--template=",
-                 "protocol.allow=never", "http.followRedirects=false", "filter.lfs.smudge="):
+                 "protocol.allow=never", "http.followRedirects=false", "filter.lfs.smudge=", "--no-checkout",
+                 f"--filter=blob:limit={marketplace.MAX_FILE_BYTES}"):
         assert flag in joined
     assert "protocol.file.allow=always" not in joined and cmd[-3] == "--"
-    assert marketplace._git_env()["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    env = marketplace._git_env()
+    assert env["GIT_CONFIG_GLOBAL"] == "/dev/null" and env["GIT_NO_LAZY_FETCH"] == "1"
+
+
+def test_clone_runs_with_a_file_size_limit(tmp_path, monkeypatch):
+    import resource
+    seen = {}
+    real = subprocess.run
+
+    def run(cmd, **k):
+        if "clone" in cmd:
+            seen["preexec"] = k.get("preexec_fn")
+        return real(cmd, **k)
+    monkeypatch.setattr(marketplace.subprocess, "run", run)
+    marketplace.fetch_url(git_repo(SAMPLE, tmp_path), "admin")
+    assert seen["preexec"] is marketplace._limit_fsize
+    out = real(["python3", "-c", "import resource; print(resource.getrlimit(resource.RLIMIT_FSIZE)[0])"],
+               capture_output=True, text=True, preexec_fn=marketplace._limit_fsize)
+    assert int(out.stdout) == marketplace.CLONE_FSIZE > marketplace.MAX_BYTES
+    assert resource.getrlimit(resource.RLIMIT_FSIZE)[0] != marketplace.CLONE_FSIZE, "the server is not limited"
+
+
+def test_clone_with_a_pack_over_the_file_size_limit_fails(tmp_path, monkeypatch):
+    big = tmp_path / "big"
+    shutil.copytree(SAMPLE, big)
+    (big / "noise.bin").write_bytes(os.urandom(300_000))  # incompressible: the pack is > 300 kB
+    url = git_repo(big, tmp_path)
+    monkeypatch.setattr(marketplace, "CLONE_FSIZE", 100_000)
+    with pytest.raises(ImportRefused, match="git clone failed"):
+        marketplace.fetch_url(url, "admin")
+    with session() as s:
+        assert s.query(AgentImport).one().status == "failed"
+    assert not any(marketplace.root().glob("*/src"))
+
+
+@pytest.mark.parametrize("allow_filter", [True, False])
+def test_oversized_file_in_repository_refused_and_removed(tmp_path, monkeypatch, allow_filter):
+    big = tmp_path / "big"
+    shutil.copytree(SAMPLE, big)
+    (big / "model.bin").write_bytes(b"x" * 50_000)
+    url = git_repo(big, tmp_path)
+    if allow_filter:  # the server honours --filter: the blob never arrives
+        subprocess.run(["git", "config", "uploadpack.allowFilter", "true"], cwd=url[len("file://"):], check=True)
+    monkeypatch.setattr(marketplace, "MAX_FILE_BYTES", 20_000)
+    # filtered: rev-list --missing=print sees the left-out blob; unfiltered: ls-tree -l reads its size
+    with pytest.raises(ImportRefused, match=r"1 file\(s\) over 20000" if allow_filter else "a file over 20000"):
+        marketplace.fetch_url(url, "admin")
+    with session() as s:
+        imp = s.query(AgentImport).one()
+        assert imp.status == "failed" and "over 20000 bytes" in imp.error
+    assert not marketplace.src_dir(imp.id).exists() and not any(marketplace.root().glob("*/src"))
+
+
+def test_git_calls_after_the_clone_never_lazy_fetch(tmp_path, monkeypatch):
+    """A blob the filter left out is never fetched by a later git call, even by a git that ignores
+    GIT_NO_LAZY_FETCH: those calls run under protocol.allow=never, without the clone's protocol allow-list."""
+    big = tmp_path / "big"
+    shutil.copytree(SAMPLE, big)
+    (big / "model.bin").write_bytes(b"x" * 50_000)
+    url = git_repo(big, tmp_path)
+    subprocess.run(["git", "config", "uploadpack.allowFilter", "true"], cwd=url[len("file://"):], check=True)
+    monkeypatch.setattr(marketplace, "MAX_FILE_BYTES", 20_000)
+    d = tmp_path / "clone"
+    subprocess.run(marketplace.clone_command(url, d), env=marketplace._git_env(), check=True, capture_output=True)
+    missing = lambda: [ln[1:] for ln in marketplace._git(d, "rev-list", "--objects", "--missing=print", "HEAD")
+                       .splitlines() if ln.startswith("?")]
+    (sha,) = missing()
+    with pytest.raises(ImportRefused, match="cat-file failed"):
+        marketplace._git(d, "cat-file", "-p", sha)
+    real_env = marketplace._git_env  # a git that ignores GIT_NO_LAZY_FETCH: the protocol rule alone refuses
+    monkeypatch.setattr(marketplace, "_git_env",
+                        lambda: {k: v for k, v in real_env().items() if k != "GIT_NO_LAZY_FETCH"})
+    with pytest.raises(ImportRefused, match="not allowed"):
+        marketplace._git(d, "cat-file", "-p", sha)
+    assert missing() == [sha], "the left-out blob is still missing"
+
+
+def test_repository_over_the_total_size_refused(tmp_path, monkeypatch):
+    big = tmp_path / "big"
+    shutil.copytree(SAMPLE, big)
+    for i in range(4):
+        (big / f"part{i}.txt").write_bytes(b"y" * 10_000)
+    url = git_repo(big, tmp_path)
+    monkeypatch.setattr(marketplace, "MAX_BYTES", 30_000)
+    with pytest.raises(ImportRefused, match="too large"):
+        marketplace.fetch_url(url, "admin")
+    assert not any(marketplace.root().glob("*/src"))
 
 
 def test_upload_zip_and_targz():
@@ -189,6 +345,54 @@ def test_archive_limits(monkeypatch):
     monkeypatch.setattr(marketplace, "MAX_FILES", 3)
     with pytest.raises(ImportRefused, match="too large"):
         marketplace.fetch_upload(zip_bytes(sample_files()), "big.zip", "admin")
+
+
+def bomb(members: int, size: int) -> bytes:
+    """A tar.gz of `members` zero-filled files of `size` bytes each: tiny packed, large unpacked."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as t:
+        for i in range(members):
+            info = tarfile.TarInfo(f"zero{i}.bin")
+            info.size = size
+            t.addfile(info, io.BytesIO(bytes(size)))
+    return buf.getvalue()
+
+
+def test_tar_bomb_refused_while_streaming(monkeypatch):
+    data = bomb(40, 200_000)  # 8 MB unpacked
+    monkeypatch.setattr(marketplace, "MAX_BYTES", 500_000)
+    assert len(data) < marketplace.MAX_BYTES
+    nexts, real_next = [], tarfile.TarFile.next
+
+    def counting(self):
+        nexts.append(1)
+        return real_next(self)
+    monkeypatch.setattr(tarfile.TarFile, "next", counting)
+    monkeypatch.setattr(tarfile.TarFile, "getmembers", lambda self: pytest.fail("getmembers reads the whole archive"))
+    with pytest.raises(ImportRefused, match="too large"):
+        marketplace.fetch_upload(data, "bomb.tar.gz", "admin")
+    assert len(nexts) <= 4, f"stopped early, not after all 40 members ({len(nexts)} read)"
+    with session() as s:
+        assert s.query(AgentImport).one().status == "failed"
+    assert not any(marketplace.root().glob("*/src"))
+
+
+def test_tar_decompressed_bytes_are_bounded(monkeypatch):
+    """Data the member headers don't declare (a huge pax header) is cut off by the bounded reader."""
+    monkeypatch.setattr(marketplace, "MAX_BYTES", 100_000)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz", format=tarfile.PAX_FORMAT) as t:
+        info = tarfile.TarInfo("a.txt")
+        info.pax_headers = {"comment": "z" * 3_000_000}
+        info.size = 1
+        t.addfile(info, io.BytesIO(b"a"))
+    stream = marketplace._Bounded(marketplace._decompressed(buf.getvalue()), 200_000)
+    with pytest.raises(ImportRefused, match="unpacks to more than"):
+        while stream.read(65536):
+            pass
+    assert stream.read_bytes <= 200_000 + 65536
+    with pytest.raises(ImportRefused, match="more than"):
+        marketplace.fetch_upload(buf.getvalue(), "pax.tar.gz", "admin")
 
 
 def test_secret_blocks_import():

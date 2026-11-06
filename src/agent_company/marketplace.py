@@ -2,11 +2,16 @@
 
   fetch       Each import gets its own new, empty directory `data/marketplace/<id>/src`. A repository URL must be
               https:// (file:// only when `ALLOW_FILE_URLS` is set, by tests); it may carry no user name or password
-              and must name a public host. It is cloned with `--depth 1`, no submodules, no hooks (`core.hooksPath`
-              = /dev/null, `--template=`), no global/system git config, no LFS or smudge filters, no redirects, a
-              timeout and a size cap; `.git` is removed afterwards. An uploaded .zip/.tar.gz is checked member by
-              member before anything is written: absolute paths, `..`, symlinks, hard links and special files refuse
-              the whole archive; file count and bytes are capped and every file is created with `open("xb")`.
+              and must name a public host, and git connects only to the address that was checked
+              (`http.curloptResolve`, git >= 2.37, else https imports are refused: DNS rebinding). It is cloned with
+              `--depth 1`, no submodules, no hooks (`core.hooksPath` = /dev/null, `--template=`), no global/system
+              git config, no LFS or smudge filters, no redirects, a timeout; the size is bounded while it runs
+              (`--filter=blob:limit`, `--no-checkout`, RLIMIT_FSIZE on the clone), the tree is checked with
+              `rev-list --missing=print` and `ls-tree -l` before a checkout with no lazy fetch; `.git` is removed
+              afterwards. An uploaded .zip/.tar.gz is checked member by member before anything is written:
+              absolute paths, `..`, symlinks, hard links and special files refuse the whole archive; file count and
+              bytes are capped (a tar in one streaming pass that counts decompressed bytes) and every file is
+              created with `open("xb")`.
   convert     Text only (json, `yaml.safe_load` without anchors, Markdown front matter): a native
               `agent-package.json`, a Claude Code subagent (`.claude/agents/*.md`), a CrewAI `config/agents.yaml`
               or a skill pack (`SKILL.md`). Nothing from the package is imported, executed or installed, and the
@@ -30,6 +35,7 @@ import ipaddress
 import json
 import os
 import re
+import resource
 import shutil
 import socket
 import stat
@@ -111,19 +117,42 @@ def _fail(import_id: int, error: str) -> None:
 
 # --- URL fetch ----------------------------------------------------------------------------------
 
-def _is_public_host(host: str) -> bool:
+PIN_GIT = (2, 37)  # http.curloptResolve
+CLONE_FSIZE = MAX_BYTES + 4 * 1024 * 1024  # RLIMIT_FSIZE of the clone: no file (the pack included) grows past it
+_git_version: tuple[int, ...] | None = None
+
+
+def git_version() -> tuple[int, ...]:
+    """The installed git's version from `git --version`, read once; (0,) when it can't be read."""
+    global _git_version
+    if _git_version is None:
+        try:
+            out = subprocess.run(["git", "--version"], env=_git_env(), capture_output=True, text=True,
+                                 timeout=10).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            out = ""
+        m = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", out)
+        _git_version = tuple(int(x) for x in m.groups(default="0")) if m else (0,)
+    return _git_version
+
+
+def _is_public_host(host: str, port: int = 443) -> str | None:
+    """The address that was checked when every address of the host is global, else None."""
     try:
-        addrs = {ipaddress.ip_address(host)}
+        addrs = [ipaddress.ip_address(host)]
     except ValueError:
         try:
-            addrs = {ipaddress.ip_address(i[4][0].split("%")[0]) for i in socket.getaddrinfo(host, 443)}
-        except (OSError, UnicodeError):
-            return False
-    return bool(addrs) and all(a.is_global for a in addrs)
+            addrs = [ipaddress.ip_address(i[4][0].split("%")[0]) for i in socket.getaddrinfo(host, port)]
+        except (OSError, UnicodeError, ValueError):
+            return None
+    if not addrs or not all(a.is_global for a in addrs):
+        return None
+    return str(addrs[0])
 
 
-def check_url(url: str) -> str:
-    """The URL when it may be cloned; raises ImportRefused otherwise."""
+def check_url(url: str) -> tuple[str, tuple[str, int, str] | None]:
+    """The URL and its pin (host, port, checked address; None for file://) when it may be cloned; raises
+    ImportRefused otherwise. git connects to the pinned address only (DNS rebinding)."""
     url = (url or "").strip()
     if not url or len(url) > 512 or any(c.isspace() or ord(c) < 32 for c in url) or url.startswith("-"):
         raise ImportRefused("give a repository URL without spaces")
@@ -133,15 +162,23 @@ def check_url(url: str) -> str:
             raise ImportRefused("file:// URLs are not allowed")
         if parts.netloc or not parts.path.startswith("/"):
             raise ImportRefused("a file:// URL names an absolute local path")
-        return url
+        return url, None
     if parts.scheme != "https":
         raise ImportRefused(f"only https:// repositories can be imported, not {parts.scheme or url}")
     if "@" in parts.netloc or parts.username or parts.password:
         raise ImportRefused("a repository URL must not carry a user name or password")
+    try:
+        port = parts.port or 443
+    except ValueError:
+        raise ImportRefused("the repository URL names an invalid port") from None
     host = parts.hostname or ""
-    if not host or not _is_public_host(host):
+    ip = _is_public_host(host, port) if host else None
+    if not ip:
         raise ImportRefused(f"{host or url} is not a public host")
-    return url
+    if git_version() < PIN_GIT:
+        raise ImportRefused(f"git {'.'.join(map(str, git_version()))} can't pin the checked address "
+                            f"(http.curloptResolve needs git 2.37 or newer): https imports are refused")
+    return url, (host, port, ip)
 
 
 def _git_env() -> dict[str, str]:
@@ -149,32 +186,83 @@ def _git_env() -> dict[str, str]:
             if k in os.environ}
     return {**keep, "HOME": "/nonexistent", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/bin/false", "GIT_LFS_SKIP_SMUDGE": "1",
-            "GIT_ALLOW_PROTOCOL": "file:https" if ALLOW_FILE_URLS else "https"}
+            "GIT_NO_LAZY_FETCH": "1", "GIT_ALLOW_PROTOCOL": "file:https" if ALLOW_FILE_URLS else "https"}
 
 
-def clone_command(url: str, dest: Path) -> list[str]:
-    allow = ["-c", "protocol.allow=never", "-c", "protocol.https.allow=always"]
+# every git call on the cloned repository: `-c` settings are not stored in the clone's config
+_GIT_SAFE = ["-c", "core.hooksPath=/dev/null", "-c", "core.symlinks=false", "-c", "core.fsmonitor=false",
+             "-c", "filter.lfs.smudge=", "-c", "filter.lfs.process=", "-c", "filter.lfs.required=false",
+             "-c", "submodule.recurse=false", "-c", "protocol.allow=never"]
+
+
+def _resolve_entry(pin: tuple[str, int, str]) -> str:
+    host, port, ip = pin
+    return f"{host}:{int(port)}:[{ip}]" if ":" in ip else f"{host}:{int(port)}:{ip}"
+
+
+def clone_command(url: str, dest: Path, pin: tuple[str, int, str] | None = None) -> list[str]:
+    """A blob-filtered clone without checkout; an https URL is cloned only from its pinned address."""
+    allow = ["-c", "protocol.https.allow=always"]
     if url.startswith("file:"):
         allow += ["-c", "protocol.file.allow=always"]
-    return ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.symlinks=false", "-c", "core.fsmonitor=false",
-            "-c", "http.followRedirects=false", "-c", "filter.lfs.smudge=", "-c", "filter.lfs.process=",
-            "-c", "filter.lfs.required=false", "-c", "submodule.recurse=false", *allow,
+    elif pin is None:
+        raise ImportRefused("an https clone needs the checked address (check_url)")
+    else:
+        allow += ["-c", f"http.curloptResolve={_resolve_entry(pin)}"]
+    return ["git", *_GIT_SAFE, "-c", "http.followRedirects=false", *allow,
             "clone", "--depth", "1", "--single-branch", "--no-recurse-submodules", "--template=", "--quiet",
-            "--", url, str(dest)]
+            "--no-checkout", f"--filter=blob:limit={MAX_FILE_BYTES}", "--", url, str(dest)]
+
+
+def _limit_fsize() -> None:  # preexec_fn of the clone: caps every file it writes, the pack included
+    resource.setrlimit(resource.RLIMIT_FSIZE, (CLONE_FSIZE, CLONE_FSIZE))  # no import between fork and exec
+
+
+def _git(d: Path, *args: str, timeout: int = 30) -> str:
+    """A git call on the clone that may never fetch: without GIT_ALLOW_PROTOCOL, `protocol.allow=never` holds, so a
+    lazy fetch fails even where git ignores GIT_NO_LAZY_FETCH (older releases) and would not use the pinned address."""
+    env = {k: v for k, v in _git_env().items() if k != "GIT_ALLOW_PROTOCOL"}
+    r = subprocess.run(["git", *_GIT_SAFE, *args], cwd=d, env=env, capture_output=True, text=True,
+                       timeout=timeout)
+    if r.returncode != 0:
+        raise ImportRefused(f"git {args[0]} failed: {r.stderr.strip()[-300:]}")
+    return r.stdout
+
+
+def _check_objects(d: Path) -> None:
+    """Before checkout: no blob was left out by the filter (one over MAX_FILE_BYTES) and the tree's files and bytes
+    are within the limits. `--missing=print` never fetches; ls-tree runs only once every blob is present."""
+    missing = [ln for ln in _git(d, "rev-list", "--objects", "--missing=print", "HEAD").splitlines()
+               if ln.startswith("?")]
+    if missing:
+        raise ImportRefused(f"the repository has {len(missing)} file(s) over {MAX_FILE_BYTES} bytes")
+    files = size = 0
+    for ln in _git(d, "ls-tree", "-r", "-l", "-z", "HEAD").split("\0"):
+        meta = ln.split("\t", 1)[0].split()
+        if len(meta) != 4 or meta[1] != "blob":
+            continue  # submodule entries (commit) are never fetched
+        n = int(meta[3]) if meta[3].isdigit() else 0
+        if n > MAX_FILE_BYTES:
+            raise ImportRefused(f"the repository has a file over {MAX_FILE_BYTES} bytes")
+        files, size = files + 1, size + n
+    if files > MAX_FILES or size > MAX_BYTES:
+        raise ImportRefused(f"the repository is too large ({files} files, {size} bytes; limits {MAX_FILES} "
+                            f"files, {MAX_BYTES} bytes)")
 
 
 def fetch_url(url: str, actor: str) -> dict[str, Any]:
     """Clone a repository into its own new directory, then convert and screen it."""
-    url = check_url(url)
+    url, pin = check_url(url)
     iid, d = _new_import("url", url, actor)
     try:
         d.rmdir()  # git clone creates it; the parent is ours and empty
-        r = subprocess.run(clone_command(url, d), cwd=d.parent, env=_git_env(), capture_output=True, text=True,
-                           timeout=CLONE_TIMEOUT)
+        r = subprocess.run(clone_command(url, d, pin), cwd=d.parent, env=_git_env(), capture_output=True,
+                           text=True, timeout=CLONE_TIMEOUT, preexec_fn=_limit_fsize)
         if r.returncode != 0:
-            raise ImportRefused(f"git clone failed: {r.stderr.strip()[-300:]}")
-        sha = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "rev-parse", "HEAD"], cwd=d,
-                             env=_git_env(), capture_output=True, text=True, timeout=20).stdout.strip()
+            raise ImportRefused(f"git clone failed: {r.stderr.strip()[-300:] or f'exit {r.returncode}'}")
+        _check_objects(d)
+        _git(d, "checkout", "--quiet", "--force", "HEAD", "--", ".", timeout=CLONE_TIMEOUT)
+        sha = _git(d, "rev-parse", "HEAD").strip()
         shutil.rmtree(d / ".git", ignore_errors=True)
         _check_tree(d)
     except subprocess.TimeoutExpired:
@@ -225,9 +313,61 @@ def _zip_members(z: zipfile.ZipFile) -> list[tuple[PurePosixPath, int, Any]]:
     return out
 
 
+class _Bounded(io.RawIOBase):
+    """A decompressing reader that refuses to return more than `cap` bytes in total (pax headers included)."""
+
+    def __init__(self, raw: Any, cap: int) -> None:
+        self.raw, self.cap, self.read_bytes = raw, cap, 0
+
+    def readable(self) -> bool:
+        return True
+
+    def read(self, n: int = -1) -> bytes:
+        chunk = self.raw.read(65536 if n is None or n < 0 else min(n, 1 << 20))
+        self.read_bytes += len(chunk)
+        if self.read_bytes > self.cap:
+            raise ImportRefused(f"the archive unpacks to more than {self.cap} bytes")
+        return chunk
+
+
+def _decompressed(data: bytes) -> Any:
+    import bz2
+    import gzip
+    import lzma
+    if data[:2] == b"\x1f\x8b":
+        return gzip.GzipFile(fileobj=io.BytesIO(data))
+    if data[:3] == b"BZh":
+        return bz2.BZ2File(io.BytesIO(data))
+    if data[:6] == b"\xfd7zXZ\x00":
+        return lzma.LZMAFile(io.BytesIO(data))
+    return io.BytesIO(data)
+
+
+def _tar_scan(data: bytes, dest: Path) -> None:
+    """One streaming pass over a tar before anything is opened for extraction (no getmembers()): the decompressed
+    bytes are counted as they are read, and it stops at the first member that takes the file count or the declared
+    size past the limits, so a gzip bomb is never decompressed in full."""
+    limit = min(MAX_BYTES, MAX_RATIO * max(len(data), 1024))
+    stream = _Bounded(_decompressed(data), limit + 1024 * (2 * MAX_FILES + 2))  # + headers and padding
+    entries = count = declared = 0
+    with tarfile.open(fileobj=stream, mode="r|") as t:
+        while (m := t.next()) is not None:
+            _member_path(m.name)
+            if not (m.isdir() or m.isfile()):
+                raise ImportRefused(f"refused archive member {m.name!r}: links and special files are not allowed")
+            try:
+                tarfile.data_filter(m, str(dest))
+            except tarfile.FilterError as e:
+                raise ImportRefused(f"refused archive member {m.name!r}: {e}") from None
+            entries, count, declared = entries + 1, count + (not m.isdir()), declared + m.size
+            if count > MAX_FILES or entries > 2 * MAX_FILES or declared > limit:
+                raise ImportRefused(f"the archive is too large (more than {min(count, MAX_FILES)} files or "
+                                    f"{limit} bytes unpacked)")
+
+
 def _tar_members(t: tarfile.TarFile) -> list[tuple[PurePosixPath, int, Any]]:
     out = []
-    for m in t.getmembers():
+    while (m := t.next()) is not None:  # bounded: _tar_scan checked the same archive first
         p = _member_path(m.name)
         if m.isdir():
             continue
@@ -243,6 +383,7 @@ def _extract(data: bytes, filename: str, dest: Path) -> None:
         arch: Any = zipfile.ZipFile(io.BytesIO(data))
         members, opener = _zip_members(arch), arch.open
     elif low.endswith((".tar.gz", ".tgz", ".tar")):
+        _tar_scan(data, dest)
         arch = tarfile.open(fileobj=io.BytesIO(data), mode="r:*")
         members, opener = _tar_members(arch), arch.extractfile
     else:
