@@ -85,7 +85,7 @@ partly declared hypothetical by the chat itself; none is copied into the model c
 | Model registry: model id, API compatibility, limits, context window, tool calling, retention/training terms, licence, commercial use; refresh | id, base URL, key variable, costs, token limits, clearance done (`ModelEntry`); the terms fields: G-R-18 |
 | Limit production routing to four model families | needs a decision: the router has no family cap; the owner decides whether to enforce one |
 | Three levels of evolution: memory, configuration, code | memory (lessons, knowledge S11), configuration (playbooks, templates, routes as experiments), code (`selfevolve.py`) |
-| A configuration change is a candidate evaluated before promotion; never overwrite directly | playbooks, templates and routes: done; the study rotation rewrites an agent's working method directly (versioned in git, no evaluation): G-R-19 |
+| A configuration change is a candidate evaluated before promotion; never overwrite directly | playbooks, templates and routes: done; a study rewrite of an agent's definition is a pending candidate an administrator applies or discards after seeing the diff: G-R-19 done (option a) |
 | Prompt injection: tool output and pages are data | done (`injection_flags`, S11-R-05 screening, threat model) |
 | Rollback of code, tool config, skill, route and memory independently | done (merge revert, MCP tool allow, catalog versions, route experiments, knowledge item status) |
 | Subscription vs API billing; agent budgets with an automatic stop (`1.md`) | done (Claude Code CLI vs API models in the router, `daily_cost_quota_usd`, room budgets, goal budgets pause) |
@@ -328,15 +328,25 @@ for room X" until theirs is written.
   from a model's or a chat's own claims: a person verifies against the provider's pages.
 
 ### G-R-19 A study rewrite is a candidate — architecture PDF §3 ("never overwrite the original configuration directly"), §6
-- The study rotation (`agentdefs.study`) writes an agent's new working method straight into its definition (each
-  change a git commit, so it can be rolled back, but it is not evaluated first). Playbooks already follow the
-  candidate path (`evolution.py`: smoke suite, trial, promote or roll back).
-- **Status: open, needs a decision.** No exposure today: `study_interval` is 0 (manual) and no definition has been
-  rewritten yet (2026-11-06). Options: (a) a rewrite is held as a candidate an administrator applies or discards
-  after seeing the diff (no model cost, a person's time); (b) the candidate runs the smoke suite against the current
-  definition first and is applied only if it does at least as well, like a playbook (real model runs, under the
-  G-R-14 benchmark budget); (c) keep applying directly (git history allows a rollback, nothing is evaluated).
-  Recommendation: (a) as the default once the rotation is switched on, (b) where a budget is set.
+- The study rotation (`agentdefs.study`, `StudyThread`, `POST /api/learning/study`, `gm study`) used to write an
+  agent's new working method straight into its definition (each change a git commit, not evaluated first).
+  Playbooks already follow the candidate path (`evolution.py`: smoke suite, trial, promote or roll back).
+- Options were: (a) a rewrite is held as a candidate an administrator applies or discards after seeing the diff;
+  (b) the candidate first runs the smoke suite against the current definition, like a playbook; (c) keep applying
+  directly.
+- **Status: done, option (a)** (owner's decision 2026-11-06). A study visit stores a pending row in
+  `definition_candidates` (sections "Working method"/"Knowledge notes", `base_version`, model, reason, status
+  pending|applied|discarded|superseded, decided_by/at, note); the definition file, its git history,
+  `definition_version` and `system_prompt()` stay unchanged. A newer candidate of the same agent supersedes the older
+  pending one. Administrators get a notification (`notify(..., admin_only=True, s=s)`). `agentdefs.candidates`,
+  `agentdefs.candidate` (unified diff of the current file against the file the candidate would produce, with a note
+  when `base_version` is older than the current version), `agentdefs.apply_candidate` (one commit naming the candidate
+  and the actor) and `agentdefs.discard_candidate`; a candidate that is not pending cannot be applied or discarded.
+  API: `GET /api/agents/{id}/definition/candidates`, `GET /api/definition-candidates/{cid}`,
+  `POST /api/definition-candidates/{cid}/apply|discard` (`manage_agents`, audited; 409 when not pending); the agent
+  card's Definition tab shows the pending candidate's diff with Apply / Discard; `gm study` prints the candidate and
+  its diff. Tests: `tests/test_definition_candidates.py`; `tests/test_company_config.py` and `tests/test_knowledge.py`
+  apply the candidate before checking the file. Option (b), a smoke suite before applying, is out of scope.
 
 ## Not requirements
 - Download guide, CrewAI setup, VS Code extension lists, Hugging Face/Ollama/LM Studio links:

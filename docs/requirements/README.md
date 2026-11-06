@@ -136,7 +136,7 @@ the order is safety and correctness of that pipeline first, then management, the
      `research.filter_material`).
    - **From the continuously evolving organisation** (2026-11-06, `docs/temp/`): G-R-15 MCP tool drift, G-R-16
      latency tail, tool failures and human overrides, G-R-17 root causes by layer and G-R-18 model terms are done;
-     G-R-19 (a study rewrite as a candidate) needs the owner's decision; a cap of four model families is not
+     G-R-19 (a study rewrite as a candidate an administrator applies after seeing the diff, option a) is done; a cap of four model families is not
      enforced (a decision for the owner).
    - **Deliberately not taken**: S02-FR-17 runtime migration (single host).
 

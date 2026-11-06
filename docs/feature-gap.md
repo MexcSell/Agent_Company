@@ -158,7 +158,7 @@ Machines code):
 | p95 latency, human override rate, tool-call failure rate | same, §4 | done (`performance.operations`, G-R-16) |
 | Root causes classified by failure layer | same, §4; self-improving guide §4 | done (`rca.parse`, `rca.layer_counts`, G-R-17) |
 | A model's terms: billing, context, tool calling, data terms, licence, last verified | same, §6; `docs/temp/1.md` | done (`ModelEntry.terms`, G-R-18) |
-| An agent-definition rewrite is a candidate evaluated before promotion | `docs/temp/continuously_evolving_agent_architecture.pdf` §3, §6 | needs the owner's decision (G-R-19) |
+| An agent-definition rewrite is a candidate evaluated before promotion | `docs/temp/continuously_evolving_agent_architecture.pdf` §3, §6 | done (G-R-19, option a): `definition_candidates`, applied or discarded by an administrator after seeing the diff; no smoke suite before applying (option b) |
 
 ## From docs/temp/advanced_self_improving_agent_guide.pdf (verified self-evolution)
 

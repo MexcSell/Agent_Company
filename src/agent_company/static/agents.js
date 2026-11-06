@@ -136,6 +136,38 @@ async function roomsModal(edit) {
   };
 }
 
+// --- definition candidates: a study rewrite an administrator applies after seeing the diff (G-R-19) ---
+function diffHtml(text) {
+  return text.split("\n").map((ln) => {
+    const cls = ln.startsWith("+") && !ln.startsWith("+++") ? "diff-add" : ln.startsWith("-") && !ln.startsWith("---") ? "diff-del" : ln.startsWith("@@") ? "diff-hunk" : "";
+    return cls ? `<span class="${cls}">${esc(ln)}</span>` : esc(ln);
+  }).join("\n");
+}
+
+async function definitionCandidate(id) {
+  const box = $("#a-cand");
+  if (!box) return;
+  let c;
+  try {
+    const pending = await api(`/api/agents/${id}/definition/candidates?status=pending`);
+    if (!pending.length) return;
+    c = await api(`/api/definition-candidates/${pending[0].id}`);
+  } catch (e) { box.innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
+  box.innerHTML = `<h3>Pending candidate #${c.id}</h3>
+    <p class="muted">A study visit proposed new ${esc(Object.keys(c.sections || {}).join(" and "))} with ${esc(c.model)} (${esc(c.reason)}, ${ago(c.created_at)}). The file changes only when you apply it.</p>
+    ${c.stale ? `<p class="diff-stale">${esc(c.stale_note)}</p>` : ""}
+    <pre class="mono diff">${c.diff ? diffHtml(c.diff) : '<span class="muted">No change to the file.</span>'}</pre>
+    <div class="row" style="margin-top:8px">${ib("check", "Apply the candidate: one commit", 'id="a-cand-apply"', "primary")}${ib("x", "Discard the candidate", 'id="a-cand-discard"', "danger")}<span class="grow"></span></div>`;
+  $("#a-cand-apply").onclick = async () => {
+    try { const r = await api(`/api/definition-candidates/${c.id}/apply`, { method: "POST" }); toast(`Candidate #${r.id} applied`); agentModal(id, "definition"); } catch (e) { toast(e.message); }
+  };
+  $("#a-cand-discard").onclick = async () => {
+    const note = prompt("Why discard it? (optional)", "");
+    if (note === null) return;
+    try { await api(`/api/definition-candidates/${c.id}/discard`, { method: "POST", body: { note } }); toast(`Candidate #${c.id} discarded`); agentModal(id, "definition"); } catch (e) { toast(e.message); }
+  };
+}
+
 // --- the agent card -------------------------------------------------------------------------
 async function agentModal(id, tab = "profile") {
   const [a, m, versions, all, cat] = await Promise.all([api(`/api/agents/${id}`), api("/api/models"), api(`/api/agents/${id}/versions`), api("/api/agents"), api("/api/catalog")]);
@@ -156,10 +188,12 @@ async function agentModal(id, tab = "profile") {
     const d = await api(`/api/agents/${id}/definition`);
     box.innerHTML = `<p class="muted">The agent runs with this file (<code>${esc(d.path)}</code>): learning rewrites its <b>Working method</b> and <b>Knowledge notes</b>, the card's settings rewrite the rest. Every change is a commit.</p>
       <textarea id="a-def" class="mono" rows="18" ${admin ? "" : "readonly"}>${esc(d.text)}</textarea>
-      <div class="row" style="margin-top:8px">${admin ? ib("save", "Save the definition", 'id="a-def-save"', "primary") + ib("book", "Study now: rewrite the working method from new knowledge and lessons", 'id="a-study"') : ""}<span class="grow"></span></div>
+      <div class="row" style="margin-top:8px">${admin ? ib("save", "Save the definition", 'id="a-def-save"', "primary") + ib("book", "Study now: propose a new working method from new knowledge and lessons", 'id="a-study"') : ""}<span class="grow"></span></div>
+      <div id="a-cand"></div>
       <h3>History</h3><div class="events">${d.history.map((h) => `<div><span class="k">${esc(h.commit)}</span>${esc(h.message)} <span class="muted">${ago(h.at)}</span></div>`).join("") || '<span class="muted">No commits yet.</span>'}</div>`;
     $("#a-def-save") && ($("#a-def-save").onclick = async () => { try { await api(`/api/agents/${id}/definition`, { method: "PUT", body: { text: $("#a-def").value } }); toast("Definition saved"); agentModal(id, "definition"); } catch (e) { toast(e.message); } });
-    $("#a-study") && ($("#a-study").onclick = async () => { toast("Studying…"); try { const r = await api(`/api/learning/study?agent_id=${id}`, { method: "POST" }); toast(r.changed ? `Rewrote ${r.lines} line(s) with ${r.model}` : `No change: ${r.detail || ""}`); agentModal(id, "definition"); } catch (e) { toast(e.message); } });
+    $("#a-study") && ($("#a-study").onclick = async () => { toast("Studying…"); try { const r = await api(`/api/learning/study?agent_id=${id}`, { method: "POST" }); toast(r.candidate_id ? `Candidate #${r.candidate_id} ready for review (${r.model})` : `No change: ${r.detail || ""}`); agentModal(id, "definition"); } catch (e) { toast(e.message); } });
+    if (admin) await definitionCandidate(id); // G-R-19: a study rewrite waits for a person who saw the diff
     return;
   }
   if (tab === "config") {

@@ -489,3 +489,9 @@ svg .link:hover .net-edge { stroke-width: 4 !important; }
 .tool-calls { margin: 2px 0 4px 24px; font-size: 12px; }
 .tool-calls ol { margin: 4px 0; padding-left: 20px; max-height: 260px; overflow: auto; }
 .tool-calls li.failed { color: var(--bad); }
+/* definition candidates (agents.js, G-R-19): the unified diff of a study rewrite */
+pre.diff { max-height: 360px; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; white-space: pre-wrap; }
+pre.diff .diff-add { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); display: inline-block; width: 100%; }
+pre.diff .diff-del { color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); display: inline-block; width: 100%; }
+pre.diff .diff-hunk { color: var(--info); }
+.diff-stale { color: var(--warn); }
