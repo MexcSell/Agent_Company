@@ -95,7 +95,9 @@ feature came from.
   (Workspace Claude Code panel: a tab per conversation of this browser session (new ones on the far left; earlier ones
   only in the sessions window), titled by Haiku; a model menu (the CLI's aliases + the Models page's `claude_code`/`codex`
   models, `router_model`: their id, sign-in and base URL; the transcript follows a conversation to another sign-in and
-  back) and effort, per prompt, also in a project's GM panel (default: the GM's model); other live host sessions only in the sessions window (a tab while one is
+  back) and effort, per prompt, also in a project's GM panel (default: the GM's model); each turn's prompt is a one-line
+  bar pinned to the top of the log (trimming the event window never drops it), tool calls and thinking fold into one
+  "N steps" line, what the agent says and the result always show; other live host sessions only in the sessions window (a tab while one is
   opened), session history with resume/stop/delete); the Workspace explorer opens more file windows ("+", stacked or
   side by side) that share one code path, clipboard and drag and drop, and keeps its lists and open files while the server is
   unreachable, without a notice; the terminal keeps its screen, reconnects quietly from the last byte it has (`?after=`),

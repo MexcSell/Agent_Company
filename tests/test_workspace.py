@@ -341,6 +341,21 @@ def test_claude_panel_runs_a_models_page_model_with_its_own_sign_in(admin, root,
                for r in admin.get("/api/audit").json()["records"])
 
 
+def test_a_long_turn_keeps_its_prompt(tmp_path, monkeypatch):
+    monkeypatch.setattr(workspace, "MAX_EVENTS", 10)
+    tr = workspace._Transcript(tmp_path / "none.jsonl")
+    tr._add({"kind": "prompt", "text": "first"}, 0)
+    tr._add({"kind": "text", "text": "a"}, 0)
+    tr._add({"kind": "prompt", "text": "do a lot"}, 0)
+    for i in range(30):
+        tr._add({"kind": "tool_use", "id": f"t{i}", "name": "Read", "input": {}}, 0)
+    assert [e["kind"] for e in tr.events][:2] == ["prompt", "tool_use"] and tr.events[0]["text"] == "do a lot"
+    assert len(tr.events) == 11 and tr.events[-1]["id"] == "t29"
+    tr._add({"kind": "prompt", "text": "next"}, 0)
+    tr._add({"kind": "text", "text": "b"}, 0)
+    assert tr.events[0]["text"] == "do a lot" and [e["kind"] for e in tr.events].count("prompt") == 2
+
+
 def test_codex_effort_is_a_config_override():
     run = workspace.Run("hi", "/tmp", "admin", "", "", [], provider="codex", effort="medium")
     cmd = workspace._command(run)

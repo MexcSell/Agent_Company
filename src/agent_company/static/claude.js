@@ -149,6 +149,10 @@ window.WSP = window.WSP || {};
       const ev = run.events.find((x) => x.n === Number(n));
       W.copyText(ev?.kind === "tool_use" ? JSON.stringify(ev.input, null, 2) : ev?.text || "");
     });
+    el.addEventListener("click", (e) => {
+      const pin = !e.target.closest("button, a") && e.target.closest("[data-pin]");
+      if (pin && !getSelection()?.toString()) pin.classList.toggle("open");
+    });
     el.addEventListener("toggle", (e) => { const k = e.target.dataset?.k; if (k) e.target.open ? C.open.add(k) : C.open.delete(k); }, true);
     if (opt.workspace) W.onRoot = () => { renderCwd(); renderTabs(); };
     el.querySelector("#wc-hist-btn").onclick = () => openHist(!C.hist.open);
@@ -515,7 +519,7 @@ window.WSP = window.WSP || {};
         const shown = run.events.some((x) => x.kind === "text" && !x.parent);
         return `${!shown && e.text ? `<div class="cc-text"><div class="md">${W.md(e.text, ROOT())}</div></div>` : ""}<div class="cc-result${e.is_error ? " err" : ""}"><span>${e.is_error ? "✗ Failed" : "✓ Done"}</span><span class="muted">${e.turns} turn${e.turns === 1 ? "" : "s"} · ${secs}s${e.cost ? ` · $${e.cost.toFixed(4)}` : ""}</span><span class="grow"></span><button class="cc-copy" data-copy="${run.id}:all">${W.svg("M8 8h12v12H8zM4 16V4h12")} Copy answer</button></div>`;
       }
-      case "prompt": return `<div class="cc-user"><div class="cc-user-text">${esc(e.text)}</div><button class="cc-copy ghost" data-copy="${k}" title="Copy prompt">${W.svg("M8 8h12v12H8zM4 16V4h12")}</button></div>`;
+      case "prompt": return pinHtml(e.text, k);
       case "notice": return `<div class="cc-notice ${e.status === "completed" ? "ok" : e.status === "failed" || e.status === "killed" ? "err" : ""}"><span>${e.status === "completed" ? "✓" : e.status === "failed" ? "✗" : "■"}</span> Background task <code>${esc(e.task_id)}</code> ${esc(e.status)}${e.text && e.text !== e.status ? ` <span class="muted">${esc(firstLine(e.text, 160))}</span>` : ""}</div>`;
       case "compact": return `<div class="cc-divider cc-compact"><span>Conversation compacted${e.pre_tokens ? `: ${fmtK(e.pre_tokens)} → ${fmtK(e.post_tokens)} tokens` : ""}</span></div>`;
       case "error": return `<div class="cc-error">${esc(e.text)}</div>`;
@@ -523,17 +527,56 @@ window.WSP = window.WSP || {};
       default: return "";
     }
   }
+  // The prompt a turn answers: one line, pinned to the top of the log while its turn is in view (a click shows all of it).
+  const pinHtml = (text, copyKey, imgs = "") => `<div class="cc-user cc-pin" data-pin title="Show the whole prompt">
+    <div class="cc-user-text">${esc(text)}</div>${imgs ? `<div class="cc-imgs">${imgs}</div>` : ""}<button class="cc-copy ghost" data-copy="${copyKey}" title="Copy prompt">${W.svg("M8 8h12v12H8zM4 16V4h12")}</button></div>`;
+  // What the agent did on the way (thinking, tool calls, logs, subagents) folds into one line per stretch; what it says,
+  // problems and the result always show.
+  const isStep = (e) => ["thinking", "tool_use", "tool_result", "log"].includes(e.kind) || (e.kind === "text" && e.parent);
+  function stepsHtml(run, group, results, live) {
+    const tools = group.filter((e) => e.kind === "tool_use");
+    if (!tools.length && !group.some((e) => e.kind === "thinking" || e.kind === "log" || e.kind === "text")) return "";
+    const failed = tools.filter((e) => results.get(e.id)?.is_error).length;
+    const names = [...new Set(tools.map((e) => e.name))];
+    const now = live ? [...group].reverse().find((e) => e.kind === "tool_use" || e.kind === "thinking") : null;
+    const k = `${run.id}:steps:${group[0].n}`;
+    const label = tools.length ? `${tools.length} step${tools.length === 1 ? "" : "s"}` : "Thinking";
+    return `<details class="cc-steps" data-k="${k}"${C.open.has(k) ? " open" : ""}><summary>${live ? '<span class="spin"></span>' : `<span class="cc-steps-chev">${W.svg("M9 6l6 6-6 6")}</span>`}
+      <span class="cc-steps-n">${label}</span>${failed ? `<span class="cc-st err">${failed} failed</span>` : ""}
+      <span class="cc-steps-sum">${now ? (now.kind === "tool_use" ? `${esc(now.name)} ${toolSummary(now)}` : "Thinking…") : esc(names.slice(0, 5).join(", ") + (names.length > 5 ? "…" : ""))}</span></summary>
+      <div class="cc-steps-body">${group.map((e) => eventHtml(run, e, results, false)).join("")}</div></details>`;
+  }
+  // A turn's events: stretches of steps folded, everything else as it is.
+  function turnHtml(run, events, results, live) {
+    let out = "", group = [];
+    const flush = (last) => { if (group.length) out += stepsHtml(run, group, results, last && live); group = []; };
+    for (const e of events) {
+      if (isStep(e)) { group.push(e); continue; }
+      flush(false); out += eventHtml(run, e, results, false);
+    }
+    flush(true);
+    return out;
+  }
+  // A transcript's events by turn, each under its prompt; a turn whose prompt was not loaded says so.
+  function turnsHtml(run, events, results, live) {
+    const turns = [];
+    for (const e of events) {
+      if (e.kind === "prompt") turns.push({ p: e, ev: [] });
+      else (turns[turns.length - 1] || (turns[0] = { p: null, ev: [] })).ev.push(e);
+    }
+    return turns.map((t, i) => `<div class="cc-turn">${t.p ? pinHtml(t.p.text, `${run.id}:${t.p.n}`) : t.ev.some((e) => !isStep(e) || e.kind === "tool_use") ? '<div class="cc-user cc-pin muted"><div class="cc-user-text">Earlier prompt not loaded</div></div>' : ""}${turnHtml(run, t.ev, results, live && i === turns.length - 1)}</div>`).join("");
+  }
   function runHtml(run) {
     if (run.divider) return `<div class="cc-divider"><span>${esc(run.divider)}</span></div>`;
     const results = new Map(run.events.filter((e) => e.kind === "tool_result").map((e) => [e.tool_use_id, e]));
     if (run.transcript) {  // an earlier conversation, resumed: its transcript, then the new prompts
-      const events = run.events.map((e) => eventHtml(run, e, results, false)).join("");
+      const events = turnsHtml(run, run.events, results, false);
       return `<div class="cc-divider"><span>Earlier in this conversation${run.title ? ` · ${esc(run.title)}` : ""}</span></div>${run.partial ? '<div class="cc-divider"><span>Earlier history not loaded</span></div>' : ""}${events || '<p class="muted">No earlier conversation found.</p>'}<div class="cc-divider"><span>Continue below</span></div>`;
     }
     const imgs = (run.images || []).map((i) => `<a href="/api/uploads/${esc(i.id)}" target="_blank" rel="noopener"><img src="/api/uploads/${esc(i.id)}" alt="${esc(i.name)}" class="cc-thumb"></a>`).join("");
-    const events = run.events.map((e, i) => eventHtml(run, e, results, i === run.events.length - 1)).join("");
+    const events = turnHtml(run, run.events, results, run.status === "running");
     const working = run.status === "running" ? `<div class="cc-working"><span class="spin"></span> Working… <span class="muted">Esc to stop</span></div>` : run.status === "stopped" && !run.events.some((e) => e.kind === "error") ? '<div class="cc-error">Stopped.</div>' : "";
-    return `<div class="cc-user"><div class="cc-user-text">${esc(run.prompt)}</div>${imgs ? `<div class="cc-imgs">${imgs}</div>` : ""}<button class="cc-copy ghost" data-copy="${run.id}:prompt" title="Copy prompt">${W.svg("M8 8h12v12H8zM4 16V4h12")}</button></div>${events}${working}`;
+    return `${pinHtml(run.prompt, `${run.id}:prompt`, imgs)}${events}${working}`;
   }
   // One log element per tab, kept while the tab is open: switching tabs only shows another element, and a
   // conversation working in a background tab keeps rendering into its own.
@@ -588,6 +631,12 @@ window.WSP = window.WSP || {};
   const sessionRun = () => ({ id: "session", events: C.view.events, status: C.view.d?.status === "busy" ? "running" : "done" });
   // Sessions that can be opened in a tab of their own: every live one no conversation of this panel holds.
   const others = () => (opt.workspace ? C.sessions.filter((s) => !convOfSid(s.session_id)) : []);  // host sessions: Workspace only
+  // Drop the oldest events but keep the prompt the first kept ones answer: a long turn never loses its prompt.
+  function keepTail(events, max) {
+    const cut = events.length - max, lead = events.slice(0, cut).reverse().find((e) => e.kind === "prompt");
+    events.splice(0, cut);
+    if (lead && events[0]?.kind !== "prompt") events.unshift(lead);
+  }
   const transcriptRun = (sid, events, partial, title) => ({ id: `resume-${sid}`, transcript: true, session_id: sid, title: title || "", prompt: "", events, status: "done", partial });
 
   async function pollSessions() {
@@ -830,7 +879,7 @@ window.WSP = window.WSP || {};
         if (d.next < v.next) { v.events = []; d = await api(`/api/workspace/claude-sessions/${encodeURIComponent(sid)}?after=0`); }  // transcript reopened
         const changed = d.events.length > 0 || !v.d || v.d.status !== d.status || (d.status === "busy" && d.current?.name !== v.d.current?.name);
         v.events.push(...d.events);
-        if (v.events.length > 600) v.events.splice(0, v.events.length - 600);
+        if (v.events.length > 600) keepTail(v.events, 600);
         v.next = d.next; v.d = d; v.missing = false;
         if (d.title && C.names[sid] && !C.names[sid].title) C.names[sid].title = d.title;
         if (changed && watching()) { renderSession(); if (!cur()) renderBusy(); }
@@ -868,7 +917,7 @@ window.WSP = window.WSP || {};
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
     const run = sessionRun();
     const results = new Map(run.events.filter((e) => e.kind === "tool_result").map((e) => [e.tool_use_id, e]));
-    const events = run.events.map((e, i) => eventHtml(run, e, results, i === run.events.length - 1)).join("");
+    const events = turnsHtml(run, run.events, results, d.status === "busy");
     const tail = d.status === "busy" ? `<div class="cc-working"><span class="spin"></span> ${activity(d)}</div>` : d.status === "ended" ? '<div class="cc-divider"><span>Session ended</span></div>' : "";
     log.innerHTML = `<div class="cc-run cc-live">${d.partial_history ? '<div class="cc-divider"><span>Earlier history not loaded</span></div>' : ""}${events || '<p class="muted">No conversation yet.</p>'}${tail}</div>`;
     if (first || atBottom) log.scrollTop = log.scrollHeight;

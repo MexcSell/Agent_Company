@@ -676,8 +676,12 @@ class _Transcript:
     def _add(self, e: dict[str, Any], at: float) -> None:
         self.n += 1
         self.events.append({"n": self.n, "at": at, **e})
-        if len(self.events) > MAX_EVENTS:
-            del self.events[: len(self.events) - MAX_EVENTS]
+        if len(self.events) > MAX_EVENTS:  # the oldest go, but never the prompt the first kept ones answer
+            cut = len(self.events) - MAX_EVENTS
+            lead = next((x for x in reversed(self.events[:cut]) if x["kind"] == "prompt"), None)
+            del self.events[:cut]
+            if lead is not None and self.events[0]["kind"] != "prompt":
+                self.events.insert(0, lead)
 
     def _line(self, raw: dict[str, Any]) -> None:
         t, at = raw.get("type"), _ts(raw.get("timestamp"))

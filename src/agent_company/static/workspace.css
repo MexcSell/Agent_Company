@@ -272,6 +272,27 @@ table.csv .c4 { color: var(--t-kw); } table.csv .c5 { color: var(--t-num); } tab
 .cc-user { position: relative; align-self: flex-end; max-width: 92%; padding: 8px 34px 8px 12px; border-radius: 12px 12px 4px 12px;
   background: color-mix(in srgb, var(--claude) 11%, var(--panel)); border: 1px solid color-mix(in srgb, var(--claude) 30%, var(--border)); }
 .cc-user-text { white-space: pre-wrap; word-break: break-word; }
+/* The prompt of a turn: one line, pinned to the top of the log while its turn is in view; a click shows all of it. */
+.cc-turn { display: flex; flex-direction: column; gap: 8px; }
+.cc-pin { position: sticky; top: -12px; z-index: 3; align-self: stretch; max-width: none; margin: 0 -12px; padding: 6px 40px 6px 14px;
+  border-radius: 0; border-width: 1px 0; cursor: pointer; box-shadow: 0 2px 6px rgb(0 0 0 / .06); }
+.wc-log > .cc-run:first-child > .cc-pin:first-child, .wc-log > .cc-run:first-child > .cc-turn:first-child > .cc-pin { margin-top: -12px; border-top-width: 0; }
+.cc-pin .cc-user-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.cc-pin .cc-user-text::before { content: "›"; margin-right: 8px; color: var(--claude); font-weight: 700; }
+.cc-pin .cc-imgs { display: none; }
+.cc-pin.open .cc-user-text { white-space: pre-wrap; max-height: 40vh; overflow: auto; font-weight: 400; }
+.cc-pin.open .cc-imgs { display: flex; }
+.cc-pin.muted .cc-user-text { font-weight: 400; font-style: italic; }
+.cc-steps { font-size: 12.5px; color: var(--muted); }
+.cc-steps > summary { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 6px; list-style: none; cursor: pointer; white-space: nowrap; min-width: 0; }
+.cc-steps > summary::-webkit-details-marker { display: none; }
+.cc-steps > summary:hover { background: var(--hover); color: var(--text); }
+.cc-steps-chev svg { width: 12px; height: 12px; display: block; transition: transform .15s; }
+.cc-steps[open] .cc-steps-chev svg { transform: rotate(90deg); }
+.cc-steps-n { font-weight: 600; flex: none; }
+.cc-steps-sum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cc-steps-sum code { background: none; padding: 0; }
+.cc-steps-body { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 4px 14px; margin-left: 6px; border-left: 2px solid var(--border); color: var(--text); }
 .cc-imgs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .cc-thumb { max-height: 110px; max-width: 160px; border-radius: 6px; border: 1px solid var(--border); display: block; }
 .cc-copy { border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; font: inherit; font-size: 11.5px; padding: 2px 8px; border-radius: 5px; display: inline-flex; align-items: center; gap: 4px; }
