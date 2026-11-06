@@ -1,6 +1,6 @@
 # ADR 0011: marketplace-fetch-method
 
-Status: Accepted
+Status: Superseded by 0013-marketplace-fetch-method
 Date: 2026-11-06
 Decision record: #11 · goal #20 (REQ-002: agent marketplace — discover, evaluate, import external agents)
 Category: technical

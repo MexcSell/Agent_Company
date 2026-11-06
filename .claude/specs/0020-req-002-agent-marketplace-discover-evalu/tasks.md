@@ -1,71 +1,73 @@
-# Tasks (iteration 1)
+# Tasks (iteration 2)
 
 
 
-## 1. Specify the agent marketplace: manifest, untrusted fetch, permission ceiling, candidate flow, data model, API/CLI/UI
-- key: `spec` · role: architect · writes: no
+## 1. Marketplace candidate flow: sandbox always on, role-only eval suite, 'unevaluated' status, no self-granted skills or models, admin checks, audited refusals
+- key: `candidate_flow_fixes` · role: developer · writes: yes
 
-Read src/agent_company/recruitment.py (open_request ~220, approve ~381, reject ~419, qualification_suite ~442, start_qualification ~456, qualify ~473, _finish ~504, _activate ~548, _retire_candidate ~560), agentdefs.py (render, sync, write_text, _commit; the definition file is a git repo, so rollback is through its versions), catalog.py (the `source` field), evaluation.py, sandbox.py, db.py, gm.py and the Agents page in static/agents.js. Then write a technical specification as your answer. It must cover:
-1) MANIFEST: an agent package manifest (`agent-package.json`, schema version 1) with role, name, instructions, skills, tools, models, dependencies, permissions (requested), version, author, source (URL or upload name plus commit sha or sha256), licence (SPDX id or 'unknown'). Give validation rules and limits (field lengths, list sizes, a role must be an existing registry role, unknown keys are kept but ignored).
-2) CONVERSION: build a manifest from (a) a native agent-package.json, (b) a Claude Code subagent .md with frontmatter, (c) a CrewAI agents.yaml (role/goal/backstory), (d) a skill pack (SKILL.md). Conversion only parses text with yaml.safe_load, json and markdown. It never imports, executes or installs anything from the package.
-3) UNTRUSTED FETCH: each import gets its own new empty directory data/marketplace/<import_id>/src. For a repository URL, allow only https:// (plus file:// when a test setting enables it) and use `git clone --depth 1 --no-recurse-submodules -c core.hooksPath=/dev/null -c protocol.file.allow=...` with a timeout and a size cap. For an uploaded .zip or .tar.gz: reject absolute paths, '..' (zip-slip), symlinks, device files, too many files and too many bytes. Nothing from the package runs on the host. Python reading the package runs with no cwd inside it.
-4) PERMISSION CEILING: the candidate's permissions and autonomy are the intersection of the administrator-granted set and a fixed import default (lowest autonomy, no MCP, no Bash beyond the role default, writes only when the role writes). Requested permissions are only displayed. Instructions text is stored as data in the definition's instructions section and never parsed for permissions, tools or models. A model outside the router catalog is ignored.
-5) CANDIDATE FLOW: an import creates a Recruitment with source='marketplace' and a disabled candidate agent, then runs the role's eval suite through the existing qualify path (L3 sandbox via contracts.run_command/sandbox) plus a security screen: secret patterns, prompt-injection phrases that claim permissions, and requested permissions above the ceiling. Results (per-dimension, S09-R-05) are stored on the import record and the recruitment. Only admin approve enables the agent. Reject retires the candidate and deletes data/marketplace/<id>/src.
-6) PROVENANCE: the agent definition file gets a `## Provenance` section (source, sha, author, licence, manifest version, eval summary, import id), committed via agentdefs, so rollback is a revert to an earlier agentdefs version.
-7) DATA MODEL in db.py: a table `agent_imports` (id, kind url|upload, source, source_sha, manifest JSON, licence, author, version, status fetched|converted|qualifying|qualified|failed|approved|rejected, screen JSON, eval JSON, recruitment_id, agent_id, created_by, created_at, error), plus the columns needed on recruitments or agents, migrated by _add_missing_columns.
-8) API: endpoints under /api/marketplace (import url, upload, list, get, approve with grant, reject). All are admin-only and call _audit.
-9) CLI: `python -m agent_company marketplace import <url|path> | list | show <id> | approve <id> | reject <id>`.
-10) UI: a 'Marketplace' tab on the Agents page in static/agents.js.
-11) THREATS: new rows for docs/threat-model.md (malicious repo or archive, zip-slip, git hooks and submodules, prompt injection widening permissions, licence, SSRF via URL).
-12) TESTS: name the tests and the local fixture package, tests/fixtures/marketplace/sample-agent/, that run offline.
-Keep the spec concrete, with function signatures in a new module src/agent_company/marketplace.py.
+Fix the iteration-1 reviewer findings below. Read .claude/specs/0020-req-002-agent-marketplace-discover-evalu/spec.md and review.md first. Change only what each finding needs and keep the existing style.
 
-Acceptance: {"type": "contains", "value": "agent_imports"}; {"type": "contains", "value": "marketplace.py"}; {"type": "regex", "pattern": "(?i)zip-?slip"}; {"type": "regex", "pattern": "(?i)permission ceiling|intersection"}; {"type": "regex", "pattern": "(?i)provenance"}; {"type": "min_length", "value": 3000}
+1. HIGH, sandbox: in sandbox.py `mode_for`, return "required" when `(goal.trial or {}).get("sandbox") == "required"`, next to the existing a2a check. This must override the company and project `sandbox=off` setting. In recruitment.py `qualify` (around line 497), when the recruitment's source is "marketplace", refuse (raise or return a refusal, matching existing patterns) if the sandbox isn't available or the effective mode would be "off". Test: set the company setting `sandbox=off` (and a project override `off`), then show that `mode_for` on a marketplace candidate's trial goal returns "required" and that `qualify` refuses when `sandbox.available()` is False. Monkeypatch; stay offline.
 
-## 2. marketplace.py: untrusted fetch, conversion to manifest, permission ceiling, candidate qualification, provenance; db tables; offline tests
-- key: `backend` · role: developer · writes: yes · after: spec
+2. HIGH, eval suite: in marketplace.py `create_candidate` (around line 516), pick the suite from the role only: `recruitment.qualification_suite([m["role"], *org.ROLES[m["role"]].skills])` or the equivalent that exists in org. The package's own `skills` must never take part in the choice. Test: a fixture manifest that claims a skill matching an easier suite still gets the role's suite.
 
-Implement the backend from the spec task's answer.
-(1) Add the agent_imports table, and any recruitment or agent columns, to src/agent_company/db.py so that _add_missing_columns migrates them.
-(2) Create src/agent_company/marketplace.py with: fetch_url(url, actor), fetch_upload(path_or_bytes, filename, actor), convert(src_dir) -> manifest dict, validate_manifest, permission_ceiling(role, requested, granted), screen(manifest, src_dir), create_candidate(import_id), approve(import_id, actor, grant), reject(import_id, actor, reason) and list/get.
-Requirements for the fetch: own empty directory data/marketplace/<id>/src; scheme allow-list; git clone --depth 1 with core.hooksPath=/dev/null, no submodules, timeout and size cap; archive extraction rejects absolute, '..', symlink and special members and enforces count and byte limits. Nothing from the package is executed or installed on the host.
-Requirements for the candidate: reuse recruitment.py, so the candidate is a disabled agent with a Recruitment record and qualify() runs its role's eval suite through the existing L3-sandboxed eval path. Store the eval and screen results on agent_imports and the recruitment. approve() goes through recruitment.approve and enables the agent only with an administrator actor. reject() goes through recruitment.reject/_retire_candidate and removes the fetched directory.
-Requirement for permissions: the candidate's permissions and autonomy never exceed the ceiling, whatever the manifest or instructions request.
-Requirement for provenance: write a '## Provenance' section (source, sha, author, licence, version, eval summary) into the agent's definition via agentdefs so it is committed as a new version.
-(3) Tests in tests/test_marketplace.py. They run offline and use a local fixture package tests/fixtures/marketplace/sample-agent/ (agent-package.json + instructions whose text tries to claim Bash/MCP/admin permissions) and a local git repo built from it in tmp (file:// URL enabled by a test setting). Cover: url import → manifest + disabled candidate, and no file from the package was executed (a fixture script that would write a marker file never runs); upload of a .zip with a '../' member and with a symlink is refused; injected permission requests are not granted; the qualification result is stored (stub the eval run the way tests/test_recruitment.py does); approve enables the agent and the provenance section is in the definition; reject retires it and deletes the src directory; agentdefs history shows the provenance version.
-Do not touch api.py, __main__.py or static/ (the next task owns them).
+3. MEDIUM, unevaluated: a role that doesn't write, or one with no matching suite, gets import status "unevaluated", not "qualified". `approve` accepts only status "qualified" with eval status "passed", or status "unevaluated" when the administrator passes `accept_unevaluated=True`. Wire the flag through the API body, the CLI flag `--accept-unevaluated` and the Marketplace tab (a checkbox or confirm shown only for unevaluated imports). Record the acceptance in the audit and provenance. Tests: approve refused without the flag, allowed with it.
 
-Acceptance: {"type": "file_exists", "path": "src/agent_company/marketplace.py"}; {"type": "file_exists", "path": "tests/test_marketplace.py"}; {"type": "command", "run": "uv run pytest -q tests/test_marketplace.py", "requirement_keys": ["REQ-002"], "stage": "unit"}; {"type": "command", "run": "uv run pytest -q tests/test_recruitment.py", "requirement_keys": ["S03-R-04"], "stage": "unit"}; {"type": "command", "run": "grep -q 'agent_imports' src/agent_company/db.py", "stage": "static"}
+4. MEDIUM, skills: don't set `agent.skills = {k: 5}` (line ~543). Store the package's claimed skills as requested skills in the manifest or provenance only. Imported skills start at the lowest proficiency (1, or 0 if `registry._rank` treats 0 as absent; choose and say why). Only eval or probation results may raise them, through existing paths. Test: after approve, the claimed skills on the agent are at the lowest level.
 
-## 3. Admin API with _audit, CLI `marketplace`, Agents-page Marketplace tab, threat model and docs
-- key: `surface` · role: developer · writes: yes · after: backend
+5. MEDIUM, models: don't set `model_pref` from `manifest.models` (line ~542). Keep the requested models in the manifest, shown only. Leave `model_pref` empty so the role route applies. `approve` takes an optional `model` the administrator picks; it must be a router catalog entry, validated (API, CLI, tab select). Test: a manifest naming a catalog model doesn't change `model_pref`.
 
-Expose src/agent_company/marketplace.py.
-(1) api.py: admin-only endpoints under /api/marketplace: POST import (url), POST upload (multipart, saved to its own new directory first), GET list, GET {id}, POST {id}/approve (with a granted-permissions body that is clamped by the ceiling), POST {id}/reject. Every mutating call uses _audit(...). Non-admins get 403.
-(2) __main__.py: `marketplace import <url|path> | list | show <id> | approve <id> [--grant ...] | reject <id> [--reason]`.
-(3) static/agents.js: a 'Marketplace' tab on the Agents page. It lists imports with status, licence, source and sha, a manifest view, the requested vs granted permissions, screen findings and eval results, plus import (URL or file) and Approve/Reject buttons. Follow the existing plain-JS style and `iconize`.
-(4) docs/threat-model.md: add the marketplace integration as threats → controls → tests (malicious repo or archive, zip-slip, git hooks and submodules, SSRF via URL, prompt injection widening permissions, licence), each pointing at tests/test_marketplace.py.
-(5) CLAUDE.md layout: one line for marketplace.py. Mark REQ-002's status in docs/requirements if it is listed there.
-(6) Add API tests to tests/test_marketplace.py: admin import/approve/reject write audit records, and a non-admin gets 403.
+6. LOW: `marketplace.reject(..., admin: bool = False)` and `agentdefs.restore(..., admin: bool = False)` raise PermissionError when admin is False. Update every caller (api, CLI, gm) to pass it correctly. `restore` checks the id with `^[0-9a-f]{7,40}$` and refuses a commit that isn't in `git log --format=%H -- <file>` of that definition. Tests for both.
 
-Acceptance: {"type": "command", "run": "uv run pytest -q tests/test_marketplace.py", "requirement_keys": ["REQ-002"], "stage": "integration"}; {"type": "command", "run": "grep -q '/api/marketplace' src/agent_company/api.py && grep -A40 '/api/marketplace' src/agent_company/api.py | grep -q '_audit('", "stage": "static"}; {"type": "command", "run": "uv run python -m agent_company marketplace --help", "stage": "static"}; {"type": "command", "run": "grep -qi 'marketplace' docs/threat-model.md && grep -qi 'marketplace' src/agent_company/static/agents.js", "stage": "static"}
+7. LOW: in api.py, wrap marketplace approve and reject the way import is wrapped, so a refusal (ImportRefused, PermissionError, wrong status, missing licence acceptance) calls `_audit` with action `marketplace_approve_refused` / `marketplace_reject_refused` at severity warning, then returns the error status. Test with the API test client.
 
-## 4. QA review of the agent marketplace against REQ-002
-- key: `qa` · role: qa · writes: no · after: surface
+After that, update spec.md with a short 'Iteration 2 changes' section listing these rules. Run `uv run pytest -q tests/test_marketplace.py tests/test_sandbox.py tests/test_recruitment.py tests/test_api.py`, then `uv run pytest -q`, and report the output. Report the evidence for each numbered item: file:line and test name.
 
-Review src/agent_company/marketplace.py, the db.py changes, the recruitment and agentdefs integration, the api.py endpoints, the CLI, the static/agents.js tab, docs/threat-model.md and tests/test_marketplace.py against the five REQ-002 acceptance criteria:
-(a) url or upload import → manifest + candidate, nothing runs on the host;
-(b) the role's eval suite runs in the L3 sandbox and the results are on the record;
-(c) only an administrator's approval enables the agent, and rejection removes it;
-(d) provenance, licence and eval results are on the agent definition and rollback works via agentdefs versions;
-(e) instructions cannot widen permissions.
-Trace the data flow of a normal case (url import → approve), an edge case (zip with a '../' member or a symlink; manifest requesting Bash/MCP/high autonomy) and an error case (unreachable URL or invalid manifest → failed status, no agent left enabled). Check: git hook and submodule handling, the scheme allow-list (no ssh:// or http:// to internal hosts unless the spec allows it), that the archive is never extracted into a shared directory, _audit on every admin action, non-admin 403, and the DB session discipline (no second connection inside session()). Write one FINDING line per issue with file:line and severity. End with an OUTCOME paragraph and either 'VERDICT: PASS' or 'VERDICT: FAIL'.
+Acceptance: {"type": "command", "run": "uv run pytest -q tests/test_marketplace.py tests/test_sandbox.py tests/test_recruitment.py", "requirement_keys": ["REQ-002"], "stage": "unit"}; {"type": "command", "run": "uv run pytest -q tests/test_api.py -k 'marketplace or audit'", "requirement_keys": ["REQ-002"], "stage": "integration"}; {"type": "command", "run": "grep -n 'trial' src/agent_company/sandbox.py | grep -q required", "requirement_keys": ["REQ-002"], "stage": "static"}; {"type": "command", "run": "grep -q 'unevaluated' src/agent_company/marketplace.py && grep -q 'accept_unevaluated' src/agent_company/api.py", "stage": "static"}
 
-Acceptance: {"type": "regex", "pattern": "VERDICT: (PASS|FAIL)"}; {"type": "contains", "value": "OUTCOME"}; {"type": "min_length", "value": 800}
+## 2. Marketplace fetch hardening: DNS-pinned clone, bounded clone size, streaming gzip-bomb guard, threat model, agents.js syntax check
+- key: `fetch_hardening` · role: developer · writes: yes · after: candidate_flow_fixes
 
-## 5. Security review of 'marketplace.py: untrusted fetch, conversion to manifest, permission ceiling, candidate qualification, provenance; db tables; offline tests'
-- key: `backend-security` · role: security · writes: no · after: backend
+Fix the fetch findings in marketplace.py. Untrusted repositories and archives are data; nothing from them runs.
 
-Review the change made by task 'backend' for security: secrets, injection, unsafe file and network access, authentication and permission changes. Verify the logic first.
+1. MEDIUM, DNS rebinding (lines ~114-172): change `_is_public_host` / `check_url` so they return the global IP address that was checked, together with the host. Put that address in `clone_command(url, dest, pin=(host, port, ip))` as `-c http.curloptResolve=<host>:<port>:<ip>` (IPv6 in brackets as libcurl expects). Port is 443 unless the URL names one. Check the git version once, by parsing `git --version`. If it is older than 2.37, refuse https URL imports with a clear ImportRefused instead of cloning unpinned. file:// test URLs don't need a pin. Tests: monkeypatch getaddrinfo, then assert the pinned option is in the command, a private address is refused, and an old git version is refused. Don't contact the network.
+
+2. MEDIUM, clone size: bound the clone while it runs. Use `--filter=blob:limit=2m` with `--no-checkout`, check sizes with `git ls-tree -r -l HEAD` against MAX_BYTES and the per-file limit, then `git checkout` with `GIT_NO_LAZY_FETCH=1` so no missing blob is fetched. Also run the clone process with `RLIMIT_FSIZE` (resource.setrlimit in preexec_fn) set a little above MAX_BYTES, so the pack itself is bounded. A refusal removes the directory and marks the import failed. Test with a local file:// fixture repository that has a file over the limit: the import is refused and the directory removed.
+
+3. LOW, gzip bomb (`_tar_members` ~228, `_extract` ~240): don't call `getmembers()` on the whole archive. Open it in stream mode (`tarfile.open(fileobj=..., mode='r|*')`), or iterate `TarFile.next()` while adding up `m.size` and the decompressed bytes read. Stop with ImportRefused as soon as the total passes MAX_BYTES or the member count passes its limit. Keep the existing member path checks and the `filter='data'` extraction. Test: a tar.gz built in the test that decompresses to more than MAX_BYTES is refused, and the test asserts it stops early (for example by patching MAX_BYTES small).
+
+4. docs/threat-model.md: extend the marketplace row with the DNS-rebinding threat → pinned curloptResolve plus the git ≥2.37 check, the clone size threat → blob filter, no lazy fetch and RLIMIT_FSIZE, and the decompression bomb → streaming count. Name the test functions in the row. Also mention the iteration-2 controls from the previous task: forced sandbox, role-only suite, the unevaluated gate, no self-granted skills or models.
+
+5. LOW: run `node --check src/agent_company/static/agents.js`. If node isn't available or the run isn't allowed, run `uv run python -c` with a parser such as esprima if it's installed. Otherwise say so plainly and report a careful manual review of the Marketplace tab code (balanced brackets, functions it calls exist in app.js). Fix any syntax error.
+
+6. Update the CLAUDE.md marketplace entry only where behaviour changed (pinned clone, unevaluated status), in one line. Run `uv run pytest -q tests/test_marketplace.py`, then `uv run pytest -q`, and report the output with evidence for each item.
+
+Acceptance: {"type": "command", "run": "uv run pytest -q tests/test_marketplace.py", "requirement_keys": ["REQ-002"], "stage": "security"}; {"type": "command", "run": "grep -q 'curloptResolve' src/agent_company/marketplace.py && grep -q 'RLIMIT_FSIZE' src/agent_company/marketplace.py", "stage": "static"}; {"type": "command", "run": "grep -qi 'rebinding' docs/threat-model.md", "requirement_keys": ["REQ-002"], "stage": "static"}; {"type": "command", "run": "uv run pytest -q", "stage": "integration"}
+
+## 3. QA and security review of the iteration-2 marketplace fixes against REQ-002
+- key: `qa_review` · role: qa · writes: no · after: candidate_flow_fixes, fetch_hardening
+
+Review the branch against REQ-002's acceptance criteria and each of the 10 iteration-1 findings (sandbox=off bypass, package-chosen suite, unevaluated approve, self-granted skill levels, self-chosen model_pref, DNS rebinding, unbounded clone, admin checks on reject/restore plus restore id and git-log check, unaudited refused approve/reject, gzip bomb, agents.js syntax). For each finding, give the file:line of the fix and the test that covers it, or a FINDING line if it's missing or wrong. Trace the data flow of three cases. (1) Normal: upload the local fixture package → manifest → candidate → eval in the L3 sandbox → approve with provenance, licence and eval results on the definition → rollback through agentdefs. (2) Edge: an unevaluated role is approved only with accept_unevaluated, and the company sandbox=off is still forced on. (3) Error: a hostile URL resolves to a private address or rebinds, or a tar bomb is uploaded → refused, audited, nothing executed on the host. Also check that package instructions can't widen permissions, autonomy, skills or model, and that reject removes the candidate. Read tests/test_marketplace.py and confirm the tests assert behaviour, not just call functions. List FINDING lines with severity, file:line and a suggested fix. End with an OUTCOME paragraph and 'VERDICT: PASS' or 'VERDICT: FAIL'. FAIL only for unmet acceptance criteria or high/medium security gaps.
+
+Acceptance: {"type": "regex", "pattern": "VERDICT: (PASS|FAIL)"}; {"type": "contains", "value": "OUTCOME"}; {"type": "min_length", "value": 1200}
+
+## 4. Security review of 'Marketplace candidate flow: sandbox always on, role-only eval suite, 'unevaluated' status, no self-granted skills or models, admin checks, audited refusals'
+- key: `candidate_flow_fixes-security` · role: security · writes: no · after: candidate_flow_fixes
+
+Review the change made by task 'candidate_flow_fixes' for security: secrets, injection, unsafe file and network access, authentication and permission changes. Verify the logic first.
+
+Acceptance: {"type": "regex", "pattern": "VERDICT: (PASS|FAIL)"}
+
+## 5. Security review of 'Marketplace fetch hardening: DNS-pinned clone, bounded clone size, streaming gzip-bomb guard, threat model, agents.js syntax check'
+- key: `fetch_hardening-security` · role: security · writes: no · after: fetch_hardening
+
+Review the change made by task 'fetch_hardening' for security: secrets, injection, unsafe file and network access, authentication and permission changes. Verify the logic first.
+
+Acceptance: {"type": "regex", "pattern": "VERDICT: (PASS|FAIL)"}
+
+## 6. Security review of 'QA and security review of the iteration-2 marketplace fixes against REQ-002'
+- key: `qa_review-security` · role: security · writes: no · after: qa_review
+
+Review the change made by task 'qa_review' for security: secrets, injection, unsafe file and network access, authentication and permission changes. Verify the logic first.
 
 Acceptance: {"type": "regex", "pattern": "VERDICT: (PASS|FAIL)"}
