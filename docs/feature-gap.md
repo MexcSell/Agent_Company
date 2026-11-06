@@ -181,7 +181,7 @@ Machines code):
 | Feature | Source | Status |
 | --- | --- | --- |
 | Repository map in the planner's prompt and a task's package | aider | done (`repomap.py`, FW-R-01) |
-| Stop a run that repeats the same tool call | OpenHands, AutoGen Magentic-One, mini-swe-agent | open → FW-R-02 |
+| Stop a run that repeats the same tool call | OpenHands, AutoGen Magentic-One, mini-swe-agent | done (`executors.StuckWatch`, FW-R-02) |
 | Prometheus metrics endpoint | Flowise, Agent Framework | open → FW-R-03 |
 | Scheduled goals | OpenHands automations, extensions catalog | open → FW-R-04 |
 | Import skills from a `SKILL.md` registry | OpenHands extensions | open → FW-R-05 |

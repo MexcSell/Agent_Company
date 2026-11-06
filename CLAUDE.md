@@ -27,7 +27,8 @@ feature came from.
   terms, licence page) validated by `check_terms`, `terms_due` after 90 days without a person's check), `contracts.py` (task contracts with scope, risk, budget, deadline; output lines),
   `executors.py` (tracked subprocesses: `terminate` for stops; `gate`, the tool gateway every run passes: permissions and
   `Agent.autonomy` G0-G4 decide writes, Bash and MCP tools, the isolation level L0-L2 and every tool call (Claude Code
-  stream-json, Codex `--json`) are recorded on the `Run`), `dependencies.py` (S08-R-05: dependency changes per goal from git objects, `pip-audit`/`npm audit` at the gate's
+  stream-json, Codex `--json`) are recorded on the `Run`; FW-R-02 `StuckWatch` reads the stream while it runs and ends a run
+  that repeats the same call `stuck_repeat_limit` times or fails the same way `stuck_error_limit` times), `dependencies.py` (S08-R-05: dependency changes per goal from git objects, `pip-audit`/`npm audit` at the gate's
   security stage with network in the sandbox, `dependency_audit` off|warn|block, merge record, CycloneDX SBOM of each merged commit in `data/sbom/`), `sandbox.py` (S14-R-07 L3: quality, acceptance and
   milestone commands and code benchmarks run agent-written code under bubblewrap: no network, the worktree writable
   with its `.git` read-only, `data/`/`.env` hidden, allow-listed env, systemd-scope limits; setting `sandbox`

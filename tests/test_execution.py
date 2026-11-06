@@ -379,7 +379,7 @@ def test_claude_code_runs_resume_the_agents_session(monkeypatch, env):
             self.stdout = _json.dumps({"result": "done", "session_id": "0f9c2b9e-1111-2222-3333-444455556666",
                                        "usage": {"input_tokens": 10, "output_tokens": 5}, "total_cost_usd": 0.01})
 
-    def fake_spawn(self, cmd, req, cwd, env=None):
+    def fake_spawn(self, cmd, req, cwd, env=None, **kw):
         calls.append(cmd)
         return Proc(cmd)
 

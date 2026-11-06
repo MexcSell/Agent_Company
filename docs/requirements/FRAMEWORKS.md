@@ -74,14 +74,14 @@ Acceptance: in a temp repository with `a.py` defining `helper()` used by `b.py` 
 `helper` before a definition nobody uses, stays within the budget, and a task package of that goal contains it;
 with `repo_map_chars` = 0 the package has none.
 
-### FW-R-02 Stop a run that repeats itself — open (planned: `executors.StuckWatch`)
+### FW-R-02 Stop a run that repeats itself — done (`executors.StuckWatch`, `Executor._watched`, settings `stuck_repeat_limit`, `stuck_error_limit`)
 
 Source: OpenHands stuck detection, AutoGen Magentic-One `max_stalls`, mini-swe-agent limits. While an executor
 run streams its tool calls (Claude Code stream-json, Codex `--json`), the same call (tool name + input) repeated
 `stuck_repeat_limit` times in a row (setting, default 5; 0 = off), or the same call failing with the same error
 `stuck_error_limit` times (default 3), ends the run: the process is terminated, the run's error says
-`stuck: <tool> repeated N times`, and the task fails with that reason so the retry policy re-tries it with the
-reason in its feedback. The event is logged and counted in the operational metrics' tool-call failures.
+`stuck: <tool> repeated N times`, and the task fails with that reason: it is not transient, so the next model of
+the fallback chain takes the task, and the reason reaches the next iteration's feedback through the task output. The event is logged and counted in the operational metrics' tool-call failures.
 
 Acceptance: a fake executor stream with five identical Bash calls ends with a `stuck:` error and the process is
 terminated; four identical calls followed by a different one does not; three identical failing calls with the

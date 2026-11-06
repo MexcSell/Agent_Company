@@ -70,6 +70,10 @@ class Settings:
     escalate_after: int = 2
     # Characters of the repository map in the planner's prompt and a task's package (FW-R-01); 0 = no map.
     repo_map_chars: int = 4000
+    # A Claude Code or Codex run ends when it repeats the same tool call this many times in a row, or the same call
+    # fails with the same error this many times (FW-R-02); 0 = that rule off.
+    stuck_repeat_limit: int = 5
+    stuck_error_limit: int = 3
     # A candidate playbook must pass the smoke suite before it is tried on users' goals (S13-D-02).
     candidate_smoke: bool = True
     # G-R-14 scheduled benchmark review: off|daily|weekly|monthly, the suite, and its budget per run (0 = never runs).
@@ -178,6 +182,8 @@ def load_settings() -> Settings:
         cost_overrun_factor=float(os.environ.get("COST_OVERRUN_FACTOR") or 2),
         escalate_after=_int("ESCALATE_AFTER", 2),
         repo_map_chars=_int("REPO_MAP_CHARS", 4000),
+        stuck_repeat_limit=_int("STUCK_REPEAT_LIMIT", 5),
+        stuck_error_limit=_int("STUCK_ERROR_LIMIT", 3),
         candidate_smoke=_bool("CANDIDATE_SMOKE", True),
         benchmark_schedule=(os.environ.get("BENCHMARK_SCHEDULE") or "off").lower(),
         benchmark_suite=os.environ.get("BENCHMARK_SUITE") or "smoke",

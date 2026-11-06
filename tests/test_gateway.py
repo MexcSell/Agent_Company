@@ -27,7 +27,7 @@ class Proc:
 def claude(monkeypatch):
     calls = []
 
-    def fake_spawn(self, cmd, req, cwd, env=None):
+    def fake_spawn(self, cmd, req, cwd, env=None, **kw):
         calls.append(cmd)
         return Proc(["Bash"])
 
@@ -96,7 +96,7 @@ def test_a_request_without_an_agent_is_read_only(claude, wt):
 
 def test_codex_cannot_write_without_shell(monkeypatch, wt):
     calls = []
-    monkeypatch.setattr(executors.Executor, "_spawn", lambda self, cmd, r, cwd, env=None: calls.append(cmd) or Proc())
+    monkeypatch.setattr(executors.Executor, "_spawn", lambda self, cmd, r, cwd, env=None, **kw: calls.append(cmd) or Proc())
     ex = executors.CodexExecutor(router.Choice("Codex", "codex", "", "t"))
     res = ex.run(req(wt, ["read", "write"]))
     assert calls[0][calls[0].index("--sandbox") + 1] == "read-only" and res.isolation == "L1"
@@ -280,7 +280,7 @@ def test_claude_code_runs_record_every_tool_call_redacted_and_in_the_trace(monke
     class Stream:
         returncode, stderr, stdout = 0, "", CLAUDE_STREAM
 
-    monkeypatch.setattr(executors.Executor, "_spawn", lambda self, cmd, r, cwd, env=None: cmds.append(cmd) or Stream())
+    monkeypatch.setattr(executors.Executor, "_spawn", lambda self, cmd, r, cwd, env=None, **kw: cmds.append(cmd) or Stream())
     res = cc(req(wt, ["read", "write", "shell"]))
     assert "stream-json" in cmds[0] and "--verbose" in cmds[0]
     assert res.ok and res.text == "done" and res.input_tokens == 12 and res.session_id.startswith("0f9c")
@@ -298,7 +298,7 @@ def test_codex_runs_record_commands_and_file_changes_from_its_json_events(monkey
     class Stream:
         returncode, stderr, stdout = 0, "", CODEX_STREAM
 
-    monkeypatch.setattr(executors.Executor, "_spawn", lambda self, cmd, r, cwd, env=None: cmds.append(cmd) or Stream())
+    monkeypatch.setattr(executors.Executor, "_spawn", lambda self, cmd, r, cwd, env=None, **kw: cmds.append(cmd) or Stream())
     res = executors.CodexExecutor(router.Choice("Codex", "codex", "", "t")).run(req(wt, ["read", "write", "shell"]))
     assert "--json" in cmds[0] and res.ok and res.text == "fixed it" and res.input_tokens == 900
     assert res.tool_calls == [{"tool": "command", "input": "pytest -q", "ok": False},

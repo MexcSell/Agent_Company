@@ -225,7 +225,7 @@ def test_copilot_model_needs_its_switch_and_cli_and_runs_only_granted_tools(monk
     assert "not found" in next(x for x in router.list_models() if x["id"] == m["id"])["unavailable_reason"]
     seen = []
 
-    def spawn(self, cmd, req, cwd, env=None):
+    def spawn(self, cmd, req, cwd, env=None, **kw):
         seen.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, "done", "")
 

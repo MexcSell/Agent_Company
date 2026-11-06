@@ -44,6 +44,10 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "escalate_after": (int, "Consecutive iterations the same check may fail before it is escalated to the planner"),
     "repo_map_chars": (int, "Characters of the repository map (definitions ranked by use) in the planner's prompt "
                             "and each task's package; 0 = no map"),
+    "stuck_repeat_limit": (int, "A Claude Code or Codex run ends when it makes the same tool call this many times in a "
+                                "row (0 = never)"),
+    "stuck_error_limit": (int, "A Claude Code or Codex run ends when the same tool call fails with the same error this "
+                               "many times (0 = never)"),
     "candidate_smoke": (bool, "A candidate playbook must pass the smoke suite before it is tried on users' goals"),
     "benchmark_schedule": (str, "Scheduled benchmark review: 'off', 'daily', 'weekly' or 'monthly' runs of the "
                                 "benchmark suite with real models, compared with the previous run; tasks that no "
@@ -106,7 +110,7 @@ LIMITS: dict[str, tuple[float, float]] = {
     "goal_token_budget": (0, 1_000_000_000), "goal_agent_limit": (0, 16),
     "retry_max_attempts": (1, 10), "retry_base_seconds": (0, 600), "retry_max_seconds": (0, 3600),
     "min_improvement": (0, 100), "max_goal_depth": (1, 10), "escalate_after": (1, 10), "cost_overrun_factor": (1, 20),
-    "repo_map_chars": (0, 50_000),
+    "repo_map_chars": (0, 50_000), "stuck_repeat_limit": (0, 100), "stuck_error_limit": (0, 100),
     "approval_blocker_hours": (0, 720), "inactive_days": (1, 3650), "explore_rate": (0, 1),
     "improvement_min_score": (0, 100), "improvement_max_regression": (0, 100),
     "shift_seconds": (0, 7 * 86400), "health_recovery_minutes": (0, 1440),
