@@ -528,6 +528,8 @@ Optionally add "estimated_cost_usd" (the whole goal's expected model cost) and "
   "requires_human_approval": true|false}] for significant choices (technology, architecture, anything costly or
 hard to undo); critical ones always wait for a person; technical and critical ones become ADR files in docs/adr/.
 Label facts, measurements, inferences and hypotheses as such.
+A task with "writes": false cannot create files: check its answer (contains, regex, min_length); a file_exists
+path ending in .md or .txt is filled by the loop with that task's whole answer (an architect's spec).
 Prefer few, well-scoped tasks. Include a QA review task: it verifies the logic (data flow of the normal,
 an edge and an error case), lists FINDING lines, and ends with an OUTCOME and "VERDICT: PASS" or
 "VERDICT: FAIL". Use an existing role when one fits; name a new
@@ -790,6 +792,26 @@ def _configure(goal: Goal) -> None:
         registry.release(gm.id, goal.id)
 
 
+ANSWER_FILES = (".md", ".markdown", ".txt", ".rst")
+
+
+def _save_answer(worktree: Path, contract: contracts.TaskContract, text: str) -> list[str]:
+    """A task that may not write files (an architect's spec) but whose acceptance names a document to exist: its
+    whole answer becomes that document, so the check measures the work, not the file permission. Only text
+    documents inside the worktree (never under .git) that do not exist yet; returns the paths written."""
+    root, saved = worktree.resolve(), []
+    for cond in contract.acceptance:
+        if cond.type != "file_exists" or not (cond.path or "").lower().endswith(ANSWER_FILES) or not text.strip():
+            continue
+        target = (root / cond.path).resolve()
+        if root not in target.parents or ".git" in target.relative_to(root).parts or target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text.rstrip() + "\n", encoding="utf-8")
+        saved.append(cond.path)
+    return saved
+
+
 def _chat_plan(goal: Goal, iteration: int, plan: list[contracts.TaskContract], summary: str, gm_id: int) -> None:
     from agent_company.projects import post_for_goal
 
@@ -974,6 +996,11 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                               evidence=[{"type": "task", "id": task_id, "error": res.error[:500]}])
             from agent_company.governance import on_command_refused
 
+            if res.ok and not contract.writes:  # a read-only task's document (a spec): the loop writes its answer
+                saved = _save_answer(Path(goal.worktree), contract, res.text)
+                if saved:
+                    log_event("task", f"saved {agent.name}'s answer as {', '.join(saved)}", goal_id=goal.id,
+                              agent_id=agent.id)
             set_task_stage(task_id, "review", "acceptance conditions and contract limits")
             # the planner wrote the acceptance commands: a refusal counts against it
             acceptance = contracts.check(contract, output, Path(goal.worktree), settings().command_timeout,

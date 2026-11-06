@@ -65,8 +65,8 @@ def write_outputs(goal: Goal, iteration: int, _: Any = None) -> None:
         tasks = s.scalars(select(Task).where(Task.goal_id == goal.id, Task.iteration == iteration).order_by(Task.id)).all()
         rows = [(t.key, t.title, t.role, t.status, (t.output or "").strip()) for t in tasks]
 
-    def section(items: list[tuple[str, str, str, str, str]]) -> str:
-        return "\n\n".join(f"## {title} ({role}, {status})\n\n{out[-8000:] or '(no output)'}" for _, title, role, status, out in items)
+    def section(items: list[tuple[str, str, str, str, str]]) -> str:  # whole: a spec cut at its start loses its frame
+        return "\n\n".join(f"## {title} ({role}, {status})\n\n{out or '(no output)'}" for _, title, role, status, out in items)
 
     spec = [r for r in rows if r[2] == "architect" and r[0] in {"spec", "specification"}]
     design = [r for r in rows if r[2] == "architect" and r not in spec]

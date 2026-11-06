@@ -83,6 +83,42 @@ def test_a_stale_folder_at_the_worktree_path_is_moved_aside(tmp_path):
     assert worktrees.create(repo, "goal-1")[0] == stale and (stale / "WORKLOG.md").exists()
 
 
+def test_a_read_only_spec_task_is_saved_as_its_document(monkeypatch):
+    """An architect may not write files; when its acceptance names a spec document, the loop writes the whole answer
+    there before checking it (goal 4 failed twice on this, and the copy in spec.md lost its beginning)."""
+    import json
+
+    from agent_company import specs
+
+    def plan(self, req):
+        p = executors.standard_plan(req.data.get("goal", "g"))
+        p["tasks"][0]["acceptance"] = [{"type": "file_exists", "path": "docs/specs/thing.md"},
+                                       {"type": "file_exists", "path": "src/app.py"}]
+        return json.dumps(p)
+
+    long_spec = "BEGIN of the spec\n" + "detail line\n" * 1200 + "END"
+
+    def task(self, req):
+        if req.data.get("title") == "Write the specification":
+            return long_spec
+        return real_task(self, req)
+
+    real_task = executors.OfflineExecutor._task
+    monkeypatch.setattr(executors.OfflineExecutor, "_plan", plan)
+    monkeypatch.setattr(executors.OfflineExecutor, "_task", task)
+    gid = loop.create_goal("Spec it", quality_commands=["test -f WORKLOG.md"])
+    loop.run_goal(gid)
+    g = loop._goal(gid)
+    with session() as s:
+        spec = s.scalars(select(Task).where(Task.goal_id == gid, Task.key == "spec")).first()
+        checks = {c["detail"] or "ok" for c in spec.gate["acceptance"]}
+    doc = open(f"{g.worktree}/docs/specs/thing.md").read()
+    assert doc.startswith("BEGIN of the spec") and doc.rstrip().endswith("END")
+    # only documents: a source file named by a read-only task's acceptance is still its own failure
+    assert spec.status == "failed" and checks == {"ok", "src/app.py does not exist"}
+    assert (specs.folder(g) / "spec.md").read_text().count("BEGIN of the spec") == 1
+
+
 def test_rejects_non_git_repo(tmp_path):
     with pytest.raises(ValueError):
         loop.create_goal("x", repo_path=str(tmp_path))
