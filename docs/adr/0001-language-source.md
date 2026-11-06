@@ -1,6 +1,6 @@
 # ADR 0001: language-source
 
-Status: Accepted
+Status: Superseded by 0002-language-source
 Date: 2026-11-06
 Decision record: #1 · goal #3 (S06-FR-04: research requests by publication date range and language)
 Category: technical
