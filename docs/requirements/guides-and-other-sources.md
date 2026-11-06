@@ -52,7 +52,7 @@ everywhere else (README → Stack).
 | Three libraries: research, experiments, approved agent knowledge | `documents`; `evals/` + `experiments`; knowledge items with screening (`learning.py`); only an approved report becomes knowledge (S06-R-04) |
 | Distinguish verified facts, recommendations, unverified and conflicting claims | done (S06-R-03: every claim checked against the stored source, `[n:contradicts]`, dropped claims; independent review S06-R-04) |
 | Improvement levels: knowledge, skills, workflow, model | retrieval (S11-R-03), playbooks and agent definitions (`evolution.py`, `agentdefs.py`), workflow templates (S04-R-11, S04-R-13), model routes as experiments (SPEC-13); fine-tuning not taken (no training infrastructure) |
-| A fixed, versioned benchmark per agent with reference tasks | coding: `evals/*.json` with practice/final/adversarial/room suites; research agent: open, G-R-13 |
+| A fixed, versioned benchmark per agent with reference tasks | coding: `evals/*.json` with practice/final/adversarial/room suites; research agent: `evals/research.json` graded by `research_eval.py`, G-R-13 done |
 | Metrics: success, accuracy, citation correctness, completeness, latency, cost per success, tool failures, regression rate | eval dimensions S09-R-05 (completion, tool use, efficiency incl. cost per passed run, reliability), claim checks per report (S06-R-03); regression rate: G-R-11 |
 | "Did it improve on a fixed set without damaging existing capabilities?" | G-R-11 |
 | Daily collection, weekly benchmark review | daily: source intervals and the rotation; scheduled benchmark review: G-R-14 |
@@ -272,8 +272,21 @@ for room X" until theirs is written.
 - Reference research tasks (find, verify a source, summarise, compare, generate tests, recommend), each with
   approved reference sources and a correctness method that is source-based (the S06-R-03 claim check), not only
   another model's opinion; run by the eval harness with its own suite kind.
-- **Status: open**: the eval harness runs coding goals in scratch repositories; research tasks need a runner that
-  grades a report against stored reference documents. Larger than one change: a goal for the goal loop.
+- **Status: done** (goal #4; `evals/research.json`, `research_eval.py`, `evaluation.run_suite`, `eval --suite research`;
+  `tests/test_research_eval.py`). A suite of kind `research` holds reference documents under
+  `eval-research://<suite>/<n>` (one unreliable, two with injected instructions) and 12 tasks, two per category
+  (find, verify, summarise, compare, tests, recommend), each with the documents it may use and an expectation:
+  URLs to cite, facts, forbidden claims, sections. `run_suite` hands the suite to `research_eval.run`: per task and
+  repeat a staffed research agent writes the report as `research.run_report` does (`report_prompt` with
+  REPORT_INSTRUCTIONS, the `research` route, usage recorded as `eval_report`). It is graded without a model judge:
+  citation correctness is the share of findings `research.check_claims` backs with a quote found in a cited
+  reference document; completeness is every required URL cited and every required fact in Findings; no forbidden
+  claim outside quoted passages; every required section present. One EvalRun per run (the grading in
+  `dimensions.research`), so `summary`, `compare` and the G-R-11 regressions apply unchanged. Isolation (ADR 0003):
+  the reference documents stay in memory as unsaved documents passed to `check_claims(documents=…)`; nothing but
+  the Run and the EvalRun is stored, and an eval report is never reviewed, approved or transferred, so they never
+  reach search, knowledge items, the blackboard, proposals or another prompt. The guide's 100 tasks grow by adding
+  documents and tasks to the JSON; a research suite refuses trainee and recruit-qualification trials (`ValueError`).
 
 ### G-R-14 A scheduled benchmark review — research guide §8 (daily collection, weekly benchmark review)
 - A setting that runs a chosen suite on a schedule and compares it with the last run (G-R-11), reporting

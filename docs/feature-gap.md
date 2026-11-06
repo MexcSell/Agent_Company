@@ -153,7 +153,7 @@ Machines code):
 | No regression on tasks the baseline solved: experiments, templates, playbook smoke trials, `eval --compare` | research guide §7 | done (`experiments.regressions`, G-R-11) |
 | PDF text extraction of collected papers, parsed in the L3 sandbox | research guide §8 | done (`research.extract_pdf`, `pdftext.py`, G-R-12) |
 | Scheduled benchmark review: a suite on a schedule within a budget, compared with the previous run, regressions notified | research guide §8 | done, off until a schedule and budget are set (`evaluation.scheduled_review`, G-R-14) |
-| A fixed research-agent benchmark | research guide §6 | open (G-R-13: a research-task runner, a goal for the goal loop) |
+| A fixed research-agent benchmark | research guide §6 | done (`evals/research.json` graded by `research_eval.py` without a model judge, G-R-13) |
 | An MCP tool whose definition changed loses its allow; periodic re-tests | `docs/temp/Continuously_Evolving_Agent_Organization.pdf` §5.1 | done (`mcp.digest`, `McpThread`, G-R-15) |
 | p95 latency, human override rate, tool-call failure rate | same, §4 | done (`performance.operations`, G-R-16) |
 | Root causes classified by failure layer | same, §4; self-improving guide §4 | done (`rca.parse`, `rca.layer_counts`, G-R-17) |
