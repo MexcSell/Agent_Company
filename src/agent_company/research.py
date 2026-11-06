@@ -32,7 +32,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urldefrag, urljoin, urlparse
@@ -75,6 +75,8 @@ class _Extractor(HTMLParser):
         self.title = ""
         self.license = ""
         self.published = ""
+        self.lang = ""  # <html lang>
+        self.meta_lang = ""  # <meta http-equiv="content-language">
         self._parts: list[str] = []
         self._skip = 0
         self._in_title = False
@@ -88,10 +90,14 @@ class _Extractor(HTMLParser):
             href = dict(attrs).get("href")
             if href:
                 self.links.append(href)
+        elif tag == "html":
+            self.lang = self.lang or (dict(attrs).get("lang") or "").strip()
         elif tag in {"meta", "link"}:
             a = {k.lower(): (v or "").strip() for k, v in attrs}
             key = (a.get("name") or a.get("property") or a.get("itemprop") or "").lower()
-            if tag == "link" and "license" in a.get("rel", "").lower().split() and a.get("href"):
+            if tag == "meta" and a.get("http-equiv", "").lower() == "content-language" and a.get("content"):
+                self.meta_lang = self.meta_lang or a["content"]
+            elif tag == "link" and "license" in a.get("rel", "").lower().split() and a.get("href"):
                 self.license = self.license or a["href"]
             elif key in LICENSE_META and a.get("content"):
                 self.license = self.license or a["content"]
@@ -146,6 +152,19 @@ def parse_date(value: str) -> datetime | None:
     return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
 
 
+_SUBTAG = re.compile(r"[a-z]{2,3}")
+XML_LANG = "{http://www.w3.org/XML/1998/namespace}lang"
+
+
+def primary_language(tag: str | None) -> str:
+    """The primary language subtag of a declared language tag, lower case: 'en-US' -> 'en', 'de, en' -> 'de' (the
+    first of a Content-Language list). '' when it is not 2-3 letters ('*', 'i-klingon', 'x-foo'). S06-FR-04: the
+    language is only ever read from what a page or feed declares, never guessed from its text."""
+    first = (tag or "").split(",")[0].strip().lower()
+    sub = first.replace("_", "-").split("-")[0]
+    return sub if _SUBTAG.fullmatch(sub) else ""
+
+
 def _local(tag: Any) -> str:
     return tag.rsplit("}", 1)[-1].lower() if isinstance(tag, str) else ""
 
@@ -176,9 +195,11 @@ def is_feed(ctype: str, body: bytes) -> bool:
         re.search(rb"<(rss|feed|rdf:rdf)[\s>]", body[:4000].lower()))
 
 
-def parse_feed(body: bytes, feed_url: str) -> list[dict[str, Any]]:
+def parse_feed(body: bytes, feed_url: str, language: str = "") -> list[dict[str, Any]]:
     """The entries of an RSS 2.0, RSS 1.0 (RDF) or Atom feed as pages: the entry's link, title, summary or content
-    as text, its publication date and licence (G-R-10). A feed with a DOCTYPE is refused, so no entity is expanded.
+    as text, its publication date and licence (G-R-10) and its declared language (S06-FR-04: the entry's xml:lang
+    or <dc:language>, else the feed's xml:lang or channel <language>, else `language`, the response's
+    Content-Language). A feed with a DOCTYPE is refused, so no entity is expanded.
     The entries are not fetched: an entry is kept as its feed describes it, and refetching the same feed only adds
     a version when an entry itself changed."""
     if re.search(rb"<!(doctype|entity)", body[:MAX_BYTES], re.I):
@@ -186,6 +207,10 @@ def parse_feed(body: bytes, feed_url: str) -> list[dict[str, Any]]:
     root = ET.fromstring(body)
     channel = _child(root, "channel") if _local(root.tag) in {"rss", "rdf"} else root
     feed_rights = _el_text(_child(channel, "rights", "copyright")) if channel is not None else ""
+    feed_lang = (primary_language(channel.get(XML_LANG)) if channel is not None else "") \
+        or primary_language(root.get(XML_LANG)) \
+        or (primary_language(_el_text(_child(channel, "language"))) if channel is not None else "") \
+        or primary_language(language)
     pages: list[dict[str, Any]] = []
     for el in root.iter():
         if _local(el.tag) not in {"item", "entry"}:
@@ -203,8 +228,9 @@ def parse_feed(body: bytes, feed_url: str) -> list[dict[str, Any]]:
         text = _strip_html(_el_text(body_el)) or title
         published = next((d for d in (parse_date(_el_text(_child(el, n)))
                                       for n in ("published", "pubdate", "date", "issued", "updated")) if d), None)
+        lang = primary_language(el.get(XML_LANG)) or primary_language(_el_text(_child(el, "language"))) or feed_lang
         pages.append({"url": url, "title": title, "text": text, "published_at": published, "feed": feed_url,
-                      "license": (_el_text(_child(el, "rights")) or feed_rights)[:256]})
+                      "license": (_el_text(_child(el, "rights")) or feed_rights)[:256], "language": lang})
     return pages
 
 
@@ -330,6 +356,7 @@ def crawl(start_url: str, depth: int = 1, max_pages: int = 20, same_host: bool =
             if resp.status_code >= 400 or not ("html" in ctype or ctype.startswith("text/") or feed or pdf):
                 pages.append({"url": url, "error": f"HTTP {resp.status_code} {ctype}".strip()})
                 continue
+            declared = primary_language(resp.headers.get("content-language", ""))  # S06-FR-04: the header first
             if pdf:  # G-R-12: extracted in the sandbox; a PDF's links are not followed
                 try:
                     got = extract_pdf(resp.content)
@@ -340,11 +367,11 @@ def crawl(start_url: str, depth: int = 1, max_pages: int = 20, same_host: bool =
                     pages.append({"url": url, "error": "PDF without extractable text (scanned pages?)"})
                     continue
                 pages.append({"url": url, "title": got.get("title") or url.rsplit("/", 1)[-1], "text": got["text"],
-                              "depth": d, "pdf_pages": got.get("pages")})
+                              "depth": d, "pdf_pages": got.get("pages"), "language": declared})
                 continue
             if feed:  # RSS/Atom (G-R-10): its entries are the pages; the feed itself is not stored
                 try:
-                    entries = parse_feed(resp.content[:MAX_BYTES], url)
+                    entries = parse_feed(resp.content[:MAX_BYTES], url, declared)
                 except (ET.ParseError, ValueError) as e:
                     pages.append({"url": url, "error": f"unreadable feed: {e}"})
                     continue
@@ -356,13 +383,14 @@ def crawl(start_url: str, depth: int = 1, max_pages: int = 20, same_host: bool =
                         pages.append(entry | {"depth": d})
                 continue
             body = resp.text[:MAX_BYTES]
-            meta: dict[str, Any] = {}
+            meta: dict[str, Any] = {"language": declared}
             if "html" in ctype:
                 ex = _Extractor()
                 ex.feed(body)
                 title, text, links = ex.title.strip(), ex.text, ex.links
                 lic = urljoin(url, ex.license) if ex.license.startswith(("/", "./", "../")) else ex.license
-                meta = {"published_at": parse_date(ex.published), "license": lic[:256]}
+                meta = {"published_at": parse_date(ex.published), "license": lic[:256],
+                        "language": declared or primary_language(ex.lang) or primary_language(ex.meta_lang)}
             else:
                 title, text, links = url.rsplit("/", 1)[-1], body, []
             pages.append({"url": url, "title": title, "text": text, "depth": d, **meta})
@@ -472,11 +500,14 @@ def diff_summary(old: str, new: str, lines: int = 3) -> dict[str, Any]:
 
 
 def _provenance(doc: Document, page: dict[str, Any]) -> None:
-    """A page's publication date and licence (G-R-10); a refetch without them keeps the ones known."""
+    """A page's publication date and licence (G-R-10) and declared language (S06-FR-04); a refetch without them
+    keeps the ones known."""
     if page.get("published_at"):
         doc.published_at = page["published_at"]
     if page.get("license"):
         doc.license = page["license"][:256]
+    if page.get("language"):
+        doc.language = page["language"][:16]
 
 
 def store_pages(pages: list[dict[str, Any]], source_url: str, agent_id: int | None = None) -> dict[str, Any]:
@@ -605,7 +636,7 @@ def search(query: str, limit: int = 5, goal_id: int | None = None, shared_only: 
         return [{"id": d.id, "url": d.url, "title": d.title, "score": sc, "category": d.category or
                  classify_source(d.url), "flags": list(d.flags or []), "collected_at": d.created_at.isoformat(),
                  "published_at": d.published_at.isoformat() if d.published_at else None, "license": d.license or "",
-                 "text": _snippet(d.text, terms)} for sc, d in scored[:limit]]
+                 "language": d.language or "", "text": _snippet(d.text, terms)} for sc, d in scored[:limit]]
 
 
 def _snippet(text: str, terms: list[str], width: int = 600) -> str:
@@ -1070,10 +1101,50 @@ def _naive(t):  # noqa: ANN001, ANN202 - SQLite hands datetimes back without a z
     return t.astimezone(timezone.utc).replace(tzinfo=None) if t.tzinfo else t
 
 
-def find_overlap(question: str, keywords: list[str] | None = None) -> int | None:
+def _as_date(value: Any, name: str) -> date | None:
+    """A request's date filter from a date, a datetime (its UTC day) or an ISO string; None when empty."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).date()
+    if isinstance(value, date):
+        return value
+    v = str(value).strip()
+    try:
+        if len(v) == 10:
+            return date.fromisoformat(v)
+        return _as_date(datetime.fromisoformat(v.replace("Z", "+00:00")), name)
+    except ValueError:
+        raise ValueError(f"{name} is not a date (YYYY-MM-DD): {v[:40]}") from None
+
+
+def normalise_languages(languages: Any) -> list[str]:
+    """Primary language subtags of a request (a list or a comma-separated string): lower case, unique, sorted.
+    A subtag that is not 2-3 letters ('english', 'e', 'en-US') is refused."""
+    items = languages.split(",") if isinstance(languages, str) else list(languages or [])
+    out = set()
+    for x in items:
+        v = str(x).strip()
+        if not v:
+            continue
+        if not re.fullmatch(r"[A-Za-z]{2,3}", v):
+            raise ValueError(f"a language is a primary subtag of 2-3 letters such as en or de, not {v[:20]!r}")
+        out.add(v.lower())
+    return sorted(out)
+
+
+def _filters(after: date | None, before: date | None, languages: list[str] | None) -> tuple[Any, ...]:
+    return (after.isoformat() if after else None, before.isoformat() if before else None,
+            tuple(sorted(languages or [])))
+
+
+def find_overlap(question: str, keywords: list[str] | None = None, *, published_after: date | None = None,
+                 published_before: date | None = None, languages: list[str] | None = None) -> int | None:
     """An open request, a recurring one, or one answered in the last RECENT_DAYS that asks the same: the same
-    normalised question, or at least OVERLAP of the question's and keywords' terms in common."""
+    normalised question, or at least OVERLAP of the question's and keywords' terms in common, with the same date
+    range and languages (S06-FR-04: other filters ask for other material)."""
     mine = _terms(question, keywords)
+    wanted = _filters(published_after, published_before, languages)
     norm = " ".join(question.lower().split()).rstrip("?. ")
     since = _naive(now()) - timedelta(days=RECENT_DAYS)
     with session() as s:
@@ -1084,6 +1155,8 @@ def find_overlap(question: str, keywords: list[str] | None = None) -> int | None
         for r in rows:
             if r.status in ("failed", "expired") or r.review == "rejected":  # a rejected report answers nothing
                 continue
+            if _filters(r.published_after, r.published_before, r.languages) != wanted:
+                continue
             theirs = _terms(r.question, r.keywords)
             same = " ".join(r.question.lower().split()).rstrip("?. ") == norm
             if same or (mine and theirs and len(mine & theirs) / len(mine | theirs) >= OVERLAP):
@@ -1093,12 +1166,11 @@ def find_overlap(question: str, keywords: list[str] | None = None) -> int | None
 
 def submit(question: str, urls: list[str] | None = None, user_id: int | None = None, *, project_id: int | None = None,
            goal_id: int | None = None, keywords: list[str] | None = None, source_preferences: str = "any",
-           priority: str = "normal", budget_usd: float = 0.0, deadline: Any = None, recurring: str = "") -> dict[str, Any]:
+           priority: str = "normal", budget_usd: float = 0.0, deadline: Any = None, recurring: str = "",
+           published_after: Any = None, published_before: Any = None, languages: Any = None) -> dict[str, Any]:
     """A research request (ASEAO06 FR-04..08). When an open or recent request already asks the same, that one is
-    returned instead (`duplicate`); the caller should not run it again."""
-    from datetime import datetime
-
-
+    returned instead (`duplicate`); the caller should not run it again. `published_after`/`published_before`
+    (dates, inclusive) and `languages` (primary subtags, empty = any) limit its material (S06-FR-04)."""
     question = question.strip()
     if len(question) < 5:
         raise ValueError("ask a real question")
@@ -1119,8 +1191,14 @@ def submit(question: str, urls: list[str] | None = None, user_id: int | None = N
         deadline = deadline.astimezone(timezone.utc)
     if deadline is not None and _naive(deadline) <= _naive(now()):
         raise ValueError("the deadline has passed")
+    after, before = _as_date(published_after, "published_after"), _as_date(published_before, "published_before")
+    if after and before and after > before:
+        raise ValueError("published_after is later than published_before")
+    languages = normalise_languages(languages)
+    if len(languages) > 20:
+        raise ValueError("at most 20 languages")
     keywords = [str(k).strip()[:64] for k in keywords or [] if str(k).strip()][:20]
-    dup = find_overlap(question, keywords)
+    dup = find_overlap(question, keywords, published_after=after, published_before=before, languages=languages)
     if dup is not None:
         log_event("research", f"request '{question[:120]}' overlaps request #{dup}; that one answers it",
                   duplicate_of=dup)
@@ -1136,7 +1214,8 @@ def submit(question: str, urls: list[str] | None = None, user_id: int | None = N
         r = ResearchReport(question=question[:2000], urls=list(urls or [])[:10], requested_by=user_id,
                            project_id=project_id, goal_id=goal_id, keywords=keywords,
                            source_preferences=source_preferences, priority=priority,
-                           budget_usd=float(budget_usd or 0), deadline=deadline or None, recurring=recurring or "")
+                           budget_usd=float(budget_usd or 0), deadline=deadline or None, recurring=recurring or "",
+                           published_after=after, published_before=before, languages=languages)
         s.add(r)
         s.flush()
         return {"id": r.id, "duplicate": False}
@@ -1147,13 +1226,69 @@ def request_report(question: str, urls: list[str] | None = None, user_id: int | 
     return submit(question, urls, user_id, **kw)["id"]
 
 
-def _material(question: str, keywords: list[str], preference: str) -> list[dict[str, Any]]:
-    """Up to six unflagged documents for the question; the preferred kinds of source first."""
-    docs = [d for d in search(" ".join([*keywords, question]), limit=20) if not d["flags"]]
+def _published_day(value: Any) -> date | None:
+    if not value:
+        return None
+    d = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).date()
+
+
+def filter_material(docs: list[dict[str, Any]], after: date | None = None, before: date | None = None,
+                    languages: list[str] | None = None) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """A request's date range and languages applied to candidate documents (S06-FR-04), stored ones and those
+    collected from the request's own URLs alike. A document published outside [after, before] (UTC days,
+    inclusive) or declared in another language is left out. One with no publication date or no declared language
+    is kept, labelled `published=unknown` / `language=unknown`, but only while that filter is active.
+    Returns the kept documents (copies with `labels`) and the counts left_out, undated, unknown_language."""
+    counts = {"left_out": 0, "undated": 0, "unknown_language": 0}
+    dated, langs = bool(after or before), set(languages or [])
+    kept = []
+    for d in docs:
+        day, lang, labels = _published_day(d.get("published_at")), d.get("language") or "", []
+        if dated and day is not None and ((after and day < after) or (before and day > before)):
+            counts["left_out"] += 1
+            continue
+        if langs and lang and lang not in langs:
+            counts["left_out"] += 1
+            continue
+        if dated and day is None:
+            labels.append("published=unknown")
+            counts["undated"] += 1
+        if langs and not lang:
+            labels.append("language=unknown")
+            counts["unknown_language"] += 1
+        kept.append(d | {"labels": labels})
+    return kept, counts
+
+
+def filters_line(after: date | None, before: date | None, languages: list[str] | None,
+                 counts: dict[str, int]) -> str:
+    """The report's method line for a filtered request: the filters and what they did to the material."""
+    parts = []
+    if after or before:
+        parts.append(f"published {after.isoformat() if after else '…'}..{before.isoformat() if before else '…'}")
+    if languages:
+        parts.append(f"languages {', '.join(languages)}")
+    return (f"Filters: {'; '.join(parts)}; {counts['left_out']} documents left out, {counts['undated']} kept "
+            f"undated, {counts['unknown_language']} kept with unknown language.")
+
+
+def _material(question: str, keywords: list[str], preference: str, after: date | None = None,
+              before: date | None = None, languages: list[str] | None = None
+              ) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Up to six unflagged documents for the question within the request's filters; the preferred kinds of source
+    first. The counts say how many the filters left out and, of the six, how many are undated or of unknown
+    language."""
+    filtered = bool(after or before or languages)
+    docs = [d for d in search(" ".join([*keywords, question]), limit=60 if filtered else 20) if not d["flags"]]
+    docs, counts = filter_material(docs, after, before, languages)  # before the cut: the six all fit the filters
     kinds = PREFERENCES.get(preference)
     if kinds:
         docs.sort(key=lambda d: d["category"] not in kinds)  # stable: the search order within each group
-    return docs[:6]
+    docs = docs[:6]
+    counts["undated"] = sum("published=unknown" in d["labels"] for d in docs)
+    counts["unknown_language"] = sum("language=unknown" in d["labels"] for d in docs)
+    return docs, counts
 
 
 def run_report(report_id: int, client: httpx.Client | None = None, allow_private: bool | None = None) -> dict[str, Any]:
@@ -1182,20 +1317,27 @@ def run_report(report_id: int, client: httpx.Client | None = None, allow_private
             return report_dict(r)
         question, urls, keywords, preference = r.question, list(r.urls), list(r.keywords or []), r.source_preferences
         goal_id = r.goal_id
+        after, before, languages = r.published_after, r.published_before, list(r.languages or [])
+    filtered = bool(after or before or languages)
     agent = registry.staff("research", ["research"])
     try:
-        for u in urls:
+        for u in urls:  # the request's own URLs are stored and then filtered like every other document
             try:
                 collect(u, depth=1, max_pages=15, agent_id=agent.id, client=client, allow_private=allow_private)
             except (ValueError, httpx.HTTPError) as e:
                 log_event("error", f"research request {report_id}: could not collect {u}: {e}")
-        docs = _material(question, keywords, preference)
+        docs, counts = _material(question, keywords, preference, after, before, languages)
         material = "\n\n".join(f'[{i}] <document url="{d["url"]}" kind="{d["category"]}" title="{d["title"]}"'
                                 + (f' published="{d["published_at"][:10]}"' if d.get("published_at") else "")
+                                + (f' language="{d["language"]}"' if d.get("language") else "")
+                                + "".join(' {}="{}"'.format(*lb.split("=", 1)) for lb in d["labels"])
                                 + f'>\n{d["text"]}\n</document>' for i, d in enumerate(docs, 1))
+        method = filters_line(after, before, languages, counts) if filtered else ""
         terms = (f"Keywords: {', '.join(keywords)}\n" if keywords else "") + (
             f"Prefer {preference.replace('_', ' ')} sources; say when a finding rests on another kind.\n"
-            if PREFERENCES.get(preference) else "")
+            if PREFERENCES.get(preference) else "") + (
+            f"{method} A document marked unknown could not be checked against a filter; say so when a finding "
+            "rests on one.\n" if filtered else "")
         req = executors.Request(
             purpose="report", role="research", system=f"You are {agent.name}, the research lead of an AI company.",
             prompt=f"Research question: {question}\n{terms}\n{REPORT_INSTRUCTIONS}\n\nMaterial:\n{material or '(none found)'}",
@@ -1208,12 +1350,15 @@ def run_report(report_id: int, client: httpx.Client | None = None, allow_private
                      output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
                      error=res.error, agent_id=agent.id, purpose="report", goal_id=goal_id, res=res)
         sources = [{"n": i, "id": d["id"], "url": d["url"], "title": d["title"], "kind": d["category"],
-                    "published_at": d.get("published_at"), "license": d.get("license", "")}
-                   for i, d in enumerate(docs, 1)]
+                    "published_at": d.get("published_at"), "license": d.get("license", ""),
+                    "language": d.get("language", "")} for i, d in enumerate(docs, 1)]
+        text = res.text
+        if res.ok and method:  # S06-FR-04: what the filters did to the material
+            text = f"{text.rstrip()}\n\n## Method\n{method}"
         with session() as s:
             r = s.get(ResearchReport, report_id)
             r.status = "done" if res.ok else "failed"
-            r.report = res.text if res.ok else res.error
+            r.report = text if res.ok else res.error
             r.sources, r.agent_id = sources, agent.id
             r.runs, r.cost_usd = (r.runs or 0) + 1, (r.cost_usd or 0.0) + float(res.cost or 0)
             r.next_run_at = (now() + timedelta(seconds=RECURRING[r.recurring])) if r.recurring else None
@@ -1246,6 +1391,8 @@ def report_dict(r: ResearchReport) -> dict[str, Any]:
             "source_preferences": r.source_preferences or "any", "priority": r.priority or "normal",
             "budget_usd": r.budget_usd or 0.0, "cost_usd": round(r.cost_usd or 0.0, 6), "deadline": _iso(r.deadline),
             "recurring": r.recurring or "", "next_run_at": _iso(r.next_run_at), "runs": r.runs or 0,
+            "published_after": _iso(r.published_after), "published_before": _iso(r.published_before),
+            "languages": list(r.languages or []),
             "review": r.review or "", "claims": r.claims or [], "approved_report": r.approved_report or "",
             "reviewer_agent_id": r.reviewer_agent_id, "reviewed_by": r.reviewed_by or "",
             "review_provider": r.review_provider or "", "review_note": r.review_note or ""}
@@ -1448,7 +1595,7 @@ def _approved_text(r: ResearchReport, kept: list[dict[str, Any]], dropped: int, 
         parts.append("## Uncertain\nThe sources disagree; this is not resolved:\n" + "\n".join(
             f"- {c['claim']} For: {ev(c, ('supports', 'partial'))}. Against: {ev(c, ('contradicts',))}."
             for c in open_))
-    for name in ("Gaps", "Recommendation", "Sources"):
+    for name in ("Gaps", "Recommendation", "Sources", "Method"):
         body = _section(r.report, name)
         if name == "Recommendation":
             body = "\n".join(ln for ln in body.splitlines() if not ln.strip().upper().startswith("PROPOSAL:"))

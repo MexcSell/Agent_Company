@@ -12,7 +12,7 @@ and carries out its duties in a rotational manner.*
 | S06-FR-01 | Humans and agents create research requests | done (`research.request_report`; agents via goal research step) |
 | S06-FR-02 | Clear research objective | done (`ResearchReport.question`) |
 | S06-FR-03 | One-time and recurring research | done: one-time and recurring reports (`recurring`, `research.ReportThread`, S06-R-01); recurring monitoring of sources (S06-R-02) |
-| S06-FR-04 | Subject areas, keywords, date ranges, languages, source preferences | partial (S06-R-01): keywords and source preferences; date ranges and languages not taken (the knowledge store has no publication date or language to filter on) |
+| S06-FR-04 | Subject areas, keywords, date ranges, languages, source preferences | done: keywords and source preferences (S06-R-01); publication date range and languages: `Document.language` (declared only: Content-Language header, `<html lang>`, `<meta http-equiv>`, a feed's `<language>`/`xml:lang`; `research.primary_language`), `ResearchReport.published_after`/`published_before`/`languages` validated by `research.submit` and compared by `find_overlap`, `research.filter_material` on the stored material and the request's own URLs before the model sees it (undated or undeclared documents kept and labelled), the counts in the report's `## Method` line (`filters_line`) |
 | S06-FR-05 | Budget and deadline | done (S06-R-01) |
 | S06-FR-06 | Detect duplicate or overlapping requests | done (S06-R-01, `research.find_overlap`) |
 | S06-FR-07 | Priority levels | done (S06-R-01) |
@@ -43,7 +43,10 @@ registered sources (`rotation_tick`), robots.txt and public-host checks (`_robot
   cost over all runs; a recurring request stops when it is used. Recurring: `hourly|daily|weekly|monthly`; the
   latest report replaces the request's `report://` document. A request linked to a goal writes its report to that
   goal's `research` blackboard section. Two runners never run one request at once (a conditional claim); requests
-  cut off by a restart are queued again. Not taken: date ranges and languages (no such data on documents).
+  cut off by a restart are queued again. Date ranges and languages followed later (S06-FR-04, see the table):
+  a request's `published_after`/`published_before` (inclusive UTC days) and `languages` leave documents out of the
+  material; one without a date or a declared language is kept and labelled `published=unknown`/`language=unknown`,
+  and the report's `## Method` line counts both. A request with other filters is not a duplicate.
 
 ### S06-R-02 Change detection and monitoring rules — §13 (AT-016..018)
 - `Document`: add `content_hash`, `version`, `fetched_at`; refetch stores a new version only when

@@ -131,13 +131,14 @@ the order is safety and correctness of that pipeline first, then management, the
      G-R-11 the regression guard are done, then G-R-12 PDF text in the sandbox and G-R-14 the scheduled benchmark review (approved 2026-11-06; off until a
      schedule and a budget are set); open is G-R-13 a fixed research-agent benchmark (a research-task runner: a goal
      for the goal loop). Research through a provider's hosted web
-     search is not taken: its claims cannot be checked against stored sources (S06-R-03).
+     search is not taken: its claims cannot be checked against stored sources (S06-R-03). With G-R-10's
+     publication dates, S06-FR-04's date ranges and languages are done too (`Document.language`,
+     `research.filter_material`).
    - **From the continuously evolving organisation** (2026-11-06, `docs/temp/`): G-R-15 MCP tool drift, G-R-16
      latency tail, tool failures and human overrides, G-R-17 root causes by layer and G-R-18 model terms are done;
      G-R-19 (a study rewrite as a candidate) needs the owner's decision; a cap of four model families is not
      enforced (a decision for the owner).
-   - **Deliberately not taken**: S06-FR-04 date ranges and languages (no such data in the knowledge store),
-     S02-FR-17 runtime migration (single host).
+   - **Deliberately not taken**: S02-FR-17 runtime migration (single host).
 
 ![Specification dependency map](images/spec01-spec-dependency-map.png)
 
