@@ -498,6 +498,59 @@ def test_qualification_suites_name_a_skill_or_fall_back_to_smoke():
     assert recruitment.qualification_suite(["rust"]) == "smoke"
 
 
+def research_and_room_suites(monkeypatch, kinds=("research", "room")):
+    """The real suites plus one suite of each kind naming the research skill."""
+    from agent_company import evaluation
+
+    real = evaluation.list_suites
+    extra = [{"name": f"{k}-suite", "file": f"{k}-suite.json", "tasks": ["t"], "kind": k, "skills": ["research"],
+              "generated": False, "approved": True} for k in kinds]
+    monkeypatch.setattr(evaluation, "list_suites", lambda: extra + real())
+
+
+def test_a_research_or_room_suite_is_never_a_qualification_suite(monkeypatch):
+    research_and_room_suites(monkeypatch, kinds=("research",))
+    assert recruitment.qualification_suite(["research"]) == "smoke"
+    research_and_room_suites(monkeypatch, kinds=("room", "adversarial", "final", "retrieval"))
+    assert recruitment.qualification_suite(["research"]) == "smoke"
+    assert recruitment.qualification_suite(["python"]) == "python-practice"
+
+
+def test_no_practice_or_benchmark_suite_means_no_qualification_suite(monkeypatch):
+    from agent_company import evaluation
+
+    monkeypatch.setattr(evaluation, "list_suites", lambda: [
+        {"name": "smoke", "file": "smoke.json", "tasks": ["t"], "kind": "research", "skills": ["research"],
+         "generated": False, "approved": True}])
+    assert recruitment.qualification_suite(["research"]) == ""
+
+
+def test_a_research_skilled_writing_recruit_runs_the_smoke_suite(monkeypatch):
+    import json
+
+    from agent_company import evaluation
+
+    gen = evaluation.generated_dir()
+    gen.mkdir(parents=True, exist_ok=True)
+    (gen / "research-suite.json").write_text(json.dumps({"name": "research-suite", "kind": "research",
+        "skills": ["research"], "tasks": [{"name": "q", "title": "Answer a research question"}]}))
+    assert any(x["kind"] == "research" for x in evaluation.list_suites())
+    real_run_suite = evaluation.run_suite
+    qualify_on(monkeypatch)
+    monkeypatch.setattr(evaluation, "run_suite", real_run_suite)  # the real eval harness, offline
+    gid = loop.create_goal("Needs research", quality_commands=[])
+    try:
+        registry.staff("researcher", ["research"], gid, writes=True)
+    except recruitment.RecruitmentPending:
+        pass
+    [rec] = records()
+    assert rec["qualification"]["suite"] == "smoke"
+    out = recruitment.qualify(rec["id"])
+    assert out["qualification"]["suite"] == "smoke"
+    assert "ValueError" not in (out["qualification"].get("error") or "")
+    assert out["qualification"]["status"] in {"passed", "failed"}
+
+
 def test_no_qualification_for_a_reading_role_or_when_off(monkeypatch):
     gid = loop.create_goal("Needs rust", quality_commands=[])
     registry.staff("rust_expert", ["rust"], gid, writes=True)
