@@ -68,6 +68,35 @@ def test_planner_note_names_folder():
     assert all(f in note for f in specs.LOOP_FILES)
 
 
+def test_planner_is_told_the_folder_and_its_plan_is_corrected(monkeypatch):
+    import json
+
+    from sqlalchemy import select
+
+    from agent_company import executors, loop
+    from agent_company.db import Event, Task, session
+
+    prompts = []
+
+    def plan(self, req):
+        prompts.append(req.prompt)
+        p = executors.standard_plan(req.data.get("goal", "g"))
+        p["tasks"][0]["acceptance"] = [{"type": "file_exists", "path": ".claude/specs/req-001-elsewhere/spec.md"}]
+        return json.dumps(p)
+
+    monkeypatch.setattr(executors.OfflineExecutor, "_plan", plan)
+    gid = loop.create_goal("Spec it", quality_commands=["test -f WORKLOG.md"])
+    loop.run_goal(gid)
+    g = loop._goal(gid)
+    own = specs.relative_folder(g)
+    assert prompts and all(f"`{own}/`" in p for p in prompts)
+    with session() as s:
+        spec = s.scalars(select(Task).where(Task.goal_id == gid, Task.key == "spec")).first()
+        events = [e.message for e in s.scalars(select(Event).where(Event.goal_id == gid, Event.kind == "plan"))]
+    assert spec.contract["acceptance"][0]["path"] == f"{own}/spec.md"
+    assert any(m.startswith("Spec paths corrected: spec: .claude/specs/req-001-elsewhere/spec.md -> ") for m in events)
+
+
 def test_relative_folder_matches_folder():
     assert specs.relative_folder(GOAL) == OWN
     assert str(specs.folder(GOAL)).endswith(specs.relative_folder(GOAL))

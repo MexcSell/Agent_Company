@@ -560,7 +560,7 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                   + (f"\nThe previous iteration failed the quality gate. Fix these findings:\n{feedback}\n"
                      if feedback else "")
                   + (f"\nResearch notes:\n{notes}\n" if notes else "")
-                  + strategies.planner_note(goal) + teams.planner_note(goal.id)
+                  + strategies.planner_note(goal) + specs.planner_note(goal) + teams.planner_note(goal.id)
                   + teststrategy.planner_note(teststrategy.derive(goal.id, None, iteration))  # S09-R-02
                   + cost_note()  # S07-R-04: budgets and the estimate from measured costs
                   + f"\nAvailable roles:\n{role_lines}\n\n"
@@ -581,6 +581,8 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                 data = contracts.extract_json(res.text)
                 tasks = data["tasks"] if isinstance(data, dict) else data
                 plan = contracts.validate_plan(tasks)
+                if fixed := specs.check_plan(goal, plan):  # K54: only this goal's spec folder, no loop files
+                    log_event("plan", "Spec paths corrected: " + "; ".join(fixed), goal_id=goal.id, agent_id=gm.id)
                 named = str(data.get("kind") or "").strip().lower() if isinstance(data, dict) else ""
                 if tmpl is None and named in strategies.KINDS:  # the planner picks the template (S04-R-11)
                     tmpl = strategies.choose(goal.id, named, "planner", str(data.get("summary", ""))[:200])
@@ -604,6 +606,7 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                           goal_id=goal.id, agent_id=gm.id)
                 kind = (tmpl or {}).get("kind", "")
                 plan = contracts.validate_plan(strategies.fallback_plan(goal.title, kind)["tasks"])
+                specs.check_plan(goal, plan)
                 try:
                     _in_rooms(plan, rooms)
                 except ValueError as e:  # nothing to fall back to inside the project's rooms
