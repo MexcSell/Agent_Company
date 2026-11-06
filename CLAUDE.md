@@ -63,7 +63,9 @@ feature came from.
   index with `retrieval_w_*` weights guarded by `evals/retrieval.json` recall@5; SE-R-21 ranking procedure per query
   class (`query_class`, `retrieval_strategies` setting) learned on `evals/retrieval-classes.json` by `learn_strategies`; a task's package adds the project's
   standards from the base branch and matching research documents; contradictions and versions as `kg_edges`,
-  resolved by people)
+  resolved by people; REQ-005 `import_knowledge`: an admin imports a text/Markdown file, a folder inside `data_dir`,
+  a chat export or experience reports as `outcome="imported"` items under the root GM, screened and `draft` until a
+  person approves them, never in a playbook or definition file)
   + `evolution.py` (playbook candidates are experiments); `experiments.py` (SPEC-13: baseline vs candidate on one eval
   suite, review by the E0-E6 policy, canary, rollback; routes only applied by an administrator; G-R-11 a candidate that breaks a task the
   baseline solved is never better (`regressions`); S10-R-02 the platform
@@ -169,7 +171,7 @@ feature came from.
 - `uv run python -m agent_company goal "<goal>" --check "<cmd>" [--allow 'src/*'] [--protect-tests] [--permit dependencies|config|skip_tests] [--kind feature|bugfix|refactor|research|docs]`
 - `uv run python -m agent_company improve list|weaknesses|benchmark [name]|create|start|deploy|rollback|cancel <id>` – verified self-evolution
 - `uv run python -m agent_company eval --suite smoke --label <name> [--repeats 3] [--model <name> --role <role>]` / `eval --compare a b` / `eval --review` (the scheduled benchmark review now)
-- `uv run python -m agent_company learn gaps|raise|plans|plan <agent> <skill>|start <id>|cancel <id>|experiments|metrics|retrieval|generate <skill> [practice|final] [count]|suites|approve <suite>`
+- `uv run python -m agent_company learn gaps|raise|plans|plan <agent> <skill>|start <id>|cancel <id>|experiments|metrics|retrieval|generate <skill> [practice|final] [count]|suites|approve <suite>|import <path in data/> [auto|text|markdown|chat|reports|folder]`
 - `uv run python -m agent_company requirements list|trace|import [--project <id>]` – requirements and traceability
 - `uv run python -m agent_company strategies evaluate [kind]|recommend <kind>` – self-evaluation of the workflow templates
 - `uv run python -m agent_company sbom [repo] [--rev HEAD] [--out file]` – CycloneDX SBOM of a commit

@@ -28,6 +28,8 @@ version of an item (SUPERSEDES, S11-R-06) or delete it with its edges.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -755,10 +757,14 @@ def review(item_id: int, approve: bool, reviewer: str, note: str = "") -> dict[s
         if approve and was != "approved" and i.review_due_at and i.review_due_at.replace(tzinfo=None) <= now().replace(
                 tzinfo=None):
             i.review_due_at = None  # reviewed again: back in retrieval
+        edges: list[int] = []
         if approve:
             kgraph.on_knowledge(s, i)
             kgraph.link(s, ("knowledge", i.id), "VERIFIED_BY", ("user", reviewer.removeprefix("user:").lower()))
+            if was == "draft" and i.outcome == "imported":  # an approved import joins contradiction checking (REQ-005)
+                edges = _link_contradictions(s, i)
         agent = i.agent_id
+    judge_contradictions(edges)
     if was == "approved" and not approve:
         recurate({agent}, f"K{item_id} rejected by {reviewer}")
     return item(item_id)
@@ -921,3 +927,266 @@ def link_team(goal_id: int, outcomes: list[tuple[int, str]], passed: bool) -> No
                     registry.connect(s, a, b, "collaborated", COLLAB_GAIN, evidence=f"goal:{goal_id}:passed")
                 elif a in failed or b in failed:
                     registry.connect(s, a, b, "collaborated", -COLLAB_LOSS, evidence=f"goal:{goal_id}:failed")
+
+
+# --- REQ-005: knowledge a person imports: a text/Markdown file, a folder of an earlier workspace, a chat export or
+# experience reports. Every piece is screened and waits as a draft for review; nothing is retrieved before a person
+# approves it. Imported text is data: it is split and stored, never evaluated or rendered.
+IMPORT_FORMATS = ("auto", "text", "markdown", "chat", "reports", "folder")
+IMPORT_MAX_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_ITEMS, IMPORT_CHUNK = 2 * 1024 * 1024, 50, 500, 1000
+IMPORT_SUFFIXES = (".md", ".markdown", ".txt")  # what a folder import reads; a single file may also be .json
+IMPORT_REFUSED = ("tls", "git-keys", "claude-accounts")  # data/ folders with keys and sign-ins
+_HEADING = re.compile(r"^#{1,6}\s+\S")
+_TURN = re.compile(r"^## (User|ChatGPT|Assistant|Claude)\s*$")  # only these exact lines start a chat turn
+_TAG = re.compile(r"<[^>\n]{1,200}>")  # <box …>, <AsyncImage …/> in chat exports: removed, never parsed
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+class NoManager(ValueError):
+    """There is no root General Manager to file imported items under (the API answers 409)."""
+
+
+def _pieces(text: str) -> list[str]:
+    """One block of text as chunks of at most IMPORT_CHUNK characters: paragraphs, neighbouring short ones merged,
+    longer ones cut at a line or sentence boundary."""
+    text = text.strip()
+    if not text:
+        return []
+    if len(text) <= IMPORT_CHUNK:
+        return [text]
+    cut: list[str] = []
+    for para in (p.strip() for p in re.split(r"\n\s*\n", text)):
+        while len(para) > IMPORT_CHUNK:
+            at = max(para.rfind("\n", 0, IMPORT_CHUNK), para.rfind(". ", 0, IMPORT_CHUNK - 1) + 1)
+            at = at if at > IMPORT_CHUNK // 2 else IMPORT_CHUNK
+            cut.append(para[:at].strip())
+            para = para[at:].strip()
+        if para:
+            cut.append(para)
+    out: list[str] = []
+    for p in cut:
+        if out and len(out[-1]) + 2 + len(p) <= IMPORT_CHUNK:
+            out[-1] += "\n\n" + p
+        else:
+            out.append(p)
+    return [x for x in out if x.strip()]
+
+
+def _front_matter(text: str) -> tuple[str, str]:
+    """(text without a leading `---` front-matter block, its `date:` value or '')."""
+    m = re.match(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", text, re.S)
+    if not m:
+        return text, ""
+    d = re.search(r"(?m)^date:\s*['\"]?(\d{4}-\d{2}-\d{2})", m.group(1))
+    return text[m.end():], d.group(1) if d else ""
+
+
+def _chunks_markdown(text: str) -> list[str]:
+    """One chunk per heading section, the heading as its first line (a heading without a body joins the next
+    section); a long section is split by `_pieces`. Text without headings is one section."""
+    sections: list[list[str]] = [[]]
+    for line in text.splitlines():
+        if _HEADING.match(line) and any(x.strip() and not _HEADING.match(x) for x in sections[-1]):
+            sections.append([])
+        sections[-1].append(line)
+    return [c for sec in sections for c in _pieces("\n".join(sec))]
+
+
+def _chunks_chat(text: str) -> tuple[str, str, list[tuple[str, str]]]:
+    """(title, source url, [(question, chunk)]) of a chat export: `# title`, `Source: <url>`, then turns that start
+    only on an exact `## User|ChatGPT|Assistant|Claude` line; a reply's own `##` headings stay in its turn."""
+    title, url, role, buf = "", "", "", []
+    turns: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        m = _TURN.match(line.rstrip())
+        if m:
+            if role:
+                turns.append((role, "\n".join(buf)))
+            role, buf = "user" if m.group(1) == "User" else "assistant", []
+        elif role:
+            buf.append(line)
+        elif line.startswith("# ") and not title:
+            title = line[2:].strip()[:200]
+        elif line.lower().startswith("source:") and not url:
+            u = line.split(":", 1)[1].strip()
+            url = u[:300] if re.match(r"https?://\S+$", u) else ""
+    if role:
+        turns.append((role, "\n".join(buf)))
+    out, question = [], ""
+    for who, body in turns:
+        body = _TAG.sub("", body).strip()
+        if who == "user":
+            question = body
+        else:
+            out += [(question, c) for c in _pieces(body)]
+    return title, url, out
+
+
+def _items_reports(text: str) -> list[tuple[str, dict[str, Any]] | None]:
+    """Experience reports from a JSON list or {"reports": [...]}: (lesson, cleaned report) each, None for a report
+    without a reusable lesson or successful approach."""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as err:
+        raise ValueError(f"a reports file must be JSON: {err}") from None
+    reports = data.get("reports") if isinstance(data, dict) else data
+    if not isinstance(reports, list):
+        raise ValueError('a reports file holds a JSON list of reports or {"reports": [...]}')
+    out: list[tuple[str, dict[str, Any]] | None] = []
+    for r in reports:
+        rep = clean_report(r) if isinstance(r, dict) else {}
+        lesson = rep.get("reusable_lesson") or rep.get("successful_approach") or ""
+        out.append((lesson[:IMPORT_CHUNK], rep) if lesson else None)
+    return out
+
+
+def _detect(name: str, text: str) -> str:
+    if name.lower().endswith(".json"):
+        return "reports"
+    if re.search(r"(?m)^## (User|ChatGPT)\s*$", text):
+        return "chat"
+    return "markdown"
+
+
+def _import_allowed(path: Path) -> Path:
+    """The resolved path if it lies inside the data directory and outside its key and sign-in folders, else
+    ValueError (the rule of `worktrees.ensure_sandboxed`, for data_dir)."""
+    root = settings().data_dir.resolve()
+    p = path.resolve()
+    if root not in p.parents:  # the data directory itself is refused too: name a folder inside it
+        raise ValueError(f"refusing to import from outside the data directory: {path}")
+    parts = p.relative_to(root).parts
+    if (parts and parts[0] in IMPORT_REFUSED) or any(x == ".env" or x.startswith(".env.") for x in parts):
+        raise ValueError(f"refusing to import from {path}: it holds keys or sign-ins")
+    return p
+
+
+def _read_import(p: Path) -> tuple[str, str]:
+    """(text, modification date) of one file, decoded as UTF-8 with replacement."""
+    if p.stat().st_size > IMPORT_MAX_BYTES:
+        raise ValueError(f"{p.name} is larger than {IMPORT_MAX_BYTES // (1024 * 1024)} MB")
+    return (p.read_bytes().decode("utf-8", errors="replace"),
+            datetime.fromtimestamp(p.stat().st_mtime).date().isoformat())
+
+
+def _import_files(path: str) -> tuple[list[tuple[str, str, str]], int]:
+    """([(label, text, modification date)], files left out) of a file or folder inside the data directory. A
+    relative path is relative to the data directory. Every file is resolved again: a symlink that leads out of the
+    data directory is refused."""
+    given = Path(path).expanduser()
+    p = _import_allowed(given if given.is_absolute() else settings().data_dir / given)
+    if p.is_file():
+        if p.suffix.lower() not in (*IMPORT_SUFFIXES, ".json"):
+            raise ValueError(f"only {', '.join(IMPORT_SUFFIXES)} and .json files can be imported")
+        return [(p.name, *_read_import(p))], 0
+    if not p.is_dir():
+        raise ValueError(f"no such file or folder: {path}")
+    found: list[Path] = []
+    for top, dirs, names in os.walk(p):  # symlinked folders are not followed; dot-folders are skipped
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        found += [Path(top) / n for n in sorted(names) if Path(n).suffix.lower() in IMPORT_SUFFIXES
+                  and not n.startswith(".")]
+    out, left = [], max(0, len(found) - IMPORT_MAX_FILES)
+    for f in found[:IMPORT_MAX_FILES]:
+        real = _import_allowed(f)
+        if real.stat().st_size > IMPORT_MAX_BYTES:
+            left += 1
+            continue
+        out.append((f.relative_to(p).as_posix()[:200], *_read_import(real)))
+    return out, left
+
+
+def import_knowledge(content: str | None, *, fmt: str, actor: str, name: str = "", path: str = "",
+                     project_id: int | None = None, classification: str = "internal",
+                     evidence_class: str = "INFERENCE", date: str = "") -> dict[str, Any]:
+    """Imported text as knowledge items for review (REQ-005): `content` (an uploaded file called `name`) or `path`
+    (a file or folder inside the data directory). Each piece is screened: clean ones become drafts, credential-like
+    ones are quarantined, instructions to agents rejected; all three wait in the review queue and none is retrieved
+    until a person approves it. The items are filed under the root General Manager, kept out of its playbook."""
+    fmt = (fmt or "auto").strip().lower()
+    if fmt not in IMPORT_FORMATS:
+        raise ValueError(f"format must be one of {', '.join(IMPORT_FORMATS)}")
+    check_level(classification)
+    evidence_class = (evidence_class or "INFERENCE").strip().upper()
+    if evidence_class not in VERIFIED:
+        raise ValueError(f"evidence class must be one of {', '.join(VERIFIED)}")
+    date = (date or "").strip()
+    if date and not _ISO_DATE.match(date):
+        raise ValueError("date must be YYYY-MM-DD")
+    who = actor if actor.startswith("user:") else f"user:{actor or 'unknown'}"
+    left = 0
+    if content is not None:
+        if fmt == "folder":
+            raise ValueError("a folder is imported by its path, not as an uploaded file")
+        if len(content.encode("utf-8", errors="replace")) > IMPORT_MAX_BYTES:
+            raise ValueError(f"a file may be at most {IMPORT_MAX_BYTES // (1024 * 1024)} MB")
+        files = [(Path(name or "upload").name[:200] or "upload", content, "")]
+    elif path:
+        files, left = _import_files(path)
+    else:
+        raise ValueError("nothing to import: give a file or a path")
+    # (text, report, kind, how it was read, file label, url, date)
+    pieces: list[tuple[str, dict[str, Any], str, str, str, str, str]] = []
+    skipped = 0
+    for label, text, mtime in files:
+        how = _detect(label, text) if fmt in ("auto", "folder") else fmt
+        body, fm_date = _front_matter(text) if how != "reports" else (text, "")
+        day = date or fm_date or mtime or now().date().isoformat()
+        if how == "reports":
+            for x in _items_reports(body):
+                if x is None:
+                    skipped += 1
+                else:
+                    pieces.append((x[0], x[1], "episodic", how, label, "", day))
+        elif how == "chat":
+            _, url, turns = _chunks_chat(body)
+            for question, chunk in turns:
+                rep = clean_report({"objective": question, "context_refs": [url] if url else []})
+                pieces.append((chunk, rep, "semantic", how, label, url, day))
+        else:
+            chunks = _chunks_markdown(body) if how == "markdown" else _pieces(body)
+            pieces += [(c, {}, "semantic", how, label, "", day) for c in chunks]
+    counts = {"created": 0, "draft": 0, "quarantined": 0, "rejected": 0, "skipped": skipped, "truncated": left,
+              "files": len(files), "ids": []}
+    with session() as s:
+        gm = s.scalar(select(Agent.id).where(Agent.role == "general_manager", Agent.parent_id.is_(None)))
+        if gm is None:
+            raise NoManager("no general manager to file imported knowledge under")
+        project = s.get(Project, project_id) if project_id else None
+        if project_id and project is None:
+            raise ValueError(f"no project {project_id}")
+        level = highest(classification, project.classification if project else None)
+        if level == "secret":  # secret content is never stored in knowledge items (S14-R-05)
+            raise ValueError("secret text is not imported: knowledge items never hold secret content")
+        known = set(s.scalars(select(Lesson.text).where(Lesson.outcome == "imported",
+                                                        Lesson.status.in_((*REVIEW_QUEUE, "approved")))))
+        for text, rep, kind, how, label, url, day in pieces:
+            if text in known:
+                counts["skipped"] += 1
+                continue
+            if counts["created"] >= IMPORT_MAX_ITEMS:
+                counts["truncated"] += 1
+                continue
+            known.add(text)
+            status, reason = screen(text)
+            if status == "approved" and rep:  # the report is shown with the item: screened like it (as in learn)
+                status, reason = screen(_report_text(rep))
+                reason = f"experience report {reason}" if reason else ""
+            status = "draft" if status == "approved" else status
+            sources = [who, f"import:{how}", f"file:{label}", *([f"url:{url}"] if url else []), f"date:{day}"]
+            item = Lesson(agent_id=gm, goal_id=None, text=text, outcome="imported", kind=kind,
+                          evidence_class=evidence_class, project_id=project_id, sources=sources, technologies=[],
+                          status=status, classification=level, report=rep,
+                          status_reason=reason or f"imported by {who.removeprefix('user:')}, awaiting review")
+            s.add(item)
+            s.flush()
+            kgraph.on_lesson(s, item, False, [])  # no edges until a person approves it
+            counts["created"] += 1
+            counts[status] += 1
+            counts["ids"].append(item.id)
+            if status != "draft":
+                log_event("security", f"imported K{item.id} {status}: {reason}", s=s, rule="memory_poisoning",
+                          ids=[item.id])
+        log_event("knowledge", f"imported {counts['created']} item(s) for review", s=s, actor=who,
+                  source=(name or path)[:300], **{k: v for k, v in counts.items() if k != "ids"})
+    return counts
