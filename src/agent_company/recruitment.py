@@ -46,6 +46,7 @@ SELF_ASSIGNED = 0.5  # verification factor of a recruit's uncertified skill
 PROFICIENT = 5  # the skill level that counts as one unit (a recruit claims it for each skill of its task)
 GRANTED_BY_ADMIN = {"shell", "network"}  # never given to a role outside the catalog without an administrator
 QUALIFY_SUITE = "smoke"  # the qualification suite of a writing role when no suite names one of its skills
+QUALIFY_KINDS = frozenset({"practice", "benchmark"})  # suite kinds a qualification run may use
 QUALIFY_PASS_RATE = 2 / 3
 WAITING = ("pending", "qualifying")  # a goal with such a record waits for it
 _qualifying: set[int] = set()  # records whose qualification run is queued or running in this process
@@ -439,12 +440,14 @@ def reject(recruitment_id: int, actor: str, reason: str = "", status: str = "rej
 # --- qualification (S03-R-04) ------------------------------------------------------------------
 
 def qualification_suite(skills: list[str]) -> str:
-    """A practice or benchmark suite naming one of the skills, else QUALIFY_SUITE; '' when there is none. Final
-    suites stay for certification (SPEC-13 S13-R-03)."""
+    """A suite of a QUALIFY_KINDS kind naming one of the skills, else QUALIFY_SUITE; '' when there is none. Every
+    other kind is skipped: run_suite refuses or misuses research, room and retrieval suites (a room suite asks for
+    a gated room's trial, a research or retrieval one is no task suite for a writing candidate), and final and
+    adversarial suites stay for certification (SPEC-13 S13-R-03)."""
     from agent_company import evaluation
     from agent_company.training import _slug
 
-    suites = [x for x in evaluation.list_suites() if x["kind"] != "final"]
+    suites = [x for x in evaluation.list_suites() if x["kind"] in QUALIFY_KINDS]
     wanted = {_slug(k) for k in skills}
     named = next((x["name"] for x in suites if wanted & {_slug(k) for k in x["skills"]}), "")
     return named or next((x["name"] for x in suites if x["name"] == QUALIFY_SUITE), "")
