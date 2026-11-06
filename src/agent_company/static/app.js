@@ -193,7 +193,7 @@ async function boot() {
     };
   }
   try { navLayout = (await api("/api/ui/nav_layout")).value || null; } catch { navLayout = null; }
-  renderRail(); show(VIEWS.some((v) => v.id === current && (!v.admin || me.is_admin)) ? current : "dashboard");
+  renderRail(); me.ui_mode === "simple" ? show("simple") : show(VIEWS.some((v) => v.id === current && (!v.admin || me.is_admin)) ? current : "dashboard");
   connectLive();
 }
 // --- rail: two groups (top, bottom) in the order an administrator set (Settings → Navigation) -----------
@@ -204,7 +204,8 @@ const TOPBAR = ["notifications", "audit", "settings", "users"];
 let navLayout = null, railEditing = false;
 function navGroups() {
   const lay = navLayout && (navLayout.top || navLayout.bottom) ? navLayout : NAV_DEFAULT;
-  const seen = new Set(), vis = VIEWS.filter((v) => (!v.admin || me.is_admin) && !TOPBAR.includes(v.id)), by = Object.fromEntries(vis.map((v) => [v.id, v]));
+  // REQ-003: the Simple view is on the rail only in Simple mode
+  const seen = new Set(), vis = VIEWS.filter((v) => (!v.admin || me.is_admin) && !TOPBAR.includes(v.id) && (v.id !== "simple" || me.ui_mode === "simple")), by = Object.fromEntries(vis.map((v) => [v.id, v]));
   const pick = (ids) => ids.filter((id) => by[id] && !seen.has(id) && seen.add(id)).map((id) => by[id]);
   // A view the saved order does not name takes its default place (before the next default neighbour it has).
   const saved = new Set([...(lay.top || []), ...(lay.bottom || []), ...(lay.hidden || [])]);
@@ -248,6 +249,17 @@ function renderTopViews() {
     b.onclick = () => show(b.dataset.v);
     b.onpointerenter = b.onfocus = () => prefetchView(b.dataset.v);
   });
+  // REQ-003: the user's own Simple/Advanced switch (not a view, so not in TOPBAR)
+  if (VIEW_FNS.simple) {
+    const simple = me.ui_mode === "simple", label = simple ? "Switch to Advanced mode (the full dashboard)" : "Switch to Simple mode (mission form and report)";
+    box.insertAdjacentHTML("afterbegin", `<button class="icon-btn" id="mode-toggle" title="${label}" aria-label="${label}">${icon(simple ? "dashboard" : "goals", 18)}</button>`);
+    $("#mode-toggle").onclick = async () => {
+      try {
+        const r = await api("/api/auth/me/ui_mode", { method: "PUT", body: { mode: simple ? "advanced" : "simple" } });
+        me.ui_mode = r.mode; show(r.mode === "simple" ? "simple" : "dashboard");
+      } catch (e) { toast(e.message); }
+    };
+  }
 }
 // Drag and drop between the two groups of a navigation list (the rail or the Settings card).
 function wireNavDrag(root, changed) {
@@ -463,6 +475,7 @@ async function goalDetail(id, openIds = new Set()) {
       return [...latest.values()].map((m) => `<div class="row">${pill(m.action === "released" ? "failed" : m.action === "requested" ? "pending" : "done").replace(/>[^<]+</, `>${esc(m.action)}<`)}<span class="grow">${esc(m.agent || "(waiting for recruitment)")} <span class="muted">${esc(m.role)} · iteration ${Number(m.iteration)}${m.reason && m.action !== "joined" ? ` · ${esc(m.reason)}` : ""}</span></span>${me.is_admin && m.agent_id && GOAL_ACTIVE.includes(g.status) ? (m.action === "released" ? `<button class="btn" data-team="add" data-agent="${Number(m.agent_id)}">Take back</button>` : `<button class="btn danger" data-team="release" data-agent="${Number(m.agent_id)}">Release</button>`) : ""}</div>`).join("");
     })()}${me.is_admin && GOAL_ACTIVE.includes(g.status) ? `<div class="row" style="margin-top:4px"><button class="btn" data-team="add">Add a role</button></div>` : ""}${(g.team || []).length > 1 ? `<details><summary class="muted">History (${g.team.length} change${g.team.length === 1 ? "" : "s"})</summary>${g.team.map((m) => `<div class="muted">${esc(m.action)} ${esc(m.agent || m.role)} (${esc(m.role)}) by ${esc(m.actor)} · ${ago(m.at)}${m.reason ? ` · ${esc(m.reason)}` : ""}</div>`).join("")}</details>` : ""}` : ""}
     ${(g.transitions || []).length ? `<h3>Workflow</h3><div class="events">${g.transitions.map((x) => `<div><span class="k">${esc(x.to.replace(/_/g, " "))}</span>${esc(x.from.replace(/_/g, " "))} → ${esc(x.to.replace(/_/g, " "))}${x.reason ? ` · ${esc(x.reason)}` : ""} <span class="muted">${esc(x.actor)} · ${ago(x.at)}</span></div>`).join("")}</div>` : ""}
+    ${!GOAL_ACTIVE.includes(g.status) && typeof missionReportHtml === "function" ? `<details data-id="report" id="goal-report" ${openIds.has("report") ? "open" : ""}><summary><strong>Mission report</strong> <span class="muted">each task verified, partial or failed from recorded checks and reviews</span></summary><div class="muted">Loading…</div></details>` : ""}
     <h3>Activity</h3><div class="events">${g.events.map((e) => `<div><span class="k">${esc(e.kind)}</span>${esc(e.message)} <span class="muted">${ago(e.at)}</span></div>`).join("")}</div>`;
   $("#goal-detail").querySelectorAll("[data-dec]").forEach((b) => (b.onclick = async () => {
     const approve = b.dataset.ok === "1", note = prompt(approve ? "Note (optional)" : "Why reject it?") ?? null;
@@ -474,6 +487,9 @@ async function goalDetail(id, openIds = new Set()) {
     if (note === null) return;
     try { await api(`/api/decisions/${b.dataset.drev}/review`, { method: "POST", body: { verdict, note } }); goalDetail(id, openIds); } catch (err) { toast(err.message); }
   }));
+  const rep = $("#goal-report");  // REQ-004
+  if (rep) api(`/api/goals/${id}/report`).then((d) => { rep.querySelector("div").outerHTML = `<div>${missionReportHtml(d)}</div>`; })
+    .catch((e) => { rep.querySelector("div").textContent = e.message; });
   if (typeof bindDefectActions === "function") bindDefectActions($("#goal-detail"), () => goalDetail(id, openIds));  // S09-R-03
   $("#goal-detail").querySelectorAll("[data-team]").forEach((b) => (b.onclick = async () => {
     const body = { action: b.dataset.team };
