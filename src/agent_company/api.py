@@ -265,6 +265,10 @@ class ResearchBody(BaseModel):
     budget_usd: float = 0.0
     deadline: str | None = None
     recurring: str = ""
+    # S06-FR-04: publication dates (YYYY-MM-DD, inclusive) and languages (a list or comma-separated subtags)
+    published_after: str | None = None
+    published_before: str | None = None
+    languages: list[str] | str = Field(default_factory=list)
 
 
 class SettingBody(BaseModel):
@@ -2655,12 +2659,19 @@ def create_app(start_background: bool = True) -> FastAPI:
             out = research.submit(body.question, body.urls, user["id"], project_id=body.project_id,
                                   goal_id=body.goal_id, keywords=body.keywords,
                                   source_preferences=body.source_preferences, priority=body.priority,
-                                  budget_usd=body.budget_usd, deadline=body.deadline, recurring=body.recurring)
+                                  budget_usd=body.budget_usd, deadline=body.deadline, recurring=body.recurring,
+                                  published_after=body.published_after, published_before=body.published_before,
+                                  languages=body.languages)
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
         if out["duplicate"]:  # an open or recent request asks the same: that one answers it
             return out
         rid = out["id"]
+        _audit(user, "research_request", rid, after={"question": body.question[:200], "project_id": pid,
+                                                     "goal_id": body.goal_id,
+                                                     "published_after": body.published_after,
+                                                     "published_before": body.published_before,
+                                                     "languages": research.normalise_languages(body.languages)})
 
         def run() -> None:
             try:
@@ -2703,7 +2714,7 @@ def create_app(start_background: bool = True) -> FastAPI:
             return [{"id": d.id, "url": d.url, "title": d.title, "chars": len(d.text),
                      "source": d.source_url, "at": d.created_at.isoformat(),
                      "category": d.category or research.classify_source(d.url), "flags": d.flags or [],
-                     "version": d.version or 1, "license": d.license or "",
+                     "version": d.version or 1, "license": d.license or "", "language": d.language or "",
                      "published_at": d.published_at.isoformat() if d.published_at else None}
                     for d in s.scalars(select(research.Document).order_by(research.Document.id.desc()).limit(300))]
 

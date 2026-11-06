@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import threading
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Iterator
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -765,6 +766,8 @@ class Document(Base):
     # provenance (G-R-10): the publisher's date and licence, from a feed entry or the page's meta tags
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     license: Mapped[str] = mapped_column(String(256), default="")
+    # the language the page or feed declares (S06-FR-04): primary subtag, lower case; '' when it declares none
+    language: Mapped[str] = mapped_column(String(16), default="")
 
 
 class DocumentVersion(Base):
@@ -802,6 +805,11 @@ class ResearchReport(Base):
     budget_usd: Mapped[float] = mapped_column(Float, default=0.0)  # model cost over all its runs; 0 = no limit
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # not run after it
     recurring: Mapped[str] = mapped_column(String(16), default="")  # hourly|daily|weekly|monthly, empty = once
+    # filters on the material (S06-FR-04): publication dates (inclusive, UTC days) and primary language subtags,
+    # empty = any. Migrated rows read languages as NULL.
+    published_after: Mapped[date | None] = mapped_column(Date, nullable=True)
+    published_before: Mapped[date | None] = mapped_column(Date, nullable=True)
+    languages: Mapped[list[Any]] = mapped_column(default=list)
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     runs: Mapped[int] = mapped_column(Integer, default=0)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
