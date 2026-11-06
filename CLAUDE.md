@@ -100,6 +100,13 @@ feature came from.
   containers with a noVNC console relayed over a WebSocket; admin-only; cleanup never prunes them);
   `a2a.py` (G-R-06: the A2A 1.0 agent card and JSON-RPC `SendMessage`/`GetTask`/`ListTasks`/`CancelTask` for
   issued bearer clients (`a2a_clients`, `a2a_tasks`); tasks become `origin="a2a"` goals that always wait for approval);
+  `marketplace.py` (REQ-002 agent marketplace: a repository URL or uploaded package fetched as untrusted data into
+  `data/marketplace/<id>/src` (checked URL, hardened shallow clone pinned to the checked address (`http.curloptResolve`,
+  git >= 2.37) and size-bounded while it runs, archive members checked first, tar streamed), converted to a
+  manifest as text, screened, a permission ceiling no package or instruction widens, a `source="marketplace"`
+  recruitment candidate qualified in the L3 sandbox (`unevaluated` without a suite: approved only with
+  `accept_unevaluated`), approved only by an administrator, `## Provenance` in its
+  definition; `/api/marketplace` admin-only and audited, CLI `marketplace`, Agents → Marketplace tab);
   `mcp.py` (Tools & MCP catalog, from AXoR's mcp_hub: stdio/HTTP servers, encrypted secrets, tool allow-list,
   per-agent grants, call log; G-R-15 a tool whose definition `digest` changed loses its allow and is marked `changed`,
   `McpThread` re-tests every `mcp_revalidate_hours`; bundled servers in `mcp_servers/`); `catalog.py` (skills, plugins, rules, commands,

@@ -904,8 +904,36 @@ class Recruitment(Base):
     evaluation_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     # S03-R-04 qualification run: {suite, status queued|running|passed|failed|skipped, label, pass_rate, runs, ...}
     qualification: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    source: Mapped[str] = mapped_column(String(16), default="")  # "" (staffing) | marketplace (REQ-002)
     decided_by: Mapped[str] = mapped_column(String(128), default="")
     note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AgentImport(Base):
+    """REQ-002 marketplace: an external agent package fetched as untrusted data into data/marketplace/<id>/src,
+    converted to a manifest, screened, qualified as a recruitment candidate and decided by an administrator."""
+
+    __tablename__ = "agent_imports"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(8), default="url")  # url|upload
+    source: Mapped[str] = mapped_column(Text, default="")  # the URL or the uploaded file's name
+    source_sha: Mapped[str] = mapped_column(String(80), default="")  # commit sha (url) or sha256 (upload)
+    manifest: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    licence: Mapped[str] = mapped_column(String(64), default="unknown")
+    author: Mapped[str] = mapped_column(String(128), default="")
+    version: Mapped[str] = mapped_column(String(32), default="")
+    # fetched|converted|qualifying|qualified|failed|approved|rejected
+    status: Mapped[str] = mapped_column(String(16), default="fetched", index=True)
+    screen: Mapped[dict[str, Any]] = mapped_column(default=dict)  # findings and block (secret values never stored)
+    ceiling: Mapped[dict[str, Any]] = mapped_column(default=dict)  # permissions/autonomy the candidate may hold
+    eval: Mapped[dict[str, Any]] = mapped_column(default=dict)  # the qualification result with its dimensions
+    recruitment_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    created_by: Mapped[str] = mapped_column(String(128), default="")
+    decided_by: Mapped[str] = mapped_column(String(128), default="")
+    error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
