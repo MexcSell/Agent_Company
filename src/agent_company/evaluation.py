@@ -15,6 +15,9 @@ whose checks never reach an agent: SPEC-13 S13-R-02; or `adversarial`, traps run
 room's source-graded benchmark: G-R-13) and the `skills` it trains or measures. A `research` suite has no checks and
 no seed repository: its `documents` are reference documents under `eval-research://` that stay in memory (ADR 0003),
 and each task's `expect` (citations, facts, forbidden claims, sections) is graded without a model judge.
+`run_suite` hands it to `research_eval.run`: the research room writes a report per task and repeat as
+`research.run_report` does, `research.check_claims` grades it against the reference documents, and each run is one
+EvalRun (no goal) whose dimensions carry the same keys plus a `research` grading, so summary and compare apply.
 
 Each task runs `repeats` times, each time as a fresh goal (origin "eval") in a new
 repository seeded with `files`. A task counts as solved only if every repeat passes.
@@ -196,8 +199,11 @@ def run_suite(suite: str | Path, label: str, repeats: int = 3, only: list[str] |
     from agent_company import performance
 
     data = load_suite(suite)
-    if data.get("kind") == "research":  # no seed repository and no checks: never a coding goal
-        raise ValueError(f"suite {data['name']} is a research suite; it has no runner yet")
+    if data.get("kind") == "research":  # no seed repository and no checks: graded reports, never a coding goal
+        from agent_company import research_eval
+
+        stopped = research_eval.run(data, label, repeats, only, budget_usd, trial=trial)
+        return _finished(label, budget_usd, stopped)
     tasks = [t for t in data["tasks"] if not only or t["name"] in only]
     final = data.get("kind") in {"final", "adversarial"}
     trial = dict(trial or {}) | ({"hide_checks": True} if final else {})
@@ -238,6 +244,10 @@ def run_suite(suite: str | Path, label: str, repeats: int = 3, only: list[str] |
             log_event("eval", f"{label}: {task['name']} run {rep} {g.status}", goal_id=gid)
         if stopped:
             break
+    return _finished(label, budget_usd, stopped)
+
+
+def _finished(label: str, budget_usd: float, stopped: bool) -> dict[str, Any]:
     if stopped:
         log_event("eval", f"{label}: stopped on its budget of ${budget_usd:.2f}")
         try:
