@@ -176,6 +176,22 @@ Machines code):
 | Candidates in containers with network and resource limits | §12 | done (benchmarks in the L3 sandbox, `sandbox.py`, SE-R-22) |
 | Fine-tuning, training models | §13 | skip (no training infrastructure) |
 
+## From the cloned framework repositories (`/home/luca/update/*`, docs/requirements/FRAMEWORKS.md)
+
+| Feature | Source | Status |
+| --- | --- | --- |
+| Repository map in a task's package | aider | open → FW-R-01 |
+| Stop a run that repeats the same tool call | OpenHands, AutoGen Magentic-One, mini-swe-agent | open → FW-R-02 |
+| Prometheus metrics endpoint | Flowise, Agent Framework | open → FW-R-03 |
+| Scheduled goals | OpenHands automations, extensions catalog | open → FW-R-04 |
+| Import skills from a `SKILL.md` registry | OpenHands extensions | open → FW-R-05 |
+| Goals from GitHub events (webhook) | OpenHands automations | needs the owner's decision (FW-R-06) |
+| Fork a goal from an earlier iteration | LangGraph time travel | open (FW-R-07) |
+| Condense long feedback | OpenHands condensers, SWE-agent history processors | partial (FW-R-08) |
+| ACP executor (Gemini CLI, OpenCode) | OpenHands, Open Interpreter | open (FW-R-09) |
+| Guardrails, termination conditions, checkpoints, interrupts, SOP documents, middleware, declarative agents, evaluations, memory, trajectories | crewAI, AutoGen, LangGraph, MetaGPT, Agent Framework, Flowise, SWE-agent | done, adapted (see FRAMEWORKS.md §2) |
+| Visual canvas, vector RAG, annotation replies, harness emulation, voice/IDE watch | Dify, Flowise, Open Interpreter, aider | skip (reasons in FRAMEWORKS.md §2) |
+
 ## Requested directly (Workspace home page, VS Code + Claude Code style)
 
 | Feature | Status |
@@ -193,10 +209,6 @@ mammoth 1.8.0, noVNC 1.7.0 with its licences, unchanged from AXoR) so the dashbo
 
 Not yet examined (no features taken, no decision recorded):
 
-- The cloned framework repositories in `/home/luca/update/`: OpenHands, SWE-agent, mini-swe-agent,
-  aider, MetaGPT, autogen, langgraph, crewAI, dify, Flowise, agent-framework, openinterpreter,
-  extensions. Candidates: aider's repo map, SWE-agent's agent-computer interface, LangGraph
-  checkpointing (see the durable workflow row), OpenHands context condensing.
 - `agentic-ai-frameworks.pdf` and `I am trying to download documents related to this.rtf`.
 
 Not usable:
