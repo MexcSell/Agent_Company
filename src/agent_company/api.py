@@ -2253,7 +2253,12 @@ def create_app(start_background: bool = True) -> FastAPI:
     def recruitment_approve(recruitment_id: int, body: RecruitDecisionBody,
                             user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         _recruit_admin(user, "recruitment_approve", recruitment_id)
-        out = _recruit_call(recruitment.approve, recruitment_id, f"user:{user['name']}", grant=body.grant)
+        try:
+            out = _recruit_call(recruitment.approve, recruitment_id, f"user:{user['name']}", grant=body.grant)
+        except PermissionError as e:  # REQ-002: a marketplace import is decided only through marketplace.approve
+            _audit(user, "recruitment_approve_denied", recruitment_id, severity="warning",
+                   after={"reason": "marketplace import"})
+            raise HTTPException(403, str(e)) from e
         _audit(user, "recruitment_approve", recruitment_id,
                after={"agent_id": out["agent_id"], "grant": body.grant, "resumed": out["resumed"]})
         return out
@@ -2262,7 +2267,12 @@ def create_app(start_background: bool = True) -> FastAPI:
     def recruitment_reject(recruitment_id: int, body: RecruitDecisionBody,
                            user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         _recruit_admin(user, "recruitment_reject", recruitment_id)
-        out = _recruit_call(recruitment.reject, recruitment_id, f"user:{user['name']}", body.reason, body.status)
+        try:
+            out = _recruit_call(recruitment.reject, recruitment_id, f"user:{user['name']}", body.reason, body.status)
+        except PermissionError as e:  # REQ-002: a marketplace import is decided only through marketplace.reject
+            _audit(user, "recruitment_reject_denied", recruitment_id, severity="warning",
+                   after={"reason": "marketplace import"})
+            raise HTTPException(403, str(e)) from e
         _audit(user, "recruitment_reject", recruitment_id, after={"status": out["status"], "reason": body.reason})
         return out
 

@@ -805,7 +805,7 @@ def approve(import_id: int, actor: str, grant: list[str] | None = None, *, admin
                                              f"(marketplace import #{imp.id})")
         imp.ceiling = {**ceiling, "autonomy": a.autonomy}
         rec_id = imp.recruitment_id
-    out = recruitment.approve(rec_id, actor, grant=False)
+    out = recruitment.approve(rec_id, actor, grant=False, via_marketplace=True)
     with session() as s:
         imp = s.get(AgentImport, import_id)
         imp.status, imp.decided_by, imp.decided_at = "approved", actor[:128], now()
@@ -832,7 +832,7 @@ def reject(import_id: int, actor: str, reason: str = "", *, admin: bool = False)
             recruitment._retire_candidate(s, rec, f"marketplace import #{imp.id} rejected by {actor}")
         rec_id = rec.id if waiting else None
     if rec_id is not None:
-        recruitment.reject(rec_id, actor, reason)
+        recruitment.reject(rec_id, actor, reason, via_marketplace=True)
     with session() as s:
         imp = s.get(AgentImport, import_id)
         imp.status, imp.decided_by, imp.decided_at = "rejected", actor[:128], now()

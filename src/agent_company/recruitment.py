@@ -379,7 +379,7 @@ def _resume_goal(goal_id: int | None, actor: str) -> bool:
     return True
 
 
-def approve(recruitment_id: int, actor: str, grant: bool = True) -> dict[str, Any]:
+def approve(recruitment_id: int, actor: str, grant: bool = True, *, via_marketplace: bool = False) -> dict[str, Any]:
     """Approve a pending record: a recruit is registered now (once: approving again returns the same agent).
     With `grant`, the permissions held back for a new role are given as well. A paused goal resumes."""
     from agent_company import registry
@@ -388,12 +388,12 @@ def approve(recruitment_id: int, actor: str, grant: bool = True) -> dict[str, An
         r = s.get(Recruitment, recruitment_id)
         if r is None:
             raise KeyError(recruitment_id)
+        if r.source == "marketplace" and not via_marketplace:  # REQ-002: only marketplace.approve decides it
+            raise PermissionError(f"recruitment #{r.id} is a marketplace import: decide it on Agents → Marketplace")
         if r.status in {"rejected", "cancelled"}:
             raise ValueError(f"recruitment #{r.id} was {r.status}")
         if r.status == "qualifying":
             raise ValueError(f"recruitment #{r.id} waits for its candidate's qualification run")
-        if r.source == "marketplace" and actor in {"policy", "qualification", "system", ""}:
-            raise PermissionError(f"recruitment #{r.id} is a marketplace import: only an administrator approves it")
         was = r.status
         if r.status == "pending":
             r.status, r.decided_by, r.decided_at = "approved", actor, now()
@@ -419,7 +419,8 @@ def approve(recruitment_id: int, actor: str, grant: bool = True) -> dict[str, An
     return out
 
 
-def reject(recruitment_id: int, actor: str, reason: str = "", status: str = "rejected") -> dict[str, Any]:
+def reject(recruitment_id: int, actor: str, reason: str = "", status: str = "rejected", *,
+           via_marketplace: bool = False) -> dict[str, Any]:
     """Reject (or cancel) a pending record, or one whose candidate is still qualifying (the candidate is retired).
     The goal resumes; its task fails with the refusal, so the planner re-plans with the roles the company has."""
     if status not in {"rejected", "cancelled"}:
@@ -428,6 +429,8 @@ def reject(recruitment_id: int, actor: str, reason: str = "", status: str = "rej
         r = s.get(Recruitment, recruitment_id)
         if r is None:
             raise KeyError(recruitment_id)
+        if r.source == "marketplace" and not via_marketplace:  # REQ-002: only marketplace.reject decides it
+            raise PermissionError(f"recruitment #{r.id} is a marketplace import: decide it on Agents → Marketplace")
         if r.status not in WAITING:
             raise ValueError(f"recruitment #{r.id} is {r.status}; only a pending one can be {status}")
         r.status, r.decided_by, r.decided_at, r.note = status, actor, now(), reason[:2000]
@@ -496,14 +499,15 @@ def qualify(recruitment_id: int) -> dict[str, Any]:
                       agent_id=agent_id, s=s, recruitment_id=r.id)
         trial: dict[str, Any] = {"trainee_id": agent_id, "qualify": recruitment_id}
         if marketplace:  # REQ-002: an imported agent's eval commands run only in the L3 sandbox, never on the host
-            from agent_company import sandbox
+            from agent_company import policies, sandbox
 
             ok, why = sandbox.available()
             if not ok:
                 return _finish(recruitment_id, None, f"the L3 sandbox is required for a marketplace candidate ({why})")
             trial["sandbox"] = "required"
-            if sandbox.mode_for(Goal(trial=trial)) == "off":  # the eval goals' mode, whatever `sandbox` is set to
-                return _finish(recruitment_id, None, "the L3 sandbox is off for this marketplace candidate's eval")
+            if policies.effective("sandbox", None) == "off":
+                log_event("recruitment", f"recruitment #{recruitment_id}: the sandbox setting 'off' is overridden to "
+                          "'required' for this marketplace candidate's eval", recruitment_id=recruitment_id)
         summary = evaluation.run_suite(suite, label, repeats=1, trial=trial)
         return _finish(recruitment_id, summary)
     except Exception as e:  # noqa: BLE001 - a broken suite must not leave the record qualifying forever

@@ -681,6 +681,56 @@ def test_api_refused_approve_and_reject_are_audited(tmp_path, monkeypatch):
     assert ("marketplace_approve", "info", str(iid)) in rows
 
 
+def test_generic_recruitment_decisions_refuse_a_marketplace_record(tmp_path):
+    """(c)/(d) recruitment.approve/reject refuse even an administrator; only marketplace.approve/reject decide."""
+    out = imported(tmp_path / "a")
+    rid = out["recruitment_id"]
+    with pytest.raises(PermissionError, match="Agents → Marketplace"):
+        recruitment.approve(rid, "user:admin")
+    with pytest.raises(PermissionError, match="Agents → Marketplace"):
+        recruitment.reject(rid, "user:admin", "no")
+    assert recruitment.get(rid)["status"] == "pending" and agent(out["agent_id"]).lifecycle == "candidate"
+    assert marketplace.approve(out["id"], "admin", admin=True, acknowledge=True)["status"] == "approved"
+    assert recruitment.get(rid)["status"] == "approved"
+    other = imported(tmp_path / "b")
+    src = marketplace.src_dir(other["id"])
+    assert marketplace.reject(other["id"], "admin", "no", admin=True)["status"] == "rejected"
+    assert recruitment.get(other["recruitment_id"])["status"] == "rejected" and not src.parent.exists()
+
+
+def test_generic_recruitment_api_refuses_a_marketplace_record_and_audits_it(tmp_path):
+    """(a)/(b) POST /api/recruitments/{id}/approve|reject → 403, nothing changes, audited; (e) others still approve."""
+    import secrets
+
+    from fastapi.testclient import TestClient
+    from sqlalchemy import select
+
+    from agent_company import loop, registry
+    from agent_company.api import create_app
+    from agent_company.db import AuditEvent
+
+    out = imported(tmp_path)
+    rid, src = out["recruitment_id"], marketplace.src_dir(out["id"])
+    config.set_overrides({"recruit_requires_approval": "always"})
+    gid = loop.create_goal("Needs rust", quality_commands=[])
+    with pytest.raises(recruitment.RecruitmentPending):
+        registry.staff("rust_expert", ["rust"], gid, writes=True)
+    plain = next(r["id"] for r in recruitment.list_recruitments("pending") if r["id"] != rid)
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
+        app.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
+        r = app.post(f"/api/recruitments/{rid}/approve", json={"grant": True})
+        assert r.status_code == 403 and "Marketplace" in r.json()["detail"]
+        assert app.post(f"/api/recruitments/{rid}/reject", json={"reason": "no"}).status_code == 403
+        assert app.post(f"/api/recruitments/{plain}/approve", json={"grant": False}).json()["status"] == "approved"
+    assert recruitment.get(rid)["status"] == "pending" and agent(out["agent_id"]).lifecycle == "candidate"
+    assert marketplace.get(out["id"])["status"] == out["status"] and src.parent.exists()
+    with session() as s:
+        rows = [(e.action, e.severity, e.target) for e in s.scalars(select(AuditEvent))]
+    for action in ("recruitment_approve_denied", "recruitment_reject_denied"):
+        assert (action, "warning", str(rid)) in rows
+    assert ("recruitment_approve", "info", str(plain)) in rows
+
+
 # --- API and CLI --------------------------------------------------------------------------------
 
 def test_api_admin_only_audited_and_grant_clamped(tmp_path):
