@@ -1,41 +1,42 @@
-# Review (iteration 1)
+# Review (iteration 2)
 
-## QA review of the qualification_suite fix (qa, failed)
+## QA review of the qualification_suite fix (read-only, scoped) (qa, done)
 
 ## Logic verification
 
-The diff is small: one line plus the docstring in `recruitment.py`, and one helper plus three tests in `tests/test_recruitment.py`. Branch `agents/goal-12` vs `main`, commit e3e998b. `git diff --stat main...HEAD -- src/agent_company/evaluation.py evals/` is empty, so neither of those changed.
+I didn't re-read `qualification_suite`, `QUALIFY_KINDS`, the tests from `tests/test_recruitment.py:496` on, or the `run_suite` grep in this turn. Each was already read in the previous review of the same commit, e3e998b. The only change in `qualification_suite` (`src/agent_company/recruitment.py:442-453`) is its filter: the old `kind != "final"` becomes `kind in QUALIFY_KINDS`, with `QUALIFY_KINDS = frozenset({"practice","benchmark"})` at `:49`.
 
-**`qualification_suite`** (`src/agent_company/recruitment.py:442-453`). The old filter was `kind != "final"`. The new one only keeps kinds in `QUALIFY_KINDS = {"practice","benchmark"}` (`:49`).
-
-- **Normal case, `["python"]`.** `list_suites()` returns `python-practice` (kind practice, with the python skill). The filter keeps it and the skill matches, so the result is `"python-practice"`. `staff` then stores `{"suite": "python-practice", "status": "queued"}` (`:247-249`). `qualify` reads it (`:487`) and calls `run_suite("python-practice", …, repeats=1, trial={trainee_id, qualify})` (`:493`). That is a practice kind, so it is not hidden as a final suite and has no room check (`evaluation.py:170-178`). Correct.
-- **Edge case, `["research"]` with research and room suites listed.** Both are dropped by kind, so no suite names the skill. The fallback picks `smoke`: its file has no `kind`, and `list_suites` defaults that to `"benchmark"` (`evaluation.py:79`). The record gets `suite="smoke"`, and `run_suite("smoke")` takes the plain benchmark path. Before the fix, a room suite reached `run_suite`. It set `trial["room"]` and raised `ValueError` when the room was not gated (`evaluation.py:172-178`). If the room was gated, it was misused: the room's disabled agents would be staffed for a recruit's qualification. A research suite was handed to a writing candidate as its task suite. The fix removes the cause, the choice of suite, rather than catching the error. **This fixes the root cause.**
-- **Error case, no usable suite.** Both `next(...)` calls return `""`. `staff` then takes the else branch (`:252`), so the record is never `qualifying` and `qualify` returns `{}` (`:480`).
-- **Kinds that are refused or certify.** room, research, final and adversarial are all outside the allow-list, so none of them can be chosen. A retrieval suite cannot even reach `list_suites`: it has no `tasks`, so `load_suite` raises (`evaluation.py:56`), and `list_suites` catches that and skips it (`:83`). Generated final suites are excluded by kind whether approved or not. Generated practice suites from `exercises.py` still qualify, which is wanted.
-- **Do the tests fail without the fix?** By static reading, yes. With `!= "final"`, the injected `research-suite`/`room-suite` entries come first in `list_suites` and match `research`, so all three new tests fail on their `== "smoke"` or `== ""` assertions. The developer reports reproducing exactly this. I could not re-run it myself (see BLOCKER).
+1. **Normal case, `["python"]`.** `evals/python-practice.json` (kind practice, with the python skill) passes the filter and its skill matches, so the result is `"python-practice"`. `staff` (`:247-249`) stores `{"suite": "python-practice", "status": "queued"}`. `qualify` reads it (`:487`) and calls `run_suite("python-practice", label, repeats=1, trial=…)` (`:493`). A practice suite hits neither the final/adversarial hiding (`evaluation.py:170`) nor the room check (`:172-178`). Correct.
+2. **Edge case, `["research"]` with a research and a room suite listed.** Both are dropped by kind, so no remaining suite names `research`. The fallback picks `smoke`: `smoke.json` has no `kind`, and `list_suites` defaults that to `"benchmark"` (`evaluation.py:79`). `qualify` then runs `smoke` on the plain path.
+   - Before the fix, a room suite reached `run_suite` and raised a `ValueError` for a room that is not gated (`evaluation.py:177-178`). For a gated room it was misused: that room's disabled agents would be staffed for the qualification.
+   - **This fixes the root cause** (which suite is chosen), not the symptom.
+3. **Error case, no practice or benchmark suite.** Both `next(...)` calls return `""`. In `staff`, `if suite:` is false, so the record never becomes `qualifying`. `qualify` returns `{}` at `:480` before `run_suite` is ever called, so there is no `ValueError`. Its fallback `… or QUALIFY_SUITE` at `:487` is only reached for a record that is already `qualifying`.
+- **Kinds `run_suite` refuses or that certify:**
+  - room, research, final and adversarial are outside the allow-list, so they can no longer be chosen.
+  - Retrieval suites have no `tasks`, so `load_suite` rejects them and `list_suites` never lists them (`evaluation.py:56,83`).
+- **Without the fix:**
+  - With `kind != "final"`, the injected `research-suite` and `room-suite` (skill `research`) come before the real suites in `list_suites`. So `qualification_suite(["research"])` returns `research-suite`.
+  - All three new tests would then fail on their `== "smoke"` or `== ""` assertions; the end-to-end test fails at `rec["qualification"]["suite"] == "smoke"`.
+  - This matches the developer's report that they reverted the filter and saw the tests fail.
 
 ## Checklist
 
-- **Contract:** met. Only `recruitment.py` and its test file changed in code; the two `.claude/specs` docs are the goal's own artifacts.
-- **Interfaces:** the signature and return values are unchanged, and the only caller is `:247`.
-- **Error handling:** the `''` path is unchanged. `qualify`'s `except` stays as a backstop.
-- **Edge cases:** covered as traced above. An allow-list fails safe: an unknown future kind is skipped.
-- **Tests:** they cover normal, edge, error and an end-to-end `qualify` on the real harness offline. There are small gaps, listed below.
-- **Dependencies, security, performance:** nothing new; the change is one set lookup.
-- **Docs:** the docstring is updated. CLAUDE.md does not list suite kinds for qualification, so it needs no update.
+- **Contract:** met. Only `qualification_suite` and its docstring changed, plus tests; `evaluation.py` and `evals/` are unchanged.
+- **Interfaces:** the signature and return values are the same.
+- **Error handling:** the `''` path is unchanged and handled by the caller.
+- **Edge cases:** covered. The allow-list fails safe: an unknown future kind is skipped.
+- **Tests:** they cover normal, edge, error and one end-to-end `qualify` run.
+- **Dependencies, security, performance:** no impact.
+- **Docs:** the docstring is updated.
 
-FINDING: tests/test_recruitment.py:514 | The retrieval entry injected into the test cannot happen for real: `list_suites` never returns a retrieval suite because it has no tasks (`evaluation.py:56,83`). That assertion therefore proves nothing about real data; it is harmless but misleading. | Add a comment that it guards the filter only, or drop "retrieval" from the injected kinds.
-FINDING: tests/test_recruitment.py:524-541 | The end-to-end test asserts `"ValueError" not in error`, but nothing in it would raise one with the research suite. The failure that is actually prevented is the room-suite `ValueError` at `evaluation.py:178`, and no end-to-end test covers that. | Add a room-kind file naming the skill in the same test, or a variant of it, so the original crash path is the one exercised.
-FINDING: src/agent_company/recruitment.py:487 | `qualify` still falls back to `QUALIFY_SUITE` without the kind filter (`... or QUALIFY_SUITE`). It is not reachable through `staff`, but a hand-edited record would bypass `QUALIFY_KINDS`. | Optional: send that fallback through `qualification_suite([])`, or leave it with a comment.
-FINDING: evals/smoke.json | The fallback only works while `smoke.json` has no `kind`, or a practice/benchmark one; this dependency is implicit. If someone adds a `kind` outside those two, qualification is silently skipped for unmatched skills. | Optional: add an assertion to the existing smoke-fallback test that `smoke`'s kind is in `QUALIFY_KINDS`.
+**Test run:** no result line. I tried `uv run pytest -q tests/test_recruitment.py` once and it was refused ("This command requires approval"). The only pass report, 27 passed, is the developer's. The gate's own command check runs the same command.
 
-BLOCKER: I could not run `uv run pytest -q tests/test_recruitment.py`. Every pytest call, through `uv run` or `.venv/bin/python`, needed approval that wasn't granted in this session. The pass result (27 passed) and the red-without-fix result come from the developer's report, not from my own run. The gate's acceptance check runs pytest independently.
+FINDING: tests/test_recruitment.py:524-541 | The end-to-end test only uses a research suite, which never raised; the room-suite `ValueError` (`evaluation.py:178`) that the change prevents is not exercised end to end | Add a room-kind suite file naming `research` to that test.
+FINDING: tests/test_recruitment.py:514 | The injected "retrieval" entry can't happen with real data: `list_suites` never lists a retrieval suite because it has no tasks | Remove it, or add a comment that it guards the filter only.
 
-NEXT: Let the gate's automated `uv run pytest -q tests/test_recruitment.py` confirm 27 passed before the merge.
-NEXT: Optionally, cover the room-suite crash path end to end (finding 2).
+BLOCKER: Running pytest here needs approval that wasn't granted, so I couldn't run the test file myself.
+NEXT: The gate's acceptance command `uv run pytest -q tests/test_recruitment.py` confirms the pass before merging.
 
-MESSAGE recommendation to developer: In `tests/test_recruitment.py`, exercise the room-suite `ValueError` path (`evaluation.py:178`) end to end; the current integration test only covers a research suite, which never raised.
-
-OUTCOME: APPROVED_WITH_COMMENTS. The kind allow-list removes the root cause. Read statically, it is correct for the normal, edge and error cases, and it keeps every refused or certifying kind out. `evaluation.py` and `evals/` are unchanged. The test run is the developer's evidence, not one I re-ran.
+OUTCOME: APPROVED_WITH_COMMENTS. The `QUALIFY_KINDS` filter in `qualification_suite` removes the root cause, and the traces show the normal, edge and error cases are right. The test pass rests on the developer's run and the gate's check, not on mine.
 
 VERDICT: PASS
