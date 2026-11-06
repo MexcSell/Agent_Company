@@ -59,7 +59,8 @@ feature came from.
   standards from the base branch and matching research documents; contradictions and versions as `kg_edges`,
   resolved by people)
   + `evolution.py` (playbook candidates are experiments); `experiments.py` (SPEC-13: baseline vs candidate on one eval
-  suite, review by the E0-E6 policy, canary, rollback; routes only applied by an administrator; S10-R-02 the platform
+  suite, review by the E0-E6 policy, canary, rollback; routes only applied by an administrator; G-R-11 a candidate that breaks a task the
+  baseline solved is never better (`regressions`); S10-R-02 the platform
   commit in `dataset` and a `budget_usd` that stops route/template experiments; `retrieval` target: ranking weights on
   the retrieval evals + `benchmarks/retrieval.py`, applied and rolled back by an administrator); `hypotheses.py`
   (ASEAO07 S07-R-03: statements under test with evidence; an experiment's comparison concludes its hypothesis; an agent
@@ -71,7 +72,7 @@ feature came from.
   control plane, failure layers, a fixed benchmark from `benchmarks/` run on the base and candidate commits, approval,
   deploy via the safe restart, monitoring, rollback; docs/requirements/SELF-EVOLUTION.md); `performance.py` (defects with priority and a lifecycle
   the loop drives, S09-R-03; certification, metrics, estimate accuracy, G-R-02 operational metrics `operations`; G-R-04 `enablement_gate` and `room_gate`: a gated role is enabled only after its room's own suite ran as a room trial, `Goal.trial.room`, whose disabled agents `registry.staff` takes for those eval goals only); `rca.py` (S07-R-02 root-cause analysis of failed goals and repeated failing checks:
-  evidence pack, causes that must cite it, actions as proposals, follow-up); `evaluation.py` (eval harness; S09-R-05 dimensions with sample sizes per run and summary, no combined score; `adversarial` suites run like final ones); `research.py` (crawl, knowledge, sources with monitoring rules: versions on change, intelligence events; shifts on the
+  evidence pack, causes that must cite it, actions as proposals, follow-up); `evaluation.py` (eval harness; S09-R-05 dimensions with sample sizes per run and summary, no combined score; `adversarial` suites run like final ones); `research.py` (crawl, knowledge, RSS/Atom feeds and each document's publication date and licence (G-R-10), sources with monitoring rules: versions on change, intelligence events; shifts on the
   rotation with handover packages, `research_shifts`; research requests with priority, deadline, budget, recurrence and
   duplicate detection, run by `ReportThread`; S06-R-03/R-04 claims checked against stored documents and an independent review (another agent, another model family when usable, else a person): only approved reports become `report://` documents, blackboard entries, `research` knowledge items and `research` proposals); `governance.py` (audit, notifications,
   command policy, emergency stops E0-E5, incidents, behaviour-rule alerts); `prefs.py` (DB settings); `gitsync.py` (push with each user's own GitHub token or SSH key, `data/git-keys/`); `files.py`; `supervisor.py` + `system.py`;

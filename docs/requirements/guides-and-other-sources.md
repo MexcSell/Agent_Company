@@ -10,7 +10,11 @@ spec, no additional requirements);
 `Claude_Code_VSCode_Extensions_CDAF_Guide.pdf`;
 `AgentForge-Website-Specification.pdf`;
 `agentic-ai-frameworks.pdf` (AWS Prescriptive Guidance on frameworks and protocols);
-`2.pdf` (framework logos and README screenshots only, no text).
+`2.pdf` (framework logos and README screenshots only, no text);
+`111.pdf` (a ChatGPT conversation "Research Agent Learning Materials", 34 pages: the research agent's sources,
+pipeline, benchmarks and metrics, then how an agent website calls a model API with web search, which model each
+role uses and how tasks are allocated) and `Research_Agent_Continuous_Learning_Guide.pdf` (the PDF export of
+its first ten pages), both added 2026-11-05 and analysed 2026-11-06.
 
 ## The original brief (`1.txt`) — coverage
 
@@ -22,6 +26,35 @@ spec, no additional requirements);
 | A specialised agent is created per task and linked to similar agents to use their experience | done (`registry._recruit`, `_link_similar`); quality → SPEC-03, SPEC-12 S12-R-02 |
 | After completion, agents learn and connect through experience | done (`loop._learn_from`, `link_team`); defects S12-D-01; retrieval → SPEC-11 |
 | Come up with new ideas and put them into practice | proposals → goals; documented case → ASEAO10 S10-R-01 |
+
+## The research agent guide (`111.pdf`, `Research_Agent_Continuous_Learning_Guide.pdf`) — coverage
+
+The guide assumes Node.js, PostgreSQL, pgvector and Redis; here it is adapted to SQLite, FastAPI and FTS5 as
+everywhere else (README → Stack).
+
+| Guide item | Where |
+| --- | --- |
+| Source registry (arXiv, GitHub, Hugging Face, official docs, news) | done (`Source`, `research.add_source`, Research page) |
+| Collection by RSS, APIs, GitHub releases, scheduled jobs | feeds: G-R-10; schedules: source intervals hourly..monthly (S06-R-02); arXiv/OpenAlex/Semantic Scholar API: `mcp_servers/papers.py` (G-R-05) |
+| Register title, URL, dates, type, version, licence | URL, title, kind (`classify_source`), collection time, content hash and versions (S06-R-02); publication date and licence: G-R-10 |
+| Filter: duplicates, relevance, source quality, freshness | one document per URL and content hash; duplicate research requests (`find_overlap`); kinds of source and preferences (S06-R-01); a change must mention the source's subject to be an event |
+| Document reader: extract text from PDFs | open: G-R-12 |
+| Treat collected material as untrusted, not as instructions | done (`injection_flags`; flagged pages never reach prompts; report prompts say so) |
+| Three libraries: research, experiments, approved agent knowledge | `documents`; `evals/` + `experiments`; knowledge items with screening (`learning.py`); only an approved report becomes knowledge (S06-R-04) |
+| Distinguish verified facts, recommendations, unverified and conflicting claims | done (S06-R-03: every claim checked against the stored source, `[n:contradicts]`, dropped claims; independent review S06-R-04) |
+| Improvement levels: knowledge, skills, workflow, model | retrieval (S11-R-03), playbooks and agent definitions (`evolution.py`, `agentdefs.py`), workflow templates (S04-R-11, S04-R-13), model routes as experiments (SPEC-13); fine-tuning not taken (no training infrastructure) |
+| A fixed, versioned benchmark per agent with reference tasks | coding: `evals/*.json` with practice/final/adversarial/room suites; research agent: open, G-R-13 |
+| Metrics: success, accuracy, citation correctness, completeness, latency, cost per success, tool failures, regression rate | eval dimensions S09-R-05 (completion, tool use, efficiency incl. cost per passed run, reliability), claim checks per report (S06-R-03); regression rate: G-R-11 |
+| "Did it improve on a fixed set without damaging existing capabilities?" | G-R-11 |
+| Daily collection, weekly benchmark review | daily: source intervals and the rotation; weekly benchmark: open, G-R-14 |
+| Research → experiment → QA → integrate → compare versions → decide | research proposals (S06-R-07), hypotheses and experiments (S07-R-03, SPEC-13), an administrator applies (E0-E6 policy) |
+| Human approval for model, prompt, tool and deployment changes; baselines and rollback | done (routes and templates applied by an administrator, self-evolution approval and rollback, playbook versions) |
+| Sandboxed benchmark code | done (S14-R-07 L3) |
+| Research API: create a request, read a report, search history | done (`POST/GET /api/research/requests`, `/api/research/search`) |
+| Model per role: strong model for planning/review, efficient for routine work | done (Model Router role routes, fallback, `gm set-model`) |
+| Task allocation: dependencies, parallel independent tasks, one owner per file, experienced agent for complex tasks, a failing test becomes a bug, security review, approval for destructive or external actions | plan DAG and handovers (SPEC-04), file leases G-R-08, staffing by skill coverage and experience (`registry._rank`), defects S09-R-03, `risk_level` high → security review (G-R-01), merge approval and `governance.check_command` |
+| Research by a provider's model with web search (OpenAI Responses API) | not taken now: the research room reads the sources it collected and stored, so every claim can be checked against a stored passage (S06-R-03); a hosted web-search tool returns text that cannot be checked that way, and it is billed per call. A decision for the owner |
+| Expose the research library to Claude Code over MCP | not taken: a task's package already carries the matching approved research (S11-R-03), and the database MCP server refuses the platform's own data directory by design |
 
 ## Specific requirements
 
@@ -165,6 +198,47 @@ for room X" until theirs is written.
   iteration's tasks done of total, the time since the order and the time in agent runs, tokens and cost of every run
   of the goal (planning, research and reviews included), and the merge state (merged, waiting for approval to merge,
   not merged).
+
+### G-R-10 Feeds and provenance of collected material — research guide §3, §11
+- A source can be an RSS 2.0, RSS 1.0 or Atom feed (arXiv listings, GitHub `releases.atom`, documentation and
+  blog feeds): each entry with a link becomes a document with the entry's summary or content as its text; the
+  feed itself is not stored, so a refetch adds a version only for an entry that changed. A feed with a DOCTYPE is
+  refused (no entity expansion).
+- Every document records its publication date and licence when the material states them: the feed entry or
+  channel (`published`/`updated`/`pubDate`/`dc:date`, `rights`/`copyright`), or the page's citation, article and
+  Dublin Core meta tags and `<link rel="license">`.
+- **Status: done** (`research.parse_feed`, `is_feed`, `parse_date`, `_provenance`; `Document.published_at`,
+  `Document.license`; shown on the Research page, in `/api/research/documents`, search results and a report's
+  sources; the report writer sees the date; `tests/test_research.py`). Acceptance: Atom and RSS entries with UTC
+  dates and the feed's licence, an unchanged refetch adds no version, a DOCTYPE is refused, HTML meta tags give
+  both.
+
+### G-R-11 No regression on what the baseline solved — research guide §7 ("without damaging existing capabilities")
+- A candidate (route, workflow template, playbook) that does not solve, in every repeat, a task the baseline
+  solved in every repeat is not better, whatever its pass rate or its savings.
+- **Status: done** (`experiments.regressions`, `side_metrics` with `tasks_run`/`solved_tasks`, `compare` with
+  `regressions` and `regression_rate`; `orchestration.compare` counts a regression as a quality guard;
+  `evolution.smoke_trial` rolls such a playbook back; `eval --compare` lists them; `tests/test_regressions.py`).
+  A task the candidate did not run is no evidence; sides recorded before the per-task record compare as before.
+
+### G-R-12 Text from PDF documents — research guide §8 ("Document reader", PyMuPDF)
+- The crawler stores only HTML and text; a linked paper (application/pdf) is skipped.
+- **Status: open, needs a decision**: it needs a PDF library (none is installed) and parsing untrusted binaries,
+  which belongs in the L3 sandbox (S14-R-07) rather than in the server process. Acceptance: a PDF from a source
+  becomes a document with its text, extracted in the sandbox with a size and time limit.
+
+### G-R-13 A fixed benchmark for the research agent — research guide §6
+- Reference research tasks (find, verify a source, summarise, compare, generate tests, recommend), each with
+  approved reference sources and a correctness method that is source-based (the S06-R-03 claim check), not only
+  another model's opinion; run by the eval harness with its own suite kind.
+- **Status: open**: the eval harness runs coding goals in scratch repositories; research tasks need a runner that
+  grades a report against stored reference documents. Larger than one change: a goal for the goal loop.
+
+### G-R-14 A scheduled benchmark review — research guide §8 (daily collection, weekly benchmark review)
+- A setting that runs a chosen suite on a schedule and compares it with the last run (G-R-11), reporting
+  regressions as a notification.
+- **Status: open, needs a decision**: every run uses real models and costs money; the owner sets whether, which
+  suite and the budget (S10-R-02 budgets apply).
 
 ## Not requirements
 - Download guide, CrewAI setup, VS Code extension lists, Hugging Face/Ollama/LM Studio links:

@@ -148,6 +148,9 @@ Machines code):
 | Information classification and data-handling rules | SPEC14 §5 | done (projects, orders, uploads and lessons classified; models receive only what they are cleared for; research sources skipped) → S14-R-05 |
 | MCP tool servers for agents | 1.txt, CDAF guide §11 | done (`mcp.py`, Tools & MCP, G-R-05) |
 | A2A protocol for agent-to-agent messages | 1.txt | done (`a2a.py`: A2A 1.0 agent card, JSON-RPC tasks as goals for issued clients, G-R-06) |
+| RSS/Atom feeds as research sources; publication date and licence per document | research guide (`111.pdf`) §3, §11 | done (`research.parse_feed`, `Document.published_at`/`license`, G-R-10) |
+| No regression on tasks the baseline solved: experiments, templates, playbook smoke trials, `eval --compare` | research guide §7 | done (`experiments.regressions`, G-R-11) |
+| PDF text extraction; a fixed research-agent benchmark; a scheduled benchmark review | research guide §6, §8 | open (G-R-12..14: a dependency in the sandbox, a research-task runner, a run budget) |
 
 ## From docs/advanced_self_improving_agent_guide.pdf (verified self-evolution)
 
@@ -190,6 +193,8 @@ Not yet examined (no features taken, no decision recorded):
 
 Not usable:
 
-- `978-3-032-22940-3 (1).pdf` and `2.pdf`: no extractable text (scanned or damaged).
+- `978-3-032-22940-3 (1).pdf`: a truncated download (15,466,496 of the 28,730,237 bytes its linearisation header
+  declares; the page tree is missing, so no reader opens it). Download it again to use it.
+- `2.pdf`: framework logos and README screenshots, no text.
 - `AXoR-Design-System-Requirements.pdf`: design system for a different product (AXoR, 46 views);
   not applicable here.
