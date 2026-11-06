@@ -12,11 +12,13 @@ from __future__ import annotations
 import functools
 import itertools
 import json
+import logging
 import queue
 import random
 import re
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -1430,7 +1432,10 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
         except Halted:
             raise
         _notify_goal(goal_id, "failed")
-        log_event("error", f"goal failed: {type(e).__name__}: {e}", goal_id=goal_id)
+        frame = traceback.extract_tb(e.__traceback__)[-1] if e.__traceback__ else None  # where, for the next diagnosis
+        log_event("error", f"goal failed: {type(e).__name__}: {e}"
+                  + (f" (at {Path(frame.filename).name}:{frame.lineno} in {frame.name})" if frame else ""), goal_id=goal_id)
+        logging.getLogger(__name__).exception("goal %s failed", goal_id)
         raise
 
 

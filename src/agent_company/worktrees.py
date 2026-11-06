@@ -7,11 +7,15 @@ so agents never edit the main checkout or anything outside the sandbox.
 
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from agent_company.config import settings
+
+log = logging.getLogger(__name__)
 
 
 class WorktreeError(RuntimeError):
@@ -77,9 +81,23 @@ def create(repo: Path | str, name: str, base: str | None = None) -> tuple[Path, 
     path = settings().worktrees_dir / _safe(name)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        return path, branch, base
-    git(repo, "worktree", "add", "-q", "-b", branch, str(path), base)
+        if _worktree_of(repo, path):  # this goal's own worktree: resumed as it is
+            return path, branch, base
+        # Something else under this name (another repository's worktree, a leftover of a deleted database): it is
+        # moved aside, never deleted, and the goal gets a fresh worktree.
+        aside = path.with_name(f"{path.name}.stale-{int(time.time())}")
+        path.rename(aside)
+        log.warning("moved %s aside to %s: not a worktree of %s", path, aside, repo)
+    git(repo, "worktree", "prune")
+    exists = git(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False)
+    git(repo, "worktree", "add", "-q", *([str(path), branch] if exists else ["-b", branch, str(path), base]))
     return path, branch, base
+
+
+def _worktree_of(repo: Path, path: Path) -> bool:
+    """Whether `path` is a working worktree registered in `repo`."""
+    listed = {Path(w.get("worktree", "")).resolve() for w in list_worktrees(repo)}
+    return path.resolve() in listed and bool(git(path, "rev-parse", "--git-dir", check=False))
 
 
 # Generated files never belong in a goal's commit (bytecode, caches, dependencies, attachments).

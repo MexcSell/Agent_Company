@@ -56,8 +56,19 @@ def env(tmp_path, monkeypatch):
     yield tmp_path
     import threading
 
-    for t in threading.enumerate():  # a goal a test ran in the background (loop.enqueue) must not write into the
-        if t.name.removeprefix("goal-").isdigit():  # next test's database, whose goal ids start at 1 again
-            t.join(timeout=30)
+    goals = [t for t in threading.enumerate() if t.name.removeprefix("goal-").isdigit()]
+    for t in goals:  # a goal a test ran in the background (loop.enqueue) must not write into the
+        t.join(timeout=30)  # next test's database, whose goal ids start at 1 again
+    late = [t for t in goals if t.is_alive()]
+    for t in late:  # still working: cancelled in this test's database, so it stops at its next step
+        try:
+            loop.cancel(int(t.name.removeprefix("goal-")))
+        except Exception:  # noqa: BLE001 - finished meanwhile
+            pass
+    for t in late:
+        t.join(timeout=60)
+    # Past this point DATA_DIR is the real one again: a goal thread still alive would write into data/ (2026-11-05 it
+    # left a worktree there that broke the next real goal 1).
+    assert not [t.name for t in late if t.is_alive()], "a background goal outlived its test"
     db.reset_engine()
     config.reset_settings()

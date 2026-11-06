@@ -59,6 +59,30 @@ def test_existing_repo_gets_its_own_worktree(tmp_path):
     assert worktrees.git(repo, "rev-parse", "--abbrev-ref", "HEAD") == "main"
 
 
+def test_a_stale_folder_at_the_worktree_path_is_moved_aside(tmp_path):
+    from agent_company.config import settings
+
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    worktrees.git(repo, "init", "-q", "-b", "main")
+    (repo / "a.txt").write_text("x")
+    worktrees.git(repo, "add", ".")
+    worktrees.git(repo, "commit", "-q", "-m", "init")
+    # What a test's background goal once left in data/worktrees: another repository's worktree under this name.
+    stale = settings().worktrees_dir / "goal-1"
+    stale.mkdir(parents=True)
+    (stale / ".git").write_text("gitdir: /nowhere/.git/worktrees/goal-1\n")
+    gid = loop.create_goal("Change it", repo_path=str(repo), quality_commands=["test -f a.txt"])
+    assert gid == 1 and loop.run_goal(gid)["status"] == "awaiting_approval"
+    assert worktrees.git(stale, "rev-parse", "--abbrev-ref", "HEAD") == "agents/goal-1"
+    aside = [p for p in settings().worktrees_dir.iterdir() if p.name.startswith("goal-1.stale-")]
+    assert len(aside) == 1 and (aside[0] / ".git").read_text().startswith("gitdir: /nowhere")
+    # The goal's own worktree is resumed as it is, and a branch left by a removed worktree is checked out again.
+    assert worktrees.create(repo, "goal-1")[0] == stale and (stale / "a.txt").exists()
+    worktrees.remove(repo, stale)
+    assert worktrees.create(repo, "goal-1")[0] == stale and (stale / "WORKLOG.md").exists()
+
+
 def test_rejects_non_git_repo(tmp_path):
     with pytest.raises(ValueError):
         loop.create_goal("x", repo_path=str(tmp_path))
