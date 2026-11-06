@@ -1291,6 +1291,17 @@ def _material(question: str, keywords: list[str], preference: str, after: date |
     return docs, counts
 
 
+def report_prompt(question: str, docs: list[dict[str, Any]], terms: str = "") -> str:
+    """The research room's report prompt: the question, the request's terms, REPORT_INSTRUCTIONS and the numbered
+    material (pure, so the research benchmark puts its reference documents in front of the room the same way)."""
+    material = "\n\n".join(f'[{i}] <document url="{d["url"]}" kind="{d.get("category", "")}" title="{d["title"]}"'
+                            + (f' published="{d["published_at"][:10]}"' if d.get("published_at") else "")
+                            + (f' language="{d["language"]}"' if d.get("language") else "")
+                            + "".join(' {}="{}"'.format(*lb.split("=", 1)) for lb in d.get("labels") or [])
+                            + f'>\n{d["text"]}\n</document>' for i, d in enumerate(docs, 1))
+    return f"Research question: {question}\n{terms}\n{REPORT_INSTRUCTIONS}\n\nMaterial:\n{material or '(none found)'}"
+
+
 def _documents(ids: list[int], words: list[str], skip: set[int], after: date | None = None,
                before: date | None = None, languages: list[str] | None = None) -> list[dict[str, Any]]:
     """The documents the research lead's tools found, as `search` lists them, within the request's filters."""
@@ -1352,11 +1363,6 @@ def run_report(report_id: int, client: httpx.Client | None = None, allow_private
         docs, counts = _material(question, keywords, preference, after, before, languages)
         docs += _documents(tools["documents"], [*keywords, question], {d["id"] for d in docs},
                            after, before, languages)[:research_agent.MAX_DOCS - 2]
-        material = "\n\n".join(f'[{i}] <document url="{d["url"]}" kind="{d["category"]}" title="{d["title"]}"'
-                                + (f' published="{d["published_at"][:10]}"' if d.get("published_at") else "")
-                                + (f' language="{d["language"]}"' if d.get("language") else "")
-                                + "".join(' {}="{}"'.format(*lb.split("=", 1)) for lb in d["labels"])
-                                + f'>\n{d["text"]}\n</document>' for i, d in enumerate(docs, 1))
         method = filters_line(after, before, languages, counts) if filtered else ""
         terms = (f"Keywords: {', '.join(keywords)}\n" if keywords else "") + (
             f"Prefer {preference.replace('_', ' ')} sources; say when a finding rests on another kind.\n"
@@ -1365,8 +1371,7 @@ def run_report(report_id: int, client: httpx.Client | None = None, allow_private
             "rests on one.\n" if filtered else "")
         req = executors.Request(
             purpose="report", role="research", system=f"You are {agent.name}, the research lead of an AI company.",
-            prompt=f"Research question: {question}\n{terms}\n{REPORT_INSTRUCTIONS}\n\nMaterial:\n{material or '(none found)'}",
-            data={"question": question, "documents": docs})
+            prompt=report_prompt(question, docs, terms), data={"question": question, "documents": docs})
         # the research lead calls its model through the router (Claude Code, Codex, Copilot or an API model; the
         # route's fallbacks when one is at its usage limit) and then checks the answer with its own tools
         res, choice = router.run("research", req, agent.model_pref, agent_id=agent.id, goal_id=goal_id)
@@ -1476,10 +1481,15 @@ def _support(evidence: list[dict[str, Any]]) -> str:
     return "contested" if backs and against else "supported" if backs else "unsupported"
 
 
-def check_claims(s, text: str, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:  # noqa: ANN001
+def check_claims(s, text: str, sources: list[dict[str, Any]],  # noqa: ANN001
+                 documents: dict[str, Document] | None = None) -> list[dict[str, Any]]:
     """The report's numbered findings as claims, each with its evidence: the cited stored document, the excerpt that
     backs it (or that it does not), the relationship the author gave, and when the document was retrieved. `support`
-    is the deterministic check; `status` is decided by the review."""
+    is the deterministic check; `status` is decided by the review.
+
+    `documents` (by URL) are unsaved Documents to check against instead of the stored ones, e.g. the research
+    benchmark's reference documents (G-R-13, ADR 0003): a source then resolves only from them and the DB is never
+    queried, so `s` may be None."""
     by_n = {x["n"]: x for x in sources}
     claims: list[dict[str, Any]] = []
     for line in _section(text, "Findings").splitlines():
@@ -1496,9 +1506,12 @@ def check_claims(s, text: str, sources: list[dict[str, Any]]) -> list[dict[str, 
                 continue
             seen.add((n, rel))
             src = by_n.get(n)
-            doc = s.get(Document, src["id"]) if src and src.get("id") else None
-            if doc is None and src:
-                doc = s.scalars(select(Document).where(Document.url == src["url"])).first()
+            if documents is not None:
+                doc = documents.get(src["url"]) if src else None
+            else:
+                doc = s.get(Document, src["id"]) if src and src.get("id") else None
+                if doc is None and src:
+                    doc = s.scalars(select(Document).where(Document.url == src["url"])).first()
             ev = {"n": n, "source_id": doc.id if doc else None, "url": src["url"] if src else "",
                   "relationship": rel, "retrieved": _iso(doc.fetched_at or doc.created_at) if doc else None}
             ev.update(_excerpt(doc, claim, quotes) if doc else

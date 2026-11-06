@@ -11,8 +11,13 @@ A suite is a JSON file:
 
 A suite may name its `kind` (`benchmark`, the default; `practice` exercises; or a `final` evaluation set,
 whose checks never reach an agent: SPEC-13 S13-R-02; or `adversarial`, traps run like a final set: S09-R-05; or
-`room` with its `room`, the suite a gated room passes before it is enabled: G-R-04) and the `skills` it trains or
-measures.
+`room` with its `room`, the suite a gated room passes before it is enabled: G-R-04; or `research`, the research
+room's source-graded benchmark: G-R-13) and the `skills` it trains or measures. A `research` suite has no checks and
+no seed repository: its `documents` are reference documents under `eval-research://` that stay in memory (ADR 0003),
+and each task's `expect` (citations, facts, forbidden claims, sections) is graded without a model judge.
+`run_suite` hands it to `research_eval.run`: the research room writes a report per task and repeat as
+`research.run_report` does, `research.check_claims` grades it against the reference documents, and each run is one
+EvalRun (no goal) whose dimensions carry the same keys plus a `research` grading, so summary and compare apply.
 
 Each task runs `repeats` times, each time as a fresh goal (origin "eval") in a new
 repository seeded with `files`. A task counts as solved only if every repeat passes.
@@ -58,7 +63,35 @@ def load_suite(path: str | Path) -> dict[str, Any]:
         if not t.get("name") or not t.get("title"):
             raise ValueError("every task needs a name and a title")
     data.setdefault("name", p.stem)
+    if data.get("kind") == "research":
+        _check_research(data)
     return data
+
+
+RESEARCH_SCHEME = "eval-research://"
+RESEARCH_CATEGORIES = ("find", "verify", "summarise", "compare", "tests", "recommend")
+
+
+def _check_research(data: dict[str, Any]) -> None:
+    """A research suite (G-R-13): reference documents under the reserved scheme, tasks of a known category that use
+    only those documents and cite only theirs."""
+    docs = data.get("documents")
+    if not isinstance(docs, list) or not docs:
+        raise ValueError("a research suite needs a non-empty 'documents' list")
+    urls = {}
+    for d in docs:
+        if not d.get("id") or d["id"] in urls or not str(d.get("url", "")).startswith(RESEARCH_SCHEME) \
+                or not d.get("text"):
+            raise ValueError(f"every reference document needs a unique id, an {RESEARCH_SCHEME} url and a text")
+        urls[d["id"]] = d["url"]
+    for t in data["tasks"]:
+        exp = t.get("expect")
+        if t.get("category") not in RESEARCH_CATEGORIES or not t.get("question") or not isinstance(exp, dict):
+            raise ValueError(f"research task {t['name']} needs a category, a question and an expect")
+        if not t.get("documents") or any(i not in urls for i in t["documents"]):
+            raise ValueError(f"research task {t['name']} names an unknown reference document")
+        if any(u not in {urls[i] for i in t["documents"]} for u in exp.get("cite") or []):
+            raise ValueError(f"research task {t['name']} expects a citation of a document it is not given")
 
 
 def usable(suite: dict[str, Any]) -> bool:
@@ -166,6 +199,11 @@ def run_suite(suite: str | Path, label: str, repeats: int = 3, only: list[str] |
     from agent_company import performance
 
     data = load_suite(suite)
+    if data.get("kind") == "research":  # no seed repository and no checks: graded reports, never a coding goal
+        from agent_company import research_eval
+
+        stopped = research_eval.run(data, label, repeats, only, budget_usd, trial=trial)
+        return _finished(label, budget_usd, stopped)
     tasks = [t for t in data["tasks"] if not only or t["name"] in only]
     final = data.get("kind") in {"final", "adversarial"}
     trial = dict(trial or {}) | ({"hide_checks": True} if final else {})
@@ -206,6 +244,10 @@ def run_suite(suite: str | Path, label: str, repeats: int = 3, only: list[str] |
             log_event("eval", f"{label}: {task['name']} run {rep} {g.status}", goal_id=gid)
         if stopped:
             break
+    return _finished(label, budget_usd, stopped)
+
+
+def _finished(label: str, budget_usd: float, stopped: bool) -> dict[str, Any]:
     if stopped:
         log_event("eval", f"{label}: stopped on its budget of ${budget_usd:.2f}")
         try:
