@@ -148,7 +148,15 @@ window.WSP = window.WSP || {};
     let hqTimer = 0;
     hq.oninput = () => { C.hist.q = hq.value; renderHist(); clearTimeout(hqTimer); hqTimer = setTimeout(loadHist, 300); };
     el.querySelector("#wc-hist").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); openHist(false); } });
-    el.querySelector("#wc-hist-body").addEventListener("click", (e) => { const b = e.target.closest("[data-hact]"); if (b) histAction(b.dataset.hact, b.dataset.sid); });
+    // A button does its action; a click elsewhere on a row selects it: an ended conversation shows in a tab with the
+    // prompt box ready to continue it, a running session shows live.
+    el.querySelector("#wc-hist-body").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-hact]");
+      if (b) return histAction(b.dataset.hact, b.dataset.sid);
+      const r = e.target.closest("[data-hrow]");
+      if (!r?.dataset.hrow || getSelection()?.toString()) return;
+      histAction(r.dataset.hstatus === "ended" ? "resume" : "open", r.dataset.hrow);
+    });
     el.querySelector("#wc-info-btn").onclick = () => openInfo(C.info ? "" : "status");
     el.querySelector("#wc-info-close").onclick = () => openInfo("");
     el.querySelectorAll("[data-info]").forEach((b) => (b.onclick = () => openInfo(b.dataset.info)));
@@ -605,8 +613,11 @@ window.WSP = window.WSP || {};
     C.el.querySelector('[data-count="running"]').textContent = running.length || "";
     C.el.querySelector('[data-count="history"]').textContent = H.at ? H.total : "";
     C.el.querySelectorAll("[data-hist]").forEach((b) => { b.classList.toggle("on", b.dataset.hist === H.tab); b.setAttribute("aria-selected", String(b.dataset.hist === H.tab)); });
-    const btn = (act, sid, label, cls = "", title = "") => `<button type="button" class="btn sm ${cls}" data-hact="${act}" data-sid="${esc(sid)}"${title ? ` title="${esc(title)}"` : ""}>${label}</button>`;
-    const row = (r, acts) => `<li class="wc-hrow${r.status === "ended" ? " ended" : ""}${r.session_id && r.session_id === viewSid() ? " on" : ""}">
+    // Icon buttons from the start: rendered as text, the page's iconize pass would swap them a moment later, on
+    // every refresh of this list.
+    const HICON = { open: "eye", resume: "play", stop: "stop", delete: "trash" };
+    const btn = (act, sid, label, cls = "", title = "") => `<button type="button" class="btn sm icon ${cls}" data-hact="${act}" data-sid="${esc(sid)}" title="${esc(title || label)}" aria-label="${esc(label)}">${icon(HICON[act], 16)}</button>`;
+    const row = (r, acts) => `<li class="wc-hrow${r.status === "ended" ? " ended" : ""}${r.session_id && r.session_id === viewSid() ? " on" : ""}" data-hrow="${esc(r.session_id || "")}" data-hstatus="${esc(r.status || "")}" title="${r.status === "ended" ? "Show this conversation and continue it here" : "Show this session"}">
         <span class="wc-dot${r.status === "busy" ? " busy" : r.status === "ended" ? " off" : ""}"></span>
         <div class="wc-hmain"><div class="wc-htitle"><b>${esc(r.title || r.session_id.slice(0, 8))}</b>${r.panel ? '<span class="wc-badge">tab in this panel</span>' : ""}${r.entrypoint && !r.panel ? `<span class="wc-badge">${esc(ENTRY[r.entrypoint] || r.entrypoint)}</span>` : ""}${r.status !== "ended" ? `<span class="wc-badge ${esc(r.status)}">${r.status === "busy" ? "working" : esc(r.status)}</span>` : ""}</div>
           <div class="muted mono wc-hsub" title="${esc(r.cwd || "")}">${esc(r.cwd || "")}${r.git_branch ? ` · ⎇ ${esc(r.git_branch)}` : ""}</div>
@@ -628,7 +639,9 @@ window.WSP = window.WSP || {};
         }).join("")}</ul>${H.total > items.length ? `<p class="muted wc-hempty">Showing ${items.length} of ${H.total}: search to narrow down.</p>` : ""}`
         : `<p class="muted wc-hempty">${H.q ? "No session matches." : "No earlier sessions yet."}</p>`;
     }
-    if (body.innerHTML !== html) { const top = body.scrollTop; body.innerHTML = html; body.scrollTop = top; }
+    // Compared with the last markup, not body.innerHTML: the browser serialises SVG differently, which would
+    // rebuild the list on every poll.
+    if (H.html !== html) { H.html = html; const top = body.scrollTop; body.innerHTML = html; body.scrollTop = top; }
   }
   async function histAction(act, sid) {
     const r = histRow(sid) || C.sessions.find((s) => s.session_id === sid) || {};

@@ -50,7 +50,7 @@ window.WSP = window.WSP || {};
     });
     new MutationObserver(() => T.list.forEach((t) => (t.term.options.theme = theme()))).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     // Coming back to the tab (or the network): lost connections reconnect by themselves.
-    const wake = () => { if (!document.hidden) T.list.filter((t) => t.lost && t.lost !== 4404).forEach((t) => reconnect(t, true)); };
+    const wake = () => { if (!document.hidden) T.list.filter((t) => t.alive && !t.gone && t.ws && t.ws.readyState > 1).forEach((t) => reconnect(t, true)); };
     document.addEventListener("visibilitychange", wake); addEventListener("online", wake);
     new ResizeObserver(() => W.fitTerminals()).observe(el);
     try {
@@ -90,8 +90,13 @@ window.WSP = window.WSP || {};
     const fit = new window.FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(host);
-    const t = { id: s.id, cwd: s.cwd, title: (s.cwd.split("/").pop() || "/"), host, term, fit, ws: null, alive: true, retry: 0 };
-    t.send = (data) => { if (t.ws?.readyState === 1) t.ws.send(JSON.stringify({ t: "in", data })); };
+    const t = { id: s.id, cwd: s.cwd, title: (s.cwd.split("/").pop() || "/"), host, term, fit, ws: null, alive: true, retry: 0, pending: "" };
+    // Input typed while the connection is down waits (up to 4 KB) and goes out once it is back; typing reconnects at once.
+    t.send = (data) => {
+      if (t.ws?.readyState === 1 && t.ready) return t.ws.send(JSON.stringify({ t: "in", data }));
+      if (!t.alive) return;
+      t.pending = (t.pending + data).slice(-4096); revive(t);
+    };
     term.onData((d) => t.send(d));
     term.onBinary((d) => { if (t.ws?.readyState === 1) t.ws.send(Uint8Array.from(d, (c) => c.charCodeAt(0))); });
     term.onResize(({ cols, rows }) => { if (t.ws?.readyState === 1) t.ws.send(JSON.stringify({ t: "resize", cols, rows })); });
@@ -111,49 +116,72 @@ window.WSP = window.WSP || {};
     return t;
   }
 
+  // A broken connection is not shown: the screen stays as it is and the terminal reconnects quietly, for as long as it
+  // takes. The same shell replays its output; a shell the server no longer has (it restarted) is replaced by a new one
+  // in the same folder on the next input, below what was there.
+  // `t.got`: how much of this shell's output the screen has, so a reconnect asks only for the rest.
   function connect(t) {
-    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/terminal/sessions/${t.id}/ws`);
+    const after = t.got != null && !t.fresh ? `?after=${t.got}` : "";
+    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/terminal/sessions/${t.id}/ws${after}`);
     ws.binaryType = "arraybuffer";
-    t.ws = ws;
-    let first = true;
-    ws.onopen = () => { t.retry = 0; t.lost = 0; t.alive = true; renderTabs(); try { t.fit.fit(); } catch { /* hidden */ } ws.send(JSON.stringify({ t: "resize", cols: t.term.cols, rows: t.term.rows })); };
+    t.ws = ws; t.ready = false;
+    ws.onopen = () => {
+      t.retry = 0; t.lost = 0; t.alive = true; renderTabs();
+      try { t.fit.fit(); } catch { /* hidden */ }
+      ws.send(JSON.stringify({ t: "resize", cols: t.term.cols, rows: t.term.rows }));
+    };
     ws.onmessage = (ev) => {
       if (typeof ev.data === "string") {
         const m = JSON.parse(ev.data);
         if (m.t === "exit") { t.alive = false; t.term.write(`\r\n\x1b[2m[process exited${m.code != null ? ` with code ${m.code}` : ""} · press Enter to close]\x1b[0m\r\n`); renderTabs(); armClose(t); }
+        // The replay that follows: the rest of what the screen has (kept), a new shell's output (below the old
+        // screen), or the whole buffer again (the screen starts over from it).
+        // Only now is the shell known to exist (a gone one opens too, then closes with 4404): typed input goes out.
+        if (m.t === "at") {
+          if (m.from !== t.got && !t.fresh) t.term.reset();
+          t.fresh = false; t.got = m.from; t.ready = true;
+          if (t.pending) { ws.send(JSON.stringify({ t: "in", data: t.pending })); t.pending = ""; }
+        }
         return;
       }
-      if (first) { first = false; t.term.reset(); }
+      t.got = (t.got || 0) + ev.data.byteLength;
       t.term.write(new Uint8Array(ev.data));
     };
     ws.onclose = (ev) => {
-      if (!t.alive || t.closed) return;
-      if (ev.code === 4404 || ev.code === 4403 || t.retry > 8) {
-        const why = ev.code === 4403 ? "refused: sign in as an administrator, and if a proxy is in front, forward the Host or X-Forwarded-Host header"
-          : ev.code === 4404 ? "this shell no longer exists on the server" : "the server is not reachable";
-        t.alive = false; t.lost = ev.code === 4404 ? 4404 : ev.code || 1;
-        t.term.write(`\r\n\x1b[31m[terminal disconnected: ${why}]\x1b[0m \x1b[2m· press Enter or the reconnect button${ev.code === 4404 ? " to open a new shell here" : " to reconnect"}\x1b[0m\r\n`);
+      if (t.ws !== ws || !t.alive || t.closed) return;
+      if (ev.code === 4403) {  // a refusal, not a lost connection: say so
+        t.alive = false; t.lost = 4403;
+        t.term.write("\r\n\x1b[31m[terminal refused: sign in as an administrator, and if a proxy is in front, forward the Host or X-Forwarded-Host header]\x1b[0m \x1b[2m· press Enter or the reconnect button to try again\x1b[0m\r\n");
         renderTabs(); armReconnect(t); return;
       }
+      if (ev.code === 4404) { t.gone = true; if (t.pending) revive(t); return; }
       t.retry++;
-      setTimeout(() => { if (!t.closed) connect(t); }, Math.min(8000, 500 * 2 ** t.retry));
+      clearTimeout(t.timer);
+      t.timer = setTimeout(() => { if (!t.closed && t.ws === ws) connect(t); }, Math.min(8000, 500 * 2 ** Math.min(t.retry, 5)));
     };
   }
-  // Reconnect a lost terminal: the same shell when the server still has it, else a new one in the same folder.
-  async function reconnect(t, quiet) {
+  // Connect again now: the same shell when the server still has it, else a new one in the same folder that takes over
+  // this tab and its screen.
+  async function revive(t) {
+    if (t.closed || t.reviving) return;
+    if (!t.gone) { if (t.ws && t.ws.readyState > 1) { clearTimeout(t.timer); connect(t); } return; }
+    t.reviving = true;
+    try {
+      const s = await api("/api/terminal/sessions", { method: "POST", body: { cwd: t.cwd, cols: t.term.cols, rows: t.term.rows } });
+      if (t.closed) { api(`/api/terminal/sessions/${s.id}`, { method: "DELETE" }).catch(() => {}); return; }
+      Object.assign(t, { id: s.id, cwd: s.cwd, gone: false, fresh: true, retry: 0 });
+      connect(t);
+    } catch { /* still not reachable: the next input tries again */ }
+    finally { t.reviving = false; }
+  }
+  function reconnect(t, quiet) {
     if (!t) return;
-    if (t.lost === 4404) {
-      const i = T.list.indexOf(t);
-      await W.newTerminal(t.cwd);
-      close(t);
-      if (i >= 0 && T.list.length) activate(T.list[T.list.length - 1]);
-      return;
-    }
-    if (!t.lost && t.ws?.readyState === 1) { if (!quiet) toast("Terminal is connected"); return; }
-    t.retry = 0; t.lost = 0; t.alive = true; t.closed = false;
-    t.term.write("\r\n\x1b[2m[reconnecting…]\x1b[0m\r\n");
+    if (t.lost) { t.lost = 0; t.alive = true; t.retry = 0; connect(t); renderTabs(); return; }
+    if (t.gone) return revive(t);
+    if (t.ws?.readyState === 1) { if (!quiet) toast("Terminal is connected"); return; }
+    t.retry = 0; clearTimeout(t.timer);
     try { t.ws?.close(); } catch { /* already closed */ }
-    connect(t); renderTabs();
+    connect(t);
   }
   function armReconnect(t) {
     const d = t.term.onData((data) => { if (data === "\r" && t.lost) { d.dispose(); reconnect(t); } });
@@ -169,7 +197,7 @@ window.WSP = window.WSP || {};
     if (t) requestAnimationFrame(() => { W.fitTerminals(); t.term.focus(); });
   }
   async function close(t) {
-    t.closed = true;
+    t.closed = true; clearTimeout(t.timer);
     t.ws?.close();
     if (t.alive) await api(`/api/terminal/sessions/${t.id}`, { method: "DELETE" }).catch(() => {});
     else api(`/api/terminal/sessions/${t.id}`, { method: "DELETE" }).catch(() => {});
@@ -181,7 +209,7 @@ window.WSP = window.WSP || {};
   }
   function renderTabs() {
     const bar = T.el.querySelector(".wt-tabs");
-    bar.innerHTML = T.list.map((t, i) => `<div class="wt-tab${t === T.active ? " on" : ""}${t.alive ? "" : " dead"}${t.lost ? " lost" : ""}" role="tab" data-i="${i}" title="${esc(t.cwd)}${t.lost ? " · disconnected: click to reconnect" : ""}">${W.svg("M4 17l6-5-6-5M12 19h8")}<span>${esc(t.title)}</span><button class="wtab-x" data-close="${i}" aria-label="Kill terminal">×</button></div>`).join("")
+    bar.innerHTML = T.list.map((t, i) => `<div class="wt-tab${t === T.active ? " on" : ""}${t.alive ? "" : " dead"}${t.lost ? " lost" : ""}" role="tab" data-i="${i}" title="${esc(t.cwd)}${t.lost ? " · refused: click to try again" : ""}">${W.svg("M4 17l6-5-6-5M12 19h8")}<span>${esc(t.title)}</span><button class="wtab-x" data-close="${i}" aria-label="Kill terminal">×</button></div>`).join("")
       || '<span class="muted wt-none">Terminal</span>';
     bar.querySelectorAll(".wt-tab").forEach((el) => {
       const t = T.list[Number(el.dataset.i)];

@@ -1552,15 +1552,26 @@ def create_app(start_background: bool = True) -> FastAPI:
             await ws.close(code=4403)
             return
         sess = terminal.SESSIONS.get(sid)
-        if sess is None:
+        await ws.accept()
+        if sess is None:  # after accept, so the browser gets the code (closed before, it sees only 1006) and starts a new shell
             await ws.close(code=4404)
             return
-        await ws.accept()
         q = sess.attach()
+        # The replay, taken in the same step as attaching so no output is in both. A browser that reconnects says
+        # how much it has (`after`): it gets only the rest, when the buffer still reaches back that far. The
+        # "at" frame says where the bytes that follow begin, so it knows whether to clear its screen first.
+        start = sess.total - len(sess.buffer)
+        try:
+            after = int(ws.query_params.get("after", ""))
+        except ValueError:
+            after = -1
+        begin = after if start <= after <= sess.total else start
+        replay = bytes(sess.buffer[begin - start:])
 
         async def outgoing() -> None:
-            if sess.buffer:
-                await ws.send_bytes(bytes(sess.buffer))
+            await ws.send_text(_json.dumps({"t": "at", "from": begin}))
+            if replay:
+                await ws.send_bytes(replay)
             if not sess.alive:
                 await ws.send_text(_json.dumps({"t": "exit", "code": sess.exit_code}))
                 return

@@ -273,8 +273,8 @@ window.WSP = window.WSP || {};
       try { fresh.set(d, (await api(`/api/files/list?path=${encodeURIComponent(d)}`)).items.filter((it) => it.name !== ".git")); if (d === T.root) rootOk = true; }
       catch (e) { if (unreachable(e)) { lost = true; return; } fresh.delete(d); if (d !== T.root) T.open.delete(d); }
     }));
-    if (lost) { S.offline = true; status("Server not reachable: showing the last list"); return; }
-    if (S.offline) { S.offline = false; status(""); }
+    if (lost) { S.offline = true; S.idle = 0; return; }  // the last list stays as it is, without a notice; the next refresh (10 s) retries
+    S.offline = false;
     T.missing = !rootOk;
     if (!rootOk) { T.dirs.clear(); return renderTree(T); }
     const before = JSON.stringify([...T.dirs.entries()].filter(([k]) => fresh.has(k)).map(([k, v]) => [k, v.map((i) => i.name + i.size + i.modified)]));
@@ -319,7 +319,8 @@ window.WSP = window.WSP || {};
 
   async function toggleDir(T, path, force) {
     const open = force ?? !T.open.has(path);
-    if (open) { T.open.add(path); if (!T.dirs.has(path)) { try { await loadDir(T, path); } catch (e) { toast(e.message); T.open.delete(path); } } }
+    // Unreachable: the folder stays open and the next refresh lists it.
+    if (open) { T.open.add(path); if (!T.dirs.has(path)) { try { await loadDir(T, path); } catch (e) { if (!unreachable(e)) { toast(e.message); T.open.delete(path); } } } }
     else T.open.delete(path);
     saveState(T); renderTree(T);
   }
@@ -447,7 +448,7 @@ window.WSP = window.WSP || {};
     if (x === "newfile") return act.create(T, dir, false);
     if (x === "newdir") return act.create(T, dir, true);
     if (x === "upload") return act.upload(T, dir);
-    if (x === "refresh") return refresh(T).then(() => toast(S.offline ? "The server is not reachable" : "Refreshed"));
+    if (x === "refresh") return refresh(T).then(() => S.offline || toast("Refreshed"));
     if (x === "collapse") { T.open.clear(); saveState(T); renderTree(T); }
     if (x === "filter") return toggleFilter(T);
   }
@@ -755,7 +756,7 @@ window.WSP = window.WSP || {};
   }
   // Reload tabs whose files changed on disk (after a Claude run, for instance).
   W.dirtyTabs = () => S.tabs.some((t) => t.dirty);
-  W.reloadCleanTabs = () => S.tabs.forEach((t) => { if (!t.dirty) { t.file = null; t.text = null; t.pdf = null; t.stamp = Date.now(); W.renderView(t, t.host, viewActions); } });
+  W.reloadCleanTabs = () => S.tabs.forEach((t) => { if (!t.dirty) { t.last = t.file; t.file = null; t.text = null; t.pdf = null; t.stamp = Date.now(); W.renderView(t, t.host, viewActions); } });
 
   // --- view ------------------------------------------------------------------------------
   async function viewWorkspace(quiet, noClaude = false) {

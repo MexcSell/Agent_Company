@@ -284,8 +284,17 @@ window.WSP = window.WSP || {};
     const modes = TEXT_MODES[tab.kind] || (BINARY_KINDS.has(tab.kind) ? [] : ["code"]);
     const textual = !BINARY_KINDS.has(tab.kind);
     if (textual && !tab.file) {
-      host.innerHTML = '<div class="wv-empty muted">Loading…</div>';
-      try { tab.file = await api(`/api/files/read?path=${encodeURIComponent(tab.path)}`); } catch (e) { host.innerHTML = `<div class="wv-empty">${esc(e.message)}</div>`; return; }
+      // While the server cannot be reached, a file shown before stays as it was (its last copy) and a new one keeps
+      // "Loading…" and tries again; only a real answer (gone, forbidden, too large) shows an error.
+      if (!tab.last) host.innerHTML = '<div class="wv-empty muted">Loading…</div>';
+      try { tab.file = await api(`/api/files/read?path=${encodeURIComponent(tab.path)}`); tab.last = null; }
+      catch (e) {
+        if (e.status && e.status < 502) { tab.last = null; host.innerHTML = `<div class="wv-empty">${esc(e.message)}</div>`; return; }
+        // parentNode, not isConnected: a tab of a Workspace that is not on screen keeps trying; a closed one stops.
+        if (!tab.last) { setTimeout(() => { if (host.parentNode && !tab.file) renderView(tab, host, actions); }, 3000); return; }
+        tab.file = tab.last; tab.last = null;
+        if (host.querySelector(".wv-body")) { if (!tab.file.binary && tab.text == null) tab.text = tab.file.text; return; }  // shown as it was
+      }
       if (!tab.file.binary && tab.text == null) tab.text = tab.file.text;
     }
     const binaryText = textual && tab.file?.binary;
@@ -311,7 +320,7 @@ window.WSP = window.WSP || {};
       if (a === "close") return openFind(tab, host, actions, false);
       if (a === "wrap") { tab.wrap = !tab.wrap; body.querySelector(".codev")?.classList.toggle("wrap", tab.wrap); return; }
       if (a === "copy-path") return W.copyText(tab.path, "Path copied");
-      if (a === "reload") { if (tab.dirty && !confirm("Discard unsaved changes?")) return; tab.file = null; tab.text = null; tab.dirty = false; tab.pdf = null; actions.changed(tab); return renderView(tab, host, actions); }
+      if (a === "reload") { if (tab.dirty && !confirm("Discard unsaved changes?")) return; tab.last = tab.dirty ? null : tab.file; tab.file = null; tab.text = null; tab.dirty = false; tab.pdf = null; actions.changed(tab); return renderView(tab, host, actions); }
       if (a.startsWith("zoom")) { tab.zoom = a === "zoom-fit" ? null : Math.min(8, Math.max(0.1, (tab.zoom || 1) * (a === "zoom-in" ? 1.25 : 0.8))); return renderView(tab, host, actions); }
     }));
 

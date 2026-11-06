@@ -138,6 +138,35 @@ def test_terminal_session_runs_commands_and_replays(admin, root):
     assert {"terminal_open", "terminal_close"} <= actions
 
 
+def test_terminal_reconnect_resumes_where_the_screen_was(admin, root):
+    """A browser that reconnects with `after` gets only the output it has not seen, so its screen stays as it was."""
+    s = admin.post("/api/terminal/sessions", json={"cwd": str(root)}).json()
+    url = f"/api/terminal/sessions/{s['id']}/ws"
+    with admin.websocket_connect(url) as ws:
+        assert json.loads(ws.receive_text()) == {"t": "at", "from": 0}
+        ws.send_text(json.dumps({"t": "in", "data": "echo first-$((2+2))\n"}))
+        seen, _ = _read_until(ws, b"first-4\r\n")
+    # The browser is offline while the shell prints more.
+    with admin.websocket_connect(url) as ws:
+        ws.receive_text()
+        ws.send_text(json.dumps({"t": "in", "data": "echo second-$((3+3))\n"}))
+        _read_until(ws, b"second-6\r\n")
+    with admin.websocket_connect(f"{url}?after={len(seen)}") as ws:
+        assert json.loads(ws.receive_text()) == {"t": "at", "from": len(seen)}
+        rest, _ = _read_until(ws, b"second-6\r\n")
+        assert b"first-4\r\n" not in rest
+    # An offset the buffer cannot serve replays everything from its start.
+    with admin.websocket_connect(f"{url}?after=999999999") as ws:
+        assert json.loads(ws.receive_text()) == {"t": "at", "from": 0}
+        full, _ = _read_until(ws, b"second-6\r\n")
+        assert full.startswith(seen[:20])
+    admin.delete(f"/api/terminal/sessions/{s['id']}")
+    # A shell the server no longer has (it restarted) answers 4404, which the browser must see to start a new one.
+    with admin.websocket_connect(url) as ws:
+        msg = ws.receive()
+    assert msg["type"] == "websocket.close" and msg["code"] == 4404
+
+
 def test_terminal_is_admin_only_and_same_origin(admin, root):
     s = admin.post("/api/terminal/sessions", json={"cwd": str(root)}).json()
     member = member_of(admin)

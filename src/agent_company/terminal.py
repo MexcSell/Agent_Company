@@ -68,6 +68,7 @@ class Session:
         self.cwd, self.owner = str(cwd), owner
         self.created = self.last_seen = time.time()
         self.buffer = bytearray()
+        self.total = 0  # bytes of output so far: the buffer holds the last of them, from `total - len(buffer)`
         self.listeners: set[asyncio.Queue[bytes | None]] = set()
         self.exit_code: int | None = None
         self._pending = bytearray()
@@ -100,6 +101,7 @@ class Session:
             self._finish()
             return
         self.buffer += data
+        self.total += len(data)
         if len(self.buffer) > SCROLLBACK:
             del self.buffer[: len(self.buffer) - SCROLLBACK]
         for q in list(self.listeners):

@@ -385,7 +385,7 @@ table.csv .c4 { color: var(--t-kw); } table.csv .c5 { color: var(--t-num); } tab
 .wc-count { font-weight: 500; font-size: 11px; opacity: .8; }
 .wc-hist-body { flex: 1; min-height: 0; overflow: auto; padding: 6px 8px 10px; }
 .wc-hlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.wc-hrow { display: flex; align-items: flex-start; gap: 9px; padding: 8px; border-radius: 7px; border: 1px solid transparent; }
+.wc-hrow { display: flex; align-items: flex-start; gap: 9px; padding: 8px; border-radius: 7px; border: 1px solid transparent; cursor: pointer; }
 .wc-hrow:hover { background: var(--hover); }
 .wc-hrow.on { border-color: color-mix(in srgb, var(--claude) 40%, var(--border)); }
 .wc-hrow.ended .wc-htitle b { font-weight: 600; }
