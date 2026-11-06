@@ -1227,6 +1227,20 @@ def create_app(start_background: bool = True) -> FastAPI:
     def agent_relationships(agent_id: int, _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         return network.of_agent(agent_id)
 
+    # --- REQ-006: an agent's run history, only of goals in projects the user may see ---
+    @app.get("/api/agents/{agent_id}/runs")
+    def agent_runs(agent_id: int, offset: int = 0, limit: int = 50,
+                   user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        return registry.agent_runs(agent_id, offset, limit, seen)
+
+    @app.get("/api/agents/{agent_id}/runs/{run_id}")
+    def agent_run(agent_id: int, run_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        return registry.agent_run(agent_id, run_id, seen)
+
     @app.post("/api/agents/{agent_id}/relationships")
     def agent_relationship_correct(agent_id: int, body: RelationshipBody,
                                    admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
