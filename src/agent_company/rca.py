@@ -11,11 +11,13 @@ iterations (the defects); failed reviews; open blockers; failed runs and error e
 carries a reference (`check:…`, `task:…`, `run:…`, `event:…`, `blocker:…`). The General Manager (the analysis room
 once it is enabled) reads it and answers with lines:
 
-    CONFIRMED: <cause> | <refs>        a cause the cited evidence shows
-    CONTRIBUTING: <factor> | <refs>    plausible, not shown
+    CONFIRMED: <layer>: <cause> | <refs>        a cause the cited evidence shows
+    CONTRIBUTING: <layer>: <factor> | <refs>    plausible, not shown
     ACTION: <corrective action> :: <why>
     FOLLOW_UP: <how to tell whether the action worked>
 
+The layer (G-R-17) is one of `selfevolve.LAYERS`, so repeated causes show where the system must change (a code
+defect is not fixed by a larger model); a missing or unknown layer stays unclassified, never guessed.
 A CONFIRMED line citing no reference of the pack becomes CONTRIBUTING: a correlation is not a cause. Each ACTION
 becomes a pending proposal (decided like any other, at most ACTIONS). The analysis is stored as a knowledge item of
 kind `operational` (screened against memory poisoning like every lesson, S11-R-05). Follow-up: when a goal spawned
@@ -33,6 +35,7 @@ from sqlalchemy import func, select
 from agent_company.db import (Agent, Defect, Event, Goal, Lesson, Proposal, Risk, Run, Task, log_event, now,
                               session)
 from agent_company.performance import OPEN
+from agent_company.selfevolve import LAYERS
 
 STREAK = 3
 ACTIONS = 3
@@ -40,12 +43,17 @@ FINISHED = ("approved", "awaiting_approval", "failed", "rejected")
 _LINE = re.compile(r"(?im)^[\s*-]*(CONFIRMED|CONTRIBUTING|ACTION|FOLLOW_UP|FOLLOW-UP):\s*(.+?)\s*$")
 
 INSTRUCTIONS = """Find the root causes of the failure from the evidence above. Answer with lines only:
-CONFIRMED: <cause> | <references from the evidence that show it, e.g. check:scope, task:12, run:40>
-CONTRIBUTING: <factor that plausibly contributed but the evidence does not show> | <references, if any>
+CONFIRMED: <layer>: <cause> | <references from the evidence that show it, e.g. check:scope, task:12, run:40>
+CONTRIBUTING: <layer>: <factor that plausibly contributed but the evidence does not show> | <references, if any>
 ACTION: <one corrective action a goal can carry out> :: <why it addresses a cause>
 FOLLOW_UP: <how to tell whether the actions worked, e.g. which check must pass>
 A cause is CONFIRMED only when the cited evidence shows it; something that merely happened at the same time is
-CONTRIBUTING at most. Give at most three actions; never propose to weaken a check, a permission or a budget."""
+CONTRIBUTING at most. <layer> is where the cause lies: model (the model misunderstood a clear requirement), prompt
+(instructions incomplete or ambiguous), code (the implementation lacks validation or recovery), orchestration (task
+split, dependencies or allocation), tools (a tool, API or adapter misbehaved), data (retrieved or input material was
+wrong or stale), environment (permissions, runtime or infrastructure). Give at most three actions; never propose to
+weaken a check, a permission or a budget."""
+_LAYER = re.compile(rf"^\s*({'|'.join(LAYERS)})\s*:\s*(.+)$", re.I | re.S)
 
 
 def _last_failed(g: Goal) -> list[str]:
@@ -135,7 +143,9 @@ def parse(output: str, refs: set[str]) -> dict[str, Any]:
         if kind in ("CONFIRMED", "CONTRIBUTING"):
             cause, _, cited = body.partition("|")
             found = _cited(cited or cause, refs)
-            entry = {"cause": cause.strip()[:400], "evidence": found[:6]}
+            m = _LAYER.match(cause)
+            layer, cause = (m.group(1).lower(), m.group(2)) if m else ("", cause)
+            entry = {"cause": cause.strip()[:400], "evidence": found[:6], "layer": layer}
             if kind == "CONFIRMED" and not found:
                 entry["demoted"] = "no evidence of the pack cited"
                 out["contributing"].append(entry)
@@ -300,3 +310,16 @@ def list_analyses(project_id: int | None = None, goal_id: int | None = None, lim
             rows = [x for x in rows if goal_id in (x.report or {}).get("goals", [])]
         return [{"id": x.id, "text": x.text, "status": x.status, "at": x.created_at.isoformat(), **(x.report or {})}
                 for x in rows]
+
+
+def layer_counts(s: Any) -> dict[str, Any]:
+    """Confirmed causes of every root-cause analysis per layer (G-R-17); `unclassified` when none was named."""
+    counts = {layer: 0 for layer in [*LAYERS, "unclassified"]}
+    analyses = 0
+    for (report,) in s.execute(select(Lesson.report).where(Lesson.kind == "operational")):
+        if not (report or {}).get("rca"):
+            continue
+        analyses += 1
+        for c in report.get("confirmed") or []:
+            counts[c.get("layer") if c.get("layer") in LAYERS else "unclassified"] += 1
+    return {"layers": counts, "causes": sum(counts.values()), "n": analyses}

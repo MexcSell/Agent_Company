@@ -362,6 +362,7 @@ def _aware(dt):  # noqa: ANN001, ANN202 - SQLite hands datetimes back without th
 def operations(s) -> dict[str, Any]:  # noqa: ANN001
     """Outcome metrics of the delivery pipeline (guides G-R-02: optimise for verified outcomes, not activity), over
     real work (benchmark goals left out). Every rate carries its sample size `n` and is None without samples."""
+    from agent_company import rca
     from agent_company.db import GoalTransition, ImprovementContract, Incident
     from agent_company.quality import REVIEW_ROLES
 
@@ -439,6 +440,7 @@ def operations(s) -> dict[str, Any]:  # noqa: ANN001
         "rollback_rate": _rate(rolled, deployed),
         "best_iteration_resets": resets,
         "security_findings": findings | {"total": sum(findings.values())},
+        "failure_layers": rca.layer_counts(s),
     }
 
 

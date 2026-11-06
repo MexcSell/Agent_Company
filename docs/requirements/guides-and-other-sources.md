@@ -312,8 +312,10 @@ for room X" until theirs is written.
 - A confirmed or contributing cause of a root-cause analysis (S07-R-02) names its layer from `selfevolve.LAYERS`
   (model, prompt, code, orchestration, tools, data, environment), so repeated gaps show where to change the system
   instead of switching to a larger model; the operations metrics count confirmed causes per layer.
-- **Status: open.** Acceptance: `CONFIRMED: tools: … | refs` is stored with `layer: tools`; an unknown layer is
-  kept as unclassified, never guessed.
+- **Status: done** (`rca.INSTRUCTIONS` asks for `<layer>: <cause>`, `rca.parse` stores `layer`, `rca.layer_counts`;
+  `failure_layers` in the operations metrics, a layer mark on the goal's analysis; `tests/test_rca.py`).
+  Acceptance: `CONFIRMED: tools: … | refs` is stored with `layer: tools`; an unknown layer is kept as unclassified,
+  never guessed.
 
 ### G-R-18 Terms of a model in the registry — Organization PDF §6, §7; `1.md` §5
 - A model entry records what routing and data handling depend on: billing (`api`, `subscription`, `free_tier`,

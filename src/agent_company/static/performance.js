@@ -53,6 +53,7 @@ function operationsCard(o) {
     <tr title="Model cost of merged goals"><td>Cost per accepted goal</td><td class="num">${o.cost_per_accepted_goal.usd == null ? "–" : money(o.cost_per_accepted_goal.usd)}</td><td class="num">${n(o.cost_per_accepted_goal)}</td></tr>
     ${r("Rollback rate", o.rollback_rate, "Deployed improvement contracts that were rolled back")}
     <tr title="Failed goals whose branch was reset to a better earlier iteration"><td>Best-iteration resets</td><td class="num">${Number(o.best_iteration_resets)}</td><td></td></tr>
+    ${o.failure_layers ? `<tr title="Confirmed causes of root-cause analyses by the layer that must change (model, prompt, code, orchestration, tools, data, environment)"><td>Root causes by layer</td><td class="num">${Number(o.failure_layers.causes)}</td><td class="num muted">${Object.entries(o.failure_layers.layers).filter(([, v]) => v).map(([k, v]) => `${v} ${esc(k)}`).join(" · ") || "–"} · n=${Number(o.failure_layers.n)}</td></tr>` : ""}
     <tr title="Secret scans, security stages and dependency audits that failed, refused commands and security incidents"><td>Security findings</td><td class="num">${Number(sec.total)}</td><td class="num muted">${sec.secret_scan} secret · ${sec.security_stage} stage · ${sec.dependency_audit} dependency · ${sec.refused_commands} refused · ${sec.incidents} incident(s)</td></tr>
   </table></div>`;
 }

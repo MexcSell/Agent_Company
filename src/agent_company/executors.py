@@ -695,7 +695,7 @@ class OfflineExecutor(Executor):
         contributing; one corrective action."""
         refs = [ref for ref, _ in req.data.get("items") or []]
         watch = list(req.data.get("watch") or [])
-        lines = [f"CONFIRMED: '{c}' kept failing | check:{c}" for c in watch[:1] if f"check:{c}" in refs]
+        lines = [f"CONFIRMED: code: '{c}' kept failing | check:{c}" for c in watch[:1] if f"check:{c}" in refs]
         runs = [r for r in refs if r.startswith("run:")][:2]
         lines.append("CONTRIBUTING: " + ("model runs failed | " + ", ".join(runs) if runs
                                          else "the plan may have been too large for the iterations given"))

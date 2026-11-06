@@ -17,7 +17,8 @@ def test_a_goal_that_used_every_iteration_gets_an_analysis_with_actions():
     assert loop.run_goal(gid)["status"] == "failed"
     [a] = rca.list_analyses(goal_id=gid)
     assert a["trigger"] == "failed after 2 iteration(s)" and a["status"] == "approved"
-    assert a["confirmed"] == [{"cause": "'command false' kept failing", "evidence": ["check:command false"]}]
+    assert a["confirmed"] == [{"cause": "'command false' kept failing", "evidence": ["check:command false"],
+                               "layer": "code"}]
     assert a["watch"] == ["command false"] and "passes" in a["follow_up"]
     with session() as s:
         item = s.get(Lesson, a["id"])
@@ -38,7 +39,7 @@ def test_a_cause_without_evidence_is_only_contributing():
                     "FOLLOW_UP: pytest passes twice in a row", refs)
     assert [c["cause"] for c in out["confirmed"]] == ["tests were changed", "pytest fails"]
     assert out["confirmed"][0]["evidence"] == ["check:scope"], "task:1 is not task:12"
-    assert out["contributing"][0] == {"cause": "the developer was slow", "evidence": [],
+    assert out["contributing"][0] == {"cause": "the developer was slow", "evidence": [], "layer": "",
                                       "demoted": "no evidence of the pack cited"}
     assert out["contributing"][1]["evidence"] == [], "run:99 is not in the pack"
     assert len(out["actions"]) == rca.ACTIONS and out["follow_up"] == "pytest passes twice in a row"
@@ -114,3 +115,23 @@ def test_no_analysis_once_the_projects_budget_is_used_up(monkeypatch):
     assert rca.after_goal(gid, "failed") is None and len(rca.list_analyses(goal_id=gid)) == 1
     monkeypatch.setattr(projects, "project_spend", lambda pid: 1.0)
     assert rca.after_goal(gid, "failed") is not None, "with budget left it would analyse"
+
+
+def test_a_cause_names_its_layer_and_the_layers_are_counted():
+    """G-R-17: the layer comes from the analyst's line; an unknown one stays unclassified."""
+    from agent_company import performance
+    from agent_company.db import Agent, Lesson
+
+    refs = {"check:scope", "run:4"}
+    out = rca.parse("CONFIRMED: Tools: the GitHub adapter returned 502 | run:4\n"
+                    "CONFIRMED: weather: tests were changed | check:scope\n"
+                    "CONTRIBUTING: prompt: the task did not name the file", refs)
+    assert out["confirmed"][0] == {"cause": "the GitHub adapter returned 502", "evidence": ["run:4"], "layer": "tools"}
+    assert out["confirmed"][1]["layer"] == "" and out["confirmed"][1]["cause"] == "weather: tests were changed"
+    assert out["contributing"][0]["layer"] == "prompt"
+    with session() as s:
+        s.add(Lesson(agent_id=s.query(Agent).first().id, text="rca", outcome="analysis", kind="operational", status="approved",
+                     report={"rca": True, "confirmed": out["confirmed"], "contributing": out["contributing"]}))
+    layers = performance.report()["operations"]["failure_layers"]
+    assert layers["n"] == 1 and layers["causes"] == 2
+    assert layers["layers"]["tools"] == 1 and layers["layers"]["unclassified"] == 1 and layers["layers"]["prompt"] == 0
