@@ -180,7 +180,10 @@ def claude_subagent(agent_id: int) -> tuple[str, str]:
             return "", ""
         # an empty `tools:` would give a Claude Code subagent every tool; at G0 it only reads
         tools = [t for t in tools_for(a.permissions, a.autonomy) if not t.startswith("MCP")] or ["Read", "Grep", "Glob"]
-        name = slug(a.role if a.parent_id is None else a.name)
+        # the first root agent of a role is `<role>.md`; a clone or a second agent of that role is named after itself
+        first = s.scalars(select(Agent.id).where(Agent.role == a.role, Agent.parent_id.is_(None))
+                          .order_by(Agent.id).limit(1)).first()
+        name = slug(a.role if a.parent_id is None and first == a.id else a.name)
         desc = re.sub(r"\s+", " ", f"{a.title}: {a.goal}")[:300]
         body = system_prompt(a)
     return f"{name}.md", f"---\nname: {name}\ndescription: {desc}\ntools: {', '.join(tools)}\n---\n\n{body}\n"

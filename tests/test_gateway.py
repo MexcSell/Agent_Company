@@ -142,6 +142,22 @@ def test_definition_files_name_the_tools_the_gateway_gives():
     assert "tools: Read, Grep, Glob\n" in text, "never an empty tools line (that would mean every tool)"
 
 
+def test_a_second_agent_of_a_role_gets_its_own_subagent_file():
+    from agent_company import agentdefs
+
+    with session() as s:
+        dev = s.scalars(select(Agent).where(Agent.role == "developer", Agent.parent_id.is_(None))
+                        .order_by(Agent.id)).first()
+        aux = Agent(name="Auxiliary Developer (Codex)", role="developer", title="Auxiliary Developer (Codex)",
+                    goal="small coding tasks", room_key=dev.room_key)
+        s.add(aux)
+        s.flush()
+        dev_id, aux_id = dev.id, aux.id
+    assert agentdefs.claude_subagent(dev_id)[0] == "developer.md"
+    rel = agentdefs.claude_subagent(aux_id)[0]
+    assert rel != "developer.md" and rel.startswith("auxiliary-developer"), rel
+
+
 def test_e0_stop_covers_runs_that_do_not_pass_the_loop():
     governance.stop("E0", "llm", "test", "drill")
     res = executors.LLMExecutor(router.Choice("m", "llm", "x/y", "t")).run(
