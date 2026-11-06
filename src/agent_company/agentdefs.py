@@ -150,13 +150,15 @@ def write_text(agent_id: int, text: str, actor: str) -> dict[str, Any]:
     return read(agent_id)
 
 
-def system_prompt(a: Agent) -> str:
-    """The body of the agent's definition (what it runs with), without the front matter."""
+def system_prompt(a: Agent, write: bool = True) -> str:
+    """The body of the agent's definition (what it runs with), without the front matter. A missing file is written
+    first, unless `write` is False (a study visit, G-R-19: nothing changes before a person applies a candidate);
+    then the text it would have is used."""
     p = path_for(a)
-    if not p.exists():
+    if not p.exists() and write:
         sync(a.id, "first definition")
     try:
-        text = p.read_text(encoding="utf-8")
+        text = p.read_text(encoding="utf-8") if p.exists() else render(a)
     except OSError:
         return ""
     return text.split("\n---\n", 1)[1].strip() if text.startswith("---\n") else text.strip()
@@ -247,7 +249,7 @@ def study(agent_id: int | None = None) -> dict[str, Any]:
                  + "\n".join(f"- {d['title'] or d['url']}: {d['text'][:400]}" for d in docs) + "\n\n" if docs else "")
               + "Write the improved 'Working method': at most 10 short imperative bullet lines (start each with '- '), "
                 "keeping what works and adding what the lessons and material teach. Answer with the bullets only.")
-    req = executors.Request(purpose="study", role=nxt.role, system=system_prompt(nxt), prompt=prompt,
+    req = executors.Request(purpose="study", role=nxt.role, system=system_prompt(nxt, write=False), prompt=prompt,
                             data={"lessons": lessons, "documents": docs, "current": current})
     res, choice = loop._execute(nxt, req, "study")
     bullets = [ln.strip() for ln in res.text.splitlines() if ln.strip().startswith("- ")][:10] if res.ok else []
@@ -316,14 +318,9 @@ def candidate(cid: int) -> dict[str, Any]:
         if c is None:
             raise KeyError(cid)
         a = s.get(Agent, c.agent_id)
-        missing = not path_for(a).exists()
-    if missing:
-        sync(a.id, "first definition")
-    with session() as s:
-        c = s.get(DefinitionCandidate, cid)
-        a = s.get(Agent, c.agent_id)
         p = path_for(a)
-        old = p.read_text(encoding="utf-8") if p.exists() else ""
+        # a preview writes nothing: without a file the diff is against the file the agent's settings would give
+        old = p.read_text(encoding="utf-8") if p.exists() else render(a)
         new = render(a, {**sections(old), **(c.sections or {})})
         out = _cand_dict(c) | {"agent_name": a.name, "current_version": a.definition_version or 0}
     out["stale"] = out["base_version"] < out["current_version"]

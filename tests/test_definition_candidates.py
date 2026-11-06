@@ -146,3 +146,22 @@ def test_the_api_needs_manage_agents_and_audits_apply_and_discard():
             actions = {(e.action, e.target) for e in s.scalars(select(AuditEvent))}
         assert ("definition_candidate_apply", str(cid)) in actions
         assert ("definition_candidate_discard", str(new)) in actions
+        assert ("definition_candidates_read", str(dev)) in actions and ("definition_candidate_read", str(cid)) in actions
+
+
+def test_study_and_preview_write_nothing_when_the_definition_file_is_missing():
+    """Codex's review of goal 11: without a file, study and the preview used to create and commit it."""
+    dev = _dev()
+    learning.learn(dev, loop.create_goal("Teach"), LESSON, False, ["testing"])
+    with session() as s:
+        a = s.get(Agent, dev)
+        path, version = agentdefs.path_for(a), a.definition_version
+    path.unlink(missing_ok=True)
+    out = agentdefs.study(dev)
+    c = agentdefs.candidate(out["candidate_id"])
+    assert not path.exists(), "neither the study visit nor the preview writes the file"
+    with session() as s:
+        assert s.get(Agent, dev).definition_version == version
+    assert any(LESSON in ln for ln in c["diff"].splitlines() if ln.startswith("+"))
+    agentdefs.apply_candidate(out["candidate_id"], "user:luca")
+    assert path.exists() and LESSON in path.read_text()

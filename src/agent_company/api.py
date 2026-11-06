@@ -3214,12 +3214,19 @@ def create_app(start_background: bool = True) -> FastAPI:
     # G-R-19: a study rewrite is a candidate a person applies after seeing the diff
     @app.get("/api/agents/{agent_id}/definition/candidates")
     def definition_candidates(agent_id: int, status: str | None = None,
-                              _: dict[str, Any] = Depends(allowed("manage_agents"))) -> list[dict[str, Any]]:
-        return agentdefs.candidates(agent_id, status)
+                              admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> list[dict[str, Any]]:
+        out = agentdefs.candidates(agent_id, status)
+        _audit(admin, "definition_candidates_read", agent_id, after={"count": len(out)})
+        return out
 
     @app.get("/api/definition-candidates/{cid}")
-    def definition_candidate(cid: int, _: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
-        return agentdefs.candidate(cid)
+    def definition_candidate(cid: int, admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        try:
+            out = agentdefs.candidate(cid)
+        except KeyError as e:
+            raise HTTPException(404, "no such candidate") from e
+        _audit(admin, "definition_candidate_read", cid, after={"agent_id": out["agent_id"]})
+        return out
 
     @app.post("/api/definition-candidates/{cid}/apply")
     def definition_candidate_apply(cid: int, admin: dict[str, Any] = Depends(allowed("manage_agents"))
