@@ -302,7 +302,9 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
     req.agent_id, req.goal_id = agent.id, goal_id
     req.permissions, req.autonomy = list(agent.permissions or []), agent.autonomy or ""  # the tool gateway's inputs
     try:  # only models cleared for the goal's classification (S14-R-05)
-        chain = router.resolve_chain(agent.role, pref, escalate, avoid_provider, level)
+        # a code review on another family's CLI cannot run the tests yet (Codex's read-only sandbox writes nothing,
+        # not even uv's cache; goal 93 hands QA the gate's own output): until then an API model of another family
+        chain = router.resolve_chain(agent.role, pref, escalate, avoid_provider, level, other_cli=False)
     except router.NotCleared as e:
         log_event("security", f"{agent.name}: {e}", goal_id=goal_id, agent_id=agent.id, classification=level)
         return (executors.Result(text="", ok=False, error=str(e)),

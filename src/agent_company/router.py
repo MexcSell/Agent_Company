@@ -475,7 +475,8 @@ def _choice_from_dict(m: dict[str, Any]) -> Choice:
 
 
 def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = False,
-                  avoid_provider: str | None = None, classification: str = "internal") -> list[Choice]:
+                  avoid_provider: str | None = None, classification: str = "internal",
+                  other_cli: bool = True) -> list[Choice]:
     """Every usable model for the role, best first, ending with the offline simulator.
 
     Only models cleared for `classification` are used (S14-R-05). When that rules out every real model that
@@ -525,14 +526,15 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
             else:
                 skipped.append(f"{name}: {why}")
         if avoid_provider and (not chain or chain[0].provider == avoid_provider):
-            other = next((c for c in chain if c.provider not in (avoid_provider, "offline")), None)
+            other = next((c for c in chain if c.provider not in (avoid_provider, "offline")
+                          and (other_cli or c.kind not in CLI_KINDS)), None)
             if other is not None:  # a model of another family is in the chain already (a fallback): it goes first
                 chain.remove(other)
                 chain.insert(0, replace(other, reason=f"different family from {avoid_provider} ({other.reason})"))
                 avoid_provider = None
         if avoid_provider and (not chain or chain[0].provider == avoid_provider):
             # another family: an API model, else an agent CLI on another sign-in (Codex reviewing Claude's work)
-            for m in s.scalars(select(ModelEntry).where(ModelEntry.kind.in_(("llm", *CLI_KINDS)))
+            for m in s.scalars(select(ModelEntry).where(ModelEntry.kind.in_(("llm", *(CLI_KINDS if other_cli else ()))))
                                .order_by(ModelEntry.kind != "llm", ModelEntry.id)):
                 c = _choice(m, f"different family from {avoid_provider}")
                 if (c.provider != avoid_provider and available(m)[0] and cleared(m, classification)
