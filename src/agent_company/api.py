@@ -525,6 +525,15 @@ class SupersedeBody(BaseModel):
     note: str = Field(default="", max_length=1000)
 
 
+class ImportPathBody(BaseModel):  # REQ-005: a file or folder inside the data directory
+    path: str = Field(min_length=1, max_length=1000)
+    fmt: str = "folder"
+    project_id: int | None = None
+    classification: str = "internal"
+    evidence_class: str = "INFERENCE"
+    date: str = ""
+
+
 class ResolveBody(BaseModel):
     resolution: str  # learning.RESOLUTIONS
     rationale: str = Field(min_length=1, max_length=2000)
@@ -2175,6 +2184,33 @@ def create_app(start_background: bool = True) -> FastAPI:
                         _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         """Edges within `depth` steps of `type:id`, paged (SPEC-11 S11-R-07, KT-019)."""
         return kgraph.neighbourhood(entity, depth, max(0, offset), max(1, min(limit, 500)), rel)
+
+    # --- REQ-005: a person imports knowledge (file, folder, chat export, reports); every item waits for review ---
+    def _import(admin: dict[str, Any], target: str, **kw: Any) -> dict[str, Any]:
+        try:
+            out = learning.import_knowledge(actor=f"user:{admin['name']}", **kw)
+        except learning.NoManager as e:
+            raise HTTPException(409, str(e)) from None
+        _audit(admin, "knowledge_import", target, after={k: v for k, v in out.items() if k != "ids"})
+        return out
+
+    @app.post("/api/knowledge/import")
+    async def knowledge_import(file: UploadFile = File(...), fmt: str = Form("auto"),
+                               project_id: int | None = Form(None), classification: str = Form("internal"),
+                               evidence_class: str = Form("INFERENCE"), date: str = Form(""),
+                               admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        data = await file.read(learning.IMPORT_MAX_BYTES + 1)
+        if len(data) > learning.IMPORT_MAX_BYTES:
+            raise HTTPException(413, "an imported file may be at most 2 MB")
+        name = file.filename or "upload"
+        return _import(admin, name, content=data.decode("utf-8", errors="replace"), name=name, fmt=fmt,
+                       project_id=project_id, classification=classification, evidence_class=evidence_class,
+                       date=date)
+
+    @app.post("/api/knowledge/import/path")
+    def knowledge_import_path(body: ImportPathBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return _import(admin, body.path, content=None, path=body.path, fmt=body.fmt, project_id=body.project_id,
+                       classification=body.classification, evidence_class=body.evidence_class, date=body.date)
 
     @app.get("/api/knowledge/{item_id}")
     def knowledge_item(item_id: int, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
