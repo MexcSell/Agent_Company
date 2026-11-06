@@ -70,6 +70,10 @@ through the router, answers with a JSON plan; the plan is validated against `TOO
 `search_papers`, `fetch_url`), at most 4 tasks per round; the research lead runs them (every fetch through
 `research.collect`), feeds the results back, and stops when the model says the evidence suffices or after
 `research_tool_rounds` rounds. The documents found join the report's material; each round is kept in `tool_steps`.
+`search_papers` asks OpenAlex (arXiv's robots.txt forbids its API and search to crawlers) and stores each result's
+title and abstract under its landing page. A CLI model called without a worktree gets an empty scratch folder
+(`data/worktrees/_router-<role>`); before that no research report could run on a CLI model. Checked on 2026-11-06 with
+a real request on Codex CLI: two planning rounds, three arXiv abstract pages fetched, the report approved.
 Acceptance: `tests/test_research_agent.py`.
 
 ### EL-R-03 Codex and Claude check each other

@@ -13,7 +13,7 @@ import re
 import shutil
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -303,6 +303,27 @@ def limit_reset(error: str, at: datetime | None = None) -> datetime:
         secs = sum(int(n) * units[u[0].lower()] for n, u in re.findall(r"(\d+)\s*([a-zA-Z]+)", m.group(1)))
         if secs:
             return at + timedelta(seconds=min(secs, LIMIT_MAX_DAYS * 86400))
+    m = re.search(r"(?i)(?:resets?|try again)\s+(?:on\s+)?(?:[a-z]{3,9},?\s+)?"
+                  r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?"
+                  r"\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?\s*(?:\(([\w/+-]+)\))?", error)
+    if m:  # a weekly limit: "resets Nov 8 at 3pm (Europe/Berlin)"
+        month = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].index(
+            m.group(1).lower()) + 1
+        hour, minute = int(m.group(3)), int(m.group(4) or 0)
+        ampm = (m.group(5) or "").lower().replace(".", "")
+        hour += 12 if ampm == "pm" and hour < 12 else -12 if ampm == "am" and hour == 12 else 0
+        try:
+            tz = ZoneInfo(m.group(6)) if m.group(6) else UTC
+        except Exception:  # noqa: BLE001
+            tz = UTC
+        try:
+            local = at.astimezone(tz)
+            reset = local.replace(month=month, day=int(m.group(2)), hour=hour, minute=minute, second=0, microsecond=0)
+            if reset < local - timedelta(days=1):  # December's message read in January
+                reset = reset.replace(year=reset.year + 1)
+            return min(reset.astimezone(UTC), at + timedelta(days=LIMIT_MAX_DAYS))
+        except ValueError:
+            pass
     m = re.search(r"(?i)(?:resets?|try again)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?\s*(?:\(([\w/+-]+)\))?",
                   error)
     if m:
@@ -504,6 +525,12 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
             else:
                 skipped.append(f"{name}: {why}")
         if avoid_provider and (not chain or chain[0].provider == avoid_provider):
+            other = next((c for c in chain if c.provider not in (avoid_provider, "offline")), None)
+            if other is not None:  # a model of another family is in the chain already (a fallback): it goes first
+                chain.remove(other)
+                chain.insert(0, replace(other, reason=f"different family from {avoid_provider} ({other.reason})"))
+                avoid_provider = None
+        if avoid_provider and (not chain or chain[0].provider == avoid_provider):
             # another family: an API model, else an agent CLI on another sign-in (Codex reviewing Claude's work)
             for m in s.scalars(select(ModelEntry).where(ModelEntry.kind.in_(("llm", *CLI_KINDS)))
                                .order_by(ModelEntry.kind != "llm", ModelEntry.id)):
@@ -536,6 +563,11 @@ def run(role: str, req: Any, model_pref: str | None = None, *, first: Choice | N
         chain = [first, *[c for c in chain if c.name != first.name]]
     if chain[0].kind != "offline":  # once a real model is tried, the simulator never stands in for it
         chain = [c for c in chain if c.kind != "offline"]
+    if req.workdir is None and any(c.kind in CLI_KINDS for c in chain[:3]):
+        # an agent CLI runs only inside data/worktrees: an empty scratch folder, read-only for a request that
+        # does not write (Claude Code without Edit/Write, Codex --sandbox read-only); the material is in the prompt
+        req.workdir = settings().worktrees_dir / f"_router-{role}"
+        req.workdir.mkdir(parents=True, exist_ok=True)
     res, choice = None, chain[0]
     for choice in chain[:3]:
         res = executors.for_choice(choice, timeout or settings().command_timeout).run(req)

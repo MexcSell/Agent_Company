@@ -64,3 +64,23 @@ def test_the_model_plans_the_research_lead_runs_its_tools_and_the_report_keeps_t
     assert steps[0]["results"][0]["action"] == "search_knowledge" and steps[0]["results"][0]["documents"]
     assert steps[1]["sufficient"] is True
     assert any(s["url"] == "https://docs.example/nats" for s in out["sources"])
+
+
+def test_search_papers_stores_each_openalex_result_under_its_landing_page():
+    import httpx
+
+    def handler(request):
+        assert request.url.host == "api.openalex.org" and request.url.params["search"] == "verbal reinforcement"
+        return httpx.Response(200, json={"results": [
+            {"id": "https://openalex.org/W1", "title": "Reflexion: Language Agents with Verbal Reinforcement Learning",
+             "publication_date": "2023-03-20", "abstract_inverted_index": {"Large": [0], "agents": [2], "language": [1]},
+             "primary_location": {"landing_page_url": "https://arxiv.org/abs/2303.11366"}},
+            {"id": "x", "title": "", "primary_location": {}}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    out = research_agent.TOOLS["search_papers"][2]({"query": "verbal reinforcement"}, {"client": client})
+    assert len(out["documents"]) == 1
+    with session() as s:
+        d = s.get(Document, out["documents"][0])
+        assert d.url == "https://arxiv.org/abs/2303.11366" and "Large language agents" in d.text
+        assert d.published_at.year == 2023

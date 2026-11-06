@@ -34,6 +34,10 @@ def test_limit_messages_and_their_reset_times():
     assert router.limit_reset("try again in 2 hours 5 minutes", at) == at + timedelta(hours=2, minutes=5)
     assert router.limit_reset("resets 5am", at) == datetime(2026, 11, 7, 5, 0, tzinfo=UTC), "the next 5am"
     assert router.limit_reset("hit your limit", at) == at + timedelta(minutes=router.LIMIT_DEFAULT_MINUTES)
+    assert router.limit_reset("You've hit your weekly limit · resets Nov 8 at 3pm (Europe/Berlin)", at) == \
+        datetime(2026, 11, 8, 14, 0, tzinfo=UTC)
+    assert router.limit_reset("resets Jan 2, 10am", datetime(2026, 12, 30, tzinfo=UTC)) == \
+        datetime(2027, 1, 2, 10, 0, tzinfo=UTC)
 
 
 def test_a_limited_model_is_skipped_until_its_reset_and_the_fallback_takes_the_work(monkeypatch):
@@ -101,3 +105,40 @@ def test_another_family_can_be_an_agent_cli(monkeypatch):
     router.set_route("research", "Claude Opus 5.5")
     chain = router.resolve_chain("research", avoid_provider="anthropic")
     assert chain[0].kind == "codex" and chain[0].reason == "different family from anthropic"
+
+
+def test_another_family_already_among_the_fallbacks_goes_first(monkeypatch):
+    """The research room on Codex with Claude fallbacks: the review of a Codex-written report runs on Claude."""
+    from agent_company.config import reset_settings
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setenv("ENABLE_CODEX", "1")
+    reset_settings()
+    monkeypatch.setattr(router.shutil, "which", lambda exe: f"/usr/bin/{exe}" if exe == "codex" else None)
+    router.set_route("research", "Codex CLI")
+    router.set_fallback("research", ["Claude Sonnet 5.5"])
+    chain = router.resolve_chain("research", avoid_provider="openai")
+    assert chain[0].name == "Claude Sonnet 5.5" and chain[0].reason.startswith("different family from openai")
+    assert chain[1].name == "Codex CLI"
+
+
+def test_a_cli_request_without_a_worktree_gets_a_scratch_folder(monkeypatch):
+    from agent_company import executors
+    from agent_company.config import reset_settings, settings
+
+    monkeypatch.setenv("ENABLE_CODEX", "1")
+    reset_settings()
+    monkeypatch.setattr(router.shutil, "which", lambda exe: f"/usr/bin/{exe}" if exe == "codex" else None)
+    router.set_route("research", "Codex CLI")
+    seen = []
+
+    class Fake:
+        def run(self, req):
+            seen.append(req.workdir)
+            return executors.Result(text="ok", ok=True)
+
+    monkeypatch.setattr(executors, "for_choice", lambda choice, timeout=0: Fake())
+    req = executors.Request(purpose="report", role="research", system="", prompt="x")
+    res, choice = router.run("research", req)
+    assert res.ok and choice.name == "Codex CLI"
+    assert seen[0] == settings().worktrees_dir / "_router-research" and seen[0].is_dir()
