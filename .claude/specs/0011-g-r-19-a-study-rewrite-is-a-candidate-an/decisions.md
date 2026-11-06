@@ -22,3 +22,14 @@ Findings:
 - task qa_review: skipped: a dependency failed
 
 Next: fix the findings (loop back to Build).
+
+## Iteration 3: FAIL
+- backend_verify (developer): done
+- ui_verify (developer): done
+- docs_verify (developer): done
+- qa_review (qa): done
+
+Findings:
+- review qa_review: reviewer: FAIL
+
+Next: fix the findings (loop back to Build).
