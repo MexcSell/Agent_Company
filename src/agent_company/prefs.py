@@ -29,8 +29,11 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "quality_commands": (list, "Default quality commands for goals that set none"),
     "executor": (str, "'auto' (Model Router) or 'offline' (simulator)"),
     "transport": (str, "How browsers connect: 'https' (encrypted, default) or 'http' (sealed cookie only)"),
+    "tls_domains": (list, "Domain names for the dashboard (e.g. agent-company.internal): added to the HTTPS "
+                          "certificate and the nginx server_name; clients need DNS or a hosts-file entry"),
     "enable_claude_code": (bool, "Let agents (and the General Manager) run the Claude Code CLI on the server's Claude login"),
     "enable_codex": (bool, "Let agents run the Codex CLI on the server's ChatGPT login"),
+    "enable_copilot": (bool, "Let agents run the GitHub Copilot CLI on the server's GitHub login"),
     "study_interval": (int, "Seconds between visits of the learning rotation; each visit produces a definition candidate for one agent that an administrator applies after seeing the diff (0 = manual)"),
     "retry_max_attempts": (int, "Attempts per model when a run fails with a transient error (429, 5xx, timeout)"),
     "retry_base_seconds": (float, "First retry delay in seconds; it doubles on each retry"),
@@ -41,6 +44,12 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "cost_overrun_factor": (float, "A goal that spends more than this many times its planner's cost estimate pauses "
                                    "for an administrator (1-20)"),
     "escalate_after": (int, "Consecutive iterations the same check may fail before it is escalated to the planner"),
+    "repo_map_chars": (int, "Characters of the repository map (definitions ranked by use) in the planner's prompt "
+                            "and each task's package; 0 = no map"),
+    "stuck_repeat_limit": (int, "A Claude Code or Codex run ends when it makes the same tool call this many times in a "
+                                "row (0 = never)"),
+    "stuck_error_limit": (int, "A Claude Code or Codex run ends when the same tool call fails with the same error this "
+                               "many times (0 = never)"),
     "candidate_smoke": (bool, "A candidate playbook must pass the smoke suite before it is tried on users' goals"),
     "benchmark_schedule": (str, "Scheduled benchmark review: 'off', 'daily', 'weekly' or 'monthly' runs of the "
                                 "benchmark suite with real models, compared with the previous run; tasks that no "
@@ -80,6 +89,11 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "dependency_audit": (str, "Changed dependency manifests are audited with pip-audit / npm audit when installed: "
                               "'block' fails the gate on a known vulnerability in an added or changed dependency, "
                               "'warn' only lists it, 'off' runs no audit"),
+    "research_tool_rounds": (int, "Rounds in which a research request's model plans tool calls (search the "
+                                  "collected documents, arXiv papers, fetch a page) that the research lead runs before "
+                                  "it writes the report (0 = off)"),
+    "max_clones": (int, "Clones an agent may have at once when all agents of its role are busy or degraded; beyond "
+                        "that the work waits (an administrator's own Clone is not counted against it)"),
     "health_recovery_minutes": (int, "A degraded agent is not staffed; after this many minutes its model is probed "
                                      "with the model test, and a passing probe makes it healthy again (the wait "
                                      "doubles after each failed probe, at most 6 h; 0 = never, an administrator "
@@ -103,9 +117,10 @@ LIMITS: dict[str, tuple[float, float]] = {
     "goal_token_budget": (0, 1_000_000_000), "goal_agent_limit": (0, 16),
     "retry_max_attempts": (1, 10), "retry_base_seconds": (0, 600), "retry_max_seconds": (0, 3600),
     "min_improvement": (0, 100), "max_goal_depth": (1, 10), "escalate_after": (1, 10), "cost_overrun_factor": (1, 20),
+    "repo_map_chars": (0, 50_000), "stuck_repeat_limit": (0, 100), "stuck_error_limit": (0, 100),
     "approval_blocker_hours": (0, 720), "inactive_days": (1, 3650), "explore_rate": (0, 1),
     "improvement_min_score": (0, 100), "improvement_max_regression": (0, 100),
-    "shift_seconds": (0, 7 * 86400), "health_recovery_minutes": (0, 1440),
+    "shift_seconds": (0, 7 * 86400), "health_recovery_minutes": (0, 1440), "max_clones": (0, 50), "research_tool_rounds": (0, 5),
     "mcp_revalidate_hours": (0, 720), "benchmark_budget_usd": (0, 1000),
     "sandbox_memory_mb": (128, 262_144), "sandbox_tasks": (16, 65_536), "sandbox_cpus": (0.1, 256),
     **{k: (0, 10) for k in RETRIEVAL_KEYS},
@@ -124,6 +139,10 @@ def _coerce(key: str, value: Any) -> Any:
         if isinstance(value, str):
             value = value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(value)
+    if key == "tls_domains":  # commas as well as newlines; strict names, as they go into the nginx config
+        from agent_company import transport
+
+        return transport.parse_domains(value)
     if typ is list:
         if isinstance(value, str):
             value = [x.strip() for x in value.split("\n") if x.strip()]
@@ -223,6 +242,7 @@ def set_value(key: str, value: Any, actor: str = "system") -> Any:
         transport.apply(v)
     if key in policies.GOVERNANCE_KEYS:
         policies.baseline()
+    previous = _stored(key) if key == "tls_domains" else None
     with session() as s:
         row = s.get(Setting, key)
         if row is None:
@@ -230,9 +250,38 @@ def set_value(key: str, value: Any, actor: str = "system") -> Any:
         else:
             row.value = {"v": v}
     load()
+    if key == "tls_domains":
+        _apply_domains(key, previous)
     if key in policies.GOVERNANCE_KEYS:
         policies.record("company", actor, f"{key} = {v}")
     return v
+
+
+def _stored(key: str) -> dict[str, Any] | None:
+    with session() as s:
+        row = s.get(Setting, key)
+        return dict(row.value) if row is not None else None
+
+
+def _apply_domains(key: str, previous: dict[str, Any] | None) -> None:
+    """Reissue the certificate and rewrite the nginx site for new domain names (REQ-009). Runs after the value is
+    stored, so `transport.hosts()` sees it; if nginx refuses, the previous value is restored and the error raised."""
+    from agent_company import transport
+
+    try:
+        transport.apply(config.settings().transport, force_reload=True)
+    except ValueError:
+        with session() as s:
+            row = s.get(Setting, key)
+            if previous is None:
+                if row is not None:
+                    s.delete(row)
+            elif row is None:
+                s.add(Setting(key=key, value=previous))
+            else:
+                row.value = previous
+        load()
+        raise
 
 
 def _check_retrieval(key: str, value: float, actor: str) -> None:
@@ -311,11 +360,14 @@ def clear(key: str, actor: str = "system") -> None:
         transport.apply(config.load_settings().transport)
     if key in policies.GOVERNANCE_KEYS:
         policies.baseline()
+    previous = _stored(key) if key == "tls_domains" else None
     with session() as s:
         row = s.get(Setting, key)
         if row is not None:
             s.delete(row)
     load()
+    if key == "tls_domains":
+        _apply_domains(key, previous)
     if key in policies.GOVERNANCE_KEYS:
         policies.record("company", actor, f"{key} back to the .env value")
 

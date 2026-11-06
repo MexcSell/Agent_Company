@@ -4,7 +4,7 @@
 // conversation's folder (the explorer's, when it starts) with every tool allowed; follow-ups
 // resume the same session. Images can be pasted, dropped or attached; every answer has a copy button.
 // Tabs: one per conversation of this panel, each with its own draft and a short title Claude
-// writes from the first prompt (+ opens another on the far left and keeps the others). Other
+// writes from the first prompt (+ opens another on the far right and keeps the others). Other
 // Claude Code sessions on the host (VS Code, terminal, SDK) get no tab of their own: they stay in
 // the sessions window, and one opened from there has a tab while it is selected; an ended one
 // can be continued in place. In the Workspace only the conversations of this browser session have tabs (the one
@@ -12,7 +12,8 @@
 // (History: Open, Continue). A conversation still working after a server restart is followed
 // live in its own tab, never shown twice. The drawer answers /status, /tasks and /agents (typed
 // in the prompt box or opened with the header button) for the selected tab: model, context,
-// background commands, todos, subagents and agent types.
+// background commands, todos, subagents and agent types; with a Models-page model that has its own sign-in chosen,
+// its sign-in's account, usage, sessions and agents. An earlier conversation opens at its beginning.
 // The sessions window (clock button, /history or /resume) lists the running sessions (open,
 // stop) and every earlier one with a transcript (open, continue in a tab, delete).
 window.WSP = window.WSP || {};
@@ -63,7 +64,7 @@ window.WSP = window.WSP || {};
     const c = C.convs.find((x) => x.id !== C.tab && shownConv(x)) || C.convs.find((x) => x.id !== C.tab && !x.session && !x.runs.length);
     if (c) return c.id;
     const n = newConv();
-    C.convs.unshift(n); saveConvs();
+    C.convs.push(n); saveConvs();
     return n.id;
   }
 
@@ -226,7 +227,8 @@ window.WSP = window.WSP || {};
     // Conversations without a tab are kept for a while (one may start working again), the oldest are forgotten:
     // their transcripts stay in the sessions window.
     const hidden = C.convs.filter((c) => !shownConv(c));
-    if (hidden.length > 30) { const drop = new Set(hidden.slice(30)); C.convs = C.convs.filter((c) => !drop.has(c)); drop.forEach((c) => dropLog(c.id)); saveConvs(); }
+    // New tabs are added on the right: the oldest hidden ones come first.
+    if (hidden.length > 30) { const drop = new Set(hidden.slice(0, hidden.length - 30)); C.convs = C.convs.filter((c) => !drop.has(c)); drop.forEach((c) => dropLog(c.id)); saveConvs(); }
     C.history = C.history.map((h, i) => (typeof h === "string" ? { prompt: h, at: Infinity, i } : { ...h, i }))
       .sort((a, b) => a.at - b.at || a.i - b.i).map((h) => h.prompt);
   };
@@ -236,19 +238,19 @@ window.WSP = window.WSP || {};
     c.runs = runs.filter(Boolean);
     C.history.push(...c.runs.filter((r) => r.prompt).map((r) => ({ prompt: r.prompt, at: r.started })));
     if (!c.title) c.title = c.runs.find((r) => r.title)?.title || "";
-    if (!c.runs.length && c.session) await showTranscript(c);  // the server restarted, or a resumed conversation
-    else renderLog(undefined, c);
     const r = running(c);
+    if (!c.runs.length && c.session) await showTranscript(c);  // the server restarted, or a resumed conversation
+    else renderLog(r ? true : undefined, c);
     if (r) poll(r);
     else if (!c.title && c.runs.length) wantTitle(c, c.runs[0]);
     saveConvs(); renderTabs(); renderBusy();
   }
-  // The current conversation when it is still empty, else a new tab on the far left.
+  // The current conversation when it is still empty, else a new tab on the far right.
   function blankConv() {
     const c = cur();
     if (c && !c.session && !c.runs.length) return c;
     const n = newConv();
-    C.convs.unshift(n); saveConvs();
+    C.convs.push(n); saveConvs();
     return n;
   }
 
@@ -272,6 +274,7 @@ window.WSP = window.WSP || {};
     btn.title = `Model: ${m.label}${m.note ? ` (${m.note})` : ""} · effort: ${EFFORT[eff || "default"]}. Applies to the next prompt`;
     btn.disabled = !info;
     if (!C.el.querySelector("#wc-menu").hidden) renderMenu();
+    renderInfo();  // /status, /tasks and /agents follow the chosen agent and model
   }
   // Models: the CLI's own aliases, then the Models page's models of this agent (`m:<name>`: the server runs them with
   // their model id, their own sign-in or address). A conversation can change model between prompts.
@@ -279,7 +282,7 @@ window.WSP = window.WSP || {};
   function modelsOf(p) {
     const info = C.models[p];
     return [...(info?.models || ["default"]).map((v) => ({ v, label: ALIAS[v] || v, note: v === "default" ? `${PROV[p].label}'s own setting` : "", ok: true })),
-      ...(info?.catalog || []).map((x) => ({ v: `m:${x.name}`, label: x.name, note: x.model_id, ok: x.available, why: x.reason, router: true,
+      ...(info?.catalog || []).map((x) => ({ v: `m:${x.name}`, label: x.name, note: x.model_id, ok: x.available, why: x.reason, router: true, account: x.account || "",
         tag: [opt.model === x.name ? "the GM's model" : "", x.account ? `sign-in: ${x.account}` : x.remote ? "other address" : ""].filter(Boolean).join(" · ") }))];
   }
   // A select as wide as its chosen option, not its longest one, so the agent's name, chevron and dot stay together.
@@ -416,7 +419,7 @@ window.WSP = window.WSP || {};
     if (d) c.runs.push(transcriptRun(sid, C.view.events, d.partial_history, c.title));
     C.drafts[c.id] = draft(sid); delete C.drafts[sid];
     if (C.closed.delete(sid)) saveClosed();
-    C.convs.unshift(c); C.tab = c.id; store.set(K + ".tab", c.id); touch(c.id); saveConvs();
+    C.convs.push(c); C.tab = c.id; store.set(K + ".tab", c.id); touch(c.id); saveConvs();
     C.view = { sid: "", events: [], next: 0, d: null }; C.following = "";
     renderTabs(); renderCwd();
     return c;
@@ -439,7 +442,7 @@ window.WSP = window.WSP || {};
     } catch (e) {
       if (e.status === 404) {  // the server restarted: the conversation goes on in its transcript
         c.runs = []; saveConvs(); renderTabs(); renderBusy();
-        if (c.session) showTranscript(c); else renderLog(undefined, c);
+        if (c.session) showTranscript(c, true); else renderLog(undefined, c);
         return;
       }
       if (e.status !== 401) { setTimeout(() => poll(run), 2000); return; }
@@ -610,14 +613,16 @@ window.WSP = window.WSP || {};
       return;
     }
     log.innerHTML = c.runs.map((r) => `<div class="cc-run" data-run="${esc(r.id)}">${runHtml(r)}</div>`).join("");
-    if (scroll !== false) log.scrollTop = log.scrollHeight;
+    // `true`: at the end (a prompt was just sent, or it is working); unset: an opened conversation starts at the top.
+    if (scroll === true) log.scrollTop = log.scrollHeight;
+    else if (scroll !== false) log.scrollTop = 0;
   }
   function renderRun(run) {
     const c = C.convs.find((x) => x.runs.includes(run));
     if (!c || following(c)) return;
     const log = logOf(c.id);
     const el = log.querySelector(`[data-run="${CSS.escape(run.id)}"]`);
-    if (!el) return renderLog(undefined, c);
+    if (!el) return renderLog(true, c);
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
     el.innerHTML = runHtml(run);
     if (atBottom) log.scrollTop = log.scrollHeight;
@@ -664,7 +669,7 @@ window.WSP = window.WSP || {};
     if (f === C.following) return;
     const was = C.following;
     C.following = f;
-    if (!f && c && was && was === c.session) showTranscript(c); else renderLog();
+    if (!f && c && was && was === c.session) showTranscript(c, true); else renderLog();
     renderInfo(); pollDetail();
   }
 
@@ -791,15 +796,16 @@ window.WSP = window.WSP || {};
     toast(`Continue: ${r.title || r.session_id.slice(0, 8)}`);
     C.el.querySelector("#wc-input").focus();
   }
-  // A conversation that has no prompt of this server process: its conversation from the transcript.
-  async function showTranscript(c) {
+  // A conversation that has no prompt of this server process: its conversation from the transcript, from its
+  // beginning (`end`: at its end, where the user was watching it work).
+  async function showTranscript(c, end = false) {
     const sid = c.session;
     let d = null;
     try { d = await api(`/api/workspace/claude-sessions/${encodeURIComponent(sid)}?after=0`); } catch { /* deleted or never written */ }
     if (c.session !== sid || c.runs.some((r) => !r.transcript && !r.divider)) return;  // a prompt was sent meanwhile
     if (!c.title && d?.title) { c.title = d.title; saveConvs(); renderTabs(); }
     c.runs = [transcriptRun(sid, d?.events || [], d?.partial_history, c.title)];
-    renderLog(undefined, c);
+    renderLog(end, c);
   }
   function renderTabs() {
     const box = C.el?.querySelector("#wc-tabs");
@@ -920,7 +926,9 @@ window.WSP = window.WSP || {};
     const events = turnsHtml(run, run.events, results, d.status === "busy");
     const tail = d.status === "busy" ? `<div class="cc-working"><span class="spin"></span> ${activity(d)}</div>` : d.status === "ended" ? '<div class="cc-divider"><span>Session ended</span></div>' : "";
     log.innerHTML = `<div class="cc-run cc-live">${d.partial_history ? '<div class="cc-divider"><span>Earlier history not loaded</span></div>' : ""}${events || '<p class="muted">No conversation yet.</p>'}${tail}</div>`;
-    if (first || atBottom) log.scrollTop = log.scrollHeight;
+    // An ended session opens at its beginning; a working one, and one followed at its end, stay at the end.
+    if (first) log.scrollTop = d.status === "busy" ? log.scrollHeight : 0;
+    else if (atBottom) log.scrollTop = log.scrollHeight;
   }
 
   const ST = { running: ["spin", ""], completed: ["ok", "✓"], failed: ["err", "✗"], killed: ["err", "■"], stopped: ["muted", "■"], ended: ["muted", "·"] };
@@ -929,36 +937,47 @@ window.WSP = window.WSP || {};
 
   function infoStatus(d) {
     const s = d?.process || C.names[viewSid()] || {};
-    const acct = C.cli?.account || {};
-    const c = cur();
+    const c = cur(), p = c ? provOf(c) : "claude", m = c ? modelOf(c) : null;
+    // The chosen model's own sign-in once /status has read it, else the host's (Claude Code only).
+    const acct = p !== "claude" ? {} : homeModel() ? (C.usage.key === homeModel() && C.usage.d?.account) || { method: `${homeModel()}'s own sign-in` } : C.cli?.account || {};
+    const agent = C.models[p];
+    const chosen = m ? `${esc(m.label)}${m.note && m.router ? ` <span class="mono muted">${esc(m.note)}</span>` : ""}${m.tag ? ` <span class="wc-badge">${esc(m.tag)}</span>` : ""}` : "";
     const status = c && !following(c) ? (busy(c) ? "busy" : "idle") : d?.status || "";
     return kv([
       ["Status", status ? `<span class="wc-badge ${esc(status)}">${esc(status === "busy" ? "working" : status)}</span>${status === "busy" && d ? ` ${activity(d)}` : ""}` : ""],
       ["Session", d || s.name ? `${esc(s.name || "")} <span class="mono muted">${esc(viewSid() || "")}</span>` : ""],
       ["Started from", s.entrypoint || d?.entrypoint ? `${esc(ENTRY[s.entrypoint || d.entrypoint] || s.entrypoint || d.entrypoint)}${s.pid ? ` <span class="muted">· pid ${s.pid}${s.started ? ` · up ${since(s.started)}` : ""}</span>` : ""}` : ""],
       ["Folder", d?.cwd ? `<span class="mono">${esc(d.cwd)}</span>${d.git_branch ? ` <span class="wc-badge">⎇ ${esc(d.git_branch)}</span>` : ""}` : ""],
-      ["Model", d?.model ? `<span class="mono">${esc(d.model)}</span>` : c ? esc(modelOf(c).label) : ""],
+      ["Agent", c ? esc(PROV[p].label) : ""],
+      ["Model", c ? `${chosen} <span class="muted">for the next prompt</span>${d?.model ? `<br><span class="mono">${esc(d.model)}</span> <span class="muted">last used</span>` : ""}` : d?.model ? `<span class="mono">${esc(d.model)}</span>` : ""],
       ["Effort", c && effortOf(c) ? esc(effortOf(c)) : ""],
       ["Permissions", d?.permission_mode ? esc(d.permission_mode) : ""],
       ["Context", d?.context_tokens ? `${fmtK(d.context_tokens)} tokens <span class="muted">in the last request</span>` : ""],
       ["Output", d?.output_tokens ? `${fmtK(d.output_tokens)} tokens${d.partial_history ? ' <span class="muted">(recent history)</span>' : ""}` : ""],
       ["Last prompt", d?.last_prompt ? `<span class="wc-clamp">${esc(firstLine(d.last_prompt, 300))}</span>` : ""],
       ["Last activity", d?.last_activity ? `${since(d.last_activity)} ago` : ""],
-      ["Claude Code", esc(d?.version || C.cli?.version || "") || (C.cli && !C.cli.available ? "not installed" : "")],
+      [c && p !== "claude" ? PROV[p].label : "Claude Code", c && p !== "claude" ? esc(agent?.version || "") || (agent && !agent.available ? "not installed" : "")
+        : esc(d?.version || C.cli?.version || "") || (C.cli && !C.cli.available ? "not installed" : "")],
       ["Account", acct.method ? `${esc(acct.method)}${acct.email ? ` · ${esc(acct.email)}` : ""}${acct.organization ? ` <span class="muted">(${esc(acct.organization)})</span>` : ""}` : ""],
     ]) + (!d && c ? '<p class="muted">Send a prompt to start a conversation; its status shows here.</p>' : "") + infoUsage();
   }
-  // Tokens and cost today and this week, every Claude Code session on the host; read again every 30 s.
+  // The chosen Models-page model when it has its own sign-in: /status, /tasks and /agents show that sign-in's.
+  const homeModel = () => { const c = cur(), m = modelOf(c); return m.router && m.account ? m.v.slice(2) : ""; };
+  const homeQ = (sep) => (homeModel() ? `${sep}model=${encodeURIComponent(homeModel())}` : "");
+  // Tokens and cost today and this week, every Claude Code session on the host (or of the chosen model's sign-in);
+  // read again every 30 s and when the model changes.
   const left = (s) => { const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60); return d ? `${d} d ${h} h` : h ? `${h} h ${m} min` : `${m} min`; };
   const money2 = (v) => `$${v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(2)}`;
   function infoUsage() {
-    const U = C.usage;
+    const U = C.usage, key = homeModel();
+    if (cur() && provOf(cur()) !== "claude") return "";
+    if (U.key !== key) { U.d = null; U.at = 0; U.err = ""; }
     if (!U.busy && Date.now() - U.at > 30000) {
-      U.busy = true;
-      api("/api/workspace/claude-usage").then((d) => { U.d = d; U.err = ""; }).catch((e) => { U.err = e.message; })
-        .finally(() => { U.busy = false; U.at = Date.now(); renderInfo(); });
+      U.busy = true; U.key = key;
+      api(`/api/workspace/claude-usage${homeQ("?")}`).then((d) => { if (U.key === key) { U.d = d; U.err = ""; } }).catch((e) => { U.err = e.message; })
+        .finally(() => { U.busy = false; if (U.key === key) U.at = Date.now(); renderInfo(); });
     }
-    const head = '<h4>Usage <span class="muted">every Claude Code session on this host</span></h4>';
+    const head = `<h4>Usage <span class="muted">${key ? `every Claude Code session of ${esc(key)}'s sign-in` : "every Claude Code session on this host"}</span></h4>`;
     if (!U.d) return head + `<p class="muted">${U.err ? esc(U.err) : '<span class="spin"></span> Counting tokens…'}</p>`;
     const now = Date.now();
     const row = (label, w) => {
@@ -970,39 +989,25 @@ window.WSP = window.WSP || {};
         <td title="Cost at API prices${w.unpriced_tokens ? `; ${fmt.format(w.unpriced_tokens)} tokens of models without a price are not counted` : ""}"><b>${money2(w.cost)}</b>${w.unpriced_tokens ? "+" : ""}</td>
         <td title="Resets ${esc(new Date(at).toLocaleString())}">resets ${esc(when)} <span class="muted">· in ${left(rest)}</span></td></tr>`;
     };
-    return head + planLimits(U.d.plan, now) + `<table class="wc-usage"><tbody>${row("Today", U.d.daily)}${row("This week", U.d.weekly)}</tbody></table>
+    return head + planLimits(U.d.plan) + `<table class="wc-usage"><tbody>${row("Today", U.d.daily)}${row("This week", U.d.weekly)}</tbody></table>
       <p class="muted wc-usage-note">Cost at the API prices in Models (cache reads 0.1×, cache writes 1.25–2× input): a Claude subscription is not billed per token. Day from 00:00 UTC, week from Monday 00:00 UTC. Hover a row for the breakdown.</p>`;
   }
-  // A circular meter: how much of a plan limit is used; the colour follows Claude's own severity, the label says it too.
-  const SEV = { warning: "near the limit", critical: "at the limit", exceeded: "limit reached" };
-  const ring = (pct, sev) => {
-    const v = Math.max(0, Math.min(100, pct)), r = 15, len = 2 * Math.PI * r;
-    return `<svg class="wc-ring ${SEV[sev] ? esc(sev) : "normal"}" viewBox="0 0 36 36" aria-hidden="true"><circle class="trk" cx="18" cy="18" r="${r}"/>`
-      + (v > 0 ? `<circle class="val" cx="18" cy="18" r="${r}" stroke-dasharray="${(len * v / 100).toFixed(2)} ${len.toFixed(2)}" transform="rotate(-90 18 18)"/>` : "")
-      + `<text x="18" y="18">${Math.round(v)}%</text></svg>`;
-  };
-  // The Claude plan's limits, as Claude Code's /usage shows them: the 5-hour session and the week.
-  function planLimits(p, now) {
+  // The Claude plan's limits, as Claude Code's /usage shows them: the 5-hour session and the week (limitCards, app.js).
+  function planLimits(p) {
     if (!p) return "";
     if (!p.available) return `<p class="muted wc-usage-note">Plan limits: ${esc(p.reason || "unavailable")}.</p>`;
-    const card = (l) => {
-      const at = Date.parse(l.resets_at), pct = Math.round(l.percent);
-      const when = at ? new Date(at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "";
-      return `<div class="wc-limit" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${esc(l.label)}: ${pct}% used" title="${esc(l.label)}: ${pct}% of the plan's limit used${at ? `\nResets ${esc(new Date(at).toLocaleString())}` : ""}">
-        ${ring(l.percent, l.severity)}<div><b>${esc(l.label)}</b><div><b>${pct}%</b> <span class="muted">used</span>${SEV[l.severity] ? ` <span class="wc-badge ${esc(l.severity)}">${SEV[l.severity]}</span>` : ""}</div>
-        ${at ? `<div class="muted">resets ${esc(when)} · in ${left(Math.max(0, (at - now) / 1000))}</div>` : ""}</div></div>`;
-    };
-    return `<div class="wc-limits">${p.limits.map(card).join("")}</div>`;
+    return limitCards(p.limits);
   }
 
   // Every live Claude Code session on the host, for /agents and /tasks; read again every 4 s while one is open.
   function hostActivity() {
-    const A = C.act;
+    const A = C.act, key = homeModel();
+    if (A.key !== key) { A.d = null; A.at = 0; A.err = ""; }
     if (!A.busy && Date.now() - A.at > 4000) {
-      A.busy = true;
+      A.busy = true; A.key = key;
       const cwd = cur()?.cwd || C.view.d?.cwd || ROOT() || "";
-      api(`/api/workspace/claude-activity${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`).then((d) => { A.d = d; A.err = ""; }).catch((e) => { A.err = e.message; })
-        .finally(() => { A.busy = false; A.at = Date.now(); renderInfo(); });
+      api(`/api/workspace/claude-activity?cwd=${encodeURIComponent(cwd)}${homeQ("&")}`).then((d) => { if (A.key === key) { A.d = d; A.err = ""; } }).catch((e) => { A.err = e.message; })
+        .finally(() => { A.busy = false; if (A.key === key) A.at = Date.now(); renderInfo(); });
     }
     return A.d;
   }
@@ -1015,9 +1020,10 @@ window.WSP = window.WSP || {};
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many || `${one}s`}`;
   function hostAgents() {
     const A = hostActivity();
-    if (!A) return `<h4>Claude Code on this host</h4><p class="muted">${C.act.err ? esc(C.act.err) : '<span class="spin"></span> Looking…'}</p>`;
+    const where = homeModel() ? `Claude Code with ${esc(homeModel())}'s sign-in` : "Claude Code on this host";
+    if (!A) return `<h4>${where}</h4><p class="muted">${C.act.err ? esc(C.act.err) : '<span class="spin"></span> Looking…'}</p>`;
     const rows = [...A.sessions].sort((a, b) => (b.status === "busy") - (a.status === "busy"));
-    return `<h4>Claude Code on this host <span class="muted">${plural(rows.length, "session")} · ${A.busy} working · ${plural(A.agents_running, "subagent")} running</span></h4>`
+    return `<h4>${where} <span class="muted">${plural(rows.length, "session")} · ${A.busy} working · ${plural(A.agents_running, "subagent")} running</span></h4>`
       + (rows.length ? `<ul class="wc-list">${rows.map((r) => hostRow(r, [r.agents ? `${plural(r.agents, "subagent")}${r.agents_running.length ? `, ${r.agents_running.length} running` : ""}` : "", ...r.agents_running.map((a) => `<span class="spin"></span> ${esc(a.description || a.type)}`)].filter(Boolean).join(" · "))).join("")}</ul>`
         : '<p class="muted">No Claude Code session is running on this host.</p>');
   }

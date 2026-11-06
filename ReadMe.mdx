@@ -677,6 +677,37 @@ they order are committed and merged under that identity and pushed to that branc
   firewalls or accounts, pipe a download into a shell, stop services or tamper
   with audit history. Refusals are audited as high severity.
 
+### Own domain name
+
+The dashboard can be reached by a name instead of an IP address, for example
+`https://agent-company.internal:4900` (`.internal` is reserved by ICANN for private
+networks, so it never clashes with a public domain).
+
+1. On **Settings → Connection**, enter the names under **Domain names** (comma
+   separated, e.g. `agent-company.internal, dash.lan`) and press **Save**. Only
+   letters, digits, `-` and `.` are accepted; no wildcards, ports or IP addresses.
+   The server certificate is renewed with the new names and nginx is reloaded
+   (with `MANAGE_NGINX=1`). `TLS_DOMAINS` in `.env` sets the same list.
+2. Make the name point to the server on every client computer. The server does not
+   do this for you: DNS setup is not automated. Either
+   - add a line to the client's hosts file, edited as administrator:
+     `/etc/hosts` on Linux and macOS, `C:\Windows\System32\drivers\etc\hosts` on
+     Windows:
+
+     ```text
+     192.168.1.20  agent-company.internal
+     ```
+
+     (use the server's own IP address), or
+   - create an A record for `agent-company.internal` on the LAN's DNS server or
+     router, which covers every computer on the network at once.
+3. Install the company CA once per computer (**Download certificate (CA)** on the
+   same card), then restart the browser.
+4. Open `https://agent-company.internal:4900`.
+
+Access by IP address and by `localhost` keeps working: those stay in the
+certificate, and nginx still answers requests for any other name.
+
 ## Platform
 
 - **Files** (admins): browse the project folders and `data/` in one or more panes

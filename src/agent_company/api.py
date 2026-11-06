@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, WebSocket
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -41,8 +43,10 @@ from agent_company import (
     loop,
     machines,
     management,
+    marketplace,
     mcp,
     mentoring,
+    mission,
     network,
     orchestration,
     organization,
@@ -67,7 +71,7 @@ from agent_company import (
     workspace,
 )
 from agent_company.config import settings
-from agent_company.db import Agent, AuditEvent, Decision, Event, Goal, Task, session
+from agent_company.db import Agent, AuditEvent, Decision, Event, Goal, Task, Upload, now, session
 
 STATIC = Path(__file__).parent / "static"
 COOKIE = "ac_session"
@@ -208,6 +212,28 @@ class GoalBody(BaseModel):
     permits: list[str] = Field(default_factory=list)  # change boundaries lifted (admins): dependencies, config
     estimated_cost_usd: float = Field(default=0.0, ge=0, le=10_000)  # twice this pauses the goal (S14-R-03)
     kind: str = ""  # S04-R-11: bugfix|feature|refactor|research|docs; "" = the planner picks
+
+
+class MissionResources(BaseModel):
+    repositories: list[str] = Field(default_factory=list, max_length=10)
+    files: list[str] = Field(default_factory=list, max_length=20)  # upload ids of the caller's uploads
+    links: list[str] = Field(default_factory=list, max_length=20)
+
+
+class MissionBody(BaseModel):
+    """REQ-003: the Simple mode mission form."""
+    project_id: int
+    title: str = Field(min_length=3, max_length=256)
+    description: str = Field(default="", max_length=20_000)
+    budget_usd: float = Field(gt=0, le=10_000)
+    deadline: datetime | None = None
+    notes: str = Field(default="", max_length=10_000)  # experience / notes
+    constraints: str = Field(default="", max_length=10_000)
+    resources: MissionResources = Field(default_factory=MissionResources)
+
+
+class UiModeBody(BaseModel):
+    mode: str = Field(max_length=16)
 
 
 class GoalTeamBody(BaseModel):
@@ -525,6 +551,15 @@ class SupersedeBody(BaseModel):
     note: str = Field(default="", max_length=1000)
 
 
+class ImportPathBody(BaseModel):  # REQ-005: a file or folder inside the data directory
+    path: str = Field(min_length=1, max_length=1000)
+    fmt: str = "folder"
+    project_id: int | None = None
+    classification: str = "internal"
+    evidence_class: str = "INFERENCE"
+    date: str = ""
+
+
 class ResolveBody(BaseModel):
     resolution: str  # learning.RESOLUTIONS
     rationale: str = Field(min_length=1, max_length=2000)
@@ -708,6 +743,23 @@ class RecruitDecisionBody(BaseModel):
     status: str = "rejected"  # rejected | cancelled (a person suspends the recruitment)
 
 
+class MarketImportBody(BaseModel):
+    url: str
+
+
+class MarketApproveBody(BaseModel):
+    grant: list[str] | None = None  # clamped by the import's permission ceiling
+    autonomy: str = ""
+    accept_licence: bool = False
+    acknowledge: bool = False
+    accept_unevaluated: bool = False  # an import no eval suite ran for (status unevaluated)
+    model: str = ""  # a router catalog entry; "" = the role route
+
+
+class MarketRejectBody(BaseModel):
+    reason: str = ""
+
+
 class RecruitReviseBody(BaseModel):
     changes: dict[str, Any]
 
@@ -729,11 +781,18 @@ class GitTokenBody(BaseModel):
 class RouteBody(BaseModel):
     model_name: str
     escalation: str | None = None
+    fallback: list[str] | None = None  # models that take the role's work when the route's model is at its limit
 
 
 class OpenRouterBody(BaseModel):
     id: str
     name: str | None = None
+    api_key: str = ""
+
+
+class LocalProbeBody(BaseModel):
+    url: str
+    api_key: str = ""
 
 
 def create_app(start_background: bool = True) -> FastAPI:
@@ -765,6 +824,10 @@ def create_app(start_background: bool = True) -> FastAPI:
             app.state.benchmarks.start()
             app.state.mcp = mcp.McpThread()
             app.state.mcp.start()
+            from agent_company import schedules
+
+            app.state.schedules = schedules.ScheduleThread()  # FW-R-04
+            app.state.schedules.start()
             threading.Thread(target=lambda: agentdefs.sync_all("registered"), daemon=True).start()
         yield
         if app.state.rotation:
@@ -781,6 +844,8 @@ def create_app(start_background: bool = True) -> FastAPI:
             app.state.benchmarks.stop.set()
         if getattr(app.state, "mcp", None):
             app.state.mcp.stop.set()
+        if getattr(app.state, "schedules", None):
+            app.state.schedules.stop.set()
         terminal.close_all()
         workspace.stop_all()
 
@@ -867,6 +932,17 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.get("/api/auth/me")
     def me(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         return {**user, "delegations": [] if user["is_admin"] else policies.list_delegations(user["id"], active_only=True)}
+
+    @app.get("/api/auth/me/ui_mode")
+    def ui_mode(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return {"mode": user.get("ui_mode") or "advanced"}
+
+    @app.put("/api/auth/me/ui_mode")
+    def ui_mode_set(body: UiModeBody, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        before = user.get("ui_mode") or "advanced"
+        out = auth.set_ui_mode(user["id"], body.mode)  # only the caller's own account
+        _audit(user, "ui_mode_set", user["id"], before={"mode": before}, after={"mode": out["ui_mode"]})
+        return {"mode": out["ui_mode"]}
 
     # --- delegated rights (S01-R-03) ---
     @app.get("/api/delegations")
@@ -1211,6 +1287,20 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.get("/api/agents/{agent_id}/relationships")
     def agent_relationships(agent_id: int, _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         return network.of_agent(agent_id)
+
+    # --- REQ-006: an agent's run history, only of goals in projects the user may see ---
+    @app.get("/api/agents/{agent_id}/runs")
+    def agent_runs(agent_id: int, offset: int = 0, limit: int = 50,
+                   user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        return registry.agent_runs(agent_id, offset, limit, seen)
+
+    @app.get("/api/agents/{agent_id}/runs/{run_id}")
+    def agent_run(agent_id: int, run_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        return registry.agent_run(agent_id, run_id, seen)
 
     @app.post("/api/agents/{agent_id}/relationships")
     def agent_relationship_correct(agent_id: int, body: RelationshipBody,
@@ -1643,13 +1733,22 @@ def create_app(start_background: bool = True) -> FastAPI:
 
     # /status: tokens and cost today and this week, every Claude Code session on the host, and the plan's limits.
     @app.get("/api/workspace/claude-usage")
-    def claude_usage(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
-        return workspace.claude_usage() | {"plan": workspace.claude_limits()}
+    # `model`: a Models-page model chosen in the panel; one with its own sign-in shows that sign-in's.
+    def claude_usage(model: str = "", _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        home = _model_home(model)
+        return workspace.claude_usage(home) | {"plan": workspace.claude_limits(home), "account": workspace._account(home),
+                                               "home": "own" if home else "host"}
 
-    # /agents and /tasks: what runs in every live Claude Code session on the host.
+    # /agents and /tasks: what runs in every live Claude Code session on the host (or of the chosen model's sign-in).
     @app.get("/api/workspace/claude-activity")
-    def claude_activity(cwd: str = "", _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
-        return workspace.host_activity(cwd)
+    def claude_activity(cwd: str = "", model: str = "", _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return workspace.host_activity(cwd, _model_home(model))
+
+    def _model_home(model: str) -> Any:
+        try:
+            return workspace.model_home(model)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
 
     @app.post("/api/workspace/claude")
     def claude_start(body: ClaudeBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
@@ -2138,6 +2237,140 @@ def create_app(start_background: bool = True) -> FastAPI:
         d["digest"] = loop.digest(goal_id)  # G-R-09
         return d
 
+    @app.get("/api/goals/{goal_id}/report")
+    def goal_report(goal_id: int, format: str = "json", user: dict[str, Any] = Depends(current_user)) -> Any:
+        """REQ-004: the mission report of a finished goal; 409 while it is still active."""
+        with session() as s:
+            g = s.get(Goal, goal_id)
+            seen = _visible_project_ids(s, user)
+            if g is None or (seen is not None and g.project_id is not None and g.project_id not in seen):
+                raise KeyError(goal_id)
+        try:
+            d = mission.report(goal_id)
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+        if format == "md":
+            return PlainTextResponse(mission.report_markdown(d), media_type="text/markdown")
+        return d
+
+    # --- Simple mode (REQ-003) ---
+    @app.post("/api/simple/missions")
+    def mission_create(body: MissionBody, request: Request,
+                       user: dict[str, Any] = Depends(allowed("run", "goal_create"))) -> dict[str, Any]:
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+            p = s.get(projects.Project, body.project_id)
+            if p is None or (seen is not None and p.id not in seen):
+                raise HTTPException(404, f"project {body.project_id} not found")
+            project_repo, checks = p.path or "", list(p.quality_commands or [])
+            own = {u.id: u.user_id for u in s.scalars(select(Upload).where(Upload.id.in_(body.resources.files)))}
+        if body.deadline is not None:
+            deadline = body.deadline if body.deadline.tzinfo else body.deadline.replace(tzinfo=now().tzinfo)
+            if deadline <= now():
+                raise HTTPException(400, "the deadline must be in the future")
+        else:
+            deadline = None
+        repos = [r.strip() for r in body.resources.repositories if r.strip()]
+        if not user["is_admin"]:
+            mine = str(Path(project_repo).resolve()) if project_repo else ""
+            foreign = [r for r in repos if not mine or str(Path(r).expanduser().resolve()) != mine]
+            if foreign:
+                _audit(user, "mission_create_denied", body.project_id, after={"repositories": foreign},
+                       severity="warning")
+                raise HTTPException(403, "only administrators can name a repository outside the project")
+        bad = [f for f in body.resources.files if own.get(f, -1) != user["id"]]
+        if bad:
+            raise HTTPException(400, f"unknown upload(s): {', '.join(bad[:5])}")
+        links = [x.strip() for x in body.resources.links if x.strip()]
+        for x in links:
+            if len(x) > 2048 or not re.match(r"^https?://[^\s/]+\S*$", x):
+                raise HTTPException(400, f"not an http(s) link: {x[:200]}")
+        parts = [body.description.strip() or body.title.strip()]
+        for head, text in (("Experience / notes", body.notes), ("Constraints", body.constraints)):
+            if text.strip():
+                parts.append(f"## {head}\n{text.strip()}")
+        if repos:
+            parts.append("## Repositories\n" + "\n".join(f"- {r}" for r in repos))
+        try:
+            gid = loop.create_goal(body.title, "\n\n".join(parts), repo_path=repos[0] if repos else project_repo,
+                                   urls=links, quality_commands=checks,
+                                   created_by=user["id"], project_id=body.project_id,
+                                   attachments=projects.uploads(body.resources.files),
+                                   extract_checks=user["is_admin"], budget_usd=body.budget_usd, deadline=deadline)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        budget = budgets.set_budget(gid, f"user:{user['name']}", budget_usd=body.budget_usd)
+        _audit(user, "mission_create", gid, after={"project_id": body.project_id, "budget_usd": body.budget_usd,
+                                                    "deadline": deadline.isoformat() if deadline else None,
+                                                    "repositories": repos, "links": links,
+                                                    "files": list(body.resources.files)})
+        q = request.app.state.queue
+        if q is not None:
+            q.submit(gid)
+        else:
+            threading.Thread(target=_run_quietly, args=(gid,), daemon=True, name=f"goal-{gid}").start()
+        return {"id": gid, "budget": budget}
+
+    @app.get("/api/simple/overview")
+    def simple_overview(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        """REQ-003: running goals with progress, cost vs budget, time vs deadline and blockers; waiting approvals;
+        blocked goals; delivered results with their report summary. Only goals of projects the user can see."""
+        from agent_company.db import Risk
+
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+            rows = [g for g in s.scalars(select(Goal).where(Goal.origin != "eval").order_by(Goal.id.desc()).limit(300))
+                    if seen is None or g.project_id is None or g.project_id in seen]
+            names = dict(s.execute(select(projects.Project.id, projects.Project.name)).all())
+            ids = [g.id for g in rows]
+            counts: dict[int, list[int]] = {}
+            for gid, it, st in s.execute(select(Task.goal_id, Task.iteration, Task.status)
+                                         .where(Task.goal_id.in_(ids))) if ids else []:
+                counts.setdefault(gid, []).append((it, st))  # type: ignore[arg-type]
+            blockers: dict[int, list[str]] = {}
+            for r in s.scalars(select(Risk).where(Risk.goal_id.in_(ids), Risk.kind == "blocker",
+                                                  Risk.status == "open")) if ids else []:
+                blockers.setdefault(r.goal_id, []).append(r.title)
+            waiting = [{"id": d.id, "goal_id": d.goal_id, "topic": d.topic, "status": d.status}
+                       for d in s.scalars(select(Decision).where(Decision.goal_id.in_(ids),
+                                                                 Decision.requires_human_approval,
+                                                                 Decision.status.not_in(["approved", "rejected",
+                                                                                         "superseded"])))] if ids else []
+            heads = [(g.id, g.title, g.status, g.project_id, g.iteration, g.deadline, g.created_at, g.updated_at,
+                      (g.checkpoint or {}).get("paused_for", "")) for g in rows]
+
+        def card(gid: int, title: str, status: str, pid: int | None, it: int, deadline: Any, created: Any) -> dict:
+            mine = [st for i, st in counts.get(gid, []) if i == it]
+            spend = budgets.summary(gid)
+            dl = deadline if deadline is None or deadline.tzinfo else deadline.replace(tzinfo=now().tzinfo)
+            cr = created if created.tzinfo else created.replace(tzinfo=now().tzinfo)
+            return {"id": gid, "title": title, "status": status, "project_id": pid, "project": names.get(pid, ""),
+                    "progress": round(sum(st == "done" for st in mine) / len(mine), 3) if mine else 0.0,
+                    "tasks_done": sum(st == "done" for st in mine), "tasks": len(mine),
+                    "cost_usd": spend["used"]["cost_usd"], "budget_usd": spend["limits"].get("cost_usd", 0.0),
+                    "elapsed_s": round(max(0.0, (now() - cr).total_seconds()), 1),
+                    "deadline": dl.isoformat() if dl else None,
+                    "remaining_s": round((dl - now()).total_seconds(), 1) if dl else None,
+                    "overdue": bool(dl and dl < now()), "blockers": blockers.get(gid, [])}
+
+        out: dict[str, Any] = {"running": [], "approvals": [], "blocked": [], "delivered": [], "decisions": waiting}
+        for gid, title, status, pid, it, deadline, created, updated, paused_for in heads:
+            c = card(gid, title, status, pid, it, deadline, created)
+            if status == "awaiting_approval":
+                out["approvals"].append(c)
+            if status == "paused" or (status in workflow.ACTIVE and c["blockers"]):
+                out["blocked"].append(c | {"paused_for": paused_for})
+            if status in workflow.ACTIVE:
+                out["running"].append(c)
+            elif len(out["delivered"]) < 20:
+                try:
+                    labels = mission.report(gid)["tasks"]["labels"]
+                except (KeyError, ValueError):
+                    labels = {}
+                out["delivered"].append(c | {"finished_at": updated.isoformat(), "labels": labels,
+                                             "report": f"/api/goals/{gid}/report"})
+        return out
+
     # --- knowledge items (SPEC-11): lessons with provenance; people review, agents never do ---
     @app.get("/api/knowledge")
     def knowledge_list(status: str = "", agent_id: int | None = None, q: str = "", kind: str = "",
@@ -2175,6 +2408,33 @@ def create_app(start_background: bool = True) -> FastAPI:
                         _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         """Edges within `depth` steps of `type:id`, paged (SPEC-11 S11-R-07, KT-019)."""
         return kgraph.neighbourhood(entity, depth, max(0, offset), max(1, min(limit, 500)), rel)
+
+    # --- REQ-005: a person imports knowledge (file, folder, chat export, reports); every item waits for review ---
+    def _import(admin: dict[str, Any], target: str, **kw: Any) -> dict[str, Any]:
+        try:
+            out = learning.import_knowledge(actor=f"user:{admin['name']}", **kw)
+        except learning.NoManager as e:
+            raise HTTPException(409, str(e)) from None
+        _audit(admin, "knowledge_import", target, after={k: v for k, v in out.items() if k != "ids"})
+        return out
+
+    @app.post("/api/knowledge/import")
+    async def knowledge_import(file: UploadFile = File(...), fmt: str = Form("auto"),
+                               project_id: int | None = Form(None), classification: str = Form("internal"),
+                               evidence_class: str = Form("INFERENCE"), date: str = Form(""),
+                               admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        data = await file.read(learning.IMPORT_MAX_BYTES + 1)
+        if len(data) > learning.IMPORT_MAX_BYTES:
+            raise HTTPException(413, "an imported file may be at most 2 MB")
+        name = file.filename or "upload"
+        return _import(admin, name, content=data.decode("utf-8", errors="replace"), name=name, fmt=fmt,
+                       project_id=project_id, classification=classification, evidence_class=evidence_class,
+                       date=date)
+
+    @app.post("/api/knowledge/import/path")
+    def knowledge_import_path(body: ImportPathBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return _import(admin, body.path, content=None, path=body.path, fmt=body.fmt, project_id=body.project_id,
+                       classification=body.classification, evidence_class=body.evidence_class, date=body.date)
 
     @app.get("/api/knowledge/{item_id}")
     def knowledge_item(item_id: int, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
@@ -2235,7 +2495,12 @@ def create_app(start_background: bool = True) -> FastAPI:
     def recruitment_approve(recruitment_id: int, body: RecruitDecisionBody,
                             user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         _recruit_admin(user, "recruitment_approve", recruitment_id)
-        out = _recruit_call(recruitment.approve, recruitment_id, f"user:{user['name']}", grant=body.grant)
+        try:
+            out = _recruit_call(recruitment.approve, recruitment_id, f"user:{user['name']}", grant=body.grant)
+        except PermissionError as e:  # REQ-002: a marketplace import is decided only through marketplace.approve
+            _audit(user, "recruitment_approve_denied", recruitment_id, severity="warning",
+                   after={"reason": "marketplace import"})
+            raise HTTPException(403, str(e)) from e
         _audit(user, "recruitment_approve", recruitment_id,
                after={"agent_id": out["agent_id"], "grant": body.grant, "resumed": out["resumed"]})
         return out
@@ -2244,7 +2509,12 @@ def create_app(start_background: bool = True) -> FastAPI:
     def recruitment_reject(recruitment_id: int, body: RecruitDecisionBody,
                            user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         _recruit_admin(user, "recruitment_reject", recruitment_id)
-        out = _recruit_call(recruitment.reject, recruitment_id, f"user:{user['name']}", body.reason, body.status)
+        try:
+            out = _recruit_call(recruitment.reject, recruitment_id, f"user:{user['name']}", body.reason, body.status)
+        except PermissionError as e:  # REQ-002: a marketplace import is decided only through marketplace.reject
+            _audit(user, "recruitment_reject_denied", recruitment_id, severity="warning",
+                   after={"reason": "marketplace import"})
+            raise HTTPException(403, str(e)) from e
         _audit(user, "recruitment_reject", recruitment_id, after={"status": out["status"], "reason": body.reason})
         return out
 
@@ -2254,6 +2524,94 @@ def create_app(start_background: bool = True) -> FastAPI:
         _recruit_admin(user, "recruitment_revise", recruitment_id)
         out = _recruit_call(recruitment.revise, recruitment_id, body.changes, f"user:{user['name']}")
         _audit(user, "recruitment_revise", recruitment_id, after={"version": out["jd_version"]})
+        return out
+
+    # --- agent marketplace (REQ-002): untrusted packages become candidates an administrator decides ---
+    def _market_call(fn: Any, *args: Any, **kw: Any) -> dict[str, Any]:
+        try:
+            return fn(*args, **kw)
+        except KeyError as e:
+            raise HTTPException(404, f"import {args[0] if args else ''}") from e
+        except PermissionError as e:
+            raise HTTPException(403, str(e)) from e
+        except ValueError as e:  # ImportRefused included
+            raise HTTPException(400, str(e)) from e
+
+    def _market_import(out: dict[str, Any]) -> dict[str, Any]:
+        return _market_call(marketplace.create_candidate, out["id"]) if out["status"] == "converted" else out
+
+    @app.post("/api/marketplace/import")
+    def marketplace_import(body: MarketImportBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = _market_import(_market_call(marketplace.fetch_url, body.url, f"user:{admin['name']}"))
+        except HTTPException as e:
+            _audit(admin, "marketplace_import_refused", body.url[:200], after={"error": str(e.detail)[:300]},
+                   severity="warning")
+            raise
+        _audit(admin, "marketplace_import", out["id"],
+               after={"source": out["source"], "sha": out["source_sha"], "status": out["status"]})
+        return out
+
+    @app.post("/api/marketplace/upload")
+    async def marketplace_upload(file: UploadFile = File(...), admin: dict[str, Any] = Depends(admin_user)
+                                 ) -> dict[str, Any]:
+        data = await file.read(marketplace.MAX_BYTES + 1)
+        if len(data) > marketplace.MAX_BYTES:
+            raise HTTPException(413, "the package is too large")
+        name = file.filename or "package"
+        try:  # unpacked straight into its own new directory data/marketplace/<id>/src
+            out = _market_import(_market_call(marketplace.fetch_upload, data, name, f"user:{admin['name']}"))
+        except HTTPException as e:
+            _audit(admin, "marketplace_upload_refused", name[:200], after={"error": str(e.detail)[:300]},
+                   severity="warning")
+            raise
+        _audit(admin, "marketplace_upload", out["id"],
+               after={"source": out["source"], "sha": out["source_sha"], "status": out["status"]})
+        return out
+
+    @app.get("/api/marketplace")
+    def marketplace_list(status: str = "", _: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
+        return marketplace.list_imports(status)
+
+    @app.get("/api/marketplace/{import_id}")
+    def marketplace_detail(import_id: int, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = _market_call(marketplace.get, import_id)
+        if out.get("agent_id"):
+            try:
+                d = agentdefs.read(out["agent_id"])
+                out["definition"] = {**d, "sections": agentdefs.sections(d["text"])}
+            except Exception:  # noqa: BLE001 - the definition is a view extra
+                out["definition"] = None
+        return out
+
+    @app.post("/api/marketplace/{import_id}/approve")
+    def marketplace_approve(import_id: int, body: MarketApproveBody, admin: dict[str, Any] = Depends(admin_user)
+                            ) -> dict[str, Any]:
+        try:
+            out = _market_call(marketplace.approve, import_id, f"user:{admin['name']}", body.grant, admin=True,
+                               autonomy=body.autonomy, accept_licence=body.accept_licence,
+                               acknowledge=body.acknowledge, accept_unevaluated=body.accept_unevaluated,
+                               model=body.model)
+        except HTTPException as e:
+            _audit(admin, "marketplace_approve_refused", import_id, after={"error": str(e.detail)[:300]},
+                   severity="warning")
+            raise
+        _audit(admin, "marketplace_approve", import_id,
+               after={"agent_id": out["agent_id"], "permissions": out["ceiling"].get("permissions"),
+                      "autonomy": out["ceiling"].get("autonomy"), "requested": body.grant, "model": body.model,
+                      "accepted_unevaluated": bool(out["eval"].get("accepted_unevaluated_by"))})
+        return out
+
+    @app.post("/api/marketplace/{import_id}/reject")
+    def marketplace_reject(import_id: int, body: MarketRejectBody, admin: dict[str, Any] = Depends(admin_user)
+                           ) -> dict[str, Any]:
+        try:
+            out = _market_call(marketplace.reject, import_id, f"user:{admin['name']}", body.reason, admin=True)
+        except HTTPException as e:
+            _audit(admin, "marketplace_reject_refused", import_id, after={"error": str(e.detail)[:300]},
+                   severity="warning")
+            raise
+        _audit(admin, "marketplace_reject", import_id, after={"status": out["status"], "reason": body.reason[:300]})
         return out
 
     @app.get("/api/recruitment/effectiveness")
@@ -2563,13 +2921,39 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.get("/api/models")
     def models(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         return {"models": router.list_models(), "routes": router.list_routes(),
-                "escalations": router.list_escalations(),
+                "escalations": router.list_escalations(), "fallbacks": router.list_fallbacks(),
                 "default_model": settings().default_model, "executor": settings().executor}
 
     @app.post("/api/models")
     def model_add(data: dict[str, Any], admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
         out = router.add_model(data)
-        _audit(admin, "model_add", out["name"], after={"model_id": out["model_id"], "kind": out["kind"]})
+        _audit(admin, "model_add", out["name"], after={"model_id": out["model_id"], "kind": out["kind"],
+                                                         "own_key": out["key_set"]})
+        return out
+
+    @app.post("/api/models/local_probe")
+    def model_local_probe(body: LocalProbeBody, _: dict[str, Any] = Depends(allowed("manage_models"))
+                          ) -> dict[str, Any]:
+        try:
+            return {"models": router.local_models(body.url.strip(), body.api_key.strip())}
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"no answer from {body.url}: {e}") from e
+
+    @app.get("/api/models/info")
+    def models_info(_: dict[str, Any] = Depends(current_user)) -> dict[int, dict[str, Any]]:
+        return router.models_info()
+
+    @app.get("/api/models/cli/{tool}")
+    def model_cli_status(tool: str, _: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
+        return router.cli_status(tool)
+
+    @app.post("/api/models/cli/{tool}/install")
+    def model_cli_install(tool: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = router.install_cli(tool)
+        except RuntimeError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "cli_install", tool, after={"ok": out["ok"], "version": out["version"]})
         return out
 
     @app.patch("/api/models/{model_id}")
@@ -2578,7 +2962,7 @@ def create_app(start_background: bool = True) -> FastAPI:
         before = next((m["name"] for m in router.list_models() if m["id"] == model_id), None)
         out = router.update_model(model_id, data)
         _audit(admin, "model_update", out["name"], before={"name": before} if before != out["name"] else None,
-               after=data)
+               after={**data, "api_key": "(set)" if data["api_key"] else "(removed)"} if "api_key" in data else data)
         if before and before != out["name"]:  # agents' definition files name their model
             with session() as s:
                 ids = list(s.scalars(select(Agent.id).where(Agent.model_pref == out["name"])))
@@ -2599,22 +2983,30 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.put("/api/routes/{role}")
     def route_set(role: str, body: RouteBody, admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
         before = router.list_routes().get(role)
-        router.set_route(role, body.model_name, body.escalation)
-        _audit(admin, "route_set", role, before={"model": before},
-               after={"model": body.model_name, "escalation": body.escalation})
+        before_fb = router.list_fallbacks().get(role, [])
+        try:
+            router.set_route(role, body.model_name, body.escalation)
+            if body.fallback is not None:
+                router.set_fallback(role, body.fallback)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "route_set", role, before={"model": before, "fallback": before_fb},
+               after={"model": body.model_name, "escalation": body.escalation, "fallback": body.fallback})
         return {"role": role, "model_name": body.model_name}
 
     @app.get("/api/openrouter/models")
-    def openrouter_models(q: str = "", free: bool = False, _: dict[str, Any] = Depends(current_user)
-                          ) -> list[dict[str, Any]]:
+    def openrouter_models(q: str = "", free: bool = False, sort: str = "price",
+                          _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         try:
-            return router.openrouter_catalog(q, free)
+            return router.openrouter_catalog(q, free, sort=sort)
         except httpx.HTTPError as e:
             raise HTTPException(502, f"OpenRouter catalog unavailable: {e}") from e
 
     @app.post("/api/openrouter/models")
-    def openrouter_add(body: OpenRouterBody, _: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
-        return router.add_openrouter_model(body.id, body.name)
+    def openrouter_add(body: OpenRouterBody, admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
+        out = router.add_openrouter_model(body.id, body.name, body.api_key.strip())
+        _audit(admin, "model_add", out["name"], after={"model_id": out["model_id"], "own_key": out["key_set"]})
+        return out
 
     @app.get("/api/providers")
     def provider_list(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
@@ -2914,6 +3306,51 @@ def create_app(start_background: bool = True) -> FastAPI:
         projects.get(project_id, user)
         return management.overview(project_id)
 
+    # --- scheduled goals (FW-R-04): every member of the project sees them, administrators change them ---
+    @app.get("/api/projects/{project_id}/schedules")
+    def schedule_list(project_id: int, user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        from agent_company import schedules
+
+        projects.get(project_id, user)
+        return schedules.list_schedules(project_id)
+
+    @app.post("/api/projects/{project_id}/schedules")
+    def schedule_create(project_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                        ) -> dict[str, Any]:
+        from agent_company import schedules
+
+        try:
+            out = schedules.create(project_id, str(body.get("title") or ""), str(body.get("interval") or ""),
+                                   str(body.get("details") or ""), list(body.get("checks") or []),
+                                   str(body.get("kind") or ""), created_by=admin["id"])
+        except KeyError as e:
+            raise HTTPException(404, "no such project") from e
+        _audit(admin, "schedule_create", f"project:{project_id}", after={k: out[k] for k in ("id", "title", "interval")})
+        return out
+
+    @app.patch("/api/schedules/{schedule_id}")
+    def schedule_update(schedule_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                        ) -> dict[str, Any]:
+        from agent_company import schedules
+
+        try:
+            out = schedules.update(schedule_id, body)
+        except KeyError as e:
+            raise HTTPException(404, "no such schedule") from e
+        _audit(admin, "schedule_update", f"schedule:{schedule_id}", after=body)
+        return out
+
+    @app.delete("/api/schedules/{schedule_id}")
+    def schedule_delete(schedule_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        from agent_company import schedules
+
+        try:
+            schedules.delete(schedule_id)
+        except KeyError as e:
+            raise HTTPException(404, "no such schedule") from e
+        _audit(admin, "schedule_delete", f"schedule:{schedule_id}")
+        return {"deleted": schedule_id}
+
     @app.post("/api/projects/{project_id}/milestones")
     def milestone_create(project_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
                          ) -> dict[str, Any]:
@@ -3166,6 +3603,15 @@ def create_app(start_background: bool = True) -> FastAPI:
         _audit(admin, "catalog_add", f"{out['kind']}:{out['name']}")
         return out
 
+    # FW-R-05: a folder of <name>/SKILL.md skills (e.g. the OpenHands extensions registry), administrators only
+    @app.post("/api/catalog/import")
+    def catalog_import(body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = catalog.import_skills(str(body.get("path") or ""), bool(body.get("enable")),
+                                    [str(x) for x in body.get("only") or []], actor=f"user:{admin['name']}")
+        _audit(admin, "catalog_import", str(body.get("path") or ""), after={k: len(v) for k, v in out.items()},
+               severity="high")
+        return out
+
     @app.patch("/api/catalog/{item_id}")
     def catalog_update(item_id: int, changes: dict[str, Any], admin: dict[str, Any] = Depends(allowed("manage_agents"))
                        ) -> dict[str, Any]:
@@ -3329,9 +3775,44 @@ def create_app(start_background: bool = True) -> FastAPI:
         _audit(admin, "ui_layout", key, after={"value": value})
         return {"key": key, "value": value}
 
+    # --- Prometheus metrics (FW-R-03): an administrator's session or the scrape token ---
+    @app.get("/metrics", include_in_schema=False)
+    def prometheus_metrics(request: Request) -> Response:
+        from agent_company import metrics
+
+        bearer = request.headers.get("authorization", "")
+        if not (bearer.lower().startswith("bearer ") and metrics.token_ok(bearer[7:].strip())):
+            u = auth.user_for_token(_session_token(request))
+            if u is None or not u["is_admin"]:
+                raise HTTPException(401, "metrics need an administrator's session or the metrics token")
+        return Response(metrics.render(), media_type="text/plain; version=0.0.4; charset=utf-8")
+
+    @app.get("/api/metrics/token")
+    def metrics_token_status(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        from agent_company import metrics
+
+        return metrics.token_status()
+
+    @app.post("/api/metrics/token")
+    def metrics_token_create(admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        from agent_company import metrics
+
+        token = metrics.create_token()
+        _audit(admin, "metrics_token_create", "metrics", after={"hint": token[-4:]}, severity="high")
+        return {"token": token, "hint": token[-4:]}
+
+    @app.delete("/api/metrics/token")
+    def metrics_token_revoke(admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        from agent_company import metrics
+
+        metrics.revoke_token()
+        _audit(admin, "metrics_token_revoke", "metrics", severity="high")
+        return metrics.token_status()
+
     @app.get("/api/projects-defaults")
-    def projects_defaults(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-        return {"base": str(projects.default_base())}
+    def projects_defaults(path: str = "", user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        # `path`: a work folder chosen in the form (administrators); its GitHub remote fills in the URL.
+        return {"base": str(projects.default_base()), "github_url": projects.repo_remote(path) if path and user["is_admin"] else ""}
 
     # --- dashboard ---
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -3402,6 +3883,7 @@ def _goal_dict(g: Goal) -> dict[str, Any]:
             "budget_tokens": g.budget_tokens or 0, "max_active_agents": g.max_active_agents or 0,
             "paused_for": (g.checkpoint or {}).get("paused_for", ""), "requirement_keys": g.requirement_keys or [],
             "kind": g.kind or "", "strategy": dict(g.strategy or {}), "test_strategy": dict(g.test_strategy or {}),
+            "deadline": g.deadline.isoformat() if g.deadline else None,
             "created_at": g.created_at.isoformat(), "updated_at": g.updated_at.isoformat()}
 
 

@@ -110,6 +110,54 @@ def test_models_and_dashboard(app):
     assert app.patch("/api/agents/1", json={"name": "renamed"}).status_code == 400
 
 
+def test_marketplace_refused_approve_and_reject_are_audited(app, monkeypatch):
+    """REQ-002: a refused administrator decision on an import is in the audit log at severity warning."""
+    import io
+    import zipfile
+    from pathlib import Path
+
+    from sqlalchemy import select
+
+    from agent_company import evaluation
+    from agent_company.db import AuditEvent, session
+
+    monkeypatch.setattr(evaluation, "list_suites", lambda: [])  # no suite: the import is unevaluated
+    sample = Path(__file__).parent / "fixtures" / "marketplace" / "sample-agent"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for p in sample.rglob("*"):
+            if p.is_file():
+                z.writestr(p.relative_to(sample).as_posix(), p.read_bytes())
+    app.post("/api/auth/register", json={"name": "admin", "device_secret": secret()})
+    out = app.post("/api/marketplace/upload", files={"file": ("pkg.zip", buf.getvalue(), "application/zip")}).json()
+    assert out["status"] == "unevaluated"
+    assert app.post(f"/api/marketplace/{out['id']}/approve", json={"acknowledge": True}).status_code == 400
+    assert app.post("/api/marketplace/9999/reject", json={}).status_code == 404
+    with session() as s:
+        rows = {(e.action, e.severity, e.target) for e in s.scalars(select(AuditEvent))}
+    assert ("marketplace_approve_refused", "warning", str(out["id"])) in rows
+    assert ("marketplace_reject_refused", "warning", "9999") in rows
+
+
+def test_a_models_own_key_never_leaves_the_server(app):
+    import json
+
+    from agent_company.db import AuditEvent, session
+
+    app.post("/api/auth/register", json={"name": "admin", "device_secret": secret()})
+    key = "sk-or-v1-secret0123456789YSUA"
+    r = app.post("/api/models", json={"name": "Keyed", "kind": "llm", "model_id": "openrouter/x/y", "api_key": key})
+    assert r.status_code == 200 and r.json()["key_hint"] == "sk-...YSUA"
+    assert app.patch(f"/api/models/{r.json()['id']}", json={"api_key": key + "2"}).status_code == 200
+    assert key not in app.get("/api/models").text
+    with session() as s:
+        assert key not in json.dumps([[a.before, a.after] for a in s.query(AuditEvent).all()], default=str)
+    st = app.get("/api/models/cli/codex").json()
+    assert st["label"] == "OpenAI Codex" and st["steps"][0] == "npm install -g @openai/codex"
+    assert app.get("/api/models/cli/nope").status_code == 404
+    assert app.post("/api/models/local_probe", json={"url": "file:///etc/passwd"}).status_code == 400
+
+
 def test_cli_bootstrap_does_not_free_busy_agents():
     from agent_company import registry
     from agent_company.api import bootstrap

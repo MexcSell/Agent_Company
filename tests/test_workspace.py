@@ -663,6 +663,35 @@ def test_claude_usage_counts_today_and_this_week_once_per_message(admin):
     assert member_of(admin).get("/api/workspace/claude-usage").status_code == 403
 
 
+def test_status_tasks_and_agents_follow_a_model_with_its_own_sign_in(admin, monkeypatch):
+    from agent_company import router
+    from agent_company.config import settings
+
+    workspace._usage_files.clear()
+    monkeypatch.setattr(workspace, "_oauth_usage", lambda token: {"limits": []})
+    router.add_model({"name": "claude_other", "kind": "claude_code", "model_id": "claude-opus-5-5", "account": "other"})
+    home = settings().data_dir / "claude-accounts" / "other"
+    (home / "projects" / "-x").mkdir(parents=True)
+    (home / "agents").mkdir()
+    (home / "agents" / "helper.md").write_text("---\nname: helper\ndescription: Only on this sign-in\n---\n")
+    (home / ".claude.json").write_text(json.dumps({"oauthAccount": {"emailAddress": "other@example.com"}}))
+    from agent_company import usage
+
+    msg = {"type": "assistant", "requestId": "r1", "timestamp": usage.now().isoformat().replace("+00:00", "Z"),
+           "message": {"id": "m1", "model": "claude-opus-5-5", "usage": {"output_tokens": 42}, "content": []}}
+    (home / "projects" / "-x" / "s.jsonl").write_text(json.dumps(msg) + "\n")
+    host = admin.get("/api/workspace/claude-usage").json()
+    own = admin.get("/api/workspace/claude-usage", params={"model": "claude_other"}).json()
+    assert own["home"] == "own" and own["account"]["email"] == "other@example.com"
+    assert own["daily"]["output_tokens"] == 42 and host["home"] == "host" and host["daily"]["output_tokens"] == 0
+    # A model without its own sign-in shows the host's.
+    router.add_model({"name": "claude_plain", "kind": "claude_code", "model_id": "claude-sonnet-5-5"})
+    assert admin.get("/api/workspace/claude-usage", params={"model": "claude_plain"}).json()["home"] == "host"
+    act = admin.get("/api/workspace/claude-activity", params={"model": "claude_other"}).json()
+    assert [a["name"] for a in act["configured_agents"]] == ["helper"]
+    assert "helper" not in [a["name"] for a in admin.get("/api/workspace/claude-activity").json()["configured_agents"]]
+
+
 @pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="needs /proc")
 def test_subagents_and_tasks_beyond_the_transcript_read_and_the_host_overview(admin, tmp_path):
     home, folder = _claude_host(tmp_path, _line(type="user", message={"content": "go"}),

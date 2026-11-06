@@ -43,6 +43,10 @@ def record(*, model_name: str, kind: str, input_tokens: int = 0, output_tokens: 
                   dropped=list(getattr(res, "dropped", None) or []),
                   denied_tools=list(getattr(res, "denied_tools", None) or [])[:100],
                   tool_calls=list(getattr(res, "tool_calls", None) or [])))
+    from agent_company import router
+
+    if not ok and router.is_limit_error(error):  # a plan or quota limit: the router skips the model until its reset
+        router.mark_limited(model_name, error)
     if agent_id is not None:  # activity and health (SPEC-02 S02-R-02)
         from agent_company import registry
 

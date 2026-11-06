@@ -51,3 +51,4 @@ are not copied into the repository. Sources, as linked next to each picture in t
 | `2.pdf` (39 images) | framework logos and README screenshots (Claude Code, AutoGen, CrewAI, LangGraph, Multi-SWE-bench, OpenHands, Open Interpreter, Dify, aider, MetaGPT) | the projects' own sites |
 | `Design Autonomous AI Company.pdf` (21 images) | AI-generated illustrations, an A2A explainer, site icons | — |
 | `AXoR-Design-System-Requirements.pdf` (1 image) | other product | — |
+| `/home/luca/update_2/1/a_1.jpg` … `a_9.jpg` (9 images, not kept) | self-evolving loop, Reflexion, lessons/rules, orchestrator and event bus, memory distillation, MiniMax recursive self-improvement, meta-agent design archive, "loops within loops" delivery system, emergence.ai self-improvement runtime (EVOLUTION-LOOPS.md) | given by the owner without page URLs; a_9 carries emergence.ai's mark |

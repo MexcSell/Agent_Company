@@ -33,6 +33,7 @@ class Settings:
     require_approval: bool
     enable_claude_code: bool
     enable_codex: bool
+    enable_copilot: bool
     command_timeout: int
     rotation_interval: int
     host: str
@@ -52,6 +53,8 @@ class Settings:
     public_port: int = 4900  # the port nginx listens on when MANAGE_NGINX=1
     manage_nginx: bool = False  # write the nginx site and reload nginx (only the real server)
     nginx_dir: str = "/etc/nginx"
+    # REQ-009: domain names of the dashboard, in the server certificate and the nginx server_name.
+    tls_domains: list[str] = field(default_factory=list)
     study_interval: int = 0  # seconds between study visits of the learning rotation (0 = manual)
     # Transient executor errors (429, 5xx, timeouts) are retried with backoff before the next model (S04-R-06).
     retry_max_attempts: int = 3
@@ -67,6 +70,12 @@ class Settings:
     cost_overrun_factor: float = 2.0
     # The same check failing in this many consecutive iterations escalates to the planner (S04-R-06, S04-R-07).
     escalate_after: int = 2
+    # Characters of the repository map in the planner's prompt and a task's package (FW-R-01); 0 = no map.
+    repo_map_chars: int = 4000
+    # A Claude Code or Codex run ends when it repeats the same tool call this many times in a row, or the same call
+    # fails with the same error this many times (FW-R-02); 0 = that rule off.
+    stuck_repeat_limit: int = 5
+    stuck_error_limit: int = 3
     # A candidate playbook must pass the smoke suite before it is tried on users' goals (S13-D-02).
     candidate_smoke: bool = True
     # G-R-14 scheduled benchmark review: off|daily|weekly|monthly, the suite, and its budget per run (0 = never runs).
@@ -110,6 +119,8 @@ class Settings:
     dependency_audit: str = "block"
     # S02-FR-18: minutes before a degraded agent's model is probed again (doubling per failed probe); 0 = off
     health_recovery_minutes: int = 15
+    max_clones: int = 4
+    research_tool_rounds: int = 2
     # G-R-15: hours between re-tests of every enabled MCP server, so a tool whose definition changed loses its allow
     mcp_revalidate_hours: int = 24
     # ASEAO09 §7.7-7.10: gate stages every goal must run checks in (e.g. performance, accessibility)
@@ -133,6 +144,17 @@ class Settings:
         return self.data_dir / "workspaces"
 
 
+def _domains(value: str) -> list[str]:
+    """TLS_DOMAINS (comma separated); an invalid value is ignored with a warning instead of stopping the start."""
+    from agent_company.transport import parse_domains  # transport imports this module
+
+    try:
+        return parse_domains(value)
+    except ValueError as e:
+        print(f"warning: TLS_DOMAINS ignored: {e}")
+        return []
+
+
 def load_settings() -> Settings:
     data_dir = Path(os.environ.get("DATA_DIR") or REPO_ROOT / "data").resolve()
     db_url = os.environ.get("DATABASE_URL") or f"sqlite:///{data_dir / 'agent_company.db'}"
@@ -147,6 +169,7 @@ def load_settings() -> Settings:
         require_approval=_bool("REQUIRE_APPROVAL", True),
         enable_claude_code=_bool("ENABLE_CLAUDE_CODE", False),
         enable_codex=_bool("ENABLE_CODEX", False),
+        enable_copilot=_bool("ENABLE_COPILOT", False),
         command_timeout=_int("COMMAND_TIMEOUT", 600),
         rotation_interval=_int("ROTATION_INTERVAL", 0),
         host=os.environ.get("HOST") or "127.0.0.1",
@@ -164,6 +187,7 @@ def load_settings() -> Settings:
         public_port=_int("PUBLIC_PORT", 4900),
         manage_nginx=_bool("MANAGE_NGINX", False),
         nginx_dir=os.environ.get("NGINX_DIR") or "/etc/nginx",
+        tls_domains=_domains(os.environ.get("TLS_DOMAINS") or ""),
         study_interval=_int("STUDY_INTERVAL", 0),
         retry_max_attempts=_int("RETRY_MAX_ATTEMPTS", 3),
         retry_base_seconds=float(os.environ.get("RETRY_BASE_SECONDS") or 2),
@@ -173,6 +197,9 @@ def load_settings() -> Settings:
         budget_exhausted_action=(os.environ.get("BUDGET_EXHAUSTED_ACTION") or "pause").lower(),
         cost_overrun_factor=float(os.environ.get("COST_OVERRUN_FACTOR") or 2),
         escalate_after=_int("ESCALATE_AFTER", 2),
+        repo_map_chars=_int("REPO_MAP_CHARS", 4000),
+        stuck_repeat_limit=_int("STUCK_REPEAT_LIMIT", 5),
+        stuck_error_limit=_int("STUCK_ERROR_LIMIT", 3),
         candidate_smoke=_bool("CANDIDATE_SMOKE", True),
         benchmark_schedule=(os.environ.get("BENCHMARK_SCHEDULE") or "off").lower(),
         benchmark_suite=os.environ.get("BENCHMARK_SUITE") or "smoke",
@@ -198,6 +225,8 @@ def load_settings() -> Settings:
         dependency_audit=(os.environ.get("DEPENDENCY_AUDIT") or "block").lower(),
         contradiction_judge=(os.environ.get("CONTRADICTION_JUDGE") or "advise").lower(),
         health_recovery_minutes=_int("HEALTH_RECOVERY_MINUTES", 15),
+        max_clones=_int("MAX_CLONES", 4),
+        research_tool_rounds=_int("RESEARCH_TOOL_ROUNDS", 2),
         mcp_revalidate_hours=_int("MCP_REVALIDATE_HOURS", 24),
         required_test_stages=[x.strip().lower() for x in (os.environ.get("REQUIRED_TEST_STAGES") or "").split(",")
                               if x.strip()],

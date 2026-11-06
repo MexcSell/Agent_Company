@@ -4,6 +4,7 @@
                Write tasks return files as FILE blocks, which are written into the worktree.
   claude_code  `claude -p` in the worktree. Uses your Claude Code login or ANTHROPIC_API_KEY.
   codex        `codex exec` in the worktree with Codex's own sandbox.
+  copilot      `copilot -p` (GitHub Copilot CLI) in the worktree; only the granted tools are allowed.
   offline      Deterministic stand-in so the whole pipeline runs and is testable with no model.
 
 Executors that touch files only ever run inside a sandboxed worktree.
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -158,6 +160,81 @@ def parse_claude_stream(stdout: str) -> tuple[dict[str, Any] | None, list[dict[s
     return result, _capped(calls)
 
 
+class StuckWatch:
+    """FW-R-02 (after OpenHands' stuck detection, Magentic-One's `max_stalls`, mini-swe-agent's limits): reads a CLI's
+    event stream line by line while it runs and names why the run must end: the same tool call (tool + input)
+    `repeat_limit` times in a row, or the same call failing with the same error `error_limit` times. 0 = that rule off.
+    `kind` is "claude" (stream-json) or "codex" (`exec --json`)."""
+
+    def __init__(self, kind: str, repeat_limit: int, error_limit: int) -> None:
+        from collections import Counter
+
+        self.kind, self.repeat_limit, self.error_limit = kind, repeat_limit, error_limit
+        self.last, self.repeats, self.reason = "", 0, ""
+        self.errors: Counter[str] = Counter()
+        self.calls: dict[str, tuple[str, str]] = {}  # tool_use id -> (key, tool name)
+
+    @property
+    def active(self) -> bool:
+        return self.repeat_limit > 0 or self.error_limit > 0
+
+    def _call(self, name: str, key: str) -> None:
+        self.repeats = self.repeats + 1 if key == self.last else 1
+        self.last = key
+        if 0 < self.repeat_limit <= self.repeats:
+            self.reason = f"stuck: {name} repeated {self.repeats} times in a row with the same input"
+
+    def _failed(self, name: str, key: str, error: str) -> None:
+        k = key + "\0" + " ".join(error.split())[:300]
+        self.errors[k] += 1
+        if 0 < self.error_limit <= self.errors[k]:
+            self.reason = f"stuck: {name} failed {self.errors[k]} times with the same error"
+
+    def feed(self, line: str) -> str:
+        """The reason to stop after this line, or ""."""
+        line = line.strip()
+        if self.reason or not line.startswith("{"):
+            return self.reason
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            return ""
+        if not isinstance(ev, dict):
+            return ""
+        if self.kind == "codex":
+            item = ev.get("item") or {}
+            if ev.get("type") == "item.completed" and item.get("type") == "command_execution":
+                key = "command\0" + str(item.get("command") or "")
+                self._call("command", key)
+                if not self.reason and item.get("exit_code") not in (0, None):
+                    self._failed("command", key, f"{item.get('exit_code')} {str(item.get('aggregated_output') or '')[-300:]}")
+            return self.reason
+        for block in (ev.get("message") or {}).get("content") or [] if ev.get("type") in ("assistant", "user") else []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                name = str(block.get("name") or "?")
+                key = name + "\0" + json.dumps(block.get("input"), sort_keys=True, default=str)
+                self.calls[str(block.get("id"))] = (key, name)
+                self._call(name, key)
+            elif block.get("type") == "tool_result" and block.get("is_error"):
+                key, name = self.calls.get(str(block.get("tool_use_id")), ("", ""))
+                content = block.get("content")
+                text = content if isinstance(content, str) else json.dumps(content, default=str)
+                if key:
+                    self._failed(name, key, text)
+            if self.reason:
+                break
+        return self.reason
+
+
+def stuck_watch(kind: str) -> StuckWatch:
+    from agent_company.config import settings
+
+    s = settings()
+    return StuckWatch(kind, int(getattr(s, "stuck_repeat_limit", 5)), int(getattr(s, "stuck_error_limit", 3)))
+
+
 def parse_codex_stream(stdout: str) -> dict[str, Any] | None:
     """text, usage, tool calls and error of `codex exec --json`; None when stdout holds no events (plain text)."""
     events = _events(stdout)
@@ -227,9 +304,10 @@ TOOL_CONTRACTS = {
     "llm": ToolContract(("text", "file_blocks"), 7200),
     "claude_code": ToolContract(("text", "read", "edit", "bash", "mcp"), 7200),
     "codex": ToolContract(("text", "read", "edit", "commands"), 7200, write_needs_shell=True),
+    "copilot": ToolContract(("text", "read", "edit", "commands"), 7200),
     "offline": ToolContract(("text", "file_blocks"), 600),
 }
-CLI_KINDS = {"claude_code", "codex"}
+CLI_KINDS = {"claude_code", "codex", "copilot"}
 
 
 def level(autonomy: str) -> int:
@@ -409,17 +487,21 @@ class Executor:
     def _run(self, req: Request) -> Result:
         raise NotImplementedError
 
-    def _spawn(self, cmd: list[str], req: Request, cwd: Path,
-               env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    def _spawn(self, cmd: list[str], req: Request, cwd: Path, env: dict[str, str] | None = None,
+               watch: StuckWatch | None = None) -> subprocess.CompletedProcess[str]:
         """subprocess.run with a timeout, an output limit and a tracked PID (its own process group), so a
-        timeout or an emergency stop ends the CLI and everything it started."""
+        timeout or an emergency stop ends the CLI and everything it started. With `watch`, stdout is read line by
+        line and a run the watch finds stuck is ended (FW-R-02); its reason is left on the watch."""
         import signal
 
         proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, env=env, start_new_session=True)
         _track(proc.pid, cmd[0], self.kind, req)
         try:
-            out, err = proc.communicate(timeout=self.timeout)
+            if watch is not None and watch.active:
+                out, err = self._watched(proc, watch, req)
+            else:
+                out, err = proc.communicate(timeout=self.timeout)
         except subprocess.TimeoutExpired:
             _signal_group(proc.pid, signal.SIGKILL)
             proc.communicate()
@@ -435,6 +517,46 @@ class Executor:
         return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
+    def _watched(self, proc: subprocess.Popen[str], watch: StuckWatch, req: Request) -> tuple[str, str]:
+        """Read a running CLI's stdout line by line through `watch`; end its process group once the watch names a
+        reason (SIGTERM, SIGKILL 5 s later) or the timeout passes."""
+        import signal
+        import threading
+
+        err: list[str] = []
+        reader = threading.Thread(target=lambda: err.append(proc.stderr.read() if proc.stderr else ""), daemon=True)
+        reader.start()
+        timed_out = threading.Event()
+
+        def expire() -> None:
+            timed_out.set()
+            _signal_group(proc.pid, signal.SIGKILL)
+
+        timer = threading.Timer(self.timeout, expire)
+        timer.daemon = True
+        timer.start()
+        lines: list[str] = []
+        try:
+            for line in proc.stdout or []:
+                lines.append(line)
+                if not watch.reason and watch.feed(line):
+                    from agent_company.db import log_event
+
+                    log_event("executor", f"{self.kind} run ended: {watch.reason}", goal_id=req.goal_id,
+                              agent_id=req.agent_id)
+                    _signal_group(proc.pid, signal.SIGTERM)
+                    killer = threading.Timer(5, _signal_group, (proc.pid, signal.SIGKILL))
+                    killer.daemon = True
+                    killer.start()
+            proc.wait()
+        finally:
+            timer.cancel()
+        reader.join(10)
+        if timed_out.is_set():
+            raise subprocess.TimeoutExpired(proc.args, self.timeout)
+        return "".join(lines), "".join(err)
+
+
 class LLMExecutor(Executor):
     kind = "llm"
 
@@ -443,12 +565,15 @@ class LLMExecutor(Executor):
 
         import os
 
+        from agent_company.router import key_for
+
         kwargs: dict[str, Any] = {"timeout": self.timeout}
+        key = key_for(self.choice.name)  # the model's own key (Models page), else its variable's
         if self.choice.base_url:  # OpenAI-compatible server: llama-server, LM Studio, vLLM, ...
             kwargs["base_url"] = self.choice.base_url
-            kwargs["api_key"] = os.environ.get(self.choice.api_key_env, "") if self.choice.api_key_env else "local"
-        elif self.choice.api_key_env and os.environ.get(self.choice.api_key_env):
-            kwargs["api_key"] = os.environ[self.choice.api_key_env]
+            kwargs["api_key"] = key or ("" if self.choice.api_key_env else "local")
+        elif key:
+            kwargs["api_key"] = key
         llm = LLM(model=self.choice.model_id, **kwargs)
         system = req.system + ("\n\n" + FILE_BLOCK_HELP if req.writes else "")
         text = llm.call([{"role": "system", "content": system}, {"role": "user", "content": req.prompt}])
@@ -487,6 +612,12 @@ def claude_env(choice: Choice) -> dict[str, str] | None:
     return env
 
 
+# EL-R-05: after each edit the file is parsed (never run) and a syntax error goes back to the agent at once
+EDIT_CHECK_SETTINGS = {"hooks": {"PostToolUse": [{"matcher": "Edit|Write|MultiEdit", "hooks": [
+    {"type": "command", "timeout": 30,
+     "command": f"python3 -I {shlex.quote(str(Path(__file__).with_name('edit_check.py')))}"}]}]}}
+
+
 class ClaudeCodeExecutor(Executor):
     kind = "claude_code"
 
@@ -504,7 +635,7 @@ class ClaudeCodeExecutor(Executor):
         cmd = ["claude", "-p", req.prompt, "--output-format", "stream-json", "--verbose",
                "--append-system-prompt", req.system, "--allowedTools", ",".join(tools)]
         if req.writes:
-            cmd += ["--permission-mode", "acceptEdits"]
+            cmd += ["--permission-mode", "acceptEdits", "--settings", json.dumps(EDIT_CHECK_SETTINGS)]
         if self.choice.model_id:
             cmd += ["--model", self.choice.model_id]
         if int(req.data.get("max_turns") or 0) > 0:  # the task contract's turn budget (G-R-01)
@@ -525,12 +656,16 @@ class ClaudeCodeExecutor(Executor):
             cmd += ["--mcp-config", mcp_file, "--strict-mcp-config"]
             cmd[cmd.index("--allowedTools") + 1] += "," + ",".join(mcp_tools)
             tools = [*tools, *mcp_tools]
+        watch = stuck_watch("claude")
         try:
-            proc = self._spawn(cmd, req, cwd, env=claude_env(self.choice))
+            proc = self._spawn(cmd, req, cwd, env=claude_env(self.choice), watch=watch)
         finally:
             if mcp_file:
                 Path(mcp_file).unlink(missing_ok=True)
         data, calls = parse_claude_stream(proc.stdout)
+        if watch.reason:  # FW-R-02: ended because it repeated itself; the retry is told why
+            return Result(text=str((data or {}).get("result") or ""), ok=False, error=watch.reason, tools=tools,
+                          tool_calls=calls, session_id=str((data or {}).get("session_id") or ""))
         if data is None:  # no result event: the CLI failed before it finished
             return Result(text=proc.stdout[-20_000:], ok=False, error=(proc.stderr or proc.stdout)[-2000:],
                           tools=tools, tool_calls=calls)
@@ -562,8 +697,12 @@ class CodexExecutor(Executor):
                "--sandbox", "workspace-write" if req.writes else "read-only"]
         if self.choice.model_id:
             cmd += ["--model", self.choice.model_id]
-        proc = self._spawn([*cmd, prompt], req, cwd)
+        watch = stuck_watch("codex")
+        proc = self._spawn([*cmd, prompt], req, cwd, watch=watch)
         parsed = parse_codex_stream(proc.stdout)
+        if watch.reason:  # FW-R-02
+            return Result(text="", input_tokens=estimate_tokens(prompt), ok=False, error=watch.reason,
+                          tool_calls=(parsed or {}).get("tool_calls") or [])
         if parsed is None:  # a Codex without --json events: its plain final message
             text = proc.stdout.strip()
             return Result(text=text, input_tokens=estimate_tokens(prompt), output_tokens=estimate_tokens(text),
@@ -574,6 +713,38 @@ class CodexExecutor(Executor):
                       output_tokens=int(u.get("output_tokens") or 0) or estimate_tokens(text), ok=ok,
                       error="" if ok else (parsed["error"] or proc.stderr[-2000:] or "codex failed")[-2000:],
                       tool_calls=parsed["tool_calls"])
+
+
+# Copilot may run tests and inspect git, nothing else, through its shell tool (as CLAUDE_BASH).
+COPILOT_SHELL = ["shell(pytest)", "shell(python -m pytest)", "shell(uv run)", "shell(npm test)", "shell(npm run)",
+                 "shell(git status)", "shell(git diff)", "shell(ls)"]
+
+
+class CopilotExecutor(Executor):
+    """`copilot -p` (GitHub Copilot CLI) in the worktree, on the server's GitHub sign-in. In this mode a tool that is
+    not allowed is refused, so the grant decides: `write` for edits, COPILOT_SHELL for commands."""
+    kind = "copilot"
+
+    def tools(self, grant: Grant) -> list[str]:
+        return (["write"] if grant.writes else []) + (list(COPILOT_SHELL) if grant.shell else [])
+
+    def _run(self, req: Request) -> Result:
+        if req.workdir is None:
+            raise RuntimeError("Copilot needs a worktree")
+        cwd = ensure_sandboxed(req.workdir)
+        tools = self.tools(req.grant or Grant())
+        prompt = req.system + "\n\n" + req.prompt
+        cmd = ["copilot", "-p", prompt]
+        for t in tools:
+            cmd += ["--allow-tool", t]
+        cmd += ["--deny-tool", "shell(git push)"]
+        if self.choice.model_id:
+            cmd += ["--model", self.choice.model_id]
+        proc = self._spawn(cmd, req, cwd)
+        text = proc.stdout.strip()
+        return Result(text=text, input_tokens=estimate_tokens(prompt), output_tokens=estimate_tokens(text),
+                      ok=proc.returncode == 0, error=(proc.stderr or proc.stdout)[-2000:] if proc.returncode else "",
+                      tools=tools)
 
 
 def standard_plan(goal: str) -> dict[str, Any]:
@@ -740,7 +911,7 @@ class OfflineExecutor(Executor):
 
 
 EXECUTORS: dict[str, type[Executor]] = {
-    "llm": LLMExecutor, "claude_code": ClaudeCodeExecutor, "codex": CodexExecutor,
+    "llm": LLMExecutor, "claude_code": ClaudeCodeExecutor, "codex": CodexExecutor, "copilot": CopilotExecutor,
     "offline": OfflineExecutor,
 }
 

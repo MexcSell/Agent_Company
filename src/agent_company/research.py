@@ -1291,6 +1291,31 @@ def _material(question: str, keywords: list[str], preference: str, after: date |
     return docs, counts
 
 
+def report_prompt(question: str, docs: list[dict[str, Any]], terms: str = "") -> str:
+    """The research room's report prompt: the question, the request's terms, REPORT_INSTRUCTIONS and the numbered
+    material (pure, so the research benchmark puts its reference documents in front of the room the same way)."""
+    material = "\n\n".join(f'[{i}] <document url="{d["url"]}" kind="{d.get("category", "")}" title="{d["title"]}"'
+                            + (f' published="{d["published_at"][:10]}"' if d.get("published_at") else "")
+                            + (f' language="{d["language"]}"' if d.get("language") else "")
+                            + "".join(' {}="{}"'.format(*lb.split("=", 1)) for lb in d.get("labels") or [])
+                            + f'>\n{d["text"]}\n</document>' for i, d in enumerate(docs, 1))
+    return f"Research question: {question}\n{terms}\n{REPORT_INSTRUCTIONS}\n\nMaterial:\n{material or '(none found)'}"
+
+
+def _documents(ids: list[int], words: list[str], skip: set[int], after: date | None = None,
+               before: date | None = None, languages: list[str] | None = None) -> list[dict[str, Any]]:
+    """The documents the research lead's tools found, as `search` lists them, within the request's filters."""
+    terms = list(dict.fromkeys(w.lower() for w in _WORD.findall(" ".join(words))))[:12]
+    with session() as s:
+        rows = {d.id: d for d in s.scalars(select(Document).where(Document.id.in_([i for i in ids if i not in skip])))}
+        docs = [{"id": d.id, "url": d.url, "title": d.title, "score": 0, "category": d.category or classify_source(d.url),
+                 "flags": list(d.flags or []), "collected_at": d.created_at.isoformat(),
+                 "published_at": d.published_at.isoformat() if d.published_at else None, "license": d.license or "",
+                 "language": d.language or "", "text": _snippet(d.text, terms)}
+                for i in ids if (d := rows.get(i)) is not None and not d.flags]
+    return filter_material(docs, after, before, languages)[0]
+
+
 def run_report(report_id: int, client: httpx.Client | None = None, allow_private: bool | None = None) -> dict[str, Any]:
     from agent_company import executors, registry, router
     from agent_company.config import settings
@@ -1326,12 +1351,18 @@ def run_report(report_id: int, client: httpx.Client | None = None, allow_private
                 collect(u, depth=1, max_pages=15, agent_id=agent.id, client=client, allow_private=allow_private)
             except (ValueError, httpx.HTTPError) as e:
                 log_event("error", f"research request {report_id}: could not collect {u}: {e}")
+        # the research lead plans with its model and runs its own tools first (research_agent: search, papers, fetch)
+        from agent_company import research_agent
+
+        try:
+            tools = research_agent.gather(question, keywords, agent, goal_id, rounds=settings().research_tool_rounds,
+                                          client=client, allow_private=allow_private)
+        except Exception as e:  # noqa: BLE001 - the tool loop is extra material: the report goes on without it
+            log_event("error", f"research request {report_id}: the tool loop failed: {e}", goal_id=goal_id)
+            tools = {"documents": [], "steps": [{"round": 1, "stopped": f"{type(e).__name__}: {e}"[:200]}]}
         docs, counts = _material(question, keywords, preference, after, before, languages)
-        material = "\n\n".join(f'[{i}] <document url="{d["url"]}" kind="{d["category"]}" title="{d["title"]}"'
-                                + (f' published="{d["published_at"][:10]}"' if d.get("published_at") else "")
-                                + (f' language="{d["language"]}"' if d.get("language") else "")
-                                + "".join(' {}="{}"'.format(*lb.split("=", 1)) for lb in d["labels"])
-                                + f'>\n{d["text"]}\n</document>' for i, d in enumerate(docs, 1))
+        docs += _documents(tools["documents"], [*keywords, question], {d["id"] for d in docs},
+                           after, before, languages)[:research_agent.MAX_DOCS - 2]
         method = filters_line(after, before, languages, counts) if filtered else ""
         terms = (f"Keywords: {', '.join(keywords)}\n" if keywords else "") + (
             f"Prefer {preference.replace('_', ' ')} sources; say when a finding rests on another kind.\n"
@@ -1340,15 +1371,10 @@ def run_report(report_id: int, client: httpx.Client | None = None, allow_private
             "rests on one.\n" if filtered else "")
         req = executors.Request(
             purpose="report", role="research", system=f"You are {agent.name}, the research lead of an AI company.",
-            prompt=f"Research question: {question}\n{terms}\n{REPORT_INSTRUCTIONS}\n\nMaterial:\n{material or '(none found)'}",
-            data={"question": question, "documents": docs})
-        choice = router.resolve("research", agent.model_pref)
-        res = executors.for_choice(choice, settings().command_timeout).run(req)
-        from agent_company import usage
-
-        usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
-                     output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
-                     error=res.error, agent_id=agent.id, purpose="report", goal_id=goal_id, res=res)
+            prompt=report_prompt(question, docs, terms), data={"question": question, "documents": docs})
+        # the research lead calls its model through the router (Claude Code, Codex, Copilot or an API model; the
+        # route's fallbacks when one is at its usage limit) and then checks the answer with its own tools
+        res, choice = router.run("research", req, agent.model_pref, agent_id=agent.id, goal_id=goal_id)
         sources = [{"n": i, "id": d["id"], "url": d["url"], "title": d["title"], "kind": d["category"],
                     "published_at": d.get("published_at"), "license": d.get("license", ""),
                     "language": d.get("language", "")} for i, d in enumerate(docs, 1)]
@@ -1359,7 +1385,7 @@ def run_report(report_id: int, client: httpx.Client | None = None, allow_private
             r = s.get(ResearchReport, report_id)
             r.status = "done" if res.ok else "failed"
             r.report = text if res.ok else res.error
-            r.sources, r.agent_id = sources, agent.id
+            r.sources, r.agent_id, r.tool_steps = sources, agent.id, tools["steps"]
             r.runs, r.cost_usd = (r.runs or 0) + 1, (r.cost_usd or 0.0) + float(res.cost or 0)
             r.next_run_at = (now() + timedelta(seconds=RECURRING[r.recurring])) if r.recurring else None
             if res.ok:  # a draft: nothing reaches knowledge or the goal before its review (S06-R-04)
@@ -1395,7 +1421,8 @@ def report_dict(r: ResearchReport) -> dict[str, Any]:
             "languages": list(r.languages or []),
             "review": r.review or "", "claims": r.claims or [], "approved_report": r.approved_report or "",
             "reviewer_agent_id": r.reviewer_agent_id, "reviewed_by": r.reviewed_by or "",
-            "review_provider": r.review_provider or "", "review_note": r.review_note or ""}
+            "review_provider": r.review_provider or "", "review_note": r.review_note or "",
+            "tool_steps": r.tool_steps or []}
 
 
 # --- claims, review and transfer (ASEAO06 S06-R-03, R-04, R-06, R-07) ---------------------
@@ -1454,10 +1481,15 @@ def _support(evidence: list[dict[str, Any]]) -> str:
     return "contested" if backs and against else "supported" if backs else "unsupported"
 
 
-def check_claims(s, text: str, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:  # noqa: ANN001
+def check_claims(s, text: str, sources: list[dict[str, Any]],  # noqa: ANN001
+                 documents: dict[str, Document] | None = None) -> list[dict[str, Any]]:
     """The report's numbered findings as claims, each with its evidence: the cited stored document, the excerpt that
     backs it (or that it does not), the relationship the author gave, and when the document was retrieved. `support`
-    is the deterministic check; `status` is decided by the review."""
+    is the deterministic check; `status` is decided by the review.
+
+    `documents` (by URL) are unsaved Documents to check against instead of the stored ones, e.g. the research
+    benchmark's reference documents (G-R-13, ADR 0003): a source then resolves only from them and the DB is never
+    queried, so `s` may be None."""
     by_n = {x["n"]: x for x in sources}
     claims: list[dict[str, Any]] = []
     for line in _section(text, "Findings").splitlines():
@@ -1474,9 +1506,12 @@ def check_claims(s, text: str, sources: list[dict[str, Any]]) -> list[dict[str, 
                 continue
             seen.add((n, rel))
             src = by_n.get(n)
-            doc = s.get(Document, src["id"]) if src and src.get("id") else None
-            if doc is None and src:
-                doc = s.scalars(select(Document).where(Document.url == src["url"])).first()
+            if documents is not None:
+                doc = documents.get(src["url"]) if src else None
+            else:
+                doc = s.get(Document, src["id"]) if src and src.get("id") else None
+                if doc is None and src:
+                    doc = s.scalars(select(Document).where(Document.url == src["url"])).first()
             ev = {"n": n, "source_id": doc.id if doc else None, "url": src["url"] if src else "",
                   "relationship": rel, "retrieved": _iso(doc.fetched_at or doc.created_at) if doc else None}
             ev.update(_excerpt(doc, claim, quotes) if doc else
@@ -1537,18 +1572,15 @@ def review_report(report_id: int, author_id: int | None = None, author_provider:
     try:
         if reviewer.id == author_id:
             return _wait_for_person(report_id, "only the author could review it")
-        try:
-            choice = reviewer_choice or router.resolve("research", reviewer.model_pref,
-                                                     avoid_provider=author_provider or None, classification=level)
-        except router.NotCleared as e:
-            return _wait_for_person(report_id, str(e))
         req = executors.Request(
             purpose="report_review", role="research", prompt=prompt, data=data, agent_id=reviewer.id,
             system=f"You are {reviewer.name}, a research reviewer of an AI company. You did not write this report.")
-        res = executors.for_choice(choice, settings().command_timeout).run(req)
-        usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
-                     output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
-                     error=res.error, agent_id=reviewer.id, purpose="report_review", goal_id=goal_id, res=res)
+        try:  # another model family when one is usable: Codex reviews what Claude wrote, and the other way round
+            res, choice = router.run("research", req, reviewer.model_pref, first=reviewer_choice,
+                                     avoid_provider=author_provider or None, classification=level,
+                                     agent_id=reviewer.id, goal_id=goal_id)
+        except router.NotCleared as e:
+            return _wait_for_person(report_id, str(e))
         with session() as s:
             r = s.get(ResearchReport, report_id)
             r.cost_usd = (r.cost_usd or 0.0) + float(res.cost or 0)

@@ -79,7 +79,7 @@ def gaps(agent_id: int | None = None) -> list[dict[str, Any]]:
         for les in s.scalars(select(Lesson).where(Lesson.agent_id.in_(ids)).order_by(Lesson.id.desc())):
             for sk in {_slug(x) for x in les.technologies or [] if _slug(x)}:
                 key = (les.agent_id, sk)
-                if les.status == "approved":
+                if les.status == "approved" and les.outcome != "imported":  # a person's imported notes (REQ-005)
                     known[key] += 1
                 if les.outcome not in {"success", "failure"}:
                     continue

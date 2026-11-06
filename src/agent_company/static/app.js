@@ -65,6 +65,27 @@ const roleIcon = (role) => icon(ROLE_ICON[role] || "specialist");
 const STOP_SCOPE = { E0: "an executor", E1: "an agent", E2: "a goal", E3: "a project", E4: "a room", E5: "the whole company" };  // governance.LEVELS
 const GOAL_ACTIVE = ["queued", "planning", "running", "recovering", "paused"];  // workflow.ACTIVE
 const pill = (s) => `<span class="pill ${esc(s)}">${esc(String(s).replace(/_/g, " "))}</span>`;
+// Usage limits as Claude Code's /usage shows them (Workspace Claude panel, Models page): per window a ring with the
+// share used, its label, a severity badge and when it resets. limits: [{label, percent, severity, resets_at (ISO)}].
+const LIMIT_SEV = { warning: "near the limit", critical: "at the limit", exceeded: "limit reached" };
+const timeLeft = (s) => { const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60); return d ? `${d} d ${h} h` : h ? `${h} h ${m} min` : `${m} min`; };
+const limitRing = (pct, sev) => {
+  const v = Math.max(0, Math.min(100, pct)), r = 15, len = 2 * Math.PI * r;
+  return `<svg class="wc-ring ${LIMIT_SEV[sev] ? esc(sev) : "normal"}" viewBox="0 0 36 36" aria-hidden="true"><circle class="trk" cx="18" cy="18" r="${r}"/>`
+    + (v > 0 ? `<circle class="val" cx="18" cy="18" r="${r}" stroke-dasharray="${(len * v / 100).toFixed(2)} ${len.toFixed(2)}" transform="rotate(-90 18 18)"/>` : "")
+    + `<text x="18" y="18">${Math.round(v)}%</text></svg>`;
+};
+function limitCards(limits) {
+  const now = Date.now();
+  const card = (l) => {
+    const at = Date.parse(l.resets_at || ""), pct = Math.round(l.percent);
+    const when = at ? new Date(at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "";
+    return `<div class="wc-limit" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${esc(l.label)}: ${pct}% used" title="${esc(l.label)}: ${pct}% of the limit used${at ? `\nResets ${esc(new Date(at).toLocaleString())}` : ""}">
+      ${limitRing(l.percent, l.severity)}<div><b>${esc(l.label)}</b><div><b>${pct}%</b> <span class="muted">used</span>${LIMIT_SEV[l.severity] ? ` <span class="wc-badge ${esc(l.severity)}">${LIMIT_SEV[l.severity]}</span>` : ""}</div>
+      ${at ? `<div class="muted">resets ${esc(when)} · in ${timeLeft(Math.max(0, (at - now) / 1000))}</div>` : ""}</div></div>`;
+  };
+  return `<div class="wc-limits">${limits.map(card).join("")}</div>`;
+}
 
 // --- storage-safe helpers -------------------------------------------------------
 const store = {
@@ -193,7 +214,7 @@ async function boot() {
     };
   }
   try { navLayout = (await api("/api/ui/nav_layout")).value || null; } catch { navLayout = null; }
-  renderRail(); show(VIEWS.some((v) => v.id === current && (!v.admin || me.is_admin)) ? current : "dashboard");
+  renderRail(); me.ui_mode === "simple" ? show("simple") : show(VIEWS.some((v) => v.id === current && (!v.admin || me.is_admin)) ? current : "dashboard");
   connectLive();
 }
 // --- rail: two groups (top, bottom) in the order an administrator set (Settings → Navigation) -----------
@@ -204,7 +225,8 @@ const TOPBAR = ["notifications", "audit", "settings", "users"];
 let navLayout = null, railEditing = false;
 function navGroups() {
   const lay = navLayout && (navLayout.top || navLayout.bottom) ? navLayout : NAV_DEFAULT;
-  const seen = new Set(), vis = VIEWS.filter((v) => (!v.admin || me.is_admin) && !TOPBAR.includes(v.id)), by = Object.fromEntries(vis.map((v) => [v.id, v]));
+  // REQ-003: the Simple view is on the rail only in Simple mode
+  const seen = new Set(), vis = VIEWS.filter((v) => (!v.admin || me.is_admin) && !TOPBAR.includes(v.id) && (v.id !== "simple" || me.ui_mode === "simple")), by = Object.fromEntries(vis.map((v) => [v.id, v]));
   const pick = (ids) => ids.filter((id) => by[id] && !seen.has(id) && seen.add(id)).map((id) => by[id]);
   // A view the saved order does not name takes its default place (before the next default neighbour it has).
   const saved = new Set([...(lay.top || []), ...(lay.bottom || []), ...(lay.hidden || [])]);
@@ -248,6 +270,17 @@ function renderTopViews() {
     b.onclick = () => show(b.dataset.v);
     b.onpointerenter = b.onfocus = () => prefetchView(b.dataset.v);
   });
+  // REQ-003: the user's own Simple/Advanced switch (not a view, so not in TOPBAR)
+  if (VIEW_FNS.simple) {
+    const simple = me.ui_mode === "simple", label = simple ? "Switch to Advanced mode (the full dashboard)" : "Switch to Simple mode (mission form and report)";
+    box.insertAdjacentHTML("afterbegin", `<button class="icon-btn" id="mode-toggle" title="${label}" aria-label="${label}">${icon(simple ? "dashboard" : "goals", 18)}</button>`);
+    $("#mode-toggle").onclick = async () => {
+      try {
+        const r = await api("/api/auth/me/ui_mode", { method: "PUT", body: { mode: simple ? "advanced" : "simple" } });
+        me.ui_mode = r.mode; show(r.mode === "simple" ? "simple" : "dashboard");
+      } catch (e) { toast(e.message); }
+    };
+  }
 }
 // Drag and drop between the two groups of a navigation list (the rail or the Settings card).
 function wireNavDrag(root, changed) {
@@ -463,6 +496,7 @@ async function goalDetail(id, openIds = new Set()) {
       return [...latest.values()].map((m) => `<div class="row">${pill(m.action === "released" ? "failed" : m.action === "requested" ? "pending" : "done").replace(/>[^<]+</, `>${esc(m.action)}<`)}<span class="grow">${esc(m.agent || "(waiting for recruitment)")} <span class="muted">${esc(m.role)} · iteration ${Number(m.iteration)}${m.reason && m.action !== "joined" ? ` · ${esc(m.reason)}` : ""}</span></span>${me.is_admin && m.agent_id && GOAL_ACTIVE.includes(g.status) ? (m.action === "released" ? `<button class="btn" data-team="add" data-agent="${Number(m.agent_id)}">Take back</button>` : `<button class="btn danger" data-team="release" data-agent="${Number(m.agent_id)}">Release</button>`) : ""}</div>`).join("");
     })()}${me.is_admin && GOAL_ACTIVE.includes(g.status) ? `<div class="row" style="margin-top:4px"><button class="btn" data-team="add">Add a role</button></div>` : ""}${(g.team || []).length > 1 ? `<details><summary class="muted">History (${g.team.length} change${g.team.length === 1 ? "" : "s"})</summary>${g.team.map((m) => `<div class="muted">${esc(m.action)} ${esc(m.agent || m.role)} (${esc(m.role)}) by ${esc(m.actor)} · ${ago(m.at)}${m.reason ? ` · ${esc(m.reason)}` : ""}</div>`).join("")}</details>` : ""}` : ""}
     ${(g.transitions || []).length ? `<h3>Workflow</h3><div class="events">${g.transitions.map((x) => `<div><span class="k">${esc(x.to.replace(/_/g, " "))}</span>${esc(x.from.replace(/_/g, " "))} → ${esc(x.to.replace(/_/g, " "))}${x.reason ? ` · ${esc(x.reason)}` : ""} <span class="muted">${esc(x.actor)} · ${ago(x.at)}</span></div>`).join("")}</div>` : ""}
+    ${!GOAL_ACTIVE.includes(g.status) && typeof missionReportHtml === "function" ? `<details data-id="report" id="goal-report" ${openIds.has("report") ? "open" : ""}><summary><strong>Mission report</strong> <span class="muted">each task verified, partial or failed from recorded checks and reviews</span></summary><div class="muted">Loading…</div></details>` : ""}
     <h3>Activity</h3><div class="events">${g.events.map((e) => `<div><span class="k">${esc(e.kind)}</span>${esc(e.message)} <span class="muted">${ago(e.at)}</span></div>`).join("")}</div>`;
   $("#goal-detail").querySelectorAll("[data-dec]").forEach((b) => (b.onclick = async () => {
     const approve = b.dataset.ok === "1", note = prompt(approve ? "Note (optional)" : "Why reject it?") ?? null;
@@ -474,6 +508,9 @@ async function goalDetail(id, openIds = new Set()) {
     if (note === null) return;
     try { await api(`/api/decisions/${b.dataset.drev}/review`, { method: "POST", body: { verdict, note } }); goalDetail(id, openIds); } catch (err) { toast(err.message); }
   }));
+  const rep = $("#goal-report");  // REQ-004
+  if (rep) api(`/api/goals/${id}/report`).then((d) => { rep.querySelector("div").outerHTML = `<div>${missionReportHtml(d)}</div>`; })
+    .catch((e) => { rep.querySelector("div").textContent = e.message; });
   if (typeof bindDefectActions === "function") bindDefectActions($("#goal-detail"), () => goalDetail(id, openIds));  // S09-R-03
   $("#goal-detail").querySelectorAll("[data-team]").forEach((b) => (b.onclick = async () => {
     const body = { action: b.dataset.team };

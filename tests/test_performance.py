@@ -194,6 +194,31 @@ def test_estimates_are_compared_with_what_happened(monkeypatch):
     assert performance.calibration()["time_by_role"][0]["bias"] == "too few samples"
 
 
+def test_the_planner_is_told_what_tasks_really_cost(monkeypatch):
+    """S07-R-04: the planner's task budgets and estimate come from measured costs, not guesses (goals 4 and 11 ran
+    out of their estimates and tasks failed on budgets a few percent too small)."""
+    from agent_company import executors
+    from agent_company.db import Run, Task
+
+    assert performance.cost_note() == "", "no history, no note"
+    prompts = []
+    real = executors.OfflineExecutor._plan
+    monkeypatch.setattr(executors.OfflineExecutor, "_plan", lambda self, req: prompts.append(req.prompt) or real(self, req))
+    for _ in range(3):
+        loop.run_goal(loop.create_goal("Costs", quality_commands=["test -f WORKLOG.md"]))
+    bench = loop.create_goal("Benchmark", quality_commands=["test -f WORKLOG.md"], origin="eval")
+    loop.run_goal(bench)
+    with session() as s:
+        for r in s.scalars(select(Run).where(Run.task_id.is_not(None))):
+            r.cost = 9.0 if r.goal_id == bench else {"developer": 2.0}.get(s.get(Task, r.task_id).role, 0.5)
+    note = performance.cost_note()
+    assert "- developer: median $2.00, 75th percentile $2.00 (3 tasks)" in note and "$9.00" not in note
+    assert "MEASURED" in note and "at least the 75th percentile" in note
+    assert "What tasks really cost" not in prompts[0]
+    loop.run_goal(loop.create_goal("Next", quality_commands=["test -f WORKLOG.md"]))
+    assert "- developer: median $2.00" in prompts[-1]
+
+
 def test_operational_metrics_report_verified_outcomes_with_sample_sizes():
     """G-R-02: gate pass rate, review rejections, escaped defects, cycle time, blocked time, approval latency,
     retries, cost per accepted goal, rollbacks and security findings; benchmark goals left out."""

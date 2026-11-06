@@ -19,6 +19,7 @@ import re
 import threading
 import time
 import traceback
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +44,7 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                 permits: list[str] | None = None, estimated_cost_usd: float = 0.0, topic: str = "general",
                 classification: str = "", trial: dict[str, Any] | None = None, budget_usd: float = 0.0,
                 budget_tokens: int = 0, max_active_agents: int = 0, requirement_keys: list[str] | None = None,
-                kind: str = "") -> int:
+                kind: str = "", deadline: datetime | None = None) -> int:
     """Create a goal. `extract_checks` (only for trusted authors) adds the test/lint commands
     the description names in backticks when no quality commands are given. `classification` (S14-R-05) can
     only raise the level: the goal is at least as classified as its project and its attachments. `trial`
@@ -53,7 +54,8 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
     `requirement_keys` (S08-R-01) name the project's requirements it implements; keys of the project named in the
     title or description are added. `kind` (S04-R-11) names the workflow template: its iteration limit, protected
     tests and scope apply where the order left them empty, and its plans must fit it; without one the planner
-    picks. An eval goal's `trial["strategy"]` (S04-R-13: kind, version, body) is the template it runs under."""
+    picks. An eval goal's `trial["strategy"]` (S04-R-13: kind, version, body) is the template it runs under.
+    `deadline` (REQ-003) is only reported (Simple dashboard, mission report); it does not change loop control."""
     from agent_company.checks import extract_check_commands
     from agent_company.governance import check_command, stops
 
@@ -126,7 +128,7 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                  estimated_cost_usd=max(0.0, float(estimated_cost_usd or 0)), topic=topic or "general",
                  classification=level, trial=dict(trial or {}), max_active_agents=max(0, int(max_active_agents or 0)),
                  requirement_keys=req_keys, kind=strategies.check_kind(kind) if kind else "",
-                 strategy=template.get("strategy", {}), **own)
+                 strategy=template.get("strategy", {}), deadline=deadline, **own)
         s.add(g)
         s.flush()
         gid = g.id
@@ -300,13 +302,20 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
     req.agent_id, req.goal_id = agent.id, goal_id
     req.permissions, req.autonomy = list(agent.permissions or []), agent.autonomy or ""  # the tool gateway's inputs
     try:  # only models cleared for the goal's classification (S14-R-05)
-        chain = router.resolve_chain(agent.role, pref, escalate, avoid_provider, level)
+        # a code review on another family's CLI cannot run the tests yet (Codex's read-only sandbox writes nothing,
+        # not even uv's cache; goal 112 hands QA the gate's own output): until then an API model of another family
+        chain = router.resolve_chain(agent.role, pref, escalate, avoid_provider, level, other_cli=False)
     except router.NotCleared as e:
         log_event("security", f"{agent.name}: {e}", goal_id=goal_id, agent_id=agent.id, classification=level)
         return (executors.Result(text="", ok=False, error=str(e)),
                 router.Choice(name="(not cleared)", kind="offline", model_id="", reason=str(e)))
+    limited = router.limit_blocked(chain)
+    if limited:  # every real model is at its usage limit: the simulator must not do the work in their place
+        log_event("error", f"{agent.name}: no model available ({limited[:300]})", goal_id=goal_id, agent_id=agent.id)
+        return (executors.Result(text="", ok=False, error=f"usage limit: {limited[:500]}"),
+                router.Choice(name="(usage limit)", kind="offline", model_id="", reason=limited))
     if req.workdir is None:  # CLI agents only run inside a worktree
-        chain = [c for c in chain if c.kind not in {"claude_code", "codex"}]
+        chain = [c for c in chain if c.kind not in executors.CLI_KINDS]
     if chain and chain[0].kind != "offline":
         # The simulator stands in only when no real model is usable. Once a real model is tried,
         # its failure must stand: placeholder work must never pass the gate in place of real work.
@@ -536,6 +545,8 @@ role only when the work needs a specialist none of them covers."""
 
 def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[contracts.TaskContract], int]:
     """The task contracts for this iteration, and the id of the agent that planned them."""
+    from agent_company.performance import cost_note
+
     gm = registry.staff("general_manager", ["planning"], goal.id)
     try:
         rooms, project_note = _project_context(goal)
@@ -558,12 +569,15 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                   + (f"\nThe previous iteration failed the quality gate. Fix these findings:\n{feedback}\n"
                      if feedback else "")
                   + (f"\nResearch notes:\n{notes}\n" if notes else "")
-                  + strategies.planner_note(goal) + teams.planner_note(goal.id)
+                  + strategies.planner_note(goal) + specs.planner_note(goal) + teams.planner_note(goal.id)
                   + teststrategy.planner_note(teststrategy.derive(goal.id, None, iteration))  # S09-R-02
+                  + cost_note()  # S07-R-04: budgets and the estimate from measured costs
                   + f"\nAvailable roles:\n{role_lines}\n\n"
                   + blackboard.inbox(goal.id, "general_manager", gm.id)
                   + (learning.experience_context(gm.id, goal_id=goal.id, query=f"{goal.title} {goal.description}")
                      + "\n\n")
+                  + ((rmap + "\n\n") if (rmap := learning.repo_map_context(goal.id, f"{goal.title} {goal.description}"))
+                     else "")  # FW-R-01
                   + PLAN_INSTRUCTIONS)
         for attempt in range(2):  # an invalid contract goes back to the planner once (S04-R-06)
             req = executors.Request(purpose="plan", role="general_manager", system=_system_for(gm), prompt=prompt,
@@ -576,6 +590,8 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                 data = contracts.extract_json(res.text)
                 tasks = data["tasks"] if isinstance(data, dict) else data
                 plan = contracts.validate_plan(tasks)
+                if fixed := specs.check_plan(goal, plan):  # K54: only this goal's spec folder, no loop files
+                    log_event("plan", "Spec paths corrected: " + "; ".join(fixed), goal_id=goal.id, agent_id=gm.id)
                 named = str(data.get("kind") or "").strip().lower() if isinstance(data, dict) else ""
                 if tmpl is None and named in strategies.KINDS:  # the planner picks the template (S04-R-11)
                     tmpl = strategies.choose(goal.id, named, "planner", str(data.get("summary", ""))[:200])
@@ -599,6 +615,7 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                           goal_id=goal.id, agent_id=gm.id)
                 kind = (tmpl or {}).get("kind", "")
                 plan = contracts.validate_plan(strategies.fallback_plan(goal.title, kind)["tasks"])
+                specs.check_plan(goal, plan)
                 try:
                     _in_rooms(plan, rooms)
                 except ValueError as e:  # nothing to fall back to inside the project's rooms
@@ -771,7 +788,7 @@ def _configure(goal: Goal) -> None:
             chain = router.resolve_chain(gm.role, gm.model_pref, classification=level)
         except router.NotCleared:  # planning will report it; no configure step
             return
-        if not chain or chain[0].kind not in {"claude_code", "codex"}:
+        if not chain or chain[0].kind not in {"claude_code", "codex"}:  # the CLIs that read .claude/
             return
         req = executors.Request(purpose="configure", role="general_manager", system=_system_for(gm),
                                 prompt=specs.configure_prompt(goal), workdir=Path(goal.worktree), writes=True,
@@ -1271,6 +1288,7 @@ def digest(goal_id: int) -> dict[str, Any]:
     from the order to now and the time agents worked, tokens and cost of every run of the goal, and the merge state."""
     from sqlalchemy import func
 
+    from agent_company import workflow
     from agent_company.db import Run, now
 
     with session() as s:
@@ -1286,7 +1304,8 @@ def digest(goal_id: int) -> dict[str, Any]:
                 "tasks_done": sum(st == "done" for st in statuses), "tasks": len(statuses),
                 "duration": round(max(0.0, (now() - created).total_seconds()), 1), "active": round(float(worked), 1),
                 "tokens": int(tokens), "cost": round(float(cost), 6),
-                "merge": MERGE_STATE.get(g.status, "not merged")}
+                "merge": MERGE_STATE.get(g.status, "not merged"),
+                **({"report": f"/api/goals/{goal_id}/report"} if g.status not in workflow.ACTIVE else {})}
 
 
 def _span(seconds: float) -> str:
@@ -1297,7 +1316,7 @@ def _span(seconds: float) -> str:
 def digest_line(d: dict[str, Any]) -> str:
     return (f"Digest: {d['tasks_done']}/{d['tasks']} task(s) passed in iteration {d['iterations']} · "
             f"{_span(d['duration'])} ({_span(d['active'])} of agent work) · {d['tokens']:,} tokens · "
-            f"${d['cost']:.4f} · {d['merge']}")
+            f"${d['cost']:.4f} · {d['merge']}" + (f" · report: {d['report']}" if d.get("report") else ""))
 
 
 def _run(goal_id: int) -> dict[str, Any]:
@@ -1413,7 +1432,8 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                                               "commit": report.get("head")})
             track_defects(goal_id, iteration, report["checks"])
             log_event("gate", f"iteration {iteration}: quality gate {'passed' if report['passed'] else 'failed'}",
-                      goal_id=goal_id, **{k: report[k] for k in ("passed", "checks", "commit")})
+                      goal_id=goal_id, iteration=iteration,
+                      **{k: report[k] for k in ("passed", "checks", "commit")})
             _learn_from(goal_id, iteration, report["passed"], report["feedback"], report.get("head") or "")
             halt = _behaviour_rules(goal_id, iteration, report)
             if halt:
@@ -1686,6 +1706,9 @@ def _out_of_quota(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, A
         row = s.get(Goal, goal_id)
         row.checkpoint = {**(row.checkpoint or {}), "paused_for": "quota", "paused_why": why,
                           "paused_day": registry.day_start().date().isoformat()}
+        reset = router.next_reset() if "usage limit" in why else None
+        if reset is not None:  # a model's usage limit: it resumes at the earliest reset, not the next UTC day
+            row.checkpoint = {**row.checkpoint, "resume_after": reset.isoformat(timespec="seconds")}
     log_event("goal", f"waiting for a quota: {why}", goal_id=goal_id)
     room = "daily budget" in why  # a room's budget (S04-R-09) rather than the agent's own quota
     notify(f"Goal #{goal_id} waits for {'a room' if room else 'an agent'}'s daily {'budget' if room else 'quota'}"[:256],
@@ -1698,9 +1721,14 @@ def _out_of_quota(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, A
 def resume_after_quota() -> list[int]:
     """Goals paused for a quota on an earlier UTC day go back to the queue (the goal queue's watcher calls this)."""
     today = registry.day_start().date().isoformat()
+    at = datetime.now(UTC).isoformat(timespec="seconds")
+
+    def due(cp: dict[str, Any]) -> bool:
+        return cp.get("paused_for") == "quota" and (cp.get("paused_day", today) < today
+                                                    or bool(cp.get("resume_after")) and cp["resume_after"] <= at)
+
     with session() as s:
-        ids = [g.id for g in s.scalars(select(Goal).where(Goal.status == "paused"))
-               if (g.checkpoint or {}).get("paused_for") == "quota" and (g.checkpoint or {}).get("paused_day", today) < today]
+        ids = [g.id for g in s.scalars(select(Goal).where(Goal.status == "paused")) if due(g.checkpoint or {})]
     resumed = []
     for gid in ids:
         try:
@@ -2001,7 +2029,7 @@ def resume(goal_id: int, actor: str = "system") -> None:
             raise ValueError(f"still over budget ({e}); raise the goal budget first") from e
         with session() as s:
             row = s.get(Goal, goal_id)
-            row.checkpoint = {k: v for k, v in (row.checkpoint or {}).items() if k not in {"paused_for", "paused_why"}}
+            row.checkpoint = {k: v for k, v in (row.checkpoint or {}).items() if k not in {"paused_for", "paused_why", "resume_after"}}
     workflow.transition(goal_id, "queued", "resumed", actor)
     log_event("goal", f"goal resumed by {actor}", goal_id=goal_id)
     enqueue(goal_id)

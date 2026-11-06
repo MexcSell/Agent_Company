@@ -222,7 +222,7 @@ def _kill(**which: Any) -> list[int]:
 # Scoped stops E0-E4 (S14-R-01). E2 (one goal) is loop.cancel, final and not stored; E5 is the key above.
 STOPS_KEY = "_stops"
 LEVELS = {"E0": "executor", "E1": "agent", "E2": "goal", "E3": "project", "E4": "room", "E5": "company"}
-EXECUTOR_KINDS = {"claude_code", "codex", "llm", "research"}
+EXECUTOR_KINDS = {"claude_code", "codex", "copilot", "llm", "research"}
 
 
 def stops() -> list[dict[str, Any]]:

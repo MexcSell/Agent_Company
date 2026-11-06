@@ -110,7 +110,10 @@ reliable. The requirements below are the parts the core pipeline needs now.
   and actual totals, the median actual/estimate ratio, the mean absolute percentage error and the share within
   ±50%. Goal cost: `estimated_cost_usd` (the order's or the planner's) against the model cost of finished goals.
   A label (calibrated, underestimates above ×1.5, overestimates below ×0.67) only from `CALIBRATION_MIN` (5)
-  samples; fewer are shown as "too few samples". Not taken: AT-015/016 forecasts of other kinds (there is no other
+  samples; fewer are shown as "too few samples". The planner is told the measured costs (2026-11-06,
+  `performance.cost_note` in the plan prompt): per role the median and 75th percentile model cost of the newest 40
+  tasks of real goals (from 3 tasks), and how far goal estimates were off; a task budget should be at least that
+  percentile, since a run over its budget fails the task. Not taken: AT-015/016 forecasts of other kinds (there is no other
   prediction source yet).
 
 ### S07-R-05 Opportunity detection — §12 (AT-017) — gated

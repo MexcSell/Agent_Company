@@ -27,6 +27,8 @@ from sqlalchemy import select
 from agent_company.db import Goal, Task, session
 
 CONFIG_PATHS = (".claude/", ".mcp.json")
+LOOP_FILES = ("requirements.md", "tasks.md", "review.md", "sa-review.md", "decisions.md")  # the loop writes them
+SPEC_DIR = re.compile(r"\.claude/specs/([^/\s'\"`]+)/")
 
 
 def slug(title: str, goal_id: int) -> str:
@@ -36,6 +38,52 @@ def slug(title: str, goal_id: int) -> str:
 
 def folder(goal: Goal) -> Path:
     return Path(goal.worktree) / ".claude" / "specs" / slug(goal.title, goal.id)
+
+
+def relative_folder(goal: Any) -> str:
+    return f".claude/specs/{slug(goal.title, goal.id)}"
+
+
+def planner_note(goal: Any) -> str:
+    d = relative_folder(goal)
+    return (f"This goal's spec folder is `{d}/`. Any spec or design document a task produces goes there (a read-only "
+            f"task's .md/.txt file_exists path in it is filled with that task's answer); use no other `.claude/specs/` "
+            f"folder. {', '.join(LOOP_FILES)} are written by the loop itself and must not appear in acceptance "
+            "conditions.\n")
+
+
+def check_plan(goal: Any, plan: list[Any]) -> list[str]:
+    """Point every `.claude/specs/<X>/` path of the plan's acceptance conditions at this goal's spec folder (K54).
+    Mutates the conditions; returns `<key>: <old> -> <new>` per rewrite. Raises ValueError on a condition about a
+    file the loop writes itself."""
+    own = slug(goal.title, goal.id)
+    prefix = str(goal.worktree).rstrip("/") + "/" if goal.worktree else ""
+    loop_file = re.compile(rf"\.claude/specs/{re.escape(own)}/({'|'.join(map(re.escape, LOOP_FILES))})(?![\w.-])")
+    report = []
+    for c in plan:
+        for cond in c.acceptance:
+            if cond.type == "file_exists" and cond.path:
+                path = cond.path
+                if prefix and path.startswith(prefix):
+                    path = path[len(prefix):]
+                while path.startswith("./"):
+                    path = path[2:]
+                if not SPEC_DIR.match(path):
+                    continue
+                new = SPEC_DIR.sub(f".claude/specs/{own}/", path, count=1)
+                if new != cond.path:
+                    report.append(f"{c.key}: {cond.path} -> {new}")
+                    cond.path = new
+                if loop_file.fullmatch(new):
+                    raise ValueError(f"task {c.key}: {new} is written by the loop itself, not by a task")
+            elif cond.type == "command" and cond.run:
+                new = SPEC_DIR.sub(f".claude/specs/{own}/", cond.run)
+                if new != cond.run:
+                    report.append(f"{c.key}: {cond.run} -> {new}")
+                    cond.run = new
+                if m := loop_file.search(new):
+                    raise ValueError(f"task {c.key}: {m.group(0)} is written by the loop itself, not by a task")
+    return report
 
 
 def _write(path: Path, text: str) -> None:
