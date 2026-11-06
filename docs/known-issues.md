@@ -78,7 +78,7 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 | P11 | A conflict review (S04-R-03) runs after the iteration's other tasks, so the implementation may already follow the rejected recommendation; the review then fails the gate and the next iteration corrects it, at the cost of one more iteration. | by design |
 | P12 | With `candidate_smoke` on (default), each new candidate playbook runs the smoke suite twice (current and candidate playbook: 6 goals with `repeats` 1). On real models this costs model time; it starts only when an agent's success rate falls below 50 % over 6 tasks. The offline simulator fails the smoke suite on purpose, so offline both sides score 0 and the candidate goes on to its live trial. | by design (S13-D-02) |
 | P13 | While a smoke trial runs its candidate side, every eval goal (including one an administrator starts with `eval`) uses that agent's candidate playbook. Run benchmarks when no smoke trial is running (Evolution page). | open (low) |
-| P14 | The "cost > 2× estimate" rule needs an estimate: the order's `estimated_cost_usd` or the planner's. Goals with neither are only limited by `goal_budget_usd`. | by design (S14-R-03) |
+| P14 | The "cost > 2× estimate" rule (factor: setting `cost_overrun_factor`) needs an estimate: the order's `estimated_cost_usd` or the planner's. Goals with neither are only limited by `goal_budget_usd`. | by design (S14-R-03) |
 
 ## Added 2026-11-05 (project management, step 3)
 

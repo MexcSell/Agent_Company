@@ -196,6 +196,27 @@ def test_spending_twice_the_estimate_pauses_the_goal(monkeypatch):
     assert loop.run_goal(gid)["status"] == "awaiting_approval"
 
 
+def test_the_cost_overrun_factor_is_a_setting(monkeypatch):
+    """The owner raised the brake to 3x the estimate: a goal between 2x and 3x keeps running."""
+    from agent_company.db import Goal
+
+    monkeypatch.setattr(loop, "enqueue", lambda gid: None)
+    gid = loop.create_goal("Estimated", quality_commands=["test -f WORKLOG.md"], estimated_cost_usd=1.0)
+    g = loop._goal(gid)
+    monkeypatch.setattr(usage, "goal_spend", lambda goal_id: 2.5)
+    with pytest.raises(loop.CostOverrun, match="2× the estimate"):
+        loop._budget_note(g, 0.0)
+    prefs.set_value("cost_overrun_factor", 3)
+    loop._budget_note(g, 0.0)
+    monkeypatch.setattr(usage, "goal_spend", lambda goal_id: 3.5)
+    with pytest.raises(loop.CostOverrun, match="3× the estimate"):
+        loop._budget_note(g, 0.0)
+    with pytest.raises(ValueError):
+        prefs.set_value("cost_overrun_factor", 0.5)
+    with session() as s:
+        assert s.get(Goal, gid).estimated_cost_usd == 1.0
+
+
 def test_the_api_takes_an_estimate_and_refuses_to_resume_a_goal_still_over_budget(monkeypatch):
     import secrets
 

@@ -246,10 +246,7 @@ class BudgetExhausted(RuntimeError):
 
 
 class CostOverrun(BudgetExhausted):
-    """The goal cost more than COST_OVERRUN times its estimate: always a pause, never a failure (S14-R-03)."""
-
-
-COST_OVERRUN = 2.0
+    """The goal cost more than `cost_overrun_factor` times its estimate: always a pause, never a failure (S14-R-03)."""
 
 
 TRANSIENT = re.compile(r"(?i)(\b(429|50[0-4]|529)\b|rate.?limit|overloaded|timed? ?out|timeout|temporar"
@@ -391,8 +388,9 @@ def _budget_note(goal: Goal, started: float) -> str:
         estimate = (row.estimated_cost_usd or 0.0) if row else 0.0
         lim = budgets.limits(row) if row else {"cost_usd": 0, "tokens": 0}
     spent = usage.goal_spend(goal.id) if lim["cost_usd"] > 0 or estimate > 0 else 0.0
-    if estimate > 0 and spent > COST_OVERRUN * estimate:  # behaviour rule (S14-R-03)
-        raise CostOverrun(f"spent ${spent:.2f}, more than {COST_OVERRUN:g}× the estimate of ${estimate:.2f}")
+    factor = cfg.cost_overrun_factor
+    if estimate > 0 and spent > factor * estimate:  # behaviour rule (S14-R-03)
+        raise CostOverrun(f"spent ${spent:.2f}, more than {factor:g}× the estimate of ${estimate:.2f}")
     if lim["cost_usd"] > 0:  # S04-R-09: the goal's own budget covers what its child goals use or hold
         held = budgets.committed(goal.id, "cost_usd")
         if held >= lim["cost_usd"]:

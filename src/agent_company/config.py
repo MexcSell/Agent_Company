@@ -63,6 +63,8 @@ class Settings:
     max_goal_depth: int = 3  # generations of proposal goals below a person's order (S04-R-08)
     # What an exhausted goal budget does (S04-R-09): "pause" waits for an administrator, "stop" fails the goal.
     budget_exhausted_action: str = "pause"
+    # A goal that spends more than this many times its planner's estimate pauses for an administrator (S14-R-03).
+    cost_overrun_factor: float = 2.0
     # The same check failing in this many consecutive iterations escalates to the planner (S04-R-06, S04-R-07).
     escalate_after: int = 2
     # A candidate playbook must pass the smoke suite before it is tried on users' goals (S13-D-02).
@@ -169,6 +171,7 @@ def load_settings() -> Settings:
         min_improvement=_int("MIN_IMPROVEMENT", 10),
         max_goal_depth=_int("MAX_GOAL_DEPTH", 3),
         budget_exhausted_action=(os.environ.get("BUDGET_EXHAUSTED_ACTION") or "pause").lower(),
+        cost_overrun_factor=float(os.environ.get("COST_OVERRUN_FACTOR") or 2),
         escalate_after=_int("ESCALATE_AFTER", 2),
         candidate_smoke=_bool("CANDIDATE_SMOKE", True),
         benchmark_schedule=(os.environ.get("BENCHMARK_SCHEDULE") or "off").lower(),

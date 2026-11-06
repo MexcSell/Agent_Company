@@ -38,6 +38,8 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "min_improvement": (int, "Percentage points a trial playbook must beat the baseline by to be promoted"),
     "max_goal_depth": (int, "Generations of goals that proposals may spawn below a person's order"),
     "budget_exhausted_action": (str, "When a goal's budget runs out: 'pause' (wait for an administrator) or 'stop' (fail it)"),
+    "cost_overrun_factor": (float, "A goal that spends more than this many times its planner's cost estimate pauses "
+                                   "for an administrator (1-20)"),
     "escalate_after": (int, "Consecutive iterations the same check may fail before it is escalated to the planner"),
     "candidate_smoke": (bool, "A candidate playbook must pass the smoke suite before it is tried on users' goals"),
     "benchmark_schedule": (str, "Scheduled benchmark review: 'off', 'daily', 'weekly' or 'monthly' runs of the "
@@ -100,7 +102,7 @@ LIMITS: dict[str, tuple[float, float]] = {
     "goal_time_budget": (0, 7 * 86400), "study_interval": (0, 7 * 86400),
     "goal_token_budget": (0, 1_000_000_000), "goal_agent_limit": (0, 16),
     "retry_max_attempts": (1, 10), "retry_base_seconds": (0, 600), "retry_max_seconds": (0, 3600),
-    "min_improvement": (0, 100), "max_goal_depth": (1, 10), "escalate_after": (1, 10),
+    "min_improvement": (0, 100), "max_goal_depth": (1, 10), "escalate_after": (1, 10), "cost_overrun_factor": (1, 20),
     "approval_blocker_hours": (0, 720), "inactive_days": (1, 3650), "explore_rate": (0, 1),
     "improvement_min_score": (0, 100), "improvement_max_regression": (0, 100),
     "shift_seconds": (0, 7 * 86400), "health_recovery_minutes": (0, 1440),

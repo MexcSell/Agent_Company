@@ -32,7 +32,7 @@ DELEGABLE = {"approve_goals": "approve or reject the project's goals that wait f
 MAX_DAYS = 365
 
 GOVERNANCE_KEYS = ("require_approval", "goal_budget_usd", "goal_token_budget", "goal_agent_limit", "goal_time_budget",
-                   "budget_exhausted_action", "recruit_requires_approval", "qualify_recruits", "proposal_policy",
+                   "budget_exhausted_action", "cost_overrun_factor", "recruit_requires_approval", "qualify_recruits", "proposal_policy",
                    "max_proposal_goals", "max_goal_depth", "candidate_smoke", "auto_push", "a2a_enabled",
                    "blocked_commands", "sandbox", "sandbox_memory_mb", "sandbox_tasks", "sandbox_cpus", "sandbox_paths",
                    "sandbox_env", "dependency_audit", "required_test_stages")
