@@ -47,7 +47,7 @@ whole company, not only the code agents.
 | Competent developers (Architect, Backend Developer, QA) | Claude Code | Codex CLI | Claude Code |
 | Auxiliary Developer (Codex) | Codex CLI (its own choice on its card) | — | Claude Code: a task the assistant failed is retried by the competent developer |
 | Research Lead | Codex CLI (route `research`) | claude_37, then Claude Code | Claude Code |
-| Reviewers of another agent's work | another family when one is usable (EL-R-03): Claude reviews Codex and the other way round in the research room; code reviews in the goal loop use only API models of another family until QA receives the gate's test output (goal 93) | | |
+| Reviewers of another agent's work | another family when one is usable (EL-R-03): Claude reviews Codex and the other way round in the research room; code reviews in the goal loop use only API models of another family until QA receives the gate's test output (goal 112) | | |
 | GitHub Copilot | registered kind `copilot`; not installed on this host | | |
 
 The research lead calls its model through the router, gets a JSON plan back and carries it out with its own tools

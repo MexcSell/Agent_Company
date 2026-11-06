@@ -1110,7 +1110,22 @@ def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = Tr
             approve, note = False, f" (goal chain depth {settings().max_goal_depth} reached)"  # S04-R-08
         if kind != "project":
             p.status, p.decided_by = ("approved" if approve else "rejected"), decided_by + note
-        if approve and kind != "project":
+        if approve and kind != "project" and origin is not None and origin.origin == "eval":
+            # a benchmark run's proposal is about the platform, not the throw-away eval repository it ran in
+            # (2026-11-06: eight such goals worked on eval seed repos): the platform project takes it, without the
+            # eval goal as parent (its budget and chain do not apply)
+            plat = s.scalars(select(Project).where(Project.protected).order_by(Project.id)).first()
+            from agent_company.config import REPO_ROOT
+
+            spawn = {"title": p.title,
+                     "description": f"{p.description or p.title}\n\n(Raised by an agent during benchmark goal "
+                                    f"#{origin.id}, which ran in a scratch repository; the change belongs to the "
+                                    "Agent Company platform.)",
+                     "repo": (plat.path if plat and plat.path else str(REPO_ROOT)),
+                     "checks": list(plat.quality_commands or []) if plat else [],
+                     "project_id": plat.id if plat else None, "parent": None, "created_by": origin.created_by,
+                     "topic": GENERAL, "classification": ""}
+        elif approve and kind != "project":
             spawn = {"title": p.title, "description": p.description or p.title,
                      "repo": origin.repo_path if origin else "",
                      "checks": list(origin.quality_commands) if origin else [], "project_id": p.project_id,
