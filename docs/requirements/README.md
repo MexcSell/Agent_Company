@@ -23,8 +23,8 @@ detail an implementer works from.
 | [SPEC-13-learning.md](SPEC-13-learning.md) | SPEC13.docx |
 | [SPEC-14-security.md](SPEC-14-security.md) | SPEC14.docx, ASEAO_SPEC-14_Enterprise_Security_Governance.pdf |
 | [SPEC-15-dashboard.md](SPEC-15-dashboard.md) | master specification (.rtf) only |
-| [guides-and-other-sources.md](guides-and-other-sources.md) | 1.txt, guides, AgentForge website spec, AWS frameworks guide, 2.pdf, 111.pdf and Research_Agent_Continuous_Learning_Guide.pdf (G-R-10..14) |
-| [SELF-EVOLUTION.md](SELF-EVOLUTION.md) | `docs/advanced_self_improving_agent_guide.pdf`: verified self-evolution of the platform's own code; IDs `SE-R-nn` |
+| [guides-and-other-sources.md](guides-and-other-sources.md) | 1.txt, guides, AgentForge website spec, AWS frameworks guide, 2.pdf, 111.pdf and Research_Agent_Continuous_Learning_Guide.pdf (G-R-10..14); docs/temp: the continuously evolving organisation and architecture PDFs, 1.md (G-R-15..19) |
+| [SELF-EVOLUTION.md](SELF-EVOLUTION.md) | `docs/temp/advanced_self_improving_agent_guide.pdf`: verified self-evolution of the platform's own code; IDs `SE-R-nn` |
 | [WORKSPACE.md](WORKSPACE.md) | the code of 2026-11-05 (no document): the Workspace and File Manager, specified so they can be set up again on another computer; IDs `WS-R-nn` |
 | [images/SOURCES.md](images/SOURCES.md) | which images were kept, which were not, and their sources |
 
@@ -128,7 +128,7 @@ the order is safety and correctness of that pipeline first, then management, the
    - **Conditional on evidence**: S11 embedding search, only if S11-R-08 shows keyword and FTS retrieval
      insufficient (recall@5 holds today).
    - **From the research agent guide** (2026-11-06, `111.pdf`): G-R-10 feeds with publication date and licence and
-     G-R-11 the regression guard are done; open are G-R-12 PDF text (a dependency, in the sandbox), G-R-13 a fixed
+     G-R-11 the regression guard are done, then G-R-12 PDF text in the sandbox (approved 2026-11-06); open are G-R-13 a fixed
      research-agent benchmark (a research-task runner: a goal for the goal loop) and G-R-14 a scheduled benchmark
      review (real model runs: the owner sets whether and the budget). Research through a provider's hosted web
      search is not taken: its claims cannot be checked against stored sources (S06-R-03).

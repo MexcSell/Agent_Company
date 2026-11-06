@@ -456,3 +456,52 @@ def test_html_meta_gives_the_publication_date_and_licence():
     assert pages[0]["published_at"].isoformat() == "2024-05-01T00:00:00+00:00"
     assert pages[0]["license"] == "https://papers.example/licenses/by/4.0/"
     assert research.parse_date("not a date") is None and research.parse_date("") is None
+
+
+def _pdf(text, title="Eval paper"):
+    """A minimal one-page PDF with `text` in Helvetica and a /Title, with a correct xref table."""
+    stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode()
+    objs = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+            b"/Resources << /Font << /F1 5 0 R >> >> >>",
+            b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", f"<< /Title ({title}) >>".encode()]
+    out, offsets = bytearray(b"%PDF-1.4\n"), []
+    for i, body in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % i + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1)
+    out += b"".join(b"%010d 00000 n \n" % o for o in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R /Info 6 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, xref)
+    return bytes(out)
+
+
+def test_a_pdf_becomes_a_document_with_its_text_extracted_in_the_sandbox():
+    from agent_company import sandbox
+
+    if not sandbox.available()[0]:
+        pytest.skip("bubblewrap is not usable here")
+    url = "https://arxiv.example/pdf/2611.00001.pdf"
+    r = research.collect(url, client=_feed_site(_pdf("Agents evaluate agents"), "application/pdf"),
+                         allow_private=True)
+    assert r["stored"] == 1 and r["errors"] == []
+    hit = research.search("evaluate agents")[0]
+    assert hit["url"] == url and hit["title"] == "Eval paper"
+    broken = research.crawl(url, client=_feed_site(b"%PDF-1.4 garbage", "application/pdf"), allow_private=True)
+    assert broken[0]["error"].startswith("unreadable PDF")
+    octet = research.crawl(url, client=_feed_site(_pdf("Octet stream"), "application/octet-stream"),
+                           allow_private=True)
+    assert "Octet stream" in octet[0]["text"], "a .pdf served as octet-stream is read too"
+
+
+def test_a_pdf_is_not_parsed_when_the_sandbox_is_unavailable(monkeypatch):
+    from agent_company import sandbox
+
+    monkeypatch.setattr(sandbox, "available", lambda: (False, "bubblewrap (bwrap) is not installed"))
+    pages = research.crawl("https://x.example/a.pdf", client=_feed_site(_pdf("Hidden"), "application/pdf"),
+                           allow_private=True)
+    assert "did not run" in pages[0]["error"] and "bwrap" in pages[0]["error"]
+    from agent_company.config import settings
+
+    assert list((settings().data_dir / "sandbox" / "pdf").iterdir()) == [], "the scratch directory is removed"

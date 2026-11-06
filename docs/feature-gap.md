@@ -150,9 +150,10 @@ Machines code):
 | A2A protocol for agent-to-agent messages | 1.txt | done (`a2a.py`: A2A 1.0 agent card, JSON-RPC tasks as goals for issued clients, G-R-06) |
 | RSS/Atom feeds as research sources; publication date and licence per document | research guide (`111.pdf`) §3, §11 | done (`research.parse_feed`, `Document.published_at`/`license`, G-R-10) |
 | No regression on tasks the baseline solved: experiments, templates, playbook smoke trials, `eval --compare` | research guide §7 | done (`experiments.regressions`, G-R-11) |
-| PDF text extraction; a fixed research-agent benchmark; a scheduled benchmark review | research guide §6, §8 | open (G-R-12..14: a dependency in the sandbox, a research-task runner, a run budget) |
+| PDF text extraction of collected papers, parsed in the L3 sandbox | research guide §8 | done (`research.extract_pdf`, `pdftext.py`, G-R-12) |
+| A fixed research-agent benchmark; a scheduled benchmark review | research guide §6, §8 | open (G-R-13 a research-task runner, G-R-14 a run budget) |
 
-## From docs/advanced_self_improving_agent_guide.pdf (verified self-evolution)
+## From docs/temp/advanced_self_improving_agent_guide.pdf (verified self-evolution)
 
 | Feature | Guide | Status |
 | --- | --- | --- |

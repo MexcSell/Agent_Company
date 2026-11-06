@@ -208,6 +208,50 @@ def parse_feed(body: bytes, feed_url: str) -> list[dict[str, Any]]:
     return pages
 
 
+MAX_PDF_BYTES = 25_000_000
+PDF_SECONDS = 60
+
+
+def is_pdf(ctype: str, url: str, body: bytes) -> bool:
+    return "application/pdf" in ctype or (("octet-stream" in ctype or not ctype) and body[:5] == b"%PDF-"
+                                          and urlparse(url).path.lower().endswith(".pdf"))
+
+
+def extract_pdf(data: bytes) -> dict[str, Any]:
+    """The text of a fetched PDF (G-R-12), parsed by `pdftext.py` in the L3 sandbox: a parser bug or a hostile file
+    meets no network, a memory, task and time limit, and a scratch directory. Required unless an administrator set
+    the sandbox `off`. Returns {"title", "text", "pages"}; raises ValueError with the reason."""
+    import json
+    import shutil
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    from agent_company import sandbox
+    from agent_company.config import settings
+
+    if len(data) > MAX_PDF_BYTES:
+        raise ValueError(f"PDF larger than {MAX_PDF_BYTES // 1_000_000} MB")
+    base = settings().data_dir / "sandbox" / "pdf"
+    base.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(dir=base))
+    try:
+        (work / "doc.pdf").write_bytes(data)
+        shutil.copyfile(Path(__file__).with_name("pdftext.py"), work / "pdftext.py")
+        mode = "off" if settings().sandbox == "off" else "required"
+        out = sandbox.run([sys.executable, "-I", "pdftext.py", "doc.pdf", "out.json"], work, PDF_SECONDS, mode=mode)
+        if out.timed_out:
+            raise ValueError(f"PDF extraction timed out after {PDF_SECONDS} s")
+        if not (work / "out.json").is_file():
+            raise ValueError(f"PDF extraction did not run: {(out.note or out.output.strip()[-200:])}")
+        result = json.loads((work / "out.json").read_text(encoding="utf-8"))
+        if result.get("error"):
+            raise ValueError(f"unreadable PDF: {result['error']}")
+        return result
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def _is_public_host(host: str) -> bool:
     try:
         infos = socket.getaddrinfo(host, None)
@@ -282,8 +326,21 @@ def crawl(start_url: str, depth: int = 1, max_pages: int = 20, same_host: bool =
                 pages.append({"url": url, "error": f"HTTP {resp.status_code}", "retry_after": wait})
                 break
             feed = resp.status_code < 400 and is_feed(ctype, resp.content)
-            if resp.status_code >= 400 or not ("html" in ctype or ctype.startswith("text/") or feed):
+            pdf = resp.status_code < 400 and is_pdf(ctype, url, resp.content)
+            if resp.status_code >= 400 or not ("html" in ctype or ctype.startswith("text/") or feed or pdf):
                 pages.append({"url": url, "error": f"HTTP {resp.status_code} {ctype}".strip()})
+                continue
+            if pdf:  # G-R-12: extracted in the sandbox; a PDF's links are not followed
+                try:
+                    got = extract_pdf(resp.content)
+                except ValueError as e:
+                    pages.append({"url": url, "error": str(e)})
+                    continue
+                if not got.get("text", "").strip():
+                    pages.append({"url": url, "error": "PDF without extractable text (scanned pages?)"})
+                    continue
+                pages.append({"url": url, "title": got.get("title") or url.rsplit("/", 1)[-1], "text": got["text"],
+                              "depth": d, "pdf_pages": got.get("pages")})
                 continue
             if feed:  # RSS/Atom (G-R-10): its entries are the pages; the feed itself is not stored
                 try:

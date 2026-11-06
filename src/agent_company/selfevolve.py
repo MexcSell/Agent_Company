@@ -1,4 +1,4 @@
-"""Verified self-evolution of the platform's own code (docs/advanced_self_improving_agent_guide.pdf).
+"""Verified self-evolution of the platform's own code (docs/temp/advanced_self_improving_agent_guide.pdf).
 
 `evolution.py` improves behaviour (playbooks); this module improves the implementation, under an improvement
 contract (§19):

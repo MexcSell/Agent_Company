@@ -1,6 +1,6 @@
 # SELF-EVOLUTION — Verified self-evolution of the platform's own code
 
-Source: `docs/advanced_self_improving_agent_guide.pdf` ("What Constitutes the Most Advanced AI Agent?",
+Source: `docs/temp/advanced_self_improving_agent_guide.pdf` ("What Constitutes the Most Advanced AI Agent?",
 7 pages, 19 sections). Its closing criterion: *the most advanced practical agent is not the one that can
 rewrite itself freely; it is the one that can repeatedly engineer, verify and preserve better versions of
 its own software.* IDs `SE-R-nn` (requirement written here, citing the guide's section).
