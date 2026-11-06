@@ -29,6 +29,8 @@ from agent_company.db import Agent, log_event, session
 from agent_company.executors import tools_for
 
 _lock = threading.Lock()
+IMPORTED = "Imported instructions"  # a marketplace package's instructions (REQ-002), data with demoted headings
+WRITABLE = {"Working method", "Knowledge notes", IMPORTED, "Provenance"}  # sections kept across syncs
 SECTION_RE = re.compile(r"^## (.+?)\n(.*?)(?=^## |\Z)", re.S | re.M)
 
 
@@ -78,6 +80,10 @@ def render(a: Agent, keep: dict[str, str] | None = None) -> str:
         parts.append(f"## Playbook (v{a.playbook_version})\n{a.playbook.strip()}")
     if keep.get("Knowledge notes"):
         parts.append(f"## Knowledge notes\n{keep['Knowledge notes']}")
+    if keep.get(IMPORTED):
+        parts.append(f"## {IMPORTED}\n{keep[IMPORTED]}")
+    if keep.get("Provenance"):
+        parts.append(f"## Provenance\n{keep['Provenance']}")
     return head + "\n" + "\n\n".join(parts) + "\n"
 
 
@@ -160,16 +166,54 @@ def learn_into(agent_id: int, section: str, text: str, reason: str) -> None:
     """Replace one learned section ("Working method" or "Knowledge notes") and commit."""
     if section not in {"Working method", "Knowledge notes"}:
         raise ValueError("learning writes the Working method or Knowledge notes section")
+    write_section(agent_id, section, text, reason)
+
+
+def demote(text: str) -> str:
+    """Untrusted text as section content: a line can never start a section (`## `) or end the front matter."""
+    text = re.sub(r"^(\s*)#", r"\1\\#", text, flags=re.M)
+    return re.sub(r"^---\s*$", r"\\---", text, flags=re.M)
+
+
+def write_section(agent_id: int, section: str, text: str, reason: str, limit: int = 6000) -> bool:
+    """Replace one kept section (WRITABLE) and commit it as a new version of the definition."""
+    if section not in WRITABLE:
+        raise ValueError(f"only {', '.join(sorted(WRITABLE))} can be written")
     with _lock, session() as s:
         a = s.get(Agent, agent_id)
         if a is None:
-            return
+            return False
         p = path_for(a)
         keep = sections(p.read_text(encoding="utf-8")) if p.exists() else {}
-        keep[section] = text.strip()[:6000]
+        keep[section] = text.strip()[:limit]
         p.write_text(render(a, keep), encoding="utf-8")
         a.definition_version = (a.definition_version or 0) + 1
         _commit(p, f"{a.name} v{a.definition_version}: {reason}"[:200])
+        return True
+
+
+def restore(agent_id: int, commit: str, actor: str, *, admin: bool = False) -> dict[str, Any]:
+    """Roll the definition back to an earlier version: that version's text becomes a new commit. Only an
+    administrator restores, and only a commit from this definition's own history."""
+    if not admin or not actor:
+        raise PermissionError("only an administrator restores an agent definition")
+    if not re.fullmatch(r"[0-9a-f]{7,40}", commit or ""):
+        raise ValueError("commit is a hexadecimal git id of 7 to 40 characters")
+    with _lock, session() as s:
+        a = s.get(Agent, agent_id)
+        if a is None:
+            raise KeyError(agent_id)
+        p = path_for(a)
+        own = _git(repo(), "log", "--format=%H", "--", p.name).stdout.split()
+        if not any(h.startswith(commit) for h in own):
+            raise ValueError(f"{commit} is not a version of {p.name}")
+        old = _git(repo(), "show", f"{commit}:{p.name}")
+        if old.returncode != 0:
+            raise ValueError(f"no version {commit} of {p.name}")
+        p.write_text(old.stdout, encoding="utf-8")
+        a.definition_version = (a.definition_version or 0) + 1
+        _commit(p, f"{a.name} v{a.definition_version}: restored {commit} by {actor}"[:200])
+    return read(agent_id)
 
 
 def claude_subagent(agent_id: int) -> tuple[str, str]:
@@ -180,7 +224,10 @@ def claude_subagent(agent_id: int) -> tuple[str, str]:
             return "", ""
         # an empty `tools:` would give a Claude Code subagent every tool; at G0 it only reads
         tools = [t for t in tools_for(a.permissions, a.autonomy) if not t.startswith("MCP")] or ["Read", "Grep", "Glob"]
-        name = slug(a.role if a.parent_id is None else a.name)
+        # the first root agent of a role is `<role>.md`; a clone or a second agent of that role is named after itself
+        first = s.scalars(select(Agent.id).where(Agent.role == a.role, Agent.parent_id.is_(None))
+                          .order_by(Agent.id).limit(1)).first()
+        name = slug(a.role if a.parent_id is None and first == a.id else a.name)
         desc = re.sub(r"\s+", " ", f"{a.title}: {a.goal}")[:300]
         body = system_prompt(a)
     return f"{name}.md", f"---\nname: {name}\ndescription: {desc}\ntools: {', '.join(tools)}\n---\n\n{body}\n"
@@ -211,9 +258,11 @@ def study(agent_id: int | None = None) -> dict[str, Any]:
             nxt = next((a for a in agents if a.id == agent_id), None)
             if nxt is None:
                 raise KeyError(agent_id)
-        # a definition file serves every project: only public/internal lessons and reports reach it (S14-R-05)
+        # a definition file serves every project: only public/internal lessons and reports reach it (S14-R-05);
+        # items a person imported (REQ-005) are knowledge for tasks, not the agent's own experience
         lessons = [x.text for x in s.scalars(select(Lesson).where(Lesson.agent_id == nxt.id, Lesson.status == "approved",
-                                                                  Lesson.classification.in_(SHAREABLE))
+                                                                  Lesson.classification.in_(SHAREABLE),
+                                                                  Lesson.outcome != "imported")
                                              .order_by(Lesson.id.desc()).limit(12))]
         s.expunge(nxt)
     topic = " ".join(list((nxt.skills or {}).keys())[:6]) or nxt.role

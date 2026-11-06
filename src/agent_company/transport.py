@@ -24,6 +24,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -163,10 +164,57 @@ def _detect_ips() -> set[str]:
     return found
 
 
+MAX_DOMAINS = 20
+_LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def parse_domains(value: str | list[str]) -> list[str]:
+    """Validated domain names for the certificate and nginx `server_name` (REQ-009).
+
+    Separated by commas, whitespace or newlines (or a list); lowercased, a trailing dot dropped, duplicates
+    removed in input order. Strict letter-digit-hyphen names only: they end up in the nginx config, so ';',
+    '{', newlines, wildcards, ports, schemes and IP literals are refused (ValueError naming the entry).
+    """
+    if isinstance(value, str):
+        parts = re.split(r"[\s,]+", value)
+    elif isinstance(value, list) and all(isinstance(x, str) for x in value):
+        parts = [p for x in value for p in re.split(r"[\s,]+", x)]
+    else:
+        raise ValueError("domain names must be a string or a list of strings")
+    out: list[str] = []
+    for raw in parts:
+        name = raw.strip().lower().removesuffix(".")
+        if not name:
+            continue
+        try:
+            ipaddress.ip_address(name)
+        except ValueError:
+            pass
+        else:
+            raise ValueError(f"{raw!r} is an IP address, not a domain name (IP access needs no entry)")
+        if not re.fullmatch(r"[a-z0-9.-]+", name):
+            raise ValueError(f"{raw!r} is not a domain name: only letters, digits, '-' and '.' are allowed")
+        if len(name) > 253:
+            raise ValueError(f"{raw!r} is longer than 253 characters")
+        for label in name.split("."):
+            if not label:
+                raise ValueError(f"{raw!r} has an empty label")
+            if len(label) > 63:
+                raise ValueError(f"{raw!r} has a label longer than 63 characters")
+            if not _LABEL.match(label):
+                raise ValueError(f"{raw!r} has a label that starts or ends with '-'")
+        if name not in out:
+            out.append(name)
+    if len(out) > MAX_DOMAINS:
+        raise ValueError(f"at most {MAX_DOMAINS} domain names")
+    return out
+
+
 def hosts() -> list[str]:
-    """Names and addresses the server certificate covers: localhost, this machine, TLS_HOSTS."""
+    """Names and addresses the server certificate covers: localhost, this machine, TLS_HOSTS, tls_domains."""
     names = {"localhost", "127.0.0.1", "::1", socket.gethostname(), *_detect_ips()}
     names |= {h.strip() for h in os.environ.get("TLS_HOSTS", "").split(",") if h.strip()}
+    names |= set(settings().tls_domains)
     return sorted(n for n in names if n)
 
 
@@ -214,7 +262,7 @@ def _leaf_ok(ca: x509.Certificate, names: list[str]) -> bool:
     if cert.not_valid_after_utc - dt.datetime.now(dt.timezone.utc) < dt.timedelta(days=RENEW_DAYS):
         return False
     have = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-    return set(_san(names)) <= set(have)
+    return set(_san(names)) == set(have)  # a removed name renews the leaf too
 
 
 def ensure_certs() -> bool:
@@ -260,7 +308,7 @@ def info() -> dict[str, Any]:
                            "public_port": settings().public_port, "ca_name": CA_NAME,
                            "ca_fingerprint": ":".join(fp[i:i + 2] for i in range(0, len(fp), 2)),
                            "ca_valid_until": ca.not_valid_after_utc.date().isoformat(),
-                           "hosts": [], "cert_valid_until": None}
+                           "domains": settings().tls_domains, "hosts": [], "cert_valid_until": None}
     crt = _paths()["crt"]
     if crt.exists():
         leaf = x509.load_pem_x509_certificate(crt.read_bytes())
@@ -294,9 +342,12 @@ def nginx_conf(mode: str) -> str:
     s = settings()
     p = _paths()
     port = s.public_port
+    # Validated again here: the names are written into the config text (defence in depth).
+    # `_` and default_server keep access by IP address or any other Host header working.
+    server_name = " ".join([*parse_domains(s.tls_domains), "_"])
     if mode == "https":
-        listen = f"""    listen {port} ssl http2;
-    listen [::]:{port} ssl http2;
+        listen = f"""    listen {port} ssl http2 default_server;
+    listen [::]:{port} ssl http2 default_server;
     ssl_certificate {p['crt']};
     ssl_certificate_key {p['key']};
     ssl_protocols TLSv1.2 TLSv1.3;
@@ -316,8 +367,8 @@ def nginx_conf(mode: str) -> str:
     }}
 """
     else:
-        listen = f"""    listen {port};
-    listen [::]:{port};"""
+        listen = f"""    listen {port} default_server;
+    listen [::]:{port} default_server;"""
         plain = ""
     return f"""# Agent Company dashboard ({mode}). Written by the app (Settings -> Connection); edits are overwritten.
 map $http_upgrade $agent_company_connection {{
@@ -332,7 +383,7 @@ upstream agent_company_app {{
 
 server {{
 {listen}
-    server_name _;
+    server_name {server_name};
     client_max_body_size 100m;
     keepalive_timeout 75s;
 

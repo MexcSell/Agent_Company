@@ -47,6 +47,30 @@ class QuotaExceeded(RuntimeError):
     """Every agent that could take the work has used its daily cost quota."""
 
 
+class ModelLimitReached(QuotaExceeded):
+    """Every model the role's agents may use (their own, the route's and its fallbacks) is at its usage limit: the
+    goal waits for the earliest reset (loop.resume_after_quota). A clone would ask for the same models."""
+
+
+class CloneLimitReached(QuotaExceeded):
+    """Every agent of the role is busy or degraded and the best one already has `max_clones` clones."""
+
+
+def _limit_blocked(role: str, pool: list[Agent]) -> str:
+    """Why no agent of the pool can get a real model right now because of usage limits ('' if one can)."""
+    from agent_company import router
+
+    if not router.any_limited():
+        return ""
+    reasons = []
+    for pref in {a.model_pref for a in pool}:
+        try:
+            reasons.append(router.limit_blocked(router.resolve_chain(role, pref)))
+        except Exception:  # noqa: BLE001 - not cleared etc.: not a limit, the run reports it
+            return ""
+    return reasons[0] if reasons and all(reasons) else ""
+
+
 def day_start():  # noqa: ANN201
     """Quotas are per UTC day."""
     t = now()
@@ -248,11 +272,12 @@ def first_model(role: str, model_pref: str | None) -> str | None:
 
 
 def _counts(r) -> bool:  # noqa: ANN001
-    """Stops and cancels, and refusals by the command policy (behaviour rules handle those), are not
-    executor errors."""
+    """Stops and cancels, refusals by the command policy (behaviour rules handle those) and a model's usage limit
+    (the router's fallbacks take the work until the reset) are not executor errors."""
     from agent_company.loop import NO_RETRY
+    from agent_company.router import is_limit_error
 
-    return not (STOPPED in (r.error or "") or NO_RETRY.search(r.error or ""))
+    return not (STOPPED in (r.error or "") or NO_RETRY.search(r.error or "") or is_limit_error(r.error))
 
 
 MODEL_TEST = "failed its test"
@@ -274,7 +299,9 @@ def _health_reason(s: Session, a: Agent, first: str | None) -> str:
     if not first:
         return ""
     test = s.scalars(select(Run).where(Run.purpose == "test", Run.model_name == first).order_by(Run.id.desc())).first()
-    if test is not None and not test.ok and (_since(a) is None or test.started_at.replace(tzinfo=None) > _since(a)):
+    from agent_company.router import is_limit_error
+
+    if test is not None and not test.ok and not is_limit_error(test.error) and (_since(a) is None or test.started_at.replace(tzinfo=None) > _since(a)):
         return f"its model {first} {MODEL_TEST} ({(test.error or 'no detail').strip()[:200]})."
     return ""
 
@@ -685,6 +712,9 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
                 raise RuntimeError(f"every {role} agent was released from goal #{goal_id}'s team; add one back "
                                    "or plan without the role")
         g = s.get(Goal, goal_id) if goal_id else None
+        limited = _limit_blocked(role, pool) if pool else ""
+        if limited:
+            raise ModelLimitReached(f"every model the {role} agents may use is at its usage limit ({limited[:300]})")
         quota ={a.id: over_quota(s, a) for a in pool}  # S02-R-03: the quota covers an agent and its clones
         idle = [a for a in pool if _free(a, goal_id) and a.health != "degraded" and not quota[a.id]]  # S02-R-02
         team = _team_weights(s, goal_id)
@@ -695,7 +725,7 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
                                                          and not quota[trainee.id])):
             agent, action = trainee, "assigned"
         elif trainee is not None and not quota[trainee.id]:  # busy: its clone, which merges back after the goal
-            agent, action = _clone(s, trainee), "cloned"
+            agent, action = _clone(s, trainee, cap=False), "cloned"  # the measured agent itself
         elif idle:
             ranks = _rank(s, idle, skills, team)
             agent = max(idle, key=lambda a: ranks[a.id]["score"])
@@ -853,9 +883,16 @@ def duplicates(threshold: float = 0.9) -> list[dict[str, Any]]:
         return sorted(out, key=lambda x: -x["similarity"])
 
 
-def _clone(s: Session, src: Agent) -> Agent:
+def _clone(s: Session, src: Agent, cap: bool = True) -> Agent:
+    from agent_company.config import settings
+
     base = s.get(Agent, src.parent_id) if src.parent_id else src
     n = s.scalar(select(func.count()).select_from(Agent).where(Agent.parent_id == base.id)) or 0
+    live = s.scalar(select(func.count()).select_from(Agent).where(Agent.parent_id == base.id,
+                                                                   Agent.lifecycle.in_(("active", "candidate")))) or 0
+    if cap and live >= settings().max_clones:  # 2026-11-06: a model limit once made 41 clones of the GM
+        raise CloneLimitReached(f"{base.name} already has {live} clone(s) (max_clones {settings().max_clones}); the "
+                                "work waits for one of them")
     name = f"{base.name} #{n + 2}"
     while s.scalars(select(Agent).where(Agent.name == name)).first():
         n += 1
@@ -1083,11 +1120,96 @@ def agent_detail(agent_id: int) -> dict[str, Any]:
         d["quota_reason"] = over_quota(s, a)
         d["trial_playbook"] = (a.experiment or {}).get("playbook")
         d["trial_outcomes"] = (a.experiment or {}).get("outcomes", [])
-        runs = s.scalars(select(Run).where(Run.agent_id == a.id)).all()
-        d["usage"] = {"runs": len(runs), "input_tokens": sum(r.input_tokens for r in runs),
-                      "output_tokens": sum(r.output_tokens for r in runs),
-                      "cost": round(sum(r.cost for r in runs), 6)}
+        n, tin, tout, cost = s.execute(select(
+            func.count(Run.id), func.coalesce(func.sum(Run.input_tokens), 0),
+            func.coalesce(func.sum(Run.output_tokens), 0), func.coalesce(func.sum(Run.cost), 0.0))
+            .where(Run.agent_id == a.id)).one()
+        d["usage"] = {"runs": int(n), "input_tokens": int(tin), "output_tokens": int(tout),
+                      "cost": round(float(cost), 6)}
         d["workload"] = workload(s, a.id)
+        return d
+
+
+# --- an agent's run history on its card (REQ-006) ----------------------------------------
+
+RUNS_PAGE_MAX = 200
+
+
+def _runs_query(agent_id: int, visible: set[int] | None, what: Any) -> Any:
+    """`what` over the agent's runs, joined to their goals; with `visible`, only runs without a goal, of a goal
+    without a project (or a deleted one) or of a project in it. `goal_id` is no foreign key: joined explicitly."""
+    from agent_company.db import Run
+
+    q = what.outerjoin(Goal, Goal.id == Run.goal_id).where(Run.agent_id == agent_id)
+    if visible is not None:
+        q = q.where(or_(Run.goal_id.is_(None), Goal.project_id.is_(None),
+                        Goal.project_id.in_(sorted(visible) or [-1])))
+    return q
+
+
+def _run_row(r: Any, goals: dict[int, str], tasks: dict[int, Any]) -> dict[str, Any]:
+    t = tasks.get(r.task_id) if r.task_id else None
+    return {"id": r.id, "goal_id": r.goal_id, "goal_title": goals.get(r.goal_id, "") if r.goal_id else "",
+            "task_id": r.task_id, "task_key": t.key if t else "", "task_title": t.title if t else "",
+            "model": r.model_name, "executor": r.kind, "purpose": r.purpose,
+            "input_tokens": r.input_tokens, "output_tokens": r.output_tokens,
+            "tokens": r.input_tokens + r.output_tokens, "cost": round(r.cost or 0.0, 6),
+            "duration": round(r.duration or 0.0, 2), "outcome": "ok" if r.ok else "failed",
+            "error": (r.error or "")[:200], "started_at": r.started_at.isoformat() if r.started_at else None,
+            "tool_call_count": len(r.tool_calls or [])}
+
+
+def _titles(s: Session, runs: list[Any]) -> tuple[dict[int, str], dict[int, Any]]:
+    """Goal titles and tasks of a page of runs, one IN lookup each."""
+    from agent_company.db import Task
+
+    gids = {r.goal_id for r in runs if r.goal_id}
+    tids = {r.task_id for r in runs if r.task_id}
+    goals = dict(s.execute(select(Goal.id, Goal.title).where(Goal.id.in_(gids))).all()) if gids else {}
+    tasks = {t.id: t for t in s.scalars(select(Task).where(Task.id.in_(tids)))} if tids else {}
+    return goals, tasks
+
+
+def agent_runs(agent_id: int, offset: int = 0, limit: int = 50,
+               visible: set[int] | None = None) -> dict[str, Any]:
+    """One page of the agent's runs, newest first (REQ-006). `visible`: project ids
+    the caller may see (None = everything, i.e. an administrator)."""
+    from agent_company.db import Run
+
+    offset, limit = max(0, offset), min(max(1, limit), RUNS_PAGE_MAX)
+    with session() as s:
+        if s.get(Agent, agent_id) is None:
+            raise KeyError(agent_id)
+        total = s.scalar(_runs_query(agent_id, visible, select(func.count(Run.id)).select_from(Run))) or 0
+        runs = list(s.scalars(_runs_query(agent_id, visible, select(Run))
+                              .order_by(Run.id.desc()).offset(offset).limit(limit)))
+        goals, tasks = _titles(s, runs)
+        return {"total": int(total), "offset": offset, "limit": limit,
+                "runs": [_run_row(r, goals, tasks) for r in runs]}
+
+
+def agent_run(agent_id: int, run_id: int, visible: set[int] | None = None) -> dict[str, Any]:
+    """One run with what was recorded: its task's output, error and tool calls."""
+    from agent_company.db import Run
+
+    with session() as s:
+        if s.get(Agent, agent_id) is None:
+            raise KeyError(agent_id)
+        r = s.get(Run, run_id)
+        if r is None or r.agent_id != agent_id:
+            raise KeyError(run_id)
+        if visible is not None and r.goal_id is not None:
+            g = s.get(Goal, r.goal_id)
+            if g is not None and g.project_id is not None and g.project_id not in visible:
+                raise KeyError(run_id)
+        goals, tasks = _titles(s, [r])
+        d = _run_row(r, goals, tasks)
+        t = tasks.get(r.task_id) if r.task_id else None
+        d.update(error=r.error or "", isolation=r.isolation or "", tools=list(r.tools or []),
+                 permissions=list(r.permissions or []), withheld=list(r.dropped or []),
+                 denied_tools=list(r.denied_tools or []), tool_calls=list(r.tool_calls or []),
+                 task={"id": t.id, "key": t.key, "title": t.title, "status": t.status, "output": t.output,
+                       "session_id": t.session_id} if t else None)
         return d
 
 
@@ -1165,7 +1287,7 @@ def clone_agent(agent_id: int) -> dict[str, Any]:
             raise KeyError(agent_id)
         if src.lifecycle == "retired":
             raise ValueError("a retired agent cannot be cloned")
-        c = _clone(s, src)
+        c = _clone(s, src, cap=False)  # an administrator's own decision
         return agent_dict(c)
 
 

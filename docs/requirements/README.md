@@ -26,13 +26,15 @@ detail an implementer works from.
 | [guides-and-other-sources.md](guides-and-other-sources.md) | 1.txt, guides, AgentForge website spec, AWS frameworks guide, 2.pdf, 111.pdf and Research_Agent_Continuous_Learning_Guide.pdf (G-R-10..14); docs/temp: the continuously evolving organisation and architecture PDFs, 1.md (G-R-15..19) |
 | [SELF-EVOLUTION.md](SELF-EVOLUTION.md) | `docs/temp/advanced_self_improving_agent_guide.pdf`: verified self-evolution of the platform's own code; IDs `SE-R-nn` |
 | [WORKSPACE.md](WORKSPACE.md) | the code of 2026-11-05 (no document): the Workspace and File Manager, specified so they can be set up again on another computer; IDs `WS-R-nn` |
+| [FRAMEWORKS.md](FRAMEWORKS.md) | the cloned framework repositories in `/home/luca/update/` (aider, SWE-agent, mini-swe-agent, OpenHands, extensions, MetaGPT, AutoGen, Agent Framework, LangGraph, crewAI, Dify, Flowise, Open Interpreter): their functions compared with this repository; IDs `FW-R-nn` |
+| [EVOLUTION-LOOPS.md](EVOLUTION-LOOPS.md) | `/home/luca/update_2/1/a_1..a_9.jpg` (self-evolution and critic-loop diagrams) and the owner's shared ChatGPT conversations (research agent + Codex, evolving agents, Codex bridge, AXoR): model fallback at usage limits, the research lead's tool loop, evolution loops; IDs `EL-R-nn` |
 | [images/SOURCES.md](images/SOURCES.md) | which images were kept, which were not, and their sources |
 
 The master specification (`I am trying to download documents related to this.rtf`) gives one
 acceptance criterion per spec; each file quotes it at the top.
 
 Not used: `978-3-032-22940-3 (1).pdf` (a truncated download: about half its bytes, no page tree), `AXoR-Design-System-Requirements.pdf`
-(another product). The cloned framework repositories are code, not specifications.
+(another product). The cloned framework repositories are compared in FRAMEWORKS.md.
 
 ## Conventions
 

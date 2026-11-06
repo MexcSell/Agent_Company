@@ -637,6 +637,40 @@ def calibration(s: Any = None) -> dict[str, Any]:
             "goal_cost": _accuracy(costs) if costs else None, "min_samples": CALIBRATION_MIN}
 
 
+COST_NOTE_TASKS = 40  # the newest task runs per role the planner's cost note is taken from
+
+
+def cost_note(s: Any = None) -> str:
+    """What work really cost, for the planner (S07-R-04): per role the median and 75th percentile model cost of the
+    newest tasks that ran, and how far the goal estimates were off. Without it the planner guesses: goals 4 and 11
+    were estimated at $4.00 and $2.50, cost over $12 and $9, and tasks failed on budgets a few percent too small."""
+    if s is None:
+        with session() as s2:
+            return cost_note(s2)
+    real = select(Goal.id).where(Goal.origin != "eval")
+    rows = s.execute(select(Task.role, Task.id, func.sum(Run.cost)).join(Run, Run.task_id == Task.id)
+                     .where(Task.goal_id.in_(real), Run.cost.is_not(None)).group_by(Task.id)
+                     .order_by(Task.id.desc())).all()
+    by_role: dict[str, list[float]] = defaultdict(list)
+    for role, _, cost in rows:
+        if cost and len(by_role[role]) < COST_NOTE_TASKS:
+            by_role[role].append(float(cost))
+    lines = []
+    for role, costs in sorted(by_role.items()):
+        if len(costs) >= 3:
+            q = statistics.quantiles(costs, n=4, method="inclusive")
+            lines.append(f"- {role}: median ${statistics.median(costs):.2f}, 75th percentile ${q[2]:.2f} "
+                         f"({len(costs)} tasks)")
+    goal = calibration(s)["goal_cost"]
+    if goal and goal["samples"] >= 3:
+        lines.append(f"- whole goals cost {goal['median_ratio']:g}× their estimate (median of {goal['samples']})")
+    if not lines:
+        return ""
+    return ("\nWhat tasks really cost here (MEASURED, model cost per task):\n" + "\n".join(lines)
+            + "\nA task whose run costs more than its budget fails even when its work is done: give a task budget "
+              "of at least the 75th percentile for its role, or none; base estimated_cost_usd on these figures.\n")
+
+
 def report() -> dict[str, Any]:
     with session() as s:
         all_goals = s.scalars(select(Goal)).all()

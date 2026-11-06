@@ -70,7 +70,7 @@ async function projectForm(p = null) {
   modal(`<h2>${icon("projects", 18)} ${p ? "Edit project" : "New project"}</h2><form id="pf">
     <label for="pf-name">Name</label><input id="pf-name" required value="${esc(p?.name || "")}" ${p?.protected ? "disabled" : ""}>
     ${p || !me.is_admin ? "" : `<label for="pf-path">Work folder (git repository; by default a new folder next to Agent Company)</label><div class="row nowrap"><input id="pf-path" class="grow" placeholder="${esc(base)}/my-project">${typeof pickFolder === "function" ? ib("folder", "Browse…", 'type="button" id="pf-browse"') : ""}</div>`}
-    <label for="pf-gh">GitHub URL (recommended; approved work is pushed here)</label><input id="pf-gh" placeholder="https://github.com/owner/repo.git" value="${esc(p?.github_url || "")}">
+    <label for="pf-gh">GitHub URL (recommended; approved work is pushed here${p ? "" : "; filled in from the folder's git remote"})</label><input id="pf-gh" placeholder="https://github.com/owner/repo.git" value="${esc(p?.github_url || "")}">
     <label for="pf-desc">Description</label><textarea id="pf-desc">${esc(p?.description || "")}</textarea>
     ${me.is_admin ? `<label for="pf-checks">Quality commands (one per line)</label><textarea id="pf-checks" placeholder="uv run pytest -q">${esc((p?.quality_commands || []).join("\n"))}</textarea>` : ""}
     ${me.is_admin && p ? `<div class="row"><div class="grow"><label for="pf-stack">Stack (comma-separated)</label><input id="pf-stack" placeholder="python, fastapi" value="${esc((p.stack || []).join(", "))}"></div>
@@ -94,11 +94,21 @@ async function projectForm(p = null) {
   // The folder follows the name until it is edited: <folder above Agent Company>/<name>.
   let edited = false;
   const slug = (n) => n.trim().replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "");
+  // A folder already set up with GitHub fills in its URL (until the URL is typed by hand).
+  let ghTyped = false, ghAuto = "";
+  const remote = async () => {
+    const path = $("#pf-path")?.value.trim();
+    const url = path ? await api(`/api/projects-defaults?path=${encodeURIComponent(path)}`).then((d) => d.github_url).catch(() => "") : "";
+    if (!ghTyped && $("#pf-gh") && $("#pf-path")?.value.trim() === path) { $("#pf-gh").value = url; ghAuto = url; }
+  };
   if ($("#pf-path")) {
+    $("#pf-gh").oninput = () => (ghTyped = !!$("#pf-gh").value.trim() && $("#pf-gh").value.trim() !== ghAuto);
     $("#pf-path").oninput = () => (edited = true);
+    $("#pf-path").onchange = remote;
     $("#pf-name").oninput = () => { if (!edited) $("#pf-path").value = $("#pf-name").value.trim() ? `${base}/${slug($("#pf-name").value)}` : ""; };
+    $("#pf-name").onchange = () => { if (!edited) remote(); };
   }
-  $("#pf-browse") && ($("#pf-browse").onclick = async () => { const dir = await pickFolder($("#pf-path").value || base); if (dir) { $("#pf-path").value = dir; edited = true; } });
+  $("#pf-browse") && ($("#pf-browse").onclick = async () => { const dir = await pickFolder($("#pf-path").value || base); if (dir) { $("#pf-path").value = dir; edited = true; remote(); } });
   $("#pf").onsubmit = async (e) => {
     e.preventDefault();
     const body = { github_url: $("#pf-gh").value.trim(), description: $("#pf-desc").value };
@@ -256,8 +266,9 @@ const day = (iso) => (iso ? iso.slice(0, 10) : "");
 
 async function projectPlan(id) {
   const box = $("#plan");
-  const [d, tr, gap] = await Promise.all([api(`/api/projects/${id}/plan`).catch((e) => ({ error: e.message })),
-    api(`/api/projects/${id}/traceability`).catch(() => null), api(`/api/projects/${id}/capability_gap`).catch(() => null)]);
+  const [d, tr, gap, sched] = await Promise.all([api(`/api/projects/${id}/plan`).catch((e) => ({ error: e.message })),
+    api(`/api/projects/${id}/traceability`).catch(() => null), api(`/api/projects/${id}/capability_gap`).catch(() => null),
+    api(`/api/projects/${id}/schedules`).catch(() => [])]);
   if (!box || !box.isConnected) return;
   if (d.error) { box.innerHTML = `<p class="muted">${esc(d.error)}</p>`; return; }
   d.requirement_kinds = ["functional", "non_functional", "story", "use_case"];
@@ -293,11 +304,17 @@ async function projectPlan(id) {
   // uncertified skill counts half); required = the project's required skills and its open tasks needing each skill
   const caps = gap && gap.skills.length ? `<section class="plan-sec"><div class="row nowrap"><h3 class="grow" style="margin:0">Capability gap</h3><span class="muted">${gap.missing.length ? `${gap.missing.length} skill(s) short` : "covered"} · planning estimates</span></div>
       <div class="list">${gap.skills.map((r) => `<div class="row nowrap"><span class="grow">${esc(r.skill.replace(/_/g, " "))}</span><span class="muted" title="${esc(r.agents.map((a) => `${a.name}: ${a.p} × ${a.c} × ${a.v}`).join("\n"))}">${r.available}/${r.required}</span><span class="pill ${r.gap > 0 ? "failed" : "done"}">${r.gap > 0 ? `${r.gap} more needed` : "covered"}</span></div>`).join("")}</div></section>` : "";
+  // Scheduled goals (FW-R-04): ordered again on their interval (UTC), each passing the gate and the merge approval
+  const sch = (x) => `<div class="list-item"><div class="row nowrap"><strong class="grow ellipsis" title="${esc(x.details || x.title)}">${esc(x.title)}</strong><span class="pill">${esc(x.interval)} UTC</span>${x.enabled ? "" : '<span class="pill pending">paused</span>'}
+      <span class="muted">${x.enabled ? `next ${new Date(x.next_run_at).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}${x.last_goal_id ? ` · last <a href="#" data-goal="${x.last_goal_id}">#${x.last_goal_id}</a>` : ""}${x.kind ? ` · ${esc(x.kind)}` : ""}</span>
+      ${admin ? ib(x.enabled ? "pause" : "play", x.enabled ? "Pause the schedule" : "Resume the schedule", `data-sch="${x.id}" data-on="${x.enabled ? "0" : "1"}"`, "sm") + ib("trash", "Delete the schedule", `data-sch-del="${x.id}"`, "sm") : ""}</div>
+    ${x.note ? `<div class="muted">${esc(x.note)}</div>` : ""}</div>`;
   const section = (title, add, rows, empty) => `<section class="plan-sec"><div class="row nowrap"><h3 class="grow" style="margin:0">${title}</h3>${admin && add ? ib("plus", `Add ${add}`, `data-add="${add}"`, "sm") : ""}</div><div class="list">${rows || `<p class="muted">${empty}</p>`}</div></section>`;
   const html = `<div class="row nowrap"><strong>Progress</strong><div class="plan-bar grow" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div><span class="muted">${pct}% over ${d.progress.parts} goal(s) and milestone(s)</span></div>
     ${section("Blockers &amp; risks", "risk", d.risks.map(risk).join(""), "No open blockers or risks.")}
     ${section("Next", "action item", d.action_items.map(item).join(""), "Nothing waiting.")}
     ${section("Milestones", "milestone", d.milestones.map(ms).join(""), "No milestones yet.")}
+    ${section("Schedules", "schedule", (sched || []).map(sch).join(""), "No scheduled goals. A schedule orders the same goal hourly, daily or weekly.")}
     ${section("Insights", "", d.insights.map(ins).join(""), "Agents report insights in their task output.")}${reqs}${caps}
     ${(d.handovers || []).length ? `<section class="plan-sec"><details id="ho-sec" ${box.querySelector("#ho-sec")?.open ? "open" : ""}><summary><h3 style="margin:0;display:inline">General Manager handovers</h3> <span class="muted">${d.handovers.length}</span></summary><div class="list">${d.handovers.map((h) => `<div class="list-item"><div class="row nowrap"><strong class="grow ellipsis">${esc(h.from_agent || "(none)")} → ${esc(h.to_agent || "")}</strong><span class="muted">${esc(h.actor)} · ${day(h.at)}</span></div>
       ${h.reason ? `<div class="muted">${esc(h.reason)}</div>` : ""}<div class="muted">Open goals: ${(h.package.goals || []).map((g) => `<a href="#" data-goal="${Number(g.id)}">#${Number(g.id)}</a> ${esc(g.status)}`).join(", ") || "none"} · blockers: ${esc((h.package.blockers || []).map((r) => r.title).join("; ") || "none")} · action items: ${(h.package.action_items || []).length}${h.package.reassigned ? ` · ${Number(h.package.reassigned)} moved to the new GM` : ""}</div></div>`).join("")}</div></details></section>` : ""}`;
@@ -314,6 +331,8 @@ async function projectPlan(id) {
   box.querySelectorAll("[data-ms]").forEach((b) => (b.onclick = () => act(() => b.dataset.act === "cancel"
     ? (confirm("Cancel this milestone?") ? api(`/api/milestones/${b.dataset.ms}`, { method: "PATCH", body: { status: "cancelled" } }) : null)
     : api(`/api/milestones/${b.dataset.ms}/${b.dataset.act}`, { method: "POST" }).then((m) => toast(b.dataset.act === "check" ? `${Math.round(m.progress * 100)}% met` : "Milestone completed")))));
+  box.querySelectorAll("[data-sch]").forEach((b) => (b.onclick = () => act(() => api(`/api/schedules/${b.dataset.sch}`, { method: "PATCH", body: { enabled: b.dataset.on === "1" } }))));
+  box.querySelectorAll("[data-sch-del]").forEach((b) => (b.onclick = () => act(() => (confirm("Delete this schedule? Goals it created stay.") ? api(`/api/schedules/${b.dataset.schDel}`, { method: "DELETE" }) : null))));
   box.querySelectorAll("[data-ins]").forEach((b) => (b.onclick = () => act(() => {
     const body = { status: b.dataset.st };
     if (body.status === "accepted") body.as_proposal = confirm("Accepted insights become knowledge items. Also propose it as follow-up work (a proposal waiting for a decision)?");
@@ -336,6 +355,13 @@ function planForm(id, what, d) {
       <label for="pl-kind">Kind</label><select id="pl-kind">${d.requirement_kinds.map((k) => `<option value="${k}">${k.replace("_", " ")}</option>`).join("")}</select>
       <label for="pl-key">Key (optional; REQ-001 … by default)</label><input id="pl-key"><label for="pl-subj">Subject (optional; finds contradicting requirements)</label><input id="pl-subj">
       <label for="pl-accept">Acceptance criteria (one per line)</label><textarea id="pl-accept"></textarea>`,
+    schedule: `<label for="pl-title">Goal</label><input id="pl-title" required placeholder="Update the dependencies and fix what breaks">
+      <label for="pl-desc">Details</label><textarea id="pl-desc"></textarea>
+      <div class="row"><div class="grow"><label for="pl-every">Every (UTC)</label><select id="pl-every"><option value="hourly">hour</option><option value="daily" selected>day at</option><option value="weekly">week on</option></select></div>
+      <div class="grow"><label for="pl-day">Day</label><select id="pl-day">${["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((x) => `<option>${x}</option>`).join("")}</select></div>
+      <div class="grow"><label for="pl-time">Time</label><input id="pl-time" type="time" value="06:00"></div></div>
+      <label for="pl-kind">Kind</label><select id="pl-kind"><option value="">the planner picks</option>${["bugfix", "feature", "refactor", "research", "docs"].map((k) => `<option>${k}</option>`).join("")}</select>
+      <label for="pl-cmds">Quality commands (one per line; empty = the project's)</label><textarea id="pl-cmds" class="mono"></textarea>`,
     "action item": `<label for="pl-title">Title</label><input id="pl-title" required><label for="pl-desc">Description</label><textarea id="pl-desc"></textarea>
       <label for="pl-prio">Priority (1 highest - 5)</label><input id="pl-prio" type="number" min="1" max="5" value="3"><label for="pl-date">Due date</label><input id="pl-date" type="date">
       <label for="pl-deps">Waits for action items (ids, comma-separated)</label><input id="pl-deps"><label for="pl-out">Expected output</label><input id="pl-out">`,
@@ -359,6 +385,11 @@ function planForm(id, what, d) {
     } else if (what === "requirement") {
       url = `/api/projects/${id}/requirements`;
       body = { text: v("#pl-title"), kind: v("#pl-kind"), key: v("#pl-key"), subject: v("#pl-subj"), acceptance: lines("#pl-accept") };
+    } else if (what === "schedule") {
+      url = `/api/projects/${id}/schedules`;
+      const every = v("#pl-every");
+      body = { title: v("#pl-title"), details: v("#pl-desc"), kind: v("#pl-kind"), checks: lines("#pl-cmds"),
+        interval: every === "hourly" ? "hourly" : every === "daily" ? `daily ${v("#pl-time")}` : `weekly ${v("#pl-day")} ${v("#pl-time")}` };
     } else if (what === "risk") {
       url = `/api/projects/${id}/risks`;
       body = { kind: v("#pl-kind"), title: v("#pl-title"), category: v("#pl-cat"), severity: v("#pl-sev"), impact: v("#pl-impact"), mitigation: v("#pl-mit"), probability: v("#pl-prob") === "" ? null : Number(v("#pl-prob")) / 100 };

@@ -21,7 +21,55 @@ import sys
 from dotenv import load_dotenv
 
 COMMANDS = {"serve", "goal", "crawl", "models", "agents", "approve", "crew", "rotate", "eval", "learn", "supervise", "host", "gm",
-            "stop", "improve", "requirements", "sbom", "strategies"}
+            "stop", "improve", "requirements", "sbom", "strategies", "marketplace"}
+
+
+def _marketplace(args: argparse.Namespace) -> None:
+    """REQ-002: the command line is the server's operator, an administrator; every decision is audited."""
+    from pathlib import Path
+
+    from agent_company import governance, marketplace
+
+    act, actor = args.action, "cli"
+    try:
+        if act == "list":
+            for i in marketplace.list_imports(args.status):
+                print(f"#{i['id']:<4} {i['status']:<10} {i['manifest'].get('role', ''):<12} {i['licence']:<12} "
+                      f"{i['source_sha'][:12]:<12} {i['source']}")
+            return
+        if act != "import" and not (args.target or "").isdigit():
+            raise SystemExit(f"marketplace {act} needs an import id")
+        if act == "show":
+            print(json.dumps(marketplace.get(int(args.target)), indent=2))
+            return
+        if act == "import":
+            if not args.target:
+                raise SystemExit("marketplace import needs a repository URL or a package file")
+            path = Path(args.target)
+            if "://" not in args.target and path.is_file():
+                out = marketplace.fetch_upload(path, path.name, actor)
+            else:
+                out = marketplace.fetch_url(args.target, actor)
+            if out["status"] == "converted":
+                out = marketplace.create_candidate(out["id"])
+            governance.audit(actor, "marketplace_import", out["id"],
+                             after={"source": out["source"], "sha": out["source_sha"], "status": out["status"]})
+        elif act == "approve":
+            grant = [g for x in args.grant for g in x.split(",") if g] if args.grant else None
+            out = marketplace.approve(int(args.target), actor, grant, admin=True, autonomy=args.autonomy,
+                                      accept_licence=args.accept_licence, acknowledge=args.acknowledge,
+                                      accept_unevaluated=args.accept_unevaluated, model=args.model)
+            governance.audit(actor, "marketplace_approve", out["id"],
+                             after={"permissions": out["ceiling"].get("permissions"), "requested": grant,
+                                    "model": args.model,
+                                    "accepted_unevaluated": bool(out["eval"].get("accepted_unevaluated_by"))})
+        else:
+            out = marketplace.reject(int(args.target), actor, args.reason, admin=True)
+            governance.audit(actor, "marketplace_reject", out["id"], after={"reason": args.reason[:300]})
+    except (ValueError, KeyError, PermissionError) as e:
+        raise SystemExit(f"marketplace {act}: {e}") from e
+    print(json.dumps({k: out[k] for k in ("id", "status", "source", "source_sha", "licence", "ceiling", "eval",
+                                          "agent_id", "error")}, indent=2))
 
 
 def _host(args: argparse.Namespace) -> None:
@@ -129,12 +177,14 @@ def main(argv: list[str] | None = None) -> None:
                     "benchmark_budget_usd in Settings) and exit")
     le = sub.add_parser("learn", help="capability gaps, learning plans and experiments (SPEC-13)")
     le.add_argument("action", choices=["gaps", "raise", "plans", "plan", "start", "cancel", "experiments", "metrics",
-                                       "retrieval", "generate", "suites", "approve"],
+                                       "retrieval", "generate", "suites", "approve", "import"],
                     help="retrieval: learn the ranking procedure per query class (SE-R-21); generate: exercises "
-                         "written by the instructor, verified by the harness (S13-R-02)")
+                         "written by the instructor, verified by the harness (S13-R-02); import: a file or folder "
+                         "inside data/ as knowledge items for review (REQ-005)")
     le.add_argument("args", nargs="*", help="plan: <agent id> <capability> [final suite] [practice suite]; "
                                             "start/cancel: <plan id>; generate: <skill> [practice|final] [count]; "
-                                            "approve: <generated final suite>")
+                                            "approve: <generated final suite>; "
+                                            "import: <path> [auto|text|markdown|chat|reports|folder]")
     sb = sub.add_parser("sbom", help="CycloneDX SBOM of a repository's dependencies at a commit (S08-R-05)")
     sb.add_argument("repo", nargs="?", default=".", help="git repository (default: the current directory)")
     sb.add_argument("--rev", default="HEAD")
@@ -158,6 +208,19 @@ def main(argv: list[str] | None = None) -> None:
     im.add_argument("--layer", default="code")
     im.add_argument("--kind", default="algorithmic")
     im.add_argument("--reason", default="")
+    mk = sub.add_parser("marketplace", help="import external agents as candidates an administrator decides (REQ-002)")
+    mk.add_argument("action", choices=["import", "list", "show", "approve", "reject"])
+    mk.add_argument("target", nargs="?", help="import: a repository URL or a .zip/.tar.gz package; else an import id")
+    mk.add_argument("--grant", action="append", default=[], help="approve: permissions to grant (repeatable or "
+                    "comma-separated); clamped by the import's ceiling; default: the whole ceiling")
+    mk.add_argument("--autonomy", default="", help="approve: G0..G2, never above the ceiling")
+    mk.add_argument("--accept-licence", action="store_true", help="approve: accept an unknown licence")
+    mk.add_argument("--acknowledge", action="store_true", help="approve: acknowledge the screen's findings")
+    mk.add_argument("--accept-unevaluated", action="store_true",
+                    help="approve: accept an import no eval suite ran for (status unevaluated)")
+    mk.add_argument("--model", default="", help="approve: a router catalog model for the agent; default: the role route")
+    mk.add_argument("--reason", default="", help="reject: why")
+    mk.add_argument("--status", default="", help="list: only this status")
     h = sub.add_parser("host", help="Docker and LXD virtual machines on this host")
     h.add_argument("action", choices=["status", "install-docker", "docker-start", "docker-stop", "docker-restart",
                                       "cleanup", "install-lxd", "launch", "start", "stop", "restart", "delete"])
@@ -218,6 +281,9 @@ def main(argv: list[str] | None = None) -> None:
     from agent_company.api import bootstrap
 
     bootstrap()
+    if args.cmd == "marketplace":
+        _marketplace(args)
+        return
     if args.cmd == "goal":
         from agent_company import loop
 
@@ -324,6 +390,19 @@ def main(argv: list[str] | None = None) -> None:
             from agent_company import learning
 
             out = learning.learn_strategies("cli")
+        elif args.action == "import":
+            from pathlib import Path
+
+            from agent_company import learning
+
+            if not a:
+                raise SystemExit("learn import <path> [auto|text|markdown|chat|reports|folder]")
+            target = Path(a[0]).expanduser().resolve()  # relative to where the command runs
+            fmt = "folder" if target.is_dir() else (a[1] if len(a) > 1 else "auto")
+            try:
+                out = learning.import_knowledge(None, fmt=fmt, actor="cli", path=str(target))
+            except ValueError as err:
+                raise SystemExit(f"learn import: {err}") from None
         else:
             out = training.metrics()
         print(json.dumps(out, indent=2, default=str))

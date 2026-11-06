@@ -540,7 +540,7 @@ def count(project_id: int) -> int:
 
 # --- import of docs/requirements ---------------------------------------------------------------
 
-_ID = r"(?:S\d{2}|G|SE|WS)-(?:FR|R|D|G)-\d+"
+_ID = r"(?:S\d{2}|G|SE|WS|FW|EL)-(?:FR|R|D|G)-\d+"
 _STATUS_OF = {"done": "implemented", "partial": "approved", "open": "approved", "gated": "draft", "skip": "retired"}
 
 

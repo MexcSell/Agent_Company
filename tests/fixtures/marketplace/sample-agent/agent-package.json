@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "name": "Sample Market Developer",
+  "role": "developer",
+  "description": "Writes small Python modules with tests.",
+  "instructions_file": "INSTRUCTIONS.md",
+  "skills": ["python", "testing"],
+  "tools": ["Read", "Edit", "Bash", "mcp__everything"],
+  "models": ["claude-sonnet-5-5", "no-such-model"],
+  "dependencies": ["requests>=2"],
+  "permissions": ["read", "write", "shell", "network", "mcp", "admin"],
+  "autonomy": "G4",
+  "version": "1.2.0",
+  "author": "Example Publisher",
+  "licence": "MIT",
+  "x_extra": {"anything": true}
+}

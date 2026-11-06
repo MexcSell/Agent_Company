@@ -46,6 +46,7 @@ SELF_ASSIGNED = 0.5  # verification factor of a recruit's uncertified skill
 PROFICIENT = 5  # the skill level that counts as one unit (a recruit claims it for each skill of its task)
 GRANTED_BY_ADMIN = {"shell", "network"}  # never given to a role outside the catalog without an administrator
 QUALIFY_SUITE = "smoke"  # the qualification suite of a writing role when no suite names one of its skills
+QUALIFY_KINDS = frozenset({"practice", "benchmark"})  # suite kinds a qualification run may use
 QUALIFY_PASS_RATE = 2 / 3
 WAITING = ("pending", "qualifying")  # a goal with such a record waits for it
 _qualifying: set[int] = set()  # records whose qualification run is queued or running in this process
@@ -199,7 +200,7 @@ def _row(r: Recruitment, names: dict[int, str]) -> dict[str, Any]:
             "lifecycle": r.lifecycle, "status": r.status, "pending_permissions": r.pending_permissions or [],
             "agent_id": r.agent_id, "agent": names.get(r.agent_id) if r.agent_id else None,
             "evaluation_cost_usd": r.evaluation_cost_usd, "qualification": r.qualification or {},
-            "decided_by": r.decided_by, "note": r.note,
+            "decided_by": r.decided_by, "note": r.note, "source": r.source or "",
             "created_at": r.created_at.isoformat(), "decided_at": r.decided_at.isoformat() if r.decided_at else None}
 
 
@@ -270,8 +271,9 @@ def open_request(s: Session, role: str, skills: list[str], writes: bool | None, 
 
 
 def _ask_or_approve(s: Session, rec: Recruitment, notify: Callable[..., Any]) -> None:
-    """The approval policy (S03-R-05): the record waits for an administrator, or is approved by policy."""
-    if needs_approval(rec.decision, rec.goal_id, s):
+    """The approval policy (S03-R-05): the record waits for an administrator, or is approved by policy. A
+    marketplace import (REQ-002) always waits for an administrator, whatever the policy."""
+    if rec.source == "marketplace" or needs_approval(rec.decision, rec.goal_id, s):
         g = s.get(Goal, rec.goal_id) if rec.goal_id else None
         jd = rec.job_description or {}
         rec.status = "pending"
@@ -377,7 +379,7 @@ def _resume_goal(goal_id: int | None, actor: str) -> bool:
     return True
 
 
-def approve(recruitment_id: int, actor: str, grant: bool = True) -> dict[str, Any]:
+def approve(recruitment_id: int, actor: str, grant: bool = True, *, via_marketplace: bool = False) -> dict[str, Any]:
     """Approve a pending record: a recruit is registered now (once: approving again returns the same agent).
     With `grant`, the permissions held back for a new role are given as well. A paused goal resumes."""
     from agent_company import registry
@@ -386,6 +388,8 @@ def approve(recruitment_id: int, actor: str, grant: bool = True) -> dict[str, An
         r = s.get(Recruitment, recruitment_id)
         if r is None:
             raise KeyError(recruitment_id)
+        if r.source == "marketplace" and not via_marketplace:  # REQ-002: only marketplace.approve decides it
+            raise PermissionError(f"recruitment #{r.id} is a marketplace import: decide it on Agents → Marketplace")
         if r.status in {"rejected", "cancelled"}:
             raise ValueError(f"recruitment #{r.id} was {r.status}")
         if r.status == "qualifying":
@@ -415,7 +419,8 @@ def approve(recruitment_id: int, actor: str, grant: bool = True) -> dict[str, An
     return out
 
 
-def reject(recruitment_id: int, actor: str, reason: str = "", status: str = "rejected") -> dict[str, Any]:
+def reject(recruitment_id: int, actor: str, reason: str = "", status: str = "rejected", *,
+           via_marketplace: bool = False) -> dict[str, Any]:
     """Reject (or cancel) a pending record, or one whose candidate is still qualifying (the candidate is retired).
     The goal resumes; its task fails with the refusal, so the planner re-plans with the roles the company has."""
     if status not in {"rejected", "cancelled"}:
@@ -424,6 +429,8 @@ def reject(recruitment_id: int, actor: str, reason: str = "", status: str = "rej
         r = s.get(Recruitment, recruitment_id)
         if r is None:
             raise KeyError(recruitment_id)
+        if r.source == "marketplace" and not via_marketplace:  # REQ-002: only marketplace.reject decides it
+            raise PermissionError(f"recruitment #{r.id} is a marketplace import: decide it on Agents → Marketplace")
         if r.status not in WAITING:
             raise ValueError(f"recruitment #{r.id} is {r.status}; only a pending one can be {status}")
         r.status, r.decided_by, r.decided_at, r.note = status, actor, now(), reason[:2000]
@@ -439,12 +446,14 @@ def reject(recruitment_id: int, actor: str, reason: str = "", status: str = "rej
 # --- qualification (S03-R-04) ------------------------------------------------------------------
 
 def qualification_suite(skills: list[str]) -> str:
-    """A practice or benchmark suite naming one of the skills, else QUALIFY_SUITE; '' when there is none. Final
-    suites stay for certification (SPEC-13 S13-R-03)."""
+    """A suite of a QUALIFY_KINDS kind naming one of the skills, else QUALIFY_SUITE; '' when there is none. Every
+    other kind is skipped: run_suite refuses or misuses research, room and retrieval suites (a room suite asks for
+    a gated room's trial, a research or retrieval one is no task suite for a writing candidate), and final and
+    adversarial suites stay for certification (SPEC-13 S13-R-03)."""
     from agent_company import evaluation
     from agent_company.training import _slug
 
-    suites = [x for x in evaluation.list_suites() if x["kind"] != "final"]
+    suites = [x for x in evaluation.list_suites() if x["kind"] in QUALIFY_KINDS]
     wanted = {_slug(k) for k in skills}
     named = next((x["name"] for x in suites if wanted & {_slug(k) for k in x["skills"]}), "")
     return named or next((x["name"] for x in suites if x["name"] == QUALIFY_SUITE), "")
@@ -482,13 +491,24 @@ def qualify(recruitment_id: int) -> dict[str, Any]:
                 registry.record_version(s, agent, "qualification", f"candidate for recruitment #{r.id}")
                 r.agent_id = agent.id
             agent_id, suite = r.agent_id, (r.qualification or {}).get("suite") or QUALIFY_SUITE
+            marketplace = r.source == "marketplace"
             label = f"qualify{r.id}-{int(time.time() * 1000)}"
             r.qualification = {**(r.qualification or {}), "suite": suite, "status": "running", "label": label,
                                "started_at": now().isoformat()}
             log_event("recruitment", f"recruitment #{r.id}: candidate runs the {suite} suite", goal_id=r.goal_id,
                       agent_id=agent_id, s=s, recruitment_id=r.id)
-        summary = evaluation.run_suite(suite, label, repeats=1, trial={"trainee_id": agent_id,
-                                                                       "qualify": recruitment_id})
+        trial: dict[str, Any] = {"trainee_id": agent_id, "qualify": recruitment_id}
+        if marketplace:  # REQ-002: an imported agent's eval commands run only in the L3 sandbox, never on the host
+            from agent_company import policies, sandbox
+
+            ok, why = sandbox.available()
+            if not ok:
+                return _finish(recruitment_id, None, f"the L3 sandbox is required for a marketplace candidate ({why})")
+            trial["sandbox"] = "required"
+            if policies.effective("sandbox", None) == "off":
+                log_event("recruitment", f"recruitment #{recruitment_id}: the sandbox setting 'off' is overridden to "
+                          "'required' for this marketplace candidate's eval", recruitment_id=recruitment_id)
+        summary = evaluation.run_suite(suite, label, repeats=1, trial=trial)
         return _finish(recruitment_id, summary)
     except Exception as e:  # noqa: BLE001 - a broken suite must not leave the record qualifying forever
         log_event("error", f"qualification of recruitment #{recruitment_id} failed: {type(e).__name__}: {e}")
@@ -516,6 +536,7 @@ def _finish(recruitment_id: int, summary: dict[str, Any] | None, error: str = ""
                            "pass_rate": round(rate, 3), "runs": (summary or {}).get("runs", 0),
                            "passed_runs": (summary or {}).get("passed", 0), "cost_usd": round(cost, 6),
                            "needed": round(QUALIFY_PASS_RATE, 3), "finished_at": now().isoformat(),
+                           **({"dimensions": summary["dimensions"]} if (summary or {}).get("dimensions") else {}),
                            **({"error": error[:500]} if error else {})}
         suite = r.qualification.get("suite", QUALIFY_SUITE)
         name = a.name if a else f"agent {r.agent_id}"
@@ -529,6 +550,10 @@ def _finish(recruitment_id: int, summary: dict[str, Any] | None, error: str = ""
             r.note = (error or f"{rate:.0%} of the {suite} suite, needs {QUALIFY_PASS_RATE:.0%}")[:2000]
             _retire_candidate(s, r, f"not qualified: {r.note}")
             verdict = f"failed its qualification run: {r.note}"
+        if r.source == "marketplace":
+            from agent_company import marketplace
+
+            marketplace.on_qualified(s, r)
         log_event("recruitment", f"recruitment #{r.id}: {name} {verdict}", goal_id=r.goal_id, agent_id=r.agent_id,
                   s=s, recruitment_id=r.id)
         if not passed or r.status == "approved":  # a pending record notifies through the approval request

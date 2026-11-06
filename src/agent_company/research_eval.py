@@ -114,7 +114,10 @@ def _report(task: dict[str, Any], docs: list[dict[str, Any]], pref: str | None) 
         req = executors.Request(
             purpose="eval_report", role="research", system=f"You are {agent.name}, the research lead of an AI company.",
             prompt=research.report_prompt(task["question"], docs), data={"question": task["question"], "documents": docs})
-        choice = router.resolve("research", pref or agent.model_pref)
+        choice = router.resolve("research", pref or agent.model_pref)  # the measured model: no fallback
+        if choice.kind in router.CLI_KINDS:  # an agent CLI runs only inside data/worktrees (as router.run does)
+            req.workdir = settings().worktrees_dir / "_router-research"
+            req.workdir.mkdir(parents=True, exist_ok=True)
         res = executors.for_choice(choice, settings().command_timeout).run(req)
         usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
                      output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,

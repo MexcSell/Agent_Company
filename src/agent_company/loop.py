@@ -19,6 +19,7 @@ import re
 import threading
 import time
 import traceback
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +44,7 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                 permits: list[str] | None = None, estimated_cost_usd: float = 0.0, topic: str = "general",
                 classification: str = "", trial: dict[str, Any] | None = None, budget_usd: float = 0.0,
                 budget_tokens: int = 0, max_active_agents: int = 0, requirement_keys: list[str] | None = None,
-                kind: str = "") -> int:
+                kind: str = "", deadline: datetime | None = None) -> int:
     """Create a goal. `extract_checks` (only for trusted authors) adds the test/lint commands
     the description names in backticks when no quality commands are given. `classification` (S14-R-05) can
     only raise the level: the goal is at least as classified as its project and its attachments. `trial`
@@ -53,7 +54,8 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
     `requirement_keys` (S08-R-01) name the project's requirements it implements; keys of the project named in the
     title or description are added. `kind` (S04-R-11) names the workflow template: its iteration limit, protected
     tests and scope apply where the order left them empty, and its plans must fit it; without one the planner
-    picks. An eval goal's `trial["strategy"]` (S04-R-13: kind, version, body) is the template it runs under."""
+    picks. An eval goal's `trial["strategy"]` (S04-R-13: kind, version, body) is the template it runs under.
+    `deadline` (REQ-003) is only reported (Simple dashboard, mission report); it does not change loop control."""
     from agent_company.checks import extract_check_commands
     from agent_company.governance import check_command, stops
 
@@ -126,7 +128,7 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                  estimated_cost_usd=max(0.0, float(estimated_cost_usd or 0)), topic=topic or "general",
                  classification=level, trial=dict(trial or {}), max_active_agents=max(0, int(max_active_agents or 0)),
                  requirement_keys=req_keys, kind=strategies.check_kind(kind) if kind else "",
-                 strategy=template.get("strategy", {}), **own)
+                 strategy=template.get("strategy", {}), deadline=deadline, **own)
         s.add(g)
         s.flush()
         gid = g.id
@@ -246,10 +248,7 @@ class BudgetExhausted(RuntimeError):
 
 
 class CostOverrun(BudgetExhausted):
-    """The goal cost more than COST_OVERRUN times its estimate: always a pause, never a failure (S14-R-03)."""
-
-
-COST_OVERRUN = 2.0
+    """The goal cost more than `cost_overrun_factor` times its estimate: always a pause, never a failure (S14-R-03)."""
 
 
 TRANSIENT = re.compile(r"(?i)(\b(429|50[0-4]|529)\b|rate.?limit|overloaded|timed? ?out|timeout|temporar"
@@ -308,8 +307,13 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
         log_event("security", f"{agent.name}: {e}", goal_id=goal_id, agent_id=agent.id, classification=level)
         return (executors.Result(text="", ok=False, error=str(e)),
                 router.Choice(name="(not cleared)", kind="offline", model_id="", reason=str(e)))
+    limited = router.limit_blocked(chain)
+    if limited:  # every real model is at its usage limit: the simulator must not do the work in their place
+        log_event("error", f"{agent.name}: no model available ({limited[:300]})", goal_id=goal_id, agent_id=agent.id)
+        return (executors.Result(text="", ok=False, error=f"usage limit: {limited[:500]}"),
+                router.Choice(name="(usage limit)", kind="offline", model_id="", reason=limited))
     if req.workdir is None:  # CLI agents only run inside a worktree
-        chain = [c for c in chain if c.kind not in {"claude_code", "codex"}]
+        chain = [c for c in chain if c.kind not in executors.CLI_KINDS]
     if chain and chain[0].kind != "offline":
         # The simulator stands in only when no real model is usable. Once a real model is tried,
         # its failure must stand: placeholder work must never pass the gate in place of real work.
@@ -391,8 +395,9 @@ def _budget_note(goal: Goal, started: float) -> str:
         estimate = (row.estimated_cost_usd or 0.0) if row else 0.0
         lim = budgets.limits(row) if row else {"cost_usd": 0, "tokens": 0}
     spent = usage.goal_spend(goal.id) if lim["cost_usd"] > 0 or estimate > 0 else 0.0
-    if estimate > 0 and spent > COST_OVERRUN * estimate:  # behaviour rule (S14-R-03)
-        raise CostOverrun(f"spent ${spent:.2f}, more than {COST_OVERRUN:g}× the estimate of ${estimate:.2f}")
+    factor = cfg.cost_overrun_factor
+    if estimate > 0 and spent > factor * estimate:  # behaviour rule (S14-R-03)
+        raise CostOverrun(f"spent ${spent:.2f}, more than {factor:g}× the estimate of ${estimate:.2f}")
     if lim["cost_usd"] > 0:  # S04-R-09: the goal's own budget covers what its child goals use or hold
         held = budgets.committed(goal.id, "cost_usd")
         if held >= lim["cost_usd"]:
@@ -528,6 +533,8 @@ Optionally add "estimated_cost_usd" (the whole goal's expected model cost) and "
   "requires_human_approval": true|false}] for significant choices (technology, architecture, anything costly or
 hard to undo); critical ones always wait for a person; technical and critical ones become ADR files in docs/adr/.
 Label facts, measurements, inferences and hypotheses as such.
+A task with "writes": false cannot create files: check its answer (contains, regex, min_length); a file_exists
+path ending in .md or .txt is filled by the loop with that task's whole answer (an architect's spec).
 Prefer few, well-scoped tasks. Include a QA review task: it verifies the logic (data flow of the normal,
 an edge and an error case), lists FINDING lines, and ends with an OUTCOME and "VERDICT: PASS" or
 "VERDICT: FAIL". Use an existing role when one fits; name a new
@@ -536,6 +543,8 @@ role only when the work needs a specialist none of them covers."""
 
 def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[contracts.TaskContract], int]:
     """The task contracts for this iteration, and the id of the agent that planned them."""
+    from agent_company.performance import cost_note
+
     gm = registry.staff("general_manager", ["planning"], goal.id)
     try:
         rooms, project_note = _project_context(goal)
@@ -558,12 +567,15 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                   + (f"\nThe previous iteration failed the quality gate. Fix these findings:\n{feedback}\n"
                      if feedback else "")
                   + (f"\nResearch notes:\n{notes}\n" if notes else "")
-                  + strategies.planner_note(goal) + teams.planner_note(goal.id)
+                  + strategies.planner_note(goal) + specs.planner_note(goal) + teams.planner_note(goal.id)
                   + teststrategy.planner_note(teststrategy.derive(goal.id, None, iteration))  # S09-R-02
+                  + cost_note()  # S07-R-04: budgets and the estimate from measured costs
                   + f"\nAvailable roles:\n{role_lines}\n\n"
                   + blackboard.inbox(goal.id, "general_manager", gm.id)
                   + (learning.experience_context(gm.id, goal_id=goal.id, query=f"{goal.title} {goal.description}")
                      + "\n\n")
+                  + ((rmap + "\n\n") if (rmap := learning.repo_map_context(goal.id, f"{goal.title} {goal.description}"))
+                     else "")  # FW-R-01
                   + PLAN_INSTRUCTIONS)
         for attempt in range(2):  # an invalid contract goes back to the planner once (S04-R-06)
             req = executors.Request(purpose="plan", role="general_manager", system=_system_for(gm), prompt=prompt,
@@ -576,6 +588,8 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                 data = contracts.extract_json(res.text)
                 tasks = data["tasks"] if isinstance(data, dict) else data
                 plan = contracts.validate_plan(tasks)
+                if fixed := specs.check_plan(goal, plan):  # K54: only this goal's spec folder, no loop files
+                    log_event("plan", "Spec paths corrected: " + "; ".join(fixed), goal_id=goal.id, agent_id=gm.id)
                 named = str(data.get("kind") or "").strip().lower() if isinstance(data, dict) else ""
                 if tmpl is None and named in strategies.KINDS:  # the planner picks the template (S04-R-11)
                     tmpl = strategies.choose(goal.id, named, "planner", str(data.get("summary", ""))[:200])
@@ -599,6 +613,7 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                           goal_id=goal.id, agent_id=gm.id)
                 kind = (tmpl or {}).get("kind", "")
                 plan = contracts.validate_plan(strategies.fallback_plan(goal.title, kind)["tasks"])
+                specs.check_plan(goal, plan)
                 try:
                     _in_rooms(plan, rooms)
                 except ValueError as e:  # nothing to fall back to inside the project's rooms
@@ -771,7 +786,7 @@ def _configure(goal: Goal) -> None:
             chain = router.resolve_chain(gm.role, gm.model_pref, classification=level)
         except router.NotCleared:  # planning will report it; no configure step
             return
-        if not chain or chain[0].kind not in {"claude_code", "codex"}:
+        if not chain or chain[0].kind not in {"claude_code", "codex"}:  # the CLIs that read .claude/
             return
         req = executors.Request(purpose="configure", role="general_manager", system=_system_for(gm),
                                 prompt=specs.configure_prompt(goal), workdir=Path(goal.worktree), writes=True,
@@ -788,6 +803,26 @@ def _configure(goal: Goal) -> None:
         log_event("error", f"configure step: {e}", goal_id=goal.id)
     finally:
         registry.release(gm.id, goal.id)
+
+
+ANSWER_FILES = (".md", ".markdown", ".txt", ".rst")
+
+
+def _save_answer(worktree: Path, contract: contracts.TaskContract, text: str) -> list[str]:
+    """A task that may not write files (an architect's spec) but whose acceptance names a document to exist: its
+    whole answer becomes that document, so the check measures the work, not the file permission. Only text
+    documents inside the worktree (never under .git) that do not exist yet; returns the paths written."""
+    root, saved = worktree.resolve(), []
+    for cond in contract.acceptance:
+        if cond.type != "file_exists" or not (cond.path or "").lower().endswith(ANSWER_FILES) or not text.strip():
+            continue
+        target = (root / cond.path).resolve()
+        if root not in target.parents or ".git" in target.relative_to(root).parts or target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text.rstrip() + "\n", encoding="utf-8")
+        saved.append(cond.path)
+    return saved
 
 
 def _chat_plan(goal: Goal, iteration: int, plan: list[contracts.TaskContract], summary: str, gm_id: int) -> None:
@@ -974,6 +1009,11 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                               evidence=[{"type": "task", "id": task_id, "error": res.error[:500]}])
             from agent_company.governance import on_command_refused
 
+            if res.ok and not contract.writes:  # a read-only task's document (a spec): the loop writes its answer
+                saved = _save_answer(Path(goal.worktree), contract, res.text)
+                if saved:
+                    log_event("task", f"saved {agent.name}'s answer as {', '.join(saved)}", goal_id=goal.id,
+                              agent_id=agent.id)
             set_task_stage(task_id, "review", "acceptance conditions and contract limits")
             # the planner wrote the acceptance commands: a refusal counts against it
             acceptance = contracts.check(contract, output, Path(goal.worktree), settings().command_timeout,
@@ -1246,6 +1286,7 @@ def digest(goal_id: int) -> dict[str, Any]:
     from the order to now and the time agents worked, tokens and cost of every run of the goal, and the merge state."""
     from sqlalchemy import func
 
+    from agent_company import workflow
     from agent_company.db import Run, now
 
     with session() as s:
@@ -1261,7 +1302,8 @@ def digest(goal_id: int) -> dict[str, Any]:
                 "tasks_done": sum(st == "done" for st in statuses), "tasks": len(statuses),
                 "duration": round(max(0.0, (now() - created).total_seconds()), 1), "active": round(float(worked), 1),
                 "tokens": int(tokens), "cost": round(float(cost), 6),
-                "merge": MERGE_STATE.get(g.status, "not merged")}
+                "merge": MERGE_STATE.get(g.status, "not merged"),
+                **({"report": f"/api/goals/{goal_id}/report"} if g.status not in workflow.ACTIVE else {})}
 
 
 def _span(seconds: float) -> str:
@@ -1272,7 +1314,7 @@ def _span(seconds: float) -> str:
 def digest_line(d: dict[str, Any]) -> str:
     return (f"Digest: {d['tasks_done']}/{d['tasks']} task(s) passed in iteration {d['iterations']} · "
             f"{_span(d['duration'])} ({_span(d['active'])} of agent work) · {d['tokens']:,} tokens · "
-            f"${d['cost']:.4f} · {d['merge']}")
+            f"${d['cost']:.4f} · {d['merge']}" + (f" · report: {d['report']}" if d.get("report") else ""))
 
 
 def _run(goal_id: int) -> dict[str, Any]:
@@ -1388,7 +1430,8 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                                               "commit": report.get("head")})
             track_defects(goal_id, iteration, report["checks"])
             log_event("gate", f"iteration {iteration}: quality gate {'passed' if report['passed'] else 'failed'}",
-                      goal_id=goal_id, **{k: report[k] for k in ("passed", "checks", "commit")})
+                      goal_id=goal_id, iteration=iteration,
+                      **{k: report[k] for k in ("passed", "checks", "commit")})
             _learn_from(goal_id, iteration, report["passed"], report["feedback"], report.get("head") or "")
             halt = _behaviour_rules(goal_id, iteration, report)
             if halt:
@@ -1661,6 +1704,9 @@ def _out_of_quota(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, A
         row = s.get(Goal, goal_id)
         row.checkpoint = {**(row.checkpoint or {}), "paused_for": "quota", "paused_why": why,
                           "paused_day": registry.day_start().date().isoformat()}
+        reset = router.next_reset() if "usage limit" in why else None
+        if reset is not None:  # a model's usage limit: it resumes at the earliest reset, not the next UTC day
+            row.checkpoint = {**row.checkpoint, "resume_after": reset.isoformat(timespec="seconds")}
     log_event("goal", f"waiting for a quota: {why}", goal_id=goal_id)
     room = "daily budget" in why  # a room's budget (S04-R-09) rather than the agent's own quota
     notify(f"Goal #{goal_id} waits for {'a room' if room else 'an agent'}'s daily {'budget' if room else 'quota'}"[:256],
@@ -1673,9 +1719,14 @@ def _out_of_quota(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, A
 def resume_after_quota() -> list[int]:
     """Goals paused for a quota on an earlier UTC day go back to the queue (the goal queue's watcher calls this)."""
     today = registry.day_start().date().isoformat()
+    at = datetime.now(UTC).isoformat(timespec="seconds")
+
+    def due(cp: dict[str, Any]) -> bool:
+        return cp.get("paused_for") == "quota" and (cp.get("paused_day", today) < today
+                                                    or bool(cp.get("resume_after")) and cp["resume_after"] <= at)
+
     with session() as s:
-        ids = [g.id for g in s.scalars(select(Goal).where(Goal.status == "paused"))
-               if (g.checkpoint or {}).get("paused_for") == "quota" and (g.checkpoint or {}).get("paused_day", today) < today]
+        ids = [g.id for g in s.scalars(select(Goal).where(Goal.status == "paused")) if due(g.checkpoint or {})]
     resumed = []
     for gid in ids:
         try:
@@ -1976,7 +2027,7 @@ def resume(goal_id: int, actor: str = "system") -> None:
             raise ValueError(f"still over budget ({e}); raise the goal budget first") from e
         with session() as s:
             row = s.get(Goal, goal_id)
-            row.checkpoint = {k: v for k, v in (row.checkpoint or {}).items() if k not in {"paused_for", "paused_why"}}
+            row.checkpoint = {k: v for k, v in (row.checkpoint or {}).items() if k not in {"paused_for", "paused_why", "resume_after"}}
     workflow.transition(goal_id, "queued", "resumed", actor)
     log_event("goal", f"goal resumed by {actor}", goal_id=goal_id)
     enqueue(goal_id)

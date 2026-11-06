@@ -147,3 +147,19 @@ def test_projects_may_only_make_the_sandbox_stricter_and_a2a_work_always_require
     prefs.set_value("sandbox", "off")
     assert sandbox.mode_for(project_id=p["id"]) == "required"
     assert "sandbox" in policies.GOVERNANCE_KEYS
+
+
+def test_a_trial_that_requires_the_sandbox_overrides_sandbox_off():
+    """REQ-002: a marketplace candidate's eval goals carry trial.sandbox=required; the company and the project
+    setting `off` never weaken it."""
+    prefs.set_value("sandbox", "off")
+    p = projects.create("Lax project")
+    policies.set_project_rules(p["id"], {"sandbox": "off"}, "user:luca")
+    gid = loop.create_goal("Candidate eval", quality_commands=[], project_id=p["id"])
+    plain = loop.create_goal("Plain", quality_commands=[], project_id=p["id"])
+    with session() as s:
+        s.get(Goal, gid).trial = {"trainee_id": 1, "qualify": 1, "sandbox": "required"}
+    with session() as s:
+        assert sandbox.mode_for(s.get(Goal, plain)) == "off"
+        assert sandbox.mode_for(s.get(Goal, gid)) == "required"
+        assert sandbox.mode_for(Goal(trial={"sandbox": "required"})) == "required"

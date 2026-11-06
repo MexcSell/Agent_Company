@@ -9,7 +9,7 @@ let agentsTab = store.get("ac.agents.tab") || "org";
 
 async function viewAgents(quiet) {
   if (quiet && $("#ag-page") && agentsTab !== "org") return;  // the catalog tabs keep their forms
-  const tabs = [["org", "Organisation", "sitemap"], ["network", "Agent network", "network"], ["mcp", "Tools & MCP", "plug"], ["catalog", "Skills & plugins", "book"]];
+  const tabs = [["org", "Organisation", "sitemap"], ["network", "Agent network", "network"], ["mcp", "Tools & MCP", "plug"], ["catalog", "Skills & plugins", "book"], ...(me.is_admin ? [["market", "Marketplace", "git"]] : [])];
   if (!$("#ag-page") || !quiet) {
     $("#view").innerHTML = `<div class="ag-page" id="ag-page"><div class="ag-tabs" role="tablist">${tabs.map(([k, l, i]) => `<button role="tab" data-agtab="${k}" aria-selected="${agentsTab === k}">${icon(i, 16)} ${l}</button>`).join("")}
       <span class="grow"></span><span id="ag-tools"></span></div><div class="ag-body" id="ag-body"></div></div>`;
@@ -19,6 +19,7 @@ async function viewAgents(quiet) {
   if (agentsTab === "network") { $("#ag-tools").innerHTML = ""; return viewNetwork($("#ag-body")); }
   if (agentsTab === "mcp") return viewMcp();
   if (agentsTab === "catalog") return viewCatalog();
+  if (agentsTab === "market" && me.is_admin) return viewMarketplace();
   return viewOrg(quiet);
 }
 
@@ -147,7 +148,7 @@ async function agentModal(id, tab = "profile") {
     <optgroup label="Models">${m.models.map((x) => `<option value="${esc(x.name)}" ${x.name === a.model_pref ? "selected" : ""}>${esc(x.name)}${x.available ? "" : " (unavailable)"}</option>`).join("")}</optgroup>
     <optgroup label="Another agent (uses its model)">${others.map((x) => `<option value="agent:${x.id}" ${a.model_pref === `agent:${x.id}` ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</optgroup></select>`;
   const plugins = cat.filter((i) => ["plugin", "skill"].includes(i.kind));
-  const tabs = [["profile", "Profile"], ["definition", "Definition"], ["history", "Playbook & history"], ["links", "Relationships"], ["config", "Versions"]];
+  const tabs = [["profile", "Profile"], ["definition", "Definition"], ["history", "Playbook & history"], ["runs", "Runs"], ["links", "Relationships"], ["config", "Versions"]];
   modal(`<div class="row"><div class="avatar">${roleIcon(a.role)}</div><div class="grow"><h2 style="margin:0">${esc(a.name)}</h2><div class="muted">${esc(a.title)} · ${esc(a.room)} · configuration v${a.config_version} · definition v${a.definition_version}</div></div>${a.health === "degraded" ? '<span class="pill failed">degraded</span>' : ""}${pill(a.enabled ? a.status : "disabled")}</div>
     <div class="ag-tabs small" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-mtab="${k}" aria-selected="${tab === k}">${l}</button>`).join("")}</div><div id="a-tab"></div>`);
   document.querySelectorAll("[data-mtab]").forEach((b) => (b.onclick = () => agentModal(id, b.dataset.mtab)));
@@ -175,6 +176,7 @@ async function agentModal(id, tab = "profile") {
     return;
   }
   if (tab === "links") return relationshipsTab(box, a, all, admin);
+  if (tab === "runs") return runsTab(box, a);
   if (tab === "history") {
     box.innerHTML = `<h3>Playbook v${a.playbook_version}</h3><pre>${esc(a.playbook || "Empty: the agent learns from finished work.")}</pre>
       ${a.trial_playbook ? `<h3>Trial playbook (${a.trial_outcomes.length} task(s) so far)</h3><pre>${esc(a.trial_playbook)}</pre>` : ""}
@@ -221,6 +223,39 @@ async function agentModal(id, tab = "profile") {
   $("#a-pause") && ($("#a-pause").onclick = () => act("lifecycle", { state: a.lifecycle === "paused" ? "active" : "paused" }));
   $("#a-retire") && ($("#a-retire").onclick = () => act("lifecycle", { state: "retired" }, "Retire this agent permanently? Its history is kept."));
   $("#a-merge") && ($("#a-merge").onclick = () => act("merge", undefined, "Fold this clone's experience into its original and retire it?"));
+}
+
+// The agent's runs, newest first and paged, only of goals in projects the user may see; a row opens what was
+// recorded: the task's output, the error, the tool gateway's grant and the tool calls (REQ-006).
+async function runsTab(box, a, offset = 0) {
+  let p;
+  try { p = await api(`/api/agents/${a.id}/runs?offset=${offset}&limit=25`); } catch (e) { toast(e.message); return; }
+  const row = (r) => `<tr data-run="${r.id}" style="cursor:pointer"><td title="${esc(r.started_at || "")}">${ago(r.started_at)}</td>
+    <td>${r.goal_id ? `#${Number(r.goal_id)} ${esc(r.goal_title)}` : '<span class="muted">none</span>'}</td>
+    <td>${esc(r.task_title || r.task_key || r.purpose)}</td><td>${esc(r.model)} <span class="muted">${esc(r.executor)}</span></td>
+    <td class="num">${fmt.format(r.tokens)}</td><td class="num">${money(r.cost)}</td><td><span title="${esc(r.error)}">${pill(r.outcome)}</span></td></tr>`;
+  const end = p.offset + p.runs.length;
+  box.innerHTML = p.total ? `<table><tr><th>When</th><th>Goal</th><th>Task</th><th>Model</th><th class="num">Tokens</th><th class="num">Cost</th><th>Outcome</th></tr>${p.runs.map(row).join("")}</table>
+    <div class="row" style="margin-top:8px">${ib("chevron_left", "Newer runs", `id="ar-newer" ${p.offset > 0 ? "" : "disabled"}`, "sm")}<span class="muted">${p.offset + 1}–${end} of ${p.total}</span>${ib("chevron_right", "Older runs", `id="ar-older" ${end < p.total ? "" : "disabled"}`, "sm")}</div>`
+    : '<span class="muted">No runs yet.</span>';
+  if (!p.total) return;
+  $("#ar-newer").onclick = () => runsTab(box, a, Math.max(0, p.offset - p.limit));
+  $("#ar-older").onclick = () => runsTab(box, a, end);
+  const text = (v) => (typeof v === "string" ? v : JSON.stringify(v));
+  const list = (xs) => (xs && xs.length ? xs.map((x) => esc(text(x))).join(", ") : "none");
+  box.querySelectorAll("[data-run]").forEach((tr) => (tr.onclick = async () => {
+    const open = tr.nextElementSibling;
+    if (open && open.dataset.runDetail) { open.remove(); return; }
+    let d;
+    try { d = await api(`/api/agents/${a.id}/runs/${tr.dataset.run}`); } catch (e) { toast(e.message); return; }
+    const calls = d.tool_calls.map((c) => `<div>${pill(c.ok === false ? "failed" : "done")} <span class="k">${esc(c.tool)}</span><span class="muted ellipsis">${esc(text(c.input ?? ""))}</span></div>`).join("");
+    tr.insertAdjacentHTML("afterend", `<tr data-run-detail="1"><td colspan="7">
+      <p class="muted">No transcript is stored per run; this is the task's output and the recorded tool calls.</p>
+      ${d.task ? `<h3>Task ${esc(d.task.key)} · ${esc(d.task.title)} ${pill(d.task.status)}</h3><pre>${esc(d.task.output || "No output.")}</pre>` : ""}
+      ${d.error ? `<h3>Error</h3><pre>${esc(d.error)}</pre>` : ""}
+      <p class="muted">Gateway: isolation ${esc(d.isolation || "–")} · tools ${list(d.tools)} · permissions ${list(d.permissions)} · withheld ${list(d.withheld)} · denied ${list(d.denied_tools)} · ${Number(d.duration)} s</p>
+      <h3>Tool calls (${d.tool_calls.length})</h3><div class="events">${calls || '<span class="muted">None recorded.</span>'}</div></td></tr>`);
+  }));
 }
 
 // Relationships with their kind, where they come from (inferred from profiles, observed in verified work,
@@ -343,6 +378,77 @@ function catalogForm(i = null) {
       else await api("/api/catalog", { method: "POST", body: { kind: $("#cf-kind").value, name: $("#cf-name").value, description: $("#cf-desc").value, content: $("#cf-content").value } });
       $("#modal").hidden = true; viewCatalog();
     } catch (err) { toast(err.message); }
+  };
+}
+
+// --- marketplace (REQ-002): external agent packages, fetched as data, qualified as candidates, decided by an admin ---
+async function viewMarketplace() {
+  $("#ag-tools").innerHTML = `<form id="mk-url" class="row" style="margin:0"><input id="mk-src" placeholder="https://… repository URL" style="width:22em">
+    <button type="submit" class="btn icon primary" title="Import from the repository URL" aria-label="Import from the repository URL">${icon("git", 16)}</button></form>
+    <label class="btn icon" title="Upload a .zip or .tar.gz package" aria-label="Upload a package">${icon("upload", 16)}<input type="file" id="mk-file" accept=".zip,.tar.gz,.tgz,.tar" hidden></label>`;
+  const body = $("#ag-body");
+  const list = await api("/api/marketplace", { fresh: true });
+  body.innerHTML = `<div class="card" style="overflow:auto"><table class="tbl"><thead><tr><th>#</th><th>Name</th><th>Role</th><th>Status</th><th>Licence</th><th>Source</th><th>Sha</th></tr></thead><tbody>
+    ${list.map((i) => `<tr data-mk="${i.id}" style="cursor:pointer"><td>${i.id}</td><td>${esc(i.manifest.name || "")}</td><td>${esc(i.manifest.role || "")}</td><td><span class="pill st-${esc(i.status)}">${esc(i.status)}</span></td>
+      <td>${esc(i.licence)}</td><td title="${esc(i.source)}">${esc(i.source.slice(0, 60))}</td><td><code>${esc(i.source_sha.slice(0, 12))}</code></td></tr>`).join("") || `<tr><td colspan="7" class="muted">No imports yet</td></tr>`}</tbody></table></div><div id="mk-detail"></div>`;
+  body.querySelectorAll("[data-mk]").forEach((r) => (r.onclick = () => marketDetail(Number(r.dataset.mk))));
+  $("#mk-url").onsubmit = async (e) => {
+    e.preventDefault();
+    try { const out = await api("/api/marketplace/import", { method: "POST", body: { url: $("#mk-src").value.trim() } }); toast(`Import #${out.id}: ${out.status}`); viewMarketplace(); } catch (err) { toast(err.message); }
+  };
+  $("#mk-file").onchange = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const fd = new FormData(); fd.append("file", file);
+    try {
+      const res = await fetch("/api/marketplace/upload", { method: "POST", body: fd, credentials: "same-origin" });
+      const data = await res.json(); if (!res.ok) throw new Error(data.detail || res.statusText);
+      toast(`Import #${data.id}: ${data.status}`); viewMarketplace();
+    } catch (err) { toast(`${file.name}: ${err.message}`); }
+  };
+}
+
+async function marketDetail(id) {
+  const box = $("#mk-detail"), [i, cat] = await Promise.all([api(`/api/marketplace/${id}`, { fresh: true }), api("/api/models")]);
+  const m = i.manifest || {}, c = i.ceiling || {}, sc = i.screen || {}, ev = i.eval || {};
+  const req = c.requested || m.permissions || [], granted = c.permissions || [];
+  const perms = [...new Set([...req, ...granted])].map((p) => `<tr><td>${esc(p)}</td><td>${req.includes(p) ? "requested" : ""}</td><td>${granted.includes(p) ? "granted" : `<span class="muted">not granted</span>`}</td></tr>`).join("");
+  const dims = Object.entries(ev.dimensions || {}).map(([k, v]) => `<li>${esc(k)}: ${esc(String(v && typeof v === "object" ? v.value ?? v.mean ?? "" : v))} <span class="muted">(n=${esc(String(v?.n ?? "?"))})</span></li>`).join("");
+  const sections = i.definition?.sections || {};
+  const levels = ["G0", "G1", "G2", "G3", "G4"].slice(0, ["G0", "G1", "G2", "G3", "G4"].indexOf(c.autonomy || "G1") + 1).reverse();
+  const decide = ["qualified", "unevaluated", "qualifying", "converted"].includes(i.status);
+  const approvable = (i.status === "qualified" && ev.status === "passed") || i.status === "unevaluated";
+  box.innerHTML = `<div class="card" style="margin-top:12px"><h3>#${i.id} ${esc(m.name || "")} <span class="pill st-${esc(i.status)}">${esc(i.status)}</span></h3>
+    ${i.error ? `<p class="bad">${esc(i.error)}</p>` : ""}
+    <p class="muted">${esc(m.role || "")} · version ${esc(i.version || "?")} · by ${esc(i.author || "unknown")} · licence ${esc(i.licence)} · ${esc(i.kind)} ${esc(i.source)} <code>${esc(i.source_sha)}</code></p>
+    <details><summary>Manifest</summary><pre>${esc(JSON.stringify(m, null, 2))}</pre></details>
+    <h4>Permissions</h4><table class="tbl"><thead><tr><th>Permission</th><th>Package</th><th>Ceiling</th></tr></thead><tbody>${perms}</tbody></table>
+    <p class="muted">Autonomy: requested ${esc(m.autonomy || "—")}, ceiling ${esc(c.autonomy || "—")}</p>
+    <h4>Screen</h4><ul>${(sc.findings || []).map((f) => `<li><b>${esc(f.kind)}</b> ${esc(f.file)}: ${esc(f.detail)}</li>`).join("") || `<li class="muted">no findings</li>`}</ul>
+    <h4>Eval</h4><p>${esc(ev.status || "not run")}${ev.suite ? ` on ${esc(ev.suite)}` : ""}${ev.pass_rate != null ? `, pass rate ${Math.round(ev.pass_rate * 100)}% of ${esc(String(ev.runs ?? 0))} runs` : ""}</p><ul>${dims}</ul>
+    ${sections["Imported instructions"] ? `<details><summary>Imported instructions</summary><pre>${esc(sections["Imported instructions"])}</pre></details>` : ""}
+    ${sections.Provenance ? `<details open><summary>Provenance</summary><pre>${esc(sections.Provenance)}</pre></details>` : ""}
+    ${decide ? `<form id="mk-dec"><h4>Decision</h4>
+      <div class="row">${granted.map((p) => `<label class="row" style="margin:0"><input type="checkbox" name="grant" value="${esc(p)}" checked style="width:auto"> ${esc(p)}</label>`).join("")}
+      <select id="mk-aut" title="Autonomy, never above the ceiling">${levels.map((g) => `<option>${g}</option>`).join("")}</select>
+      <select id="mk-model" title="Model: the role route, or a model of the router catalog (the package's requested models are only shown)"><option value="">role route</option>${(cat.models || []).map((x) => `<option value="${esc(x.name)}">${esc(x.name)}${(m.models || []).includes(x.name) ? " (requested)" : ""}</option>`).join("")}</select></div>
+      ${i.status === "unevaluated" ? `<label class="row"><input type="checkbox" id="mk-unev" required style="width:auto"> No eval suite ran for this import (${esc(ev.reason || "no suite")}): I accept it unevaluated</label>` : ""}
+      ${i.licence === "unknown" ? `<label class="row"><input type="checkbox" id="mk-lic" required style="width:auto"> I accept a package without a known licence</label>` : ""}
+      ${sc.acknowledge ? `<label class="row"><input type="checkbox" id="mk-ack" required style="width:auto"> I have read the screen's findings</label>` : ""}
+      <div class="row"><input id="mk-reason" placeholder="Reason (reject)">
+      ${approvable ? `<button type="submit" class="btn icon primary" title="Approve: enable the agent with the checked permissions" aria-label="Approve: enable the agent with the checked permissions">${icon("check", 16)}</button>` : ""}
+      ${ib("x", "Reject: retire the candidate and delete the package", 'id="mk-rej"')}</div></form>` : ""}</div>`;
+  const form = $("#mk-dec"); if (!form) return;
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const grant = [...form.querySelectorAll("[name=grant]:checked")].map((x) => x.value);
+    try {
+      await api(`/api/marketplace/${id}/approve`, { method: "POST", body: { grant, autonomy: $("#mk-aut").value, accept_licence: !!$("#mk-lic")?.checked, acknowledge: !!$("#mk-ack")?.checked, accept_unevaluated: !!$("#mk-unev")?.checked, model: $("#mk-model").value } });
+      toast("Approved"); await viewMarketplace(); marketDetail(id);
+    } catch (err) { toast(err.message); }
+  };
+  $("#mk-rej").onclick = async () => {
+    if (!confirm(`Reject import #${id}? The candidate is retired and the fetched package deleted.`)) return;
+    try { await api(`/api/marketplace/${id}/reject`, { method: "POST", body: { reason: $("#mk-reason").value } }); toast("Rejected"); viewMarketplace(); } catch (err) { toast(err.message); }
   };
 }
 

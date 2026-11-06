@@ -58,6 +58,7 @@ How you run the company (shell commands; GM below stands for: {gm}):
   GM agents                         every agent: id, role, skills, plugins, model
   GM create-agent <role> --title "…" --skills "python=7,api=6" --plugins "code-review" --mission "…" [--writes]
   GM set-model <agent id> "<model name>"   (see: gm models)
+  GM set-fallback <role> "<model>,<model>"   models that take a role's work when its model hits a usage limit
   GM models                         the model catalog and role routes
   GM catalog [--kind skill|plugin|rule|command|hook]
   GM add <kind> <name> --description "…" --content "…"   add what is missing, then use it
@@ -71,6 +72,9 @@ How you run the company (shell commands; GM below stands for: {gm}):
      "Main flow:" with numbered steps, "Alternatives:", "Postconditions:")
   GM requirements {project['id']} [--trace]   the project's requirements; --trace: implemented, tested, merged
   GM study [<agent id>]             one learning visit: rewrites an agent's definition
+  GM schedule {project['id']} "<goal>" --every "daily 06:00" [--details "…"] [--check "…"] [--kind …]   a recurring goal (UTC;
+       hourly | daily HH:MM | weekly <mon..sun> HH:MM); GM schedules {project['id']}
+  GM import-skills <folder> [--only "a,b"] [--enable]   <folder>/<name>/SKILL.md skills into the catalog (screened)
   GM hypothesis "<statement>" --reason "…" --test "how to test it" --expect "…" [--project {project['id']}]
   GM hypotheses [--status proposed,testing]      hypotheses and their evidence
   GM hypothesis-status <id> <investigating|testing|rejected|inconclusive|archived> [--note "…"]
@@ -151,6 +155,9 @@ def main(argv: list[str]) -> None:
     sm = sub.add_parser("set-model")
     sm.add_argument("agent_id", type=int)
     sm.add_argument("model")
+    fb = sub.add_parser("set-fallback")
+    fb.add_argument("role")
+    fb.add_argument("models", help="comma-separated model names, in order; '' clears")
     cat = sub.add_parser("catalog")
     cat.add_argument("--kind", default="")
     ad = sub.add_parser("add")
@@ -198,6 +205,19 @@ def main(argv: list[str]) -> None:
     hs.add_argument("hypothesis_id", type=int)
     hs.add_argument("status")
     hs.add_argument("--note", default="")
+    im = sub.add_parser("import-skills", help="FW-R-05: import <folder>/<name>/SKILL.md skills into the catalog")
+    im.add_argument("folder")
+    im.add_argument("--enable", action="store_true", help="enable them at once (default: disabled until chosen)")
+    im.add_argument("--only", default="", help="comma-separated skill names")
+    sc = sub.add_parser("schedule", help="FW-R-04: order a goal on a schedule")
+    sc.add_argument("project_id", type=int)
+    sc.add_argument("title")
+    sc.add_argument("--every", required=True, help="hourly | 'daily HH:MM' | 'weekly <mon..sun> HH:MM' (UTC)")
+    sc.add_argument("--details", default="")
+    sc.add_argument("--check", action="append", default=[])
+    sc.add_argument("--kind", default="", choices=["", "feature", "bugfix", "refactor", "research", "docs"])
+    sl = sub.add_parser("schedules")
+    sl.add_argument("project_id", type=int, nargs="?")
     dr = sub.add_parser("decision")
     dr.add_argument("decision_id", type=int)
     dv = sub.add_parser("decision-review")
@@ -212,8 +232,9 @@ def main(argv: list[str]) -> None:
         out = [{k: x[k] for k in ("id", "name", "role", "room", "skills", "plugins", "model_pref", "status",
                                   "lifecycle", "enabled")} for x in registry.list_agents() if x["lifecycle"] != "retired"]
     elif a.cmd == "models":
-        out = {"models": [{k: m[k] for k in ("name", "kind", "available", "unavailable_reason")} for m in router.list_models()],
-               "routes": router.list_routes()}
+        out = {"models": [{k: m[k] for k in ("name", "kind", "available", "unavailable_reason", "limited_until")}
+                          for m in router.list_models()],
+               "routes": router.list_routes(), "fallbacks": {k: v for k, v in router.list_fallbacks().items() if v}}
     elif a.cmd == "create-agent":
         skills = {k.strip(): int(v) for k, v in (x.split("=") for x in a.skills.split(",") if "=" in x)}
         out = registry.create_agent(a.role, a.title, skills, a.room, None, a.mission, a.writes)
@@ -224,6 +245,8 @@ def main(argv: list[str]) -> None:
         agentdefs.sync(out["id"], "created by the General Manager")
     elif a.cmd == "set-model":
         out = registry.update_agent(a.agent_id, {"model_pref": a.model or None})
+    elif a.cmd == "set-fallback":
+        out = {"role": a.role, "fallback": router.set_fallback(a.role, a.models.split(","))}
     elif a.cmd == "catalog":
         out = [{k: i[k] for k in ("kind", "name", "description")} for i in catalog.list_items(a.kind)]
     elif a.cmd == "add":
@@ -270,6 +293,16 @@ def main(argv: list[str]) -> None:
             out = hypotheses.list_hypotheses(a.status)
         else:
             out = hypotheses.set_status(a.hypothesis_id, a.status, actor, a.note)
+    elif a.cmd == "import-skills":
+        out = catalog.import_skills(a.folder, a.enable, [x for x in a.only.split(",") if x.strip()], actor="gm")
+    elif a.cmd in ("schedule", "schedules"):
+        from agent_company import schedules
+
+        if a.cmd == "schedule":
+            _project(a.project_id)
+            out = schedules.create(a.project_id, a.title, a.every, a.details, a.check, a.kind)
+        else:
+            out = schedules.list_schedules(a.project_id)
     elif a.cmd == "decision":
         from agent_company import decisions
 
