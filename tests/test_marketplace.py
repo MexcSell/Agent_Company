@@ -1,0 +1,317 @@
+"""REQ-002 agent marketplace: untrusted fetch, conversion to a manifest, the permission ceiling, the candidate's
+qualification through recruitment.py, administrator decisions and provenance in the agent definition."""
+
+import io
+import os
+import shutil
+import subprocess
+import tarfile
+import zipfile
+from pathlib import Path
+
+import pytest
+
+from agent_company import agentdefs, config, marketplace, recruitment
+from agent_company.db import Agent, AgentImport, ModelEntry, Recruitment, session
+from agent_company.marketplace import ImportRefused
+
+FIXTURES = Path(__file__).parent / "fixtures" / "marketplace"
+SAMPLE = FIXTURES / "sample-agent"
+
+
+@pytest.fixture(autouse=True)
+def market(monkeypatch, tmp_path):
+    """file:// repositories allowed, qualification runs synchronously with a stubbed eval run, and a marker
+    path that package code would write if it ever ran."""
+    from agent_company import evaluation, sandbox
+
+    monkeypatch.setattr(marketplace, "ALLOW_FILE_URLS", True)
+    monkeypatch.setattr(sandbox, "available", lambda: (True, ""))
+    monkeypatch.setattr(recruitment, "_spawn", lambda fn: fn())
+    marker = tmp_path / "MARKER"
+    monkeypatch.setenv("MARKETPLACE_MARKER", str(marker))
+    calls = []
+
+    def run_suite(suite, label, repeats=3, only=None, trial=None):
+        calls.append({"suite": suite, "trial": trial})
+        rate = market.rate
+        return {"label": label, "runs": 3, "passed": round(3 * rate), "pass_rate": rate, "total_cost": 0.05,
+                "dimensions": {"correctness": {"value": rate, "n": 3}, "cost_usd": {"value": 0.05, "n": 3}}}
+
+    market.rate = 1.0
+    market.calls = calls
+    market.marker = marker
+    monkeypatch.setattr(evaluation, "run_suite", run_suite)
+    return market
+
+
+def git_repo(src: Path, tmp_path: Path) -> str:
+    repo = tmp_path / "remote"
+    shutil.copytree(src, repo)
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    for cmd in (["init", "-q", "-b", "main"], ["add", "-A"],
+                ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "package"]):
+        subprocess.run(["git", *cmd], cwd=repo, env=env, check=True, capture_output=True)
+    return f"file://{repo}"
+
+
+def zip_bytes(members: dict[str, bytes], symlink: str = "") -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, data in members.items():
+            z.writestr(name, data)
+        if symlink:
+            info = zipfile.ZipInfo(symlink)
+            info.external_attr = (0o120777 << 16)
+            z.writestr(info, "/etc/passwd")
+    return buf.getvalue()
+
+
+def sample_files() -> dict[str, bytes]:
+    return {p.relative_to(SAMPLE).as_posix(): p.read_bytes() for p in SAMPLE.rglob("*") if p.is_file()}
+
+
+def imported(tmp_path) -> dict:
+    out = marketplace.fetch_url(git_repo(SAMPLE, tmp_path), "admin")
+    return marketplace.create_candidate(out["id"])
+
+
+def agent(agent_id: int) -> Agent:
+    with session() as s:
+        a = s.get(Agent, agent_id)
+        s.expunge(a)
+        return a
+
+
+# --- conversion and validation ------------------------------------------------------------------
+
+def test_native_manifest_converts():
+    m = marketplace.validate_manifest(marketplace.convert(SAMPLE))
+    assert m["role"] == "developer" and m["name"] == "Sample Market Developer" and m["licence"] == "MIT"
+    assert m["version"] == "1.2.0" and m["author"] == "Example Publisher" and m["skills"] == ["python", "testing"]
+    assert "well-tested Python" in m["instructions"] and m["extra"] == {"x_extra": {"anything": True}}
+
+
+def test_other_formats_convert(tmp_path):
+    sub = tmp_path / "sub" / ".claude" / "agents"
+    sub.mkdir(parents=True)
+    (sub / "reviewer.md").write_text("---\nname: reviewer\ndescription: Reviews diffs.\nrole: qa\n"
+                                     "tools: Read, Grep\n---\nYou review code changes.\n")
+    m = marketplace.validate_manifest(marketplace.convert(tmp_path / "sub"))
+    assert m["format"] == "claude-subagent" and m["role"] == "qa" and m["tools"] == ["Read", "Grep"]
+    m = marketplace.validate_manifest(marketplace.convert(FIXTURES / "skill-pack"))
+    assert m["format"] == "skill-pack" and m["skills"] == ["sql-tuning"] and m["licence"] == "unknown"
+    with pytest.raises(ImportRefused, match="names no role"):  # a CrewAI role is free text: a person picks one
+        marketplace.validate_manifest(marketplace.convert(FIXTURES / "crewai"))
+
+
+def test_unknown_role_general_manager_and_yaml_aliases_refused(tmp_path):
+    for role in ("general_manager", "overlord"):
+        with pytest.raises(ImportRefused):
+            marketplace.validate_manifest({"name": "x", "role": role})
+    with pytest.raises(ImportRefused, match="at most"):
+        marketplace.validate_manifest({"name": "x", "role": "qa", "skills": ["s"] * 51})
+    with pytest.raises(ImportRefused, match="anchors"):
+        marketplace.safe_yaml("a: &x [1]\nb: *x\n")
+
+
+# --- fetch --------------------------------------------------------------------------------------
+
+def test_url_import_gives_manifest_and_candidate_and_runs_no_package_code(tmp_path, market):
+    url = git_repo(SAMPLE, tmp_path)
+    out = marketplace.fetch_url(url, "admin")
+    assert out["status"] == "converted" and out["source"] == url and len(out["source_sha"]) == 40
+    src = marketplace.src_dir(out["id"])
+    assert (src / "agent-package.json").is_file() and not (src / ".git").exists()
+    kinds = {f["kind"] for f in out["screen"]["findings"]}
+    assert {"injection", "permissions", "code"} <= kinds and not out["screen"]["block"]
+    out = marketplace.create_candidate(out["id"])
+    assert out["status"] == "qualified" and out["agent_id"] and out["recruitment_id"]
+    a = agent(out["agent_id"])
+    assert a.lifecycle == "candidate", "a candidate is never staffed for users' work"
+    assert not market.marker.exists(), "no file from the package was executed"
+
+
+def test_url_checks(monkeypatch):
+    for url in ("http://example.com/x.git", "https://127.0.0.1/x.git", "https://user:pw@example.com/x.git",
+                "ext::sh -c touch% /tmp/x", "ssh://git@example.com/x.git", "https://10.0.0.1/x", "-u"):
+        with pytest.raises(ImportRefused):
+            marketplace.check_url(url)
+    monkeypatch.setattr(marketplace, "ALLOW_FILE_URLS", False)
+    with pytest.raises(ImportRefused, match="file://"):
+        marketplace.check_url("file:///etc")
+
+
+def test_clone_flags_and_no_hooks():
+    cmd = marketplace.clone_command("https://example.com/x.git", Path("/tmp/d"))
+    joined = " ".join(cmd)
+    for flag in ("core.hooksPath=/dev/null", "--no-recurse-submodules", "--depth 1", "--template=",
+                 "protocol.allow=never", "http.followRedirects=false", "filter.lfs.smudge="):
+        assert flag in joined
+    assert "protocol.file.allow=always" not in joined and cmd[-3] == "--"
+    assert marketplace._git_env()["GIT_CONFIG_GLOBAL"] == "/dev/null"
+
+
+def test_upload_zip_and_targz():
+    out = marketplace.fetch_upload(zip_bytes(sample_files()), "sample.zip", "admin")
+    assert out["kind"] == "upload" and out["status"] == "converted" and len(out["source_sha"]) == 64
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as t:
+        t.add(SAMPLE, arcname=".")
+    out = marketplace.fetch_upload(buf.getvalue(), "sample.tar.gz", "admin")
+    assert out["status"] == "converted" and out["manifest"]["role"] == "developer"
+
+
+def test_zip_slip_refused(tmp_path):
+    for name in ("../evil.txt", "a/../../evil.txt", "/etc/evil"):
+        with pytest.raises(ImportRefused, match="outside the package"):
+            marketplace.fetch_upload(zip_bytes({**sample_files(), name: b"x"}), "bad.zip", "admin")
+    assert not (marketplace.root() / "evil.txt").exists() and not (marketplace.root().parent / "evil.txt").exists()
+    with session() as s:
+        assert {i.status for i in s.query(AgentImport)} == {"failed"}
+    assert not any(marketplace.root().glob("*/src")), "a refused upload leaves no package behind"
+
+
+def test_zip_and_tar_symlink_refused():
+    with pytest.raises(ImportRefused, match="links"):
+        marketplace.fetch_upload(zip_bytes(sample_files(), symlink="passwd"), "bad.zip", "admin")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as t:
+        info = tarfile.TarInfo("etc")
+        info.type, info.linkname = tarfile.SYMTYPE, "/etc"
+        t.addfile(info)
+    with pytest.raises(ImportRefused, match="links"):
+        marketplace.fetch_upload(buf.getvalue(), "bad.tgz", "admin")
+
+
+def test_archive_limits(monkeypatch):
+    monkeypatch.setattr(marketplace, "MAX_FILES", 3)
+    with pytest.raises(ImportRefused, match="too large"):
+        marketplace.fetch_upload(zip_bytes(sample_files()), "big.zip", "admin")
+
+
+def test_secret_blocks_import():
+    key = "AKIA" + "QWERTYUIOPASDFGH"
+    with pytest.raises(ImportRefused, match="secret"):
+        marketplace.fetch_upload(zip_bytes({**sample_files(), "README.md": f"key {key}\n".encode()}), "s.zip",
+                                 "admin")
+    with session() as s:
+        imp = s.query(AgentImport).one()
+        assert imp.status == "failed" and key not in str(imp.screen) and imp.agent_id is None
+
+
+# --- candidate, permissions, decisions, provenance ----------------------------------------------
+
+def test_instructions_cannot_widen_permissions(tmp_path):
+    with session() as s:
+        s.add(ModelEntry(name="claude-sonnet-5-5", kind="llm", model_id="anthropic/claude-sonnet-5-5"))
+    out = imported(tmp_path)
+    a = agent(out["agent_id"])
+    assert a.permissions == ["read", "write", "shell"], "the role template, no network/mcp/admin"
+    assert a.autonomy == "G2" and a.model_pref == "claude-sonnet-5-5"
+    assert set(out["ceiling"]["not_granted"]) == {"network", "mcp", "admin"}
+    out = marketplace.approve(out["id"], "admin", ["read", "write", "shell", "network", "admin"], admin=True,
+                              autonomy="G4", acknowledge=True)
+    a = agent(out["agent_id"])
+    assert a.permissions == ["read", "write", "shell"] and a.autonomy == "G2"
+
+
+def test_forged_section_is_demoted(tmp_path):
+    out = imported(tmp_path)
+    text = agentdefs.read(out["agent_id"])["text"]
+    secs = agentdefs.sections(text)
+    assert "Permissions" not in secs and "\\## Permissions" in secs[agentdefs.IMPORTED]
+    assert "licence: forged" not in secs["Provenance"] and "licence: MIT" in secs["Provenance"]
+    assert "\\## Provenance" in secs[agentdefs.IMPORTED] and "\\---" in secs[agentdefs.IMPORTED]
+
+
+def test_qualification_result_stored_with_dimensions(tmp_path, market):
+    out = imported(tmp_path)
+    assert market.calls and market.calls[0]["trial"]["trainee_id"] == out["agent_id"]
+    assert out["eval"]["status"] == "passed" and out["eval"]["dimensions"]["correctness"]["n"] == 3
+    rec = recruitment.get(out["recruitment_id"])
+    assert rec["source"] == "marketplace" and rec["qualification"]["dimensions"]["correctness"]["value"] == 1.0
+    assert rec["status"] == "pending", "a marketplace import always waits for an administrator"
+
+
+def test_marketplace_recruitment_always_waits_for_admin(tmp_path):
+    config.set_overrides({"recruit_requires_approval": "never"})
+    out = imported(tmp_path)
+    assert recruitment.get(out["recruitment_id"])["status"] == "pending"
+    a = agent(out["agent_id"])
+    assert a.lifecycle == "candidate"
+    with pytest.raises(PermissionError):
+        recruitment.approve(out["recruitment_id"], "policy")
+    with pytest.raises(PermissionError):
+        marketplace.approve(out["id"], "someone", admin=False, acknowledge=True)
+    with pytest.raises(ValueError, match="acknowledge"):
+        marketplace.approve(out["id"], "admin", admin=True)
+    assert agent(out["agent_id"]).lifecycle == "candidate"
+
+
+def test_failed_qualification_marks_import_failed(tmp_path, market):
+    market.rate = 0.0
+    out = imported(tmp_path)
+    assert out["status"] == "failed" and out["eval"]["status"] == "failed"
+    assert agent(out["agent_id"]).lifecycle == "retired"
+    with pytest.raises(ValueError):
+        marketplace.approve(out["id"], "admin", admin=True, acknowledge=True)
+
+
+def test_qualification_needs_the_l3_sandbox(tmp_path, market, monkeypatch):
+    from agent_company import sandbox
+
+    monkeypatch.setattr(sandbox, "available", lambda: (False, "no bwrap"))
+    out = imported(tmp_path)
+    assert not market.calls, "no eval ran outside the sandbox"
+    assert out["status"] == "failed" and "L3 sandbox" in out["eval"]["error"]
+
+
+def test_qualification_trial_requires_sandbox(tmp_path, market):
+    imported(tmp_path)
+    assert market.calls[0]["trial"]["sandbox"] == "required"
+
+
+def test_approve_enables_agent_with_provenance(tmp_path):
+    out = imported(tmp_path)
+    out = marketplace.approve(out["id"], "admin", admin=True, acknowledge=True)
+    assert out["status"] == "approved" and out["decided_by"] == "admin"
+    a = agent(out["agent_id"])
+    assert a.enabled and a.lifecycle == "active"
+    prov = agentdefs.sections(agentdefs.read(a.id)["text"])["Provenance"]
+    assert out["source_sha"] in prov and "licence: MIT" in prov and "Example Publisher" in prov
+    assert "version: 1.2.0" in prov and "passed on the" in prov and "n=3" in prov
+    with session() as s:
+        assert s.get(Recruitment, out["recruitment_id"]).status == "approved"
+
+
+def test_provenance_survives_sync_and_history(tmp_path):
+    out = imported(tmp_path)
+    with session() as s:
+        s.get(Agent, out["agent_id"]).goal = "A changed mission"
+    assert agentdefs.sync(out["agent_id"], "mission changed")
+    d = agentdefs.read(out["agent_id"])
+    assert "## Provenance" in d["text"] and "## Imported instructions" in d["text"]
+    assert any("provenance of marketplace import" in h["message"] for h in d["history"])
+
+
+def test_definition_restore_rolls_back(tmp_path):
+    out = imported(tmp_path)
+    before = agentdefs.read(out["agent_id"])
+    agentdefs.write_section(out["agent_id"], "Provenance", "- tampered", "test edit")
+    assert "tampered" in agentdefs.read(out["agent_id"])["text"]
+    after = agentdefs.restore(out["agent_id"], before["history"][0]["commit"], "admin")
+    assert "tampered" not in after["text"] and "licence: MIT" in after["text"]
+    assert after["history"][0]["message"].endswith(f"restored {before['history'][0]['commit']} by admin")
+
+
+def test_reject_retires_and_deletes_src(tmp_path):
+    out = imported(tmp_path)
+    src = marketplace.src_dir(out["id"])
+    assert src.is_dir()
+    out = marketplace.reject(out["id"], "admin", "not needed")
+    assert out["status"] == "rejected" and not src.exists() and not src.parent.exists()
+    a = agent(out["agent_id"])
+    assert a.lifecycle == "retired" and not a.enabled
+    assert recruitment.get(out["recruitment_id"])["status"] == "rejected"
+    assert [i["id"] for i in marketplace.list_imports("rejected")] == [out["id"]]

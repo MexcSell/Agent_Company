@@ -29,6 +29,8 @@ from agent_company.db import Agent, log_event, session
 from agent_company.executors import tools_for
 
 _lock = threading.Lock()
+IMPORTED = "Imported instructions"  # a marketplace package's instructions (REQ-002), data with demoted headings
+WRITABLE = {"Working method", "Knowledge notes", IMPORTED, "Provenance"}  # sections kept across syncs
 SECTION_RE = re.compile(r"^## (.+?)\n(.*?)(?=^## |\Z)", re.S | re.M)
 
 
@@ -78,6 +80,10 @@ def render(a: Agent, keep: dict[str, str] | None = None) -> str:
         parts.append(f"## Playbook (v{a.playbook_version})\n{a.playbook.strip()}")
     if keep.get("Knowledge notes"):
         parts.append(f"## Knowledge notes\n{keep['Knowledge notes']}")
+    if keep.get(IMPORTED):
+        parts.append(f"## {IMPORTED}\n{keep[IMPORTED]}")
+    if keep.get("Provenance"):
+        parts.append(f"## Provenance\n{keep['Provenance']}")
     return head + "\n" + "\n\n".join(parts) + "\n"
 
 
@@ -160,16 +166,48 @@ def learn_into(agent_id: int, section: str, text: str, reason: str) -> None:
     """Replace one learned section ("Working method" or "Knowledge notes") and commit."""
     if section not in {"Working method", "Knowledge notes"}:
         raise ValueError("learning writes the Working method or Knowledge notes section")
+    write_section(agent_id, section, text, reason)
+
+
+def demote(text: str) -> str:
+    """Untrusted text as section content: a line can never start a section (`## `) or end the front matter."""
+    text = re.sub(r"^(\s*)#", r"\1\\#", text, flags=re.M)
+    return re.sub(r"^---\s*$", r"\\---", text, flags=re.M)
+
+
+def write_section(agent_id: int, section: str, text: str, reason: str, limit: int = 6000) -> bool:
+    """Replace one kept section (WRITABLE) and commit it as a new version of the definition."""
+    if section not in WRITABLE:
+        raise ValueError(f"only {', '.join(sorted(WRITABLE))} can be written")
     with _lock, session() as s:
         a = s.get(Agent, agent_id)
         if a is None:
-            return
+            return False
         p = path_for(a)
         keep = sections(p.read_text(encoding="utf-8")) if p.exists() else {}
-        keep[section] = text.strip()[:6000]
+        keep[section] = text.strip()[:limit]
         p.write_text(render(a, keep), encoding="utf-8")
         a.definition_version = (a.definition_version or 0) + 1
         _commit(p, f"{a.name} v{a.definition_version}: {reason}"[:200])
+        return True
+
+
+def restore(agent_id: int, commit: str, actor: str) -> dict[str, Any]:
+    """Roll the definition back to an earlier version: that version's text becomes a new commit."""
+    if not re.fullmatch(r"[0-9a-f]{4,40}", commit or ""):
+        raise ValueError("commit is a hexadecimal git id")
+    with _lock, session() as s:
+        a = s.get(Agent, agent_id)
+        if a is None:
+            raise KeyError(agent_id)
+        p = path_for(a)
+        old = _git(repo(), "show", f"{commit}:{p.name}")
+        if old.returncode != 0:
+            raise ValueError(f"no version {commit} of {p.name}")
+        p.write_text(old.stdout, encoding="utf-8")
+        a.definition_version = (a.definition_version or 0) + 1
+        _commit(p, f"{a.name} v{a.definition_version}: restored {commit} by {actor}"[:200])
+    return read(agent_id)
 
 
 def claude_subagent(agent_id: int) -> tuple[str, str]:
