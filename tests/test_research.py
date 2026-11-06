@@ -383,3 +383,76 @@ def test_a_failed_visit_does_not_resolve_a_flagged_page():
     research.rotation_tick(source_id=1, client=_flaky_site(pages, set()), allow_private=True)
     st = research.shifts(1)[0]
     assert st["unverified"] == [] and st["open_questions"] == [] and st["known_problems"] == []
+
+
+ATOM = b"""<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"><title>crewAI releases</title><rights>MIT</rights>
+<entry><id>tag:github.com,2008:1</id><title>v1.2.0</title><updated>2026-10-30T12:00:00Z</updated>
+<link rel="alternate" type="text/html" href="https://github.com/crewAIInc/crewAI/releases/tag/1.2.0"/>
+<content type="html">&lt;p&gt;Adds &lt;b&gt;flow checkpoints&lt;/b&gt;&lt;/p&gt;</content></entry>
+<entry><id>tag:github.com,2008:0</id><title>v1.1.0</title><published>2026-09-01T08:00:00+02:00</published>
+<link href="/crewAIInc/crewAI/releases/tag/1.1.0"/><summary>Bug fixes</summary></entry>
+</feed>"""
+
+RSS = b"""<?xml version="1.0"?><rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/"><channel>
+<title>cs.SE updates on arXiv.org</title><copyright>http://creativecommons.org/licenses/by/4.0/</copyright>
+<item><title>Agents that test agents</title><link>https://arxiv.org/abs/2611.00001</link>
+<description>We evaluate &lt;i&gt;multi-agent&lt;/i&gt; QA.</description><pubDate>Wed, 04 Nov 2026 00:00:00 -0500</pubDate></item>
+<item><title>No link here</title><description>skipped</description></item>
+</channel></rss>"""
+
+
+def _feed_site(body, ctype):
+    def handler(req):
+        if req.url.path == "/robots.txt":
+            return httpx.Response(200, text="")
+        return httpx.Response(200, content=body, headers={"content-type": ctype})
+
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_atom_and_rss_feeds_become_one_document_per_entry_with_date_and_licence():
+    pages = research.crawl("https://github.com/crewAIInc/crewAI/releases.atom", depth=1,
+                           client=_feed_site(ATOM, "application/atom+xml; charset=utf-8"), allow_private=True)
+    assert [p["url"] for p in pages] == ["https://github.com/crewAIInc/crewAI/releases/tag/1.2.0",
+                                         "https://github.com/crewAIInc/crewAI/releases/tag/1.1.0"]
+    assert pages[0]["text"] == "Adds flow checkpoints" and pages[1]["text"] == "Bug fixes"
+    assert pages[0]["published_at"].isoformat() == "2026-10-30T12:00:00+00:00"
+    assert pages[1]["published_at"].isoformat() == "2026-09-01T06:00:00+00:00", "in UTC"
+    assert {p["license"] for p in pages} == {"MIT"}
+    rss = research.crawl("https://rss.arxiv.org/rss/cs.SE", client=_feed_site(RSS, "text/xml"), allow_private=True)
+    assert len(rss) == 1 and rss[0]["url"] == "https://arxiv.org/abs/2611.00001", "an entry without a link is skipped"
+    assert rss[0]["text"] == "We evaluate multi-agent QA." and rss[0]["published_at"].isoformat().startswith("2026-11-04T05")
+    capped = research.crawl("https://github.com/crewAIInc/crewAI/releases.atom", max_pages=1,
+                            client=_feed_site(ATOM, "application/atom+xml"), allow_private=True)
+    assert len(capped) == 1
+
+
+def test_a_refetched_feed_adds_no_version_unless_an_entry_changed():
+    url = "https://github.com/crewAIInc/crewAI/releases.atom"
+    first = research.collect(url, client=_feed_site(ATOM, "application/atom+xml"), allow_private=True)
+    assert first["stored"] == 2 and first["new"] == 2
+    again = research.collect(url, client=_feed_site(ATOM, "application/atom+xml"), allow_private=True)
+    assert again["new"] == 0 and again["unchanged"] == 2 and again["changed"] == []
+    edited = ATOM.replace(b"Bug fixes", b"Bug fixes and a security patch")
+    third = research.collect(url, client=_feed_site(edited, "application/atom+xml"), allow_private=True)
+    assert [c["url"] for c in third["changed"]] == ["https://github.com/crewAIInc/crewAI/releases/tag/1.1.0"]
+    hit = research.search("security patch")[0]
+    assert hit["license"] == "MIT" and hit["published_at"].startswith("2026-09-01")
+
+
+def test_a_feed_with_a_doctype_is_refused():
+    bomb = (b'<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;">]>'
+            b'<rss><channel><item><title>&lol2;</title><link>https://x.example/a</link></item></channel></rss>')
+    pages = research.crawl("https://x.example/feed", client=_feed_site(bomb, "application/rss+xml"), allow_private=True)
+    assert len(pages) == 1 and "DOCTYPE" in pages[0]["error"]
+
+
+def test_html_meta_gives_the_publication_date_and_licence():
+    page = (b'<html><head><title>Paper</title><meta name="citation_publication_date" content="2024/05/01">'
+            b'<link rel="license" href="/licenses/by/4.0/"></head><body><p>Results</p></body></html>')
+    pages = research.crawl("https://papers.example/p/1", depth=0, client=_feed_site(page, "text/html"),
+                           allow_private=True)
+    assert pages[0]["published_at"].isoformat() == "2024-05-01T00:00:00+00:00"
+    assert pages[0]["license"] == "https://papers.example/licenses/by/4.0/"
+    assert research.parse_date("not a date") is None and research.parse_date("") is None

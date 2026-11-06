@@ -2686,7 +2686,8 @@ def create_app(start_background: bool = True) -> FastAPI:
             return [{"id": d.id, "url": d.url, "title": d.title, "chars": len(d.text),
                      "source": d.source_url, "at": d.created_at.isoformat(),
                      "category": d.category or research.classify_source(d.url), "flags": d.flags or [],
-                     "version": d.version or 1}
+                     "version": d.version or 1, "license": d.license or "",
+                     "published_at": d.published_at.isoformat() if d.published_at else None}
                     for d in s.scalars(select(research.Document).order_by(research.Document.id.desc()).limit(300))]
 
     @app.get("/api/research/sources")

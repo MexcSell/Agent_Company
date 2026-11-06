@@ -757,6 +757,9 @@ class Document(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    # provenance (G-R-10): the publisher's date and licence, from a feed entry or the page's meta tags
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    license: Mapped[str] = mapped_column(String(256), default="")
 
 
 class DocumentVersion(Base):
