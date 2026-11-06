@@ -602,6 +602,26 @@ class Milestone(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class Schedule(Base):
+    """A goal a project orders on a schedule (schedules.py, FW-R-04, after OpenHands automations)."""
+
+    __tablename__ = "schedules"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    details: Mapped[str] = mapped_column(Text, default="")
+    checks: Mapped[list[Any]] = mapped_column(default=list)  # quality commands; empty = the project's
+    kind: Mapped[str] = mapped_column(String(16), default="")  # workflow template; "" = the planner picks
+    interval: Mapped[str] = mapped_column(String(32))  # hourly | daily HH:MM | weekly <day> HH:MM (UTC)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")  # what the last due run did (created #n, skipped: why)
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class Risk(Base):
     """A risk or blocker of a project (management.py, ASEAO05 §8). Automatic ones carry the `cause` that opened
     them and close when it no longer holds."""

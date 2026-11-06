@@ -60,6 +60,8 @@ feature came from.
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals (S10-R-01: a
   `PROPOSAL[product]` becomes a project only with its documented case, decided by a person), uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress and goal times;
   blockers and generated items are reconciled from goal state by `sync`; a new project GM gets a handover package); `kgraph.py` (SPEC-11 knowledge graph: `kg_edges` written as side effects, the paged neighbourhood API);
+  `schedules.py` (FW-R-04: a project's goals ordered `hourly`/`daily HH:MM`/`weekly <day> HH:MM` UTC by the
+  `ScheduleThread`, origin `schedule`; skipped while the last one is open or the project is not active; Plan → Schedules);
   `metrics.py` (FW-R-03: `GET /metrics` in the Prometheus format for an admin session or the hashed scrape token,
   Settings → Metrics for Prometheus);
   `repomap.py` (FW-R-01, after aider: the base branch's definitions ranked by use in other files, within
@@ -183,5 +185,5 @@ feature came from.
 - `uv run python -m agent_company stop [--level E0..E5 --scope X] [--lift|--status]` – emergency stop; writes the DB
   directly, works while the server is stuck
 - `uv run python -m agent_company host status|install-docker|docker-start|cleanup [--yes]|install-lxd|launch <name> [--container]|stop|delete <name>`
-- `uv run python -m agent_company gm status|agents|create-agent|add|mcp|configure|goal|team|study` – the GM's toolbox
+- `uv run python -m agent_company gm status|agents|create-agent|add|mcp|configure|goal|team|study|schedule|schedules` – the GM's toolbox
 - `uv run python -m agent_company "<request>"` – classic four-agent crew

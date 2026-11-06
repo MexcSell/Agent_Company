@@ -99,7 +99,7 @@ Acceptance: without a session or token the endpoint answers 401; with the token 
 `agent_company_goals{status="queued"}` and the other families, each with `# HELP` and `# TYPE`; values match
 rows created in the test.
 
-### FW-R-04 Scheduled goals — open (planned: `schedules.py`, Projects → Schedules, `gm schedule`)
+### FW-R-04 Scheduled goals — done (`schedules.py`, `ScheduleThread`, Projects → Plan → Schedules, `gm schedule`/`gm schedules`)
 
 Source: OpenHands automations and the extensions automation catalog (`cron` triggers). A project has schedules:
 title, details, check commands, kind, an interval (`hourly`, `daily HH:MM`, `weekly <day> HH:MM`, UTC), enabled,

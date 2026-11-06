@@ -198,6 +198,15 @@ def main(argv: list[str]) -> None:
     hs.add_argument("hypothesis_id", type=int)
     hs.add_argument("status")
     hs.add_argument("--note", default="")
+    sc = sub.add_parser("schedule", help="FW-R-04: order a goal on a schedule")
+    sc.add_argument("project_id", type=int)
+    sc.add_argument("title")
+    sc.add_argument("--every", required=True, help="hourly | 'daily HH:MM' | 'weekly <mon..sun> HH:MM' (UTC)")
+    sc.add_argument("--details", default="")
+    sc.add_argument("--check", action="append", default=[])
+    sc.add_argument("--kind", default="", choices=["", "feature", "bugfix", "refactor", "research", "docs"])
+    sl = sub.add_parser("schedules")
+    sl.add_argument("project_id", type=int, nargs="?")
     dr = sub.add_parser("decision")
     dr.add_argument("decision_id", type=int)
     dv = sub.add_parser("decision-review")
@@ -270,6 +279,14 @@ def main(argv: list[str]) -> None:
             out = hypotheses.list_hypotheses(a.status)
         else:
             out = hypotheses.set_status(a.hypothesis_id, a.status, actor, a.note)
+    elif a.cmd in ("schedule", "schedules"):
+        from agent_company import schedules
+
+        if a.cmd == "schedule":
+            _project(a.project_id)
+            out = schedules.create(a.project_id, a.title, a.every, a.details, a.check, a.kind)
+        else:
+            out = schedules.list_schedules(a.project_id)
     elif a.cmd == "decision":
         from agent_company import decisions
 

@@ -780,6 +780,10 @@ def create_app(start_background: bool = True) -> FastAPI:
             app.state.benchmarks.start()
             app.state.mcp = mcp.McpThread()
             app.state.mcp.start()
+            from agent_company import schedules
+
+            app.state.schedules = schedules.ScheduleThread()  # FW-R-04
+            app.state.schedules.start()
             threading.Thread(target=lambda: agentdefs.sync_all("registered"), daemon=True).start()
         yield
         if app.state.rotation:
@@ -796,6 +800,8 @@ def create_app(start_background: bool = True) -> FastAPI:
             app.state.benchmarks.stop.set()
         if getattr(app.state, "mcp", None):
             app.state.mcp.stop.set()
+        if getattr(app.state, "schedules", None):
+            app.state.schedules.stop.set()
         terminal.close_all()
         workspace.stop_all()
 
@@ -2992,6 +2998,51 @@ def create_app(start_background: bool = True) -> FastAPI:
     def project_plan(project_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         projects.get(project_id, user)
         return management.overview(project_id)
+
+    # --- scheduled goals (FW-R-04): every member of the project sees them, administrators change them ---
+    @app.get("/api/projects/{project_id}/schedules")
+    def schedule_list(project_id: int, user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        from agent_company import schedules
+
+        projects.get(project_id, user)
+        return schedules.list_schedules(project_id)
+
+    @app.post("/api/projects/{project_id}/schedules")
+    def schedule_create(project_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                        ) -> dict[str, Any]:
+        from agent_company import schedules
+
+        try:
+            out = schedules.create(project_id, str(body.get("title") or ""), str(body.get("interval") or ""),
+                                   str(body.get("details") or ""), list(body.get("checks") or []),
+                                   str(body.get("kind") or ""), created_by=admin["id"])
+        except KeyError as e:
+            raise HTTPException(404, "no such project") from e
+        _audit(admin, "schedule_create", f"project:{project_id}", after={k: out[k] for k in ("id", "title", "interval")})
+        return out
+
+    @app.patch("/api/schedules/{schedule_id}")
+    def schedule_update(schedule_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                        ) -> dict[str, Any]:
+        from agent_company import schedules
+
+        try:
+            out = schedules.update(schedule_id, body)
+        except KeyError as e:
+            raise HTTPException(404, "no such schedule") from e
+        _audit(admin, "schedule_update", f"schedule:{schedule_id}", after=body)
+        return out
+
+    @app.delete("/api/schedules/{schedule_id}")
+    def schedule_delete(schedule_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        from agent_company import schedules
+
+        try:
+            schedules.delete(schedule_id)
+        except KeyError as e:
+            raise HTTPException(404, "no such schedule") from e
+        _audit(admin, "schedule_delete", f"schedule:{schedule_id}")
+        return {"deleted": schedule_id}
 
     @app.post("/api/projects/{project_id}/milestones")
     def milestone_create(project_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)

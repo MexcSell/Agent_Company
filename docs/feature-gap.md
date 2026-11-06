@@ -183,7 +183,7 @@ Machines code):
 | Repository map in the planner's prompt and a task's package | aider | done (`repomap.py`, FW-R-01) |
 | Stop a run that repeats the same tool call | OpenHands, AutoGen Magentic-One, mini-swe-agent | done (`executors.StuckWatch`, FW-R-02) |
 | Prometheus metrics endpoint | Flowise, Agent Framework | done (`metrics.py`, `GET /metrics`, FW-R-03) |
-| Scheduled goals | OpenHands automations, extensions catalog | open → FW-R-04 |
+| Scheduled goals | OpenHands automations, extensions catalog | done (`schedules.py`, Plan → Schedules, FW-R-04) |
 | Import skills from a `SKILL.md` registry | OpenHands extensions | open → FW-R-05 |
 | Goals from GitHub events (webhook) | OpenHands automations | needs the owner's decision (FW-R-06) |
 | Fork a goal from an earlier iteration | LangGraph time travel | open (FW-R-07) |
