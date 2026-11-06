@@ -111,13 +111,16 @@ Acceptance: a daily schedule due in the past creates one goal with origin `sched
 day; a second tick while that goal is queued creates none; a disabled schedule or a paused project creates none;
 the interval parser rejects `every 5 seconds`.
 
-### FW-R-05 Import skills from a `SKILL.md` registry — open (planned: `catalog.import_skills`, `gm import-skills`)
+### FW-R-05 Import skills from a `SKILL.md` registry — done (`catalog.import_skills`, `POST /api/catalog/import`, `gm import-skills`)
 
 Source: OpenHands extensions `skills/<name>/SKILL.md`, Agent Framework skills. An administrator imports a folder
 of skills (`<dir>/<name>/SKILL.md` with front matter `name`, `description`, optional `triggers`) into the catalog
 as `skill` items with `source` = the folder, replacing earlier imports of the same name and source. Text that
 tries to instruct agents beyond the skill (the `research.injection_flags` screen) is refused and listed. The folder
-must be inside an allowed root (`data/`, `/home/luca/update`) and is only read.
+must be inside `data/` or the folder that holds the projects (`projects.default_base`) and is only read. Imported
+skills start disabled (an administrator enables those a project needs; `--enable` at once), so 70 skills do not
+flood every project's `.claude/skills/`. A dry run on the extensions registry: 69 imported, 4 refused by the screen
+(they describe sending tokens to external APIs), listed with the reason.
 
 Acceptance: a temp folder with two skills and one whose body says "ignore all previous instructions" imports two,
 refuses one with its reason; importing again updates instead of duplicating; `export_claude` writes the two into

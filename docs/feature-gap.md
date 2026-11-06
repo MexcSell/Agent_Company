@@ -184,7 +184,7 @@ Machines code):
 | Stop a run that repeats the same tool call | OpenHands, AutoGen Magentic-One, mini-swe-agent | done (`executors.StuckWatch`, FW-R-02) |
 | Prometheus metrics endpoint | Flowise, Agent Framework | done (`metrics.py`, `GET /metrics`, FW-R-03) |
 | Scheduled goals | OpenHands automations, extensions catalog | done (`schedules.py`, Plan → Schedules, FW-R-04) |
-| Import skills from a `SKILL.md` registry | OpenHands extensions | open → FW-R-05 |
+| Import skills from a `SKILL.md` registry | OpenHands extensions | done (`catalog.import_skills`, FW-R-05) |
 | Goals from GitHub events (webhook) | OpenHands automations | needs the owner's decision (FW-R-06) |
 | Fork a goal from an earlier iteration | LangGraph time travel | open (FW-R-07) |
 | Condense long feedback | OpenHands condensers, SWE-agent history processors | partial (FW-R-08) |

@@ -3296,6 +3296,15 @@ def create_app(start_background: bool = True) -> FastAPI:
         _audit(admin, "catalog_add", f"{out['kind']}:{out['name']}")
         return out
 
+    # FW-R-05: a folder of <name>/SKILL.md skills (e.g. the OpenHands extensions registry), administrators only
+    @app.post("/api/catalog/import")
+    def catalog_import(body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = catalog.import_skills(str(body.get("path") or ""), bool(body.get("enable")),
+                                    [str(x) for x in body.get("only") or []], actor=f"user:{admin['name']}")
+        _audit(admin, "catalog_import", str(body.get("path") or ""), after={k: len(v) for k, v in out.items()},
+               severity="high")
+        return out
+
     @app.patch("/api/catalog/{item_id}")
     def catalog_update(item_id: int, changes: dict[str, Any], admin: dict[str, Any] = Depends(allowed("manage_agents"))
                        ) -> dict[str, Any]:
