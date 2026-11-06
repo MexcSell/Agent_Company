@@ -244,6 +244,9 @@ def main(argv: list[str] | None = None) -> None:
             for dim, x in out["dimensions"].items():
                 a, b = args.compare
                 print(f"  {dim:<12} {x['metric']:<15} {x[a]} (n={x['n'][a]}) -> {x[b]} (n={x['n'][b]})")
+            if out["regressions"]:
+                print(f"regressions ({out['regression_rate']:.0%} of the tasks {args.compare[0]} solved): "
+                      + ", ".join(out["regressions"]))
             return
         if args.gate:
             from agent_company import performance

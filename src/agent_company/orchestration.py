@@ -309,6 +309,8 @@ def compare(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, An
             b, c = baseline.get("pass_rate"), candidate.get("pass_rate")
         if b is not None and (c is None or c < b - 1e-9):
             guards.append(f"{dim} {c} < {b}")
+    if out["regressions"]:  # G-R-11: cheaper or faster does not excuse a task it broke
+        guards.append("breaks " + ", ".join(out["regressions"]))
     gains = []
     for key in ("cost_per_passed", "avg_seconds"):
         b, c = baseline.get(key), candidate.get(key)

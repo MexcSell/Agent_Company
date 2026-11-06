@@ -225,10 +225,12 @@ def _set_side(agent_id: int, side: str) -> bool:
 
 def smoke_trial(agent_id: int, repeats: int = 1) -> dict[str, float]:
     """Run the smoke suite with the current playbook, then with the candidate (S13-D-02, S13-R-05: same suite, same
-    repeats). The candidate goes on to the live trial if it passes at least as many runs, else it is rolled back."""
+    repeats). The candidate goes on to the live trial if it passes at least as many runs and breaks no task the
+    current playbook solved (G-R-11), else it is rolled back."""
     from agent_company import evaluation, experiments
 
     results: dict[str, float] = {}
+    metrics: dict[str, dict[str, Any]] = {}
     try:
         with session() as s:
             a = s.get(Agent, agent_id)
@@ -246,17 +248,21 @@ def smoke_trial(agent_id: int, repeats: int = 1) -> dict[str, float]:
                 trial = {"trainee_id": agent_id, "side": side} | ({"experiment_id": exp_id} if exp_id else {})
                 summary = evaluation.run_suite(suite, label, repeats=repeats, trial=trial)
                 results[side] = summary["pass_rate"]
+                metrics[side] = experiments.side_metrics(summary)
                 with session() as s:
-                    experiments.update(s, exp_id, **{side: experiments.side_metrics(summary)})
+                    experiments.update(s, exp_id, **{side: metrics[side]})
         with session() as s:
             a = s.get(Agent, agent_id)
             exp = dict(a.experiment or {}) if a else {}
             if not exp or _stage(exp) != "smoke":
                 return {}
-            passed = results["candidate"] >= results["baseline"]
+            broken = experiments.regressions(metrics["baseline"], metrics["candidate"]) or []
+            passed = results["candidate"] >= results["baseline"] and not broken  # G-R-11
             _event(s, "smoke", a.id, f"{a.name}: candidate {results['candidate']:.0%} vs current "
-                   f"{results['baseline']:.0%} on the {suite} suite", passed=passed, **results)
-            cmp = {"pass_rate_change": round(results["candidate"] - results["baseline"], 3), "passed": passed}
+                   f"{results['baseline']:.0%} on the {suite} suite"
+                   + (f", breaks {', '.join(broken)}" if broken else ""), passed=passed, **results)
+            cmp = {"pass_rate_change": round(results["candidate"] - results["baseline"], 3), "passed": passed,
+                   "regressions": broken}
             if passed:
                 exp.pop("smoke_side", None)
                 a.experiment = {**exp, "stage": "live", "smoke": results}

@@ -230,3 +230,24 @@ def test_evolution_api():
         assert app.post("/api/evolution/cycle").json() == {"experiments_started": 0}
         d = app.get(f"/api/agents/{a['id']}").json()
         assert d["lifecycle"] == "paused" and "handovers" in d and app.get(f"/api/agents/{a['id']}/versions").json() == []
+
+
+def test_a_candidate_that_breaks_a_solved_task_is_rolled_back_despite_its_pass_rate(monkeypatch):
+    """G-R-11: as many runs passed, but not the ones the current playbook solved."""
+    from agent_company import evaluation
+
+    aid = dev_id()
+    assert start_candidate(aid)["stage"] == "smoke"
+    by_side = {"baseline": [("a", True), ("b", True), ("c", False)],
+               "candidate": [("a", True), ("b", False), ("c", True)]}
+
+    def run_suite(suite, label, repeats=3, only=None, trial=None):
+        tasks = by_side[label.split("-")[2]]
+        return {"pass_rate": 0.67, "by_task": [{"task": t, "solved": ok} for t, ok in tasks]}
+
+    monkeypatch.setattr(evaluation, "run_suite", run_suite)
+    assert evolution.smoke_trial(aid) == {"baseline": 0.67, "candidate": 0.67}
+    with session() as s:
+        assert s.get(Agent, aid).experiment == {}
+    ev = evolution.overview()["events"]
+    assert ev[0]["stage"] == "rollback" and "breaks b" in ev[1]["title"]

@@ -141,15 +141,33 @@ def update(s: Session, exp_id: int | None, status: str | None = None, decision: 
 def side_metrics(summary: dict[str, Any]) -> dict[str, Any]:
     """What a side is compared on (§10): success rate, rework (iterations), time, cost per verified run."""
     keys = ("label", "runs", "passed", "pass_rate", "avg_iterations", "avg_seconds", "total_cost", "cost_per_passed")
-    return {k: summary.get(k) for k in keys if k in summary}
+    out = {k: summary.get(k) for k in keys if k in summary}
+    if "by_task" in summary:  # per task, for the regression guard (G-R-11)
+        out["tasks_run"] = sorted(t["task"] for t in summary["by_task"])
+        out["solved_tasks"] = sorted(t["task"] for t in summary["by_task"] if t["solved"])
+    return out
+
+
+def regressions(baseline: dict[str, Any], candidate: dict[str, Any]) -> list[str] | None:
+    """G-R-11: the tasks the baseline solved in every repeat that the candidate ran and did not solve in every
+    repeat. A candidate that breaks one is not better, whatever its pass rate. None when a side has no per-task
+    record (recorded before it existed)."""
+    if "solved_tasks" not in baseline or "solved_tasks" not in candidate:
+        return None
+    ran = set(candidate.get("tasks_run") or [])
+    return sorted((set(baseline["solved_tasks"]) & ran) - set(candidate["solved_tasks"]))
 
 
 def compare(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     b, c = float(baseline.get("pass_rate") or 0), float(candidate.get("pass_rate") or 0)
     need = b + settings().min_improvement / 100
+    broken = regressions(baseline, candidate)
+    solved = baseline.get("solved_tasks") or []
     out = {"pass_rate_change": round(c - b, 3), "samples": {"baseline": baseline.get("runs"),
                                                              "candidate": candidate.get("runs")},
-           "needed": round(min(need, 1.0), 3), "better": c > b and c >= need - 1e-9}
+           "needed": round(min(need, 1.0), 3), "better": c > b and c >= need - 1e-9 and not broken,
+           "regressions": broken or [],
+           "regression_rate": round(len(broken) / len(solved), 3) if broken is not None and solved else None}
     for k in ("avg_iterations", "avg_seconds", "cost_per_passed"):
         if baseline.get(k) is not None and candidate.get(k) is not None:
             out[f"{k}_change"] = round(candidate[k] - baseline[k], 6)
@@ -350,7 +368,8 @@ def run_route(exp_id: int) -> dict[str, Any]:
                    f"{sides['baseline']['pass_rate']:.0%} (n={cmp['samples']['candidate']}/{cmp['samples']['baseline']})"
                    if cmp["better"] else
                    f"keep {base or 'the current route'} for {role}: {cand} {sides['candidate']['pass_rate']:.0%} vs "
-                   f"{sides['baseline']['pass_rate']:.0%}, needs {cmp['needed']:.0%}")
+                   f"{sides['baseline']['pass_rate']:.0%}, needs {cmp['needed']:.0%}"
+                   + (f" and breaks {', '.join(cmp['regressions'])}" if cmp["regressions"] else ""))
         with session() as s:
             update(s, exp_id, status="review", decision=verdict, comparison=cmp)
             notify(f"Experiment #{exp_id}: {role} route", verdict + (". Apply it on Evolution → Experiments."

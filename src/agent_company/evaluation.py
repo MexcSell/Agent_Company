@@ -299,8 +299,12 @@ def compare(a: str, b: str) -> dict[str, Any]:
     rows = [{"task": name, a: ta.get(name, {}).get("passed"), b: tb.get(name, {}).get("passed"),
              "change": (tb.get(name, {}).get("passed", 0) or 0) - (ta.get(name, {}).get("passed", 0) or 0)}
             for name in sorted(set(ta) | set(tb))]
+    # G-R-11: tasks a solved in every repeat that b ran and did not; the share of a's solved tasks they are
+    solved = [n for n, t in ta.items() if t["solved"]]
+    broken = sorted(n for n in solved if n in tb and not tb[n]["solved"])
     return {"a": sa, "b": sb, "pass_rate_change": round(sb["pass_rate"] - sa["pass_rate"], 3),
-            "cost_change": round(sb["total_cost"] - sa["total_cost"], 6), "tasks": rows, "dimensions": dims}
+            "cost_change": round(sb["total_cost"] - sa["total_cost"], 6), "tasks": rows, "dimensions": dims,
+            "regressions": broken, "regression_rate": _rate(len(broken), len(solved))}
 
 
 def labels() -> list[dict[str, Any]]:
