@@ -331,7 +331,12 @@ for room X" until theirs is written.
 - The study rotation (`agentdefs.study`) writes an agent's new working method straight into its definition (each
   change a git commit, so it can be rolled back, but it is not evaluated first). Playbooks already follow the
   candidate path (`evolution.py`: smoke suite, trial, promote or roll back).
-- **Status: open.** To be decided with G-R-14: evaluating every rewrite runs real models and costs money.
+- **Status: open, needs a decision.** No exposure today: `study_interval` is 0 (manual) and no definition has been
+  rewritten yet (2026-11-06). Options: (a) a rewrite is held as a candidate an administrator applies or discards
+  after seeing the diff (no model cost, a person's time); (b) the candidate runs the smoke suite against the current
+  definition first and is applied only if it does at least as well, like a playbook (real model runs, under the
+  G-R-14 benchmark budget); (c) keep applying directly (git history allows a rollback, nothing is evaluated).
+  Recommendation: (a) as the default once the rotation is switched on, (b) where a budget is set.
 
 ## Not requirements
 - Download guide, CrewAI setup, VS Code extension lists, Hugging Face/Ollama/LM Studio links:
