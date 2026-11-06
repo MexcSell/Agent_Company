@@ -536,6 +536,8 @@ role only when the work needs a specialist none of them covers."""
 
 def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[contracts.TaskContract], int]:
     """The task contracts for this iteration, and the id of the agent that planned them."""
+    from agent_company.performance import cost_note
+
     gm = registry.staff("general_manager", ["planning"], goal.id)
     try:
         rooms, project_note = _project_context(goal)
@@ -560,6 +562,7 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                   + (f"\nResearch notes:\n{notes}\n" if notes else "")
                   + strategies.planner_note(goal) + teams.planner_note(goal.id)
                   + teststrategy.planner_note(teststrategy.derive(goal.id, None, iteration))  # S09-R-02
+                  + cost_note()  # S07-R-04: budgets and the estimate from measured costs
                   + f"\nAvailable roles:\n{role_lines}\n\n"
                   + blackboard.inbox(goal.id, "general_manager", gm.id)
                   + (learning.experience_context(gm.id, goal_id=goal.id, query=f"{goal.title} {goal.description}")
