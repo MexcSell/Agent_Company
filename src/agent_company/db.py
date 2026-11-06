@@ -438,6 +438,7 @@ class Goal(Base):
     worktree: Mapped[str] = mapped_column(Text, default="")
     iteration: Mapped[int] = mapped_column(Integer, default=0)
     max_iterations: Mapped[int] = mapped_column(Integer, default=3)
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # REQ-003, reported only
     urls: Mapped[list[Any]] = mapped_column(default=list)
     quality_commands: Mapped[list[Any]] = mapped_column(default=list)
     result: Mapped[str] = mapped_column(Text, default="")
@@ -1044,6 +1045,8 @@ class User(Base):
     git_email: Mapped[str] = mapped_column(String(256), default="")
     git_branch: Mapped[str] = mapped_column(String(128), default="")
     git_token: Mapped[str] = mapped_column(Text, default="")  # GitHub token, encrypted (gitsync.set_token)
+    # REQ-003: the dashboard this user sees: simple|advanced; "" (accounts from before it existed) = advanced
+    ui_mode: Mapped[str] = mapped_column(String(16), default="")
 
 
 class UserSession(Base):

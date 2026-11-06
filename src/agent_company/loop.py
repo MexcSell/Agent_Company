@@ -43,7 +43,7 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                 permits: list[str] | None = None, estimated_cost_usd: float = 0.0, topic: str = "general",
                 classification: str = "", trial: dict[str, Any] | None = None, budget_usd: float = 0.0,
                 budget_tokens: int = 0, max_active_agents: int = 0, requirement_keys: list[str] | None = None,
-                kind: str = "") -> int:
+                kind: str = "", deadline: datetime | None = None) -> int:
     """Create a goal. `extract_checks` (only for trusted authors) adds the test/lint commands
     the description names in backticks when no quality commands are given. `classification` (S14-R-05) can
     only raise the level: the goal is at least as classified as its project and its attachments. `trial`
@@ -53,7 +53,8 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
     `requirement_keys` (S08-R-01) name the project's requirements it implements; keys of the project named in the
     title or description are added. `kind` (S04-R-11) names the workflow template: its iteration limit, protected
     tests and scope apply where the order left them empty, and its plans must fit it; without one the planner
-    picks. An eval goal's `trial["strategy"]` (S04-R-13: kind, version, body) is the template it runs under."""
+    picks. An eval goal's `trial["strategy"]` (S04-R-13: kind, version, body) is the template it runs under.
+    `deadline` (REQ-003) is only reported (Simple dashboard, mission report); it does not change loop control."""
     from agent_company.checks import extract_check_commands
     from agent_company.governance import check_command, stops
 
@@ -126,7 +127,7 @@ def create_goal(title: str, description: str = "", repo_path: str = "", urls: li
                  estimated_cost_usd=max(0.0, float(estimated_cost_usd or 0)), topic=topic or "general",
                  classification=level, trial=dict(trial or {}), max_active_agents=max(0, int(max_active_agents or 0)),
                  requirement_keys=req_keys, kind=strategies.check_kind(kind) if kind else "",
-                 strategy=template.get("strategy", {}), **own)
+                 strategy=template.get("strategy", {}), deadline=deadline, **own)
         s.add(g)
         s.flush()
         gid = g.id
@@ -1274,6 +1275,7 @@ def digest(goal_id: int) -> dict[str, Any]:
     from the order to now and the time agents worked, tokens and cost of every run of the goal, and the merge state."""
     from sqlalchemy import func
 
+    from agent_company import workflow
     from agent_company.db import Run, now
 
     with session() as s:
@@ -1289,7 +1291,8 @@ def digest(goal_id: int) -> dict[str, Any]:
                 "tasks_done": sum(st == "done" for st in statuses), "tasks": len(statuses),
                 "duration": round(max(0.0, (now() - created).total_seconds()), 1), "active": round(float(worked), 1),
                 "tokens": int(tokens), "cost": round(float(cost), 6),
-                "merge": MERGE_STATE.get(g.status, "not merged")}
+                "merge": MERGE_STATE.get(g.status, "not merged"),
+                **({"report": f"/api/goals/{goal_id}/report"} if g.status not in workflow.ACTIVE else {})}
 
 
 def _span(seconds: float) -> str:
@@ -1300,7 +1303,7 @@ def _span(seconds: float) -> str:
 def digest_line(d: dict[str, Any]) -> str:
     return (f"Digest: {d['tasks_done']}/{d['tasks']} task(s) passed in iteration {d['iterations']} · "
             f"{_span(d['duration'])} ({_span(d['active'])} of agent work) · {d['tokens']:,} tokens · "
-            f"${d['cost']:.4f} · {d['merge']}")
+            f"${d['cost']:.4f} · {d['merge']}" + (f" · report: {d['report']}" if d.get("report") else ""))
 
 
 def _run(goal_id: int) -> dict[str, Any]:
@@ -1416,7 +1419,8 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                                               "commit": report.get("head")})
             track_defects(goal_id, iteration, report["checks"])
             log_event("gate", f"iteration {iteration}: quality gate {'passed' if report['passed'] else 'failed'}",
-                      goal_id=goal_id, **{k: report[k] for k in ("passed", "checks", "commit")})
+                      goal_id=goal_id, iteration=iteration,
+                      **{k: report[k] for k in ("passed", "checks", "commit")})
             _learn_from(goal_id, iteration, report["passed"], report["feedback"], report.get("head") or "")
             halt = _behaviour_rules(goal_id, iteration, report)
             if halt:

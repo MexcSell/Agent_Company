@@ -80,7 +80,28 @@ def user_dict(u: User) -> dict[str, Any]:
             "approved_at": u.approved_at.isoformat() if u.approved_at else None,
             "git": {"name": u.git_name or "", "email": u.git_email or "", "branch": u.git_branch or "",
                     "token": bool(u.git_token), "ssh_key": _has_ssh_key(u.id)},
-            "permissions": permissions_of(u)}
+            "permissions": permissions_of(u), "ui_mode": ui_mode_of(u)}
+
+
+UI_MODES = ("simple", "advanced")
+
+
+def ui_mode_of(u: User) -> str:
+    """REQ-003: a new account starts in Simple mode; an account from before the setting existed ('') is Advanced."""
+    return u.ui_mode if u.ui_mode in UI_MODES else "advanced"
+
+
+def set_ui_mode(user_id: int, mode: str) -> dict[str, Any]:
+    """Set a user's own dashboard mode (the API passes the caller's id, never another's)."""
+    if mode not in UI_MODES:
+        raise AuthError(400, "invalid_ui_mode", f"ui_mode is one of {', '.join(UI_MODES)}")
+    with session() as s:
+        u = s.get(User, user_id)
+        if u is None:
+            raise AuthError(404, "unknown_user")
+        u.ui_mode = mode
+        s.flush()
+        return user_dict(u)
 
 
 def _has_ssh_key(user_id: int) -> bool:
@@ -137,7 +158,8 @@ def register(name: str, device_secret: str, device_info: dict[str, Any] | None =
                             "No administrator yet: create the first account from the server itself "
                             "(http://localhost:4900, e.g. through an SSH or VS Code port forward).")
         u = User(name=name, device_hash=dh, device_info=info, is_admin=first,
-                 status="active" if first else "pending", approved_at=now() if first else None)
+                 status="active" if first else "pending", approved_at=now() if first else None,
+                 ui_mode="simple")
         s.add(u)
         s.flush()
         token = _new_session(s, u.id) if first else None
