@@ -1,139 +1,241 @@
-# Review (iteration 1)
+# Review (iteration 2)
 
-## QA review of the agent marketplace against REQ-002 (qa, done)
+## QA and security review of the iteration-2 marketplace fixes against REQ-002 (qa, failed)
 
-## Marketplace QA review against REQ-002
+## Iteration-2 marketplace fixes: QA and security review against REQ-002 (commits d6e5f17 + 88621ae)
 
-**Verdict: FAIL.** Criterion (b) is not met, and none of the issues I raised in the earlier security review of the backend have been fixed: `git diff 5dec38f HEAD` shows no change to `marketplace.py`, `recruitment.py`, `sandbox.py` or `agentdefs.py`. The `surface` commit (34a3934) added only the API, CLI, Marketplace tab, threat-model rows and tests.
+**Verdict: FAIL.** All ten iteration-1 findings are fixed and tested; the `agents.js` syntax check is still not done. One medium gap from my previous security review is still open: a marketplace candidate can be enabled through the general recruitment approve, which skips every marketplace check. That breaks edge case 2 ("approved only with `accept_unevaluated`").
 
-I could not run `pytest` or `node --check` because both needed approval, so the "25 pass" figure is the developer's claim. I did not open the tab in a browser either; I read its code instead.
+I could not run the tests. `pytest` and `node --check` both needed approval, so the 771 passed figure is the developer's report.
 
 ## Logic verification
 
-**Normal case: URL import, then approve.**
-1. `POST /api/marketplace/import` needs an admin (`admin_user`), so others get 403. It calls `fetch_url`, which runs `check_url`: https only, a public host, no user name or password. `file://` is allowed only when the module constant `ALLOW_FILE_URLS` is set, which only tests do. ssh://, http:// and `ext::` are refused, both by the scheme check and by `protocol.allow=never` with only https allowed.
-2. The repository is cloned shallow into a new `data/marketplace/<id>/src`, with hooks off (`core.hooksPath=/dev/null`, `--template=`), no submodules, no symlinks and LFS filters emptied. `.git` is removed, then `_check_tree` checks the size.
-3. `convert` reads text only, `validate_manifest` checks it, `screen` looks for secrets, injected instructions, code and a missing licence, and `permission_ceiling` sets what the agent may hold. The import is then `converted`.
-4. `create_candidate` creates a `Recruitment` with `source="marketplace"` and an agent with `lifecycle="candidate"`, at the ceiling's permissions and autonomy. It writes `## Imported instructions` and `## Provenance` and starts `qualify`. `_finish` passes the result to `on_qualified`, which stores the eval on the import.
-5. Approve: `marketplace.approve(admin=True)` re-computes the ceiling intersected with `grant` and clamps autonomy, then calls `recruitment.approve`, which refuses `policy`/`system` as actors. Provenance is written again, the API records `_audit`, and the agent is enabled.
-6. Neither the API nor the CLI can grant outside the ceiling: the ceiling is the role template's permissions minus network, mcp and admin, and `clamp_autonomy` takes the lower of the request and the ceiling. This answers the developer's question.
+**Case 1, normal: upload the fixture package → approve → rollback.** This works.
+1. `fetch_upload` checks every zip member, then unpacks into a new `data/marketplace/<id>/src`.
+2. `convert` and `validate_manifest` read text only, and `screen` runs.
+3. `create_candidate` (marketplace.py:652):
+   - The eval suite comes from the role only (`[role, *ROLES[role].skills]`, :664).
+   - Skills start at level 0 (:642) and `model_pref=None` (:691).
+   - Permissions and autonomy are set to the ceiling.
+4. `qualify` puts `trial.sandbox="required"` on the eval goals. `mode_for` (sandbox.py:223) returns `required` for them, and every place that runs a goal's commands asks it: loop.py:1009, quality.py:165/214 and performance.py:226.
+5. `on_qualified` stores the result on the import.
+6. `approve` (:772) needs `qualified` with eval `passed`. The ceiling is intersected with the grant, and the model must be in the router catalog.
+7. Provenance (source, sha, licence, eval with sample sizes, requested skills and models "not granted/applied") is committed through `agentdefs`.
+8. `restore` needs `admin`, a 7–40 hex id, and a commit that appears in this file's `git log`.
+9. Package code never runs: `MARKER` is asserted absent (test_marketplace.py:121).
 
-**Edge case: archive with `../` or a symlink.** `_member_path` refuses absolute paths, `..` and backslashes. `_zip_members` and `_tar_members` refuse links and special files before anything is written, and files are created with `open("xb")`. The import is marked `failed`, its folder is deleted, the API returns 400 and records a `*_refused` audit entry. Nothing is extracted into a shared directory: Starlette's upload spool holds only the compressed bytes.
+**Case 2, edge: an unevaluated role and `sandbox=off`.** Only partly works.
+- Inside `marketplace.approve`, an `unevaluated` import needs `accept_unevaluated` (:789), which is recorded in the eval, Provenance and the audit.
+- `sandbox=off` for the company or the project still gives `required` for the candidate's trial, and other goals are not affected (test :551-566).
+- **Gap:** the record's `Recruitment.status` is `pending`. `POST /api/recruitments/{id}/approve` (api.py:2252) leads to `recruitment.approve` (recruitment.py:395). An `actor="user:…"` passes the check there, and `_activate` (:403-404) enables the agent.
+  - `accept_unevaluated`, `accept_licence` and `acknowledge` are all skipped.
+  - The import stays `unevaluated`/`qualified`, and Provenance never records the decision.
+  - admin.js:141 shows a plain Approve button for every pending record, including these.
+  - This is unchanged since my last review. Permissions don't widen on this path (`pending_permissions=[]`), but the safeguards the requirement adds are skipped.
 
-**Edge case: manifest requesting Bash, MCP or high autonomy.** The requested permissions only fill `not_granted`; `mcp` and `network` are always dropped and autonomy is capped at G2 or G1. The screen sets `acknowledge`. Permissions cannot be widened, but self-declared skills and models are still applied (findings 4 and 5).
+**Case 3, error: hostile URL or tar bomb.** This works.
+- A private or mixed address: `_is_public_host` requires every resolved address to be global, otherwise `ImportRefused`, before any import record exists.
+- The API records `marketplace_import_refused` as a warning.
+- DNS rebinding:
+  - git connects only to the checked address (`http.curloptResolve=<host>:<port>:<ip>`, :203).
+  - With git older than 2.37, https imports are refused (fail-closed).
+  - Redirects are off.
+- Clone size:
+  - The clone uses `--no-checkout --filter=blob:limit=2 MB`, with `RLIMIT_FSIZE` limiting every file it writes, the pack included (:217).
+  - `_check_objects` (:232) checks with `rev-list --missing=print` and `ls-tree -l` before checkout.
+  - After the clone, git calls drop `GIT_ALLOW_PROTOCOL`, so `protocol.allow=never` blocks any lazy fetch.
+- Tar bomb: `_tar_scan` (:346) makes one streaming pass through a reader that stops at a byte cap, and also applies `data_filter`. The test confirms it stops after at most 4 `next()` calls and never calls `getmembers()`. The import is then `failed`, its folder is deleted, and the API audits the refusal.
 
-**Error case: unreachable URL.** A host that doesn't resolve is refused in `check_url`, before any record exists. A clone failure or timeout calls `_fail`: status `failed` and the folder deleted. No agent is created, because the agent is only created in `create_candidate`, which needs `converted`.
+**Widening by the package.**
+- Permissions: the ceiling is the role template minus network, mcp and admin.
+- Autonomy: clamped to G2 or G1.
+- Skills: start at 0.
+- Model: not applied.
+- None of these can be widened from the manifest or the instructions.
+- Through the generic approve (case 2), the agent keeps its candidate permissions, which are within the ceiling, so permissions are not widened there either.
 
-**Error case: invalid manifest.** `_after_fetch` catches `ImportRefused`, then `_fail` runs, with no agent. Correct.
+**Rejection.** `reject` needs `admin`. It retires the candidate (`enabled=False`, `lifecycle=retired`) and deletes the package directory (test :513).
 
-**Rejection.** `reject` either retires the candidate (`lifecycle="retired"`, `enabled=False`, recruitment.py:582) or calls `recruitment.reject`, then deletes `data/marketplace/<id>`. Correct.
+## Each iteration-1 finding
 
-**Root cause:** the fetch, unpacking, ceiling and approve paths fix the root causes. The "eval only in L3" guarantee only covers the symptom (bubblewrap missing), not the setting that turns the sandbox off (finding 1).
+| # | Finding | Fix | Test |
+|---|---|---|---|
+| 1 | `sandbox=off` bypass | sandbox.py:223; recruitment.py:498-506 | `test_sandbox_off_setting_cannot_weaken_the_candidate_eval`; test_sandbox.py `test_a_trial_that_requires_the_sandbox_overrides_sandbox_off` |
+| 2 | package chooses the eval suite | marketplace.py:664 | `test_suite_comes_from_the_role_not_the_package_skills` |
+| 3 | unevaluated import approvable | :789 (bypassable, see below) | `test_unevaluated_import_needs_explicit_acceptance`, `test_qualified_needs_a_passed_eval` |
+| 4 | self-granted skill levels | :642 | `test_claimed_skills_start_at_the_lowest_level` |
+| 5 | package-chosen `model_pref` | :691 | `test_requested_models_are_not_applied_admin_picks_a_catalog_model` |
+| 6 | DNS rebinding | :153, :203 | `test_checked_address_is_pinned_for_the_clone`, `test_private_or_mixed_address_refused`, `test_old_git_refuses_https_imports` |
+| 7 | clone unbounded while running | :203, :217, :232 | `test_clone_runs_with_a_file_size_limit`, `test_clone_with_a_pack_over_the_file_size_limit_fails`, `test_oversized_file_in_repository_refused_and_removed`, `test_git_calls_after_the_clone_never_lazy_fetch`, `test_repository_over_the_total_size_refused` |
+| 8 | admin checks on reject/restore, restore id and `git log` check | :817; agentdefs.py:195-207 | `test_reject_and_restore_need_an_administrator` |
+| 9 | refused approve/reject not audited | api.py:2344, :2359 | `test_api_refused_approve_and_reject_are_audited`; test_api.py |
+| 10 | gzip bomb | :346 | `test_tar_bomb_refused_while_streaming`, `test_tar_decompressed_bytes_are_bounded` |
+| 11 | `agents.js` syntax | not checked (`node --check` refused again) | none |
+
+The tests I read assert behaviour: statuses, which suite was chosen, the `next()` count, that no `src` folder is left, the exact `curloptResolve` string, that `MARKER` is absent. They don't only call functions.
 
 ## Checklist
 
-- **Contract:**
-  - (a) met.
-  - (b) **not met** (findings 1–3).
-  - (c) met for the API and CLI, but `reject` and `restore` have no admin check of their own (finding 8).
-  - (d) met; rollback through `agentdefs.restore` works, but it is laxer than the spec (finding 8).
-  - (e) met for permissions and autonomy; skills and model are still taken from the package (findings 4 and 5).
-- **Interfaces:** compatible.
-- **Error handling:** good. API errors map to 404, 403 and 400.
-- **DB session discipline:** correct. `log_event`, `notify` and `record_version` get `s=s`. `agentdefs` and `recruitment.approve` run after the session closes, and `on_qualified` uses the caller's session.
-- **`_audit`:** present on import, upload, approve, reject and the refused import/upload, and the CLI audits as `cli`. A refused *approve* (400/403) is not audited (finding 9).
-- **UI:** every interpolated value goes through `esc()`. The checkboxes are limited to `ceiling.permissions` and the autonomy menu stops at the ceiling. The upload uses the same raw `fetch` pattern as `projects.js:410`.
-- **Tests:** good coverage. The missing cases are `sandbox=off`, a suite chosen by the package's skills, an unevaluated role being approved, and DNS rebinding.
-- **Docs:** six threat-model rows that name their tests. The SSRF row claims redirect protection but doesn't cover rebinding (finding 6).
+- **Contract:** criteria (a), (d) and (e) are met. Criteria (b) and (c) are met through the marketplace path but can be bypassed (case 2).
+- **Interfaces:** `check_url` now returns a tuple. Its callers in the code I read were updated (`fetch_url`, tests).
+- **Error handling:** fails closed in every case I traced.
+- **Tests:** strong. Missing: a marketplace record approved through `/api/recruitments/{id}/approve`.
+- **Dependencies:** none new; only the standard-library `resource`, `bz2`, `gzip` and `lzma`.
+- **Security:** see the findings.
+- **Performance:** a tar is decompressed twice (scan, then extract), bounded by `MAX_BYTES`. Acceptable.
+- **Docs:** the threat model and CLAUDE.md were updated.
 
 ## Findings
 
-FINDING: src/agent_company/recruitment.py:497, src/agent_company/sandbox.py:216 | **high** – with the company or project setting `sandbox=off`, a marketplace candidate's eval commands (model-written code, steered by untrusted imported instructions) run on the host without the sandbox. `qualify` checks only `available()`, and `trial["sandbox"]="required"` is never read by `mode_for`. Criterion (b) is broken | `mode_for` returns `"required"` when `goal.trial.get("sandbox")=="required"`, and `qualify` refuses a marketplace candidate whose effective mode is `off`; add a test with `sandbox=off`
-FINDING: src/agent_company/marketplace.py:516 | **high** – `qualification_suite([*m["skills"], m["role"]])` puts the package's own skills first, so the package chooses its eval suite (e.g. an easy one) instead of its role's. Criterion (b) | pick the suite from the role only (`[m["role"]]` or the role template's skills); add a test
-FINDING: src/agent_company/marketplace.py:527, :547 | **medium** – a role that doesn't write, or one with no matching suite, becomes import status `"qualified"` with the eval `skipped`, and `approve` enables it with no eval run. Criterion (b) | use a separate `unevaluated` status, and make `approve` require `eval.status=="passed"` or an explicit `accept_unevaluated`
-FINDING: src/agent_company/marketplace.py:543 | **medium** – `agent.skills = {k: 5 …}` gives proficiency 5 in every skill the package claims, so once approved, `registry._rank` prefers it for those skills with no verified evidence. A package widens how it is staffed. Criterion (e) | start the imported skills at the lowest level and raise them only from eval or probation results
-FINDING: src/agent_company/marketplace.py:542 | **medium** – `model_pref` is taken from the untrusted manifest's `models` (any catalog entry, e.g. an expensive model or a `claude_code` model with its own sign-in), although the module says requested items are "shown, never applied" | keep the requested models in the manifest only, use the role route, and let the administrator choose at approve
-FINDING: src/agent_company/marketplace.py:142, :172, docs/threat-model.md:68 | **medium** – DNS rebinding: `_is_public_host` resolves the host, then git resolves it again, so the clone can reach 127.0.0.1 or internal services (SSRF on the server). The threat-model row doesn't cover this | pin the checked address with `-c http.curloptResolve=<host>:443:<ip>` in `clone_command`; add the case to the row and a test
-FINDING: src/agent_company/marketplace.py:172 | **medium** – the clone has no size bound while it runs, so a hostile repository can fill `data/` within the 60 s timeout before `_check_tree` runs | add `--filter=blob:limit=2m`, or an `RLIMIT_FSIZE` / systemd-scope disk limit on the clone process
-FINDING: src/agent_company/marketplace.py:649, src/agent_company/agentdefs.py:196 | **low** – `reject` and `restore` don't check for an administrator themselves (only the callers do, unlike `approve(admin=True)`). `restore` accepts 4-hex-character ids and doesn't check the file's `git log` as spec C2 requires | add `admin: bool` → `PermissionError` to both; use the regex `{7,40}` and check the commit is in `git log --format=%H -- <file>`
-FINDING: src/agent_company/api.py:2337 | **low** – a refused approve (missing licence acceptance, 403 for a non-person actor, wrong status) raises before `_audit`, so attempts are not in the audit log; the same holds for reject | wrap `_market_call` in approve and reject the way import does, with `marketplace_approve_refused` at severity warning
-FINDING: src/agent_company/marketplace.py:246 | **low** – `tarfile.getmembers()` decompresses the whole stream of a 20 MB gzip bomb before the `MAX_RATIO` check runs (CPU/time DoS in an API worker) | count the decompressed bytes while iterating the members and stop at `MAX_BYTES`
-FINDING: src/agent_company/static/agents.js:351 | **low** – the new tab's JavaScript was never syntax-checked or opened in a browser (`node --check` was refused for both developer and QA) | run `node --check src/agent_company/static/agents.js` and open Agents → Marketplace once
+FINDING: src/agent_company/recruitment.py:395, src/agent_company/recruitment.py:403, src/agent_company/api.py:2252, src/agent_company/static/admin.js:141 | **medium** – an administrator approving a marketplace record through the general recruitment approve (API or the Evolution → Recruitment button) enables an unevaluated, unlicensed or flagged import without `accept_unevaluated`, `accept_licence` or `acknowledge`. The import record is never marked `approved` and Provenance doesn't record the decision | in `recruitment.approve`, raise `PermissionError("decide it on Agents → Marketplace")` when `r.source == "marketplace"` unless a keyword `via_marketplace=True` is passed (only `marketplace.approve` passes it); do the same in `recruitment.reject`; hide the generic buttons in admin.js for `source === "marketplace"`; add an API test expecting 403
+FINDING: src/agent_company/static/agents.js:351 | **low** – the Marketplace tab's JavaScript has still not been syntax-checked or opened in a browser (`node --check` refused for every role) | run `node --check src/agent_company/static/agents.js` with approval, or add a node syntax check to the test suite
+FINDING: src/agent_company/marketplace.py:217 | **low** – `preexec_fn` in the multithreaded API server can deadlock the child between fork and exec (Python's documentation warns against it with threads) | run the clone as `["prlimit", f"--fsize={CLONE_FSIZE}", "git", …]` or inside the systemd scope `sandbox.py` already uses
 
-NEXT: a developer task with `sandbox.py`, `marketplace.py`, `recruitment.py` and `agentdefs.py` in its allowed paths fixes findings 1–5 and adds tests for `sandbox=off`, a suite chosen by skills, approving an unevaluated import, and starting skills unverified.
-NEXT: pin the clone address and bound the clone size (findings 6 and 7), then update the SSRF row in the threat model.
-MESSAGE request to developer: fix src/agent_company/sandbox.py:216 (`trial.sandbox` must be binding) and src/agent_company/marketplace.py:516/527/542/543 before the next QA pass; `tests/test_marketplace.py` needs the four missing cases.
-MESSAGE fact to security: no backend security fix landed between 5dec38f and 34a3934; the DNS-rebinding gap and the `sandbox=off` host path are still open.
-
-PROPOSAL: run `node --check` on static/*.js in the test suite :: dashboard syntax errors pass every gate today, and tasks without approval for node can't check them.
-
-```json
-{"insights": [{"title": "Review findings are not carried into the next task", "description": "The surface task left every backend security finding from the previous review unfixed, because none of the files involved (sandbox.py, marketplace.py) were in its allowed paths. Findings that block a requirement need their own fix task, or the following QA will fail again on the same points.", "evidence": ["git diff 5dec38f 34a3934 -- src/agent_company/marketplace.py src/agent_company/sandbox.py is empty", "sandbox.py:216 mode_for ignores trial"], "expected_benefit": "Fewer QA iterations that repeat the same findings", "confidence": 0.7}]}
-```
-
-OUTCOME: REVISION_REQUIRED. Criteria (a), (c) and (d) are essentially met: the fetch and unpacking are hardened, nothing is extracted into a shared directory, approval needs an administrator, the API and CLI are audited and give non-admins 403, and the database session handling is correct. Criterion (b) is not met. With `sandbox=off` the candidate's eval runs on the host, the package chooses its own eval suite, and a role with no suite can be approved with no eval. Criterion (e) holds for permissions and autonomy, but self-declared skills at level 5 and the package's chosen model are applied.
+OUTCOME: REVISION_REQUIRED. Iteration 2 fixes all ten iteration-1 findings at their root, each with a test that checks behaviour. The sandbox is forced on for candidate evals, the suite comes from the role, package skills and models aren't applied, the clone is pinned to the checked address and bounded while it runs, tar files are scanned in one bounded stream, and refusals are audited. One medium security gap is left: the older recruitment approve and reject path still reaches marketplace candidates and skips the unevaluated, licence and screen checks. That leaves edge case 2 and criteria (b)/(c) open. The fix is a guard in `recruitment.approve`/`reject` plus a test.
 
 VERDICT: FAIL
 
-## Security review of 'marketplace.py: untrusted fetch, conversion to manifest, permission ceiling, candidate qualification, provenance; db tables; offline tests' (qa, done)
+NEXT: add the `source == "marketplace"` guard in recruitment.py `approve`/`reject` with an API test, hide the generic buttons in admin.js, and run `node --check` on `agents.js`.
+MESSAGE request to developer: guard `recruitment.approve`/`reject` (src/agent_company/recruitment.py:382) against `source == "marketplace"` unless called from `marketplace.approve`/`reject`, add a test that `POST /api/recruitments/{id}/approve` on a marketplace record returns 403, and hide the generic buttons in src/agent_company/static/admin.js:141.
+MESSAGE fact to security: DNS pinning, the bounded clone and the streamed tar scan are in marketplace.py (:153, :203, :217, :232, :346) with tests; the open item is the generic recruitment approve bypass.
 
-I'm reviewing commit 5dec38f (`marketplace.py`, `recruitment.py`, `agentdefs.py`, `db.py`, `tests/test_marketplace.py`). I read all the code. I could not run the tests: running them needed approval, so the 49-test pass is the backend's claim, not something I checked.
+PROPOSAL: node syntax check of static/*.js in pytest :: no role is allowed to run `node --check`, so dashboard syntax errors pass every gate.
+
+## Security review of 'Marketplace candidate flow: sandbox always on, role-only eval suite, 'unevaluated' status, no self-granted skills or models, admin checks, audited refusals' (qa, done)
+
+## Security review of `candidate_flow_fixes` (commit d6e5f17)
+
+**Verdict: FAIL.** Six of the seven fixes are correct. Fix 3 can be bypassed: the existing approve button in Evolution → Recruitment enables a marketplace candidate without going through the marketplace checks. The fix is small.
+
+I could not run the tests. The 759 passed / 77 passed counts are the developer's report.
 
 ## Logic verification
 
-- **`check_url` / `clone_command` / `fetch_url`**
-  - Normal case: an https URL to a public host passes the check. It is cloned shallow with hooks off (`core.hooksPath=/dev/null`), no templates, no symlinks, no fsmonitor, no LFS, no redirects, https only and no proxy variables. `.git` is then removed and `_check_tree` caps the size.
-  - Edge case: a leading `-`, `user@host`, or a host resolving to an address that is not global are refused, and `--` comes before the URL.
-  - Error case: on a non-zero exit or timeout, `_fail` deletes the directory.
-  - Gap: the DNS lookup in `_is_public_host` and the lookup git does are separate (TOCTOU).
-- **`_extract` / `_member_path`**
-  - Normal case: every member is checked before anything is written. Files are created with `open("xb")`, so a duplicate name fails as an `OSError`, which is caught and refused.
-  - Edge case: a zip-slip `../evil` is refused, and zip/tar symlinks and hard links are refused.
-  - Error case: a bad archive becomes `ImportRefused` and the directory is removed.
-  - Gap: tar `getmembers()` decompresses the whole stream before the ratio check runs.
-- **`convert` / `validate_manifest` / `safe_yaml`**: text only. `_read` uses `lstat`, so symlinks are refused. `instructions_file` refuses `..` and absolute paths. YAML anchors are refused. `general_manager` and unknown roles are refused. Correct.
-- **`permission_ceiling` / `clamp_autonomy` / `approve`**
-  - The permissions are the role template's, minus `NEVER_ON_IMPORT`, intersected with `grant`.
-  - `requested` only fills `not_granted`. Autonomy is `min(value, ceiling)`.
-  - With `grant=["admin","network","write"]` the result is a subset of the ceiling, so `approve` cannot widen the ceiling (the architect's question). This holds.
-- **`recruitment.qualify`, marketplace branch**: it refuses when `sandbox.available()` is false and adds `trial["sandbox"]="required"`. `sandbox.mode_for` (sandbox.py:216) never reads that key. It returns `policies.effective("sandbox", …)`. So with the company setting `sandbox=off`, bubblewrap can be installed and `qualify` proceeds, yet the eval checks run without the sandbox, on the host. The commands run are model-written code, steered by the imported instructions. The fix closes the symptom (bubblewrap missing) but not the root cause.
-- **`create_candidate`**
-  - The package's own `skills` are listed before the role in `qualification_suite`, so the package chooses which suite it is tested on.
-  - A role that doesn't write, or that has no matching suite, gets `imp.status="qualified"` with no eval having run. It can then be approved.
-- **`agentdefs.demote` / `write_section` / `restore`**: forged `## ` and `---` lines are escaped, and the kept sections survive `sync`. `restore` accepts 4–40 hex characters (the spec says 7–40). It does not check the file's `git log` and takes no permission check.
-- **Tests**: `MARKER` is asserted absent (test_marketplace.py:132). Zip-slip, symlinks, limits, secrets, widening, demotion, approve, reject and restore are covered. Missing: `sandbox=off`, a suite chosen by the package's skills, a non-writing role becoming "qualified", and rebinding.
+**1. `sandbox.mode_for` (sandbox.py:223) and `recruitment.qualify` (:497-506): fixed at the root.**
+- Normal case: `qualify` builds `trial={"trainee_id", "qualify", "sandbox": "required"}`. `evaluation.run_suite(trial=…)` (evaluation.py:193) passes it to `loop` as `Goal.trial = dict(trial)` (loop.py:127).
+- Every place that runs a goal's commands asks `sandbox.mode_for(goal)`: loop.py:1009, quality.py:165/214 (and so :283/:304), and performance.py:226. Each now gets `required`, ahead of the company or project setting.
+- Edge case: `sandbox=off` for the company or the project still gives `required`.
+- Error case: with bubblewrap missing, `available()` is false and `_finish(…, error)` retires the candidate.
+- The extra `mode_for(Goal(trial=trial)) == "off"` check can never be true, because the trial already forces `required`. It is dead code but harmless.
+
+**2. The suite comes from the role (marketplace.py:523-524): fixed.**
+- Normal case: `qualification_suite([role, *ROLES[role].skills])`.
+- Edge case: a package claiming `markdown` cannot reach an easier docs suite.
+- Error case: no suite for the role gives the `unevaluated` path below.
+
+**3. `unevaluated` status (:557, :645-649): fixed inside `marketplace.approve`, but bypassable.**
+- Inside `marketplace.approve`:
+  - Normal case: only `qualified` with `eval.status == "passed"` is accepted, or `unevaluated` with `accept_unevaluated`, which is recorded in the eval and in Provenance.
+  - Edge case: a `qualified` import whose eval isn't `passed` is refused.
+- The bypass: the record still has `status="pending"` (`_ask_or_approve`), so `POST /api/recruitments/{id}/approve` reaches `recruitment.approve`. There, `actor="user:<admin>"` passes the check at :395 and `_activate` enables the agent. None of the marketplace checks run: `accept_unevaluated`, `accept_licence` and `acknowledge` are skipped. The import record stays `unevaluated`/`qualified`, nothing marks it `approved`, and Provenance is not rewritten.
+- The Evolution → Recruitment list (admin.js:133-141) shows every pending record with a plain **Approve** button, so this path is one click away.
+- Permissions don't widen on this path: marketplace records have `pending_permissions=[]`, so `grant=True` adds nothing.
+
+**4. Skills start at 0 (:501, :551): fixed.** `registry._rank` scores level 0 the same as a missing skill. The claimed skills are kept only in `requested_skills` and in Provenance.
+
+**5. Models (:550, :504): fixed.** `model_pref=None`, so the role route applies. The administrator's `model` must be in the router catalog, otherwise `ValueError` gives 400; that raise happens before any field changes and is audited as refused.
+
+**6. Admin checks: fixed.**
+- `reject` and `restore` refuse without `admin`.
+- `restore` uses the `{7,40}` regex and accepts only commits in the file's own `git log`.
+- The commit id is checked against a hex regex and the file name comes from `path_for`, so neither can carry an option or a path.
+
+**7. Refused approve and reject are audited: fixed.** api.py:2344 and :2359 record them at severity warning before re-raising.
 
 ## Checklist
 
-- **Contract**: partly met. "Runs its role's eval suite in the L3 sandbox" is not guaranteed (findings 1–3).
-- **Interfaces**: compatible. `recruitment.approve` keeps its signature.
-- **Error handling**: good. Every fetch failure cleans up.
-- **Edge cases**: see the findings.
-- **Tests**: good but missing the cases above.
-- **Dependencies**: none new.
-- **Security**: findings below.
-- **Performance**: decompression and clone size are unbounded while running.
-- **Docs**: the threat model is left to the next task.
+- **Contract:** items 1, 2 and 4-7 are met; item 3 has the bypass above.
+- **Interfaces:** new keyword-only arguments with safe defaults; the API body gains two fields.
+- **Error handling:** good.
+- **Tests:** a named test for each item (by the developer's report). None covers approve through `/api/recruitments/{id}/approve` for a marketplace record.
+- **Dependencies:** none.
+- **Security:**
+  - Within this task's scope, the problem is the bypass.
+  - Outside this task's scope, still open and owned by `fetch_hardening`: DNS rebinding, the clone's size while it runs, the tar gzip bomb, and `node --check` of `agents.js`.
+- **Performance:** fine.
+- **Docs:** `spec.md` §12 is stale ("`model_pref` from the catalog only"); the developer's BLOCKER covers it.
 
-FINDING: src/agent_company/recruitment.py:497, src/agent_company/sandbox.py:216 | with the company or project setting `sandbox=off`, a marketplace candidate's eval commands (model-written, steered by untrusted imported instructions) run on the host without the sandbox, even though `qualify` checked `available()`; `trial["sandbox"]` is never read | `mode_for` returns `"required"` when `goal.trial.get("sandbox")=="required"` (or when the trainee's recruitment has `source=="marketplace"`), and `qualify` refuses a marketplace candidate when the effective mode is `off`; add a test with `sandbox=off`
-FINDING: src/agent_company/marketplace.py:516 | the package's self-declared `skills` come first in `qualification_suite([*m["skills"], m["role"]])`, so a package can pick an easier suite than its role's | use `qualification_suite([m["role"], *org.ROLES[m["role"]].skills])` (role only); show the package's skills but don't let them choose
-FINDING: src/agent_company/marketplace.py:543 | `agent.skills = {k: 5 …}` gives proficiency 5 in every skill the package claims; once approved, `registry._rank` prefers the import for those skills (e.g. security review) with no verified evidence | start the imported skills at 0 or 1 and raise them only through the eval or probation results, or store them only as `requested_skills`
-FINDING: src/agent_company/marketplace.py:547 | a role that doesn't write, or one with no matching suite, gets import status `"qualified"` with the eval `skipped`; `approve` accepts it, so an agent can be enabled without the eval the task requires | use a separate status such as `unevaluated`, and make `approve` require `eval.status=="passed"` or an explicit `accept_unevaluated=True`; add a test
-FINDING: src/agent_company/marketplace.py:142, :172 | DNS rebinding: `_is_public_host` resolves the host, then git resolves it again, so a rebinding host can point the clone at 127.0.0.1 or internal services (SSRF on the server) | pin the checked address with `-c http.curloptResolve=<host>:<port>:<ip>` in `clone_command`, or clone through a proxy that refuses addresses that aren't global
-FINDING: src/agent_company/marketplace.py:172 | the clone has no size bound while it runs: a hostile repository can fill `data/` within the 60 s timeout before `_check_tree` runs | add `--filter=blob:limit=2m`, or run the clone under an `RLIMIT_FSIZE` / disk quota / systemd-scope limit, and refuse a pack larger than the limit
-FINDING: src/agent_company/marketplace.py:246 | `tarfile.getmembers()` on a 20 MB gzip bomb decompresses gigabytes before the ratio check (CPU/time DoS in the API worker) | wrap the decompression in a reader that stops after `MAX_BYTES * 2`, or check `MAX_RATIO` while iterating the members
-FINDING: src/agent_company/marketplace.py:542 | `model_pref` is taken from the untrusted manifest's `models` (any catalog name, e.g. an expensive model or a `claude_code` model with its own sign-in), although the module says requested items are "shown, never applied" | store the requested models in the manifest only, leave `model_pref` as the role's route, and let the administrator set it at `approve`
-FINDING: src/agent_company/marketplace.py:649, src/agent_company/agentdefs.py:196 | `reject` and `restore` take no admin check (`approve` takes `admin=True`); `restore` accepts 4-hex-character ids and doesn't check the file's `git log` as spec C2 requires | add `admin: bool` and raise `PermissionError` for both; use the regex `{7,40}` and check `git log --format=%H -- <file>` contains the commit
+## Findings
 
-OUTCOME: REVISION_REQUIRED
+FINDING: src/agent_company/recruitment.py:395, src/agent_company/api.py:2252, src/agent_company/static/admin.js:141 | **medium** – an administrator can approve a marketplace candidate through the generic recruitment approve (API or the Evolution → Recruitment "Approve" button). `_activate` then enables an unevaluated, unlicensed or flagged import without `accept_unevaluated`, `accept_licence` or `acknowledge`. The import record never becomes `approved`, and Provenance does not record the decision | in `recruitment.approve`, raise `PermissionError("approve it on Agents → Marketplace")` when `r.source == "marketplace"` unless a new keyword `via_marketplace=True` is passed (only `marketplace.approve` passes it); hide the button in admin.js for `source === "marketplace"`; add a test that `POST /api/recruitments/{id}/approve` on a marketplace record returns 403
+FINDING: src/agent_company/api.py:2261, src/agent_company/recruitment.py:419 | **low** – rejecting through the generic recruitment reject retires the candidate but leaves the import `unevaluated`/`qualified` and keeps `data/marketplace/<id>/src` | refuse marketplace records there as well (same guard), so every decision goes through `marketplace.reject`
+FINDING: src/agent_company/recruitment.py:505 | **low** – `mode_for(Goal(trial=trial)) == "off"` can never be true, because the trial already forces `required`; it reads as a second safeguard but isn't one | drop it, or check `policies.effective("sandbox", None)` and log that the setting was overridden
+
+OUTCOME: REVISION_REQUIRED. The sandbox fix, the role-only suite, skills at level 0, the administrator's choice of model, the admin checks on reject and restore, and audited refusals are correct and fix the root causes. The new `unevaluated`, licence and screen safeguards live only in `marketplace.approve`, and the older recruitment approve endpoint and its admin-UI button skip them. A one-line guard in `recruitment.approve` plus a test closes this.
+
 VERDICT: FAIL
 
-NEXT: fix findings 1–4 (`sandbox.py` needs to be in a task's allowed paths), then the clone and tar bounds; add the four missing tests.
-MESSAGE recommendation to developer: in the next task, make `sandbox.mode_for` honour `trial.sandbox`, take the qualification suite from the role only, start imported skills unverified, and refuse to approve an unevaluated import (src/agent_company/marketplace.py:516,543,547; src/agent_company/sandbox.py:216).
-MESSAGE request to security: add threat-model rows for DNS rebinding of the clone and for the eval of an imported agent when `sandbox=off` (docs/threat-model.md).
-
-PROPOSAL: Pin resolved addresses for all outbound fetches :: research crawling and marketplace clones share the TOCTOU of resolving the address for the check and again for the fetch; one helper (`curloptResolve`/pinned connect) closes it everywhere.
+NEXT: add the `source == "marketplace"` guard to `recruitment.approve` and `recruitment.reject` with an API test, hide the buttons in admin.js, then re-run `tests/test_marketplace.py tests/test_recruitment.py tests/test_api.py`.
+NEXT: `fetch_hardening` still owns DNS pinning, the clone's size bound, the tar bomb and `node --check src/agent_company/static/agents.js`.
+MESSAGE request to developer: guard `recruitment.approve`/`reject` (src/agent_company/recruitment.py:382) against `source == "marketplace"` unless called from `marketplace.approve`/`reject`, and hide the generic buttons in src/agent_company/static/admin.js:141.
 
 ```json
-{"insights": [{"title": "A flag in trial is not a sandbox guarantee", "description": "Setting trial['sandbox']='required' has no effect: sandbox.mode_for only reads origin and policies.effective. Every 'must run in L3' requirement has to be enforced inside mode_for, not at the caller.", "evidence": ["src/agent_company/sandbox.py:216", "src/agent_company/recruitment.py:497"], "expected_benefit": "Prevents host execution when the company setting is off", "confidence": 0.8}]}
+{"insights": [{"title": "New safeguards must cover every older path to the same state change", "description": "Checks added to marketplace.approve (unevaluated, licence, screen acknowledgement) were skipped because the generic recruitment.approve endpoint and its admin button can still activate the same record. When a new flow adds conditions to an existing state change, guard the shared lower-level function, not only the new entry point.", "evidence": ["src/agent_company/recruitment.py:395-404", "src/agent_company/api.py:2252", "src/agent_company/static/admin.js:133-141"], "expected_benefit": "Prevents approval bypasses in future features built on recruitment", "confidence": 0.75}]}
 ```
+
+## Security review of 'Marketplace fetch hardening: DNS-pinned clone, bounded clone size, streaming gzip-bomb guard, threat model, agents.js syntax check' (qa, done)
+
+## Logic verification
+
+**`_is_public_host` / `check_url` / `clone_command` (DNS pinning)**
+- **Normal case:** `https://example.com/x.git` resolves to a set of addresses. Every one must be `is_global`; the first is returned and becomes `(host, port, ip)`. That pin goes into `clone_command` as `-c http.curloptResolve=example.com:443:<ip>`, and IPv6 addresses are bracketed. Because `_git_env` passes on no `*_proxy` variables, curl connects directly to the pinned address. This fixes the root cause (git resolving the name a second time). It does not just hide it.
+- **Edge case:** a host with mixed addresses (one public, one private) returns `None` and is refused before any import record is written (`test_private_or_mixed_address_refused`). An invalid port such as `:99999` raises `ValueError`, which becomes `ImportRefused`.
+- **Error case:** git older than 2.37, or a git whose version can't be read (`(0,)`), refuses https imports before any subprocess runs (`test_old_git_refuses_https_imports`). `clone_command` refuses an https URL that has no pin.
+- **Gap (see FINDING 1):** the pin only works if curl's lookup key equals the pinned `parts.hostname` string. If they differ, curl silently resolves through DNS again, so the pin fails open.
+
+**`clone_command` + `_limit_fsize` + `_check_objects` + `_git` (clone size)**
+- **Normal case:** the clone runs with `--no-checkout --filter=blob:limit=MAX_FILE_BYTES` under `RLIMIT_FSIZE`. Then:
+  - `rev-list --missing=print` finds no `?` lines, so no blob was filtered out.
+  - `ls-tree -r -l -z` adds up blob sizes and checks each file and the total against `MAX_FILE_BYTES`, `MAX_BYTES` and `MAX_FILES`.
+  - Checkout runs only after both checks.
+- **Edge case:** a server that ignores the filter still has the blob sizes read by `ls-tree` before checkout (the parametrized test covers both cases). Submodule `commit` entries are skipped and never fetched.
+- **Error case:** a pack over `CLONE_FSIZE` gets SIGXFSZ, git exits non-zero, the import is marked `failed` and its directory is removed (`test_clone_with_a_pack_over_the_file_size_limit_fails`).
+- **Lazy fetch:** later calls drop `GIT_ALLOW_PROTOCOL` while keeping `protocol.allow=never`, so even a git that ignores `GIT_NO_LAZY_FETCH` cannot fetch the missing blob. The test shows this directly (`cat-file` fails with "not allowed").
+- Total disk use is bounded to roughly pack + idx, each under `CLONE_FSIZE`, plus the 60 s timeout. Dumb-HTTP multi-pack fetches are not possible because `--depth` is unsupported on dumb transports. Root cause fixed.
+
+**`_Bounded` / `_decompressed` / `_tar_scan` / `_tar_members` (decompression bomb)**
+- **Normal case:** the archive is read in one pass in stream mode (`r|`) through a reader capped at `limit + header room`. For each member it checks the path, the file type and `tarfile.data_filter`, then adds up `m.size`. It stops at the first member that crosses a limit. `_tar_members` then re-reads the same, already-validated bytes in random-access mode with `next()` and never calls `getmembers()`.
+- **Edge case:** a huge pax header is not declared in `m.size` but is cut off by `_Bounded` (`test_tar_decompressed_bytes_are_bounded`). The scan and the `r:*` path recognise the same compressions (gz, bz2, xz); legacy `.lzma` data is fed to the scan raw, which rejects it as an invalid header.
+- **Error case:** corrupt compressed data (FINDING 2) raises `zlib.error` or `lzma.LZMAError`. Neither is an `OSError`, so neither is caught at `marketplace.py:417`. Root cause of the bomb: fixed.
+
+**agents.js:** the only change is icon names and two inline buttons. The `git`, `x`, `check` and `upload` icons all exist (`app.js:23`, `:26`, `:28`). The template literals are balanced on reading. `node --check` needed approval in this session as well, so the syntax check is still not run.
+
+## Checklist
+- **Contract:** all four parts are met: DNS pin, bounded clone, streaming bomb guard, threat-model rows. The `node --check` item is still not run (blocked by permissions).
+- **Interfaces:** `check_url` now returns a tuple, and the only caller (`fetch_url`) is updated. `_is_public_host` now returns `str | None` instead of `bool`; I found no other callers. `clone_command(url, dest, pin=None)` stays compatible for `file:` URLs.
+- **Error handling:** good on the clone path (`_git` raises `ImportRefused`, and timeouts are handled). The gap in the upload path is FINDING 2.
+- **Tests:** 15+ new tests that are offline and specific (the bomb test asserts at most 4 `next()` calls and no `getmembers`). There is no test that curl actually honours the pin (offline limitation) and none for host-form canonicalisation.
+- **Dependencies:** standard library only (`resource`, `bz2`, `lzma`). Justified.
+- **Security:**
+  - No secrets were added, and the URL is passed after `--`.
+  - The env is allow-listed and carries no proxy variables, so the pin can't be bypassed through a proxy.
+  - `-c` settings are not persisted into the clone's config.
+  - `core.symlinks=false` is set at checkout.
+- **Performance:** one extra decompression pass per tar upload, bounded. Acceptable.
+- **Docs:**
+  - `docs/threat-model.md` has new rows for DNS rebinding, clone size, decompression bomb and self-grading, each mapped to existing tests.
+  - The module docstring is updated.
+
+## Findings
+FINDING: src/agent_company/marketplace.py:174 (and :204 `_resolve_entry`) | The pin fails open. The `http.curloptResolve` key is the raw `parts.hostname`, so any host form that curl rewrites before its lookup misses the entry, and curl falls back to DNS (rebinding/SSRF again). Two forms an attacker who controls the domain can choose: a trailing dot (`https://rebind.example./`; whether curl strips the dot differs by version) and a non-ASCII IDN host (Python keeps the Unicode form, while curl with libidn2 looks up the punycode form). I reasoned this from how curl handles host names and did not run it. | Canonicalise before resolving and pinning: refuse a trailing dot and non-ASCII hosts, or convert with `host.encode("idna").decode()`, and require `^[a-z0-9.-]+$` (plus IP literals). Add a test for `https://x.example./` and `https://bücher.example/`.
+
+FINDING: src/agent_company/marketplace.py:417 (raised from :338 `_decompressed`/`_Bounded`) | In a corrupt `.tar.gz` or `.tar.xz` upload, `GzipFile` raises `zlib.error` and `LZMAFile` raises `lzma.LZMAError` from inside `_tar_scan`. Neither is in the except tuple, so `_fail` is never called: the import record stays in its in-progress status, the empty `data/marketplace/<id>/src` directory stays behind, and the admin API returns a 500. The admin sees a crash instead of "unreadable archive". | Add `zlib.error` and `lzma.LZMAError` to the except at :417, or catch them in `_tar_scan` and re-raise as `ImportRefused`. Add a test that sends a truncated or bit-flipped `.tar.gz`.
+
+FINDING: src/agent_company/marketplace.py:255 (`subprocess.run(..., preexec_fn=_limit_fsize)`) | `preexec_fn` is documented as unsafe in a multithreaded process: the server runs `KpiThread`, `McpThread`, `ReportThread` and others, and a fork while another thread holds the allocator or GIL state can deadlock an API worker. That risk is low here because `setrlimit` is a single syscall and `resource` is imported at module level. | Prefer `["prlimit", f"--fsize={CLONE_FSIZE}", "--", "git", …]` (util-linux) or the existing systemd-scope wrapper used by `sandbox.py`. Then drop `preexec_fn`.
+
+FINDING: src/agent_company/static/agents.js:353 | `node --check` and opening the Marketplace tab in a browser were still not done (the call needed approval). The diff looks valid on reading and its icons exist, but nobody has run it. | Run `node --check src/agent_company/static/agents.js` and open Agents → Marketplace once (headless playwright on the scratch server).
+
+None of these undo the root-cause fixes. FINDING 1 is a hardening gap in the new pin, with a medium-to-low impact: it needs an administrator to import the attacker's URL in an unusual host form. The others are low.
+
+NEXT: Canonicalise or refuse trailing-dot and IDN hosts before pinning, and add tests for both.
+NEXT: Catch `zlib.error` and `lzma.LZMAError` in `fetch_upload`, and add a test with a corrupt `.tar.gz`.
+NEXT: Run `node --check` on agents.js and open the Marketplace tab once.
+
+MESSAGE recommendation to developer: in `marketplace.check_url`, canonicalise `parts.hostname` (refuse a trailing dot and non-ASCII, or IDNA-encode it) so the `http.curloptResolve` key always matches curl's lookup; add `zlib.error` and `lzma.LZMAError` to the except at `marketplace.py:417`.
+
+```json
+{"insights": [{"title": "curl CURLOPT_RESOLVE pins fail open on a host-string mismatch", "description": "A pin set with http.curloptResolve only applies when curl's lookup key exactly matches the pinned host; otherwise curl resolves through DNS without any error. A DNS-rebinding defence built on it must canonicalise the host (IDNA, trailing dot, case) or refuse unusual forms.", "evidence": ["src/agent_company/marketplace.py:174", "src/agent_company/marketplace.py:204"], "expected_benefit": "Prevents SSRF bypasses of the clone pin", "confidence": 0.6}]}
+```
+
+OUTCOME: APPROVED_WITH_COMMENTS
+VERDICT: PASS
