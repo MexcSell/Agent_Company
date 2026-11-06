@@ -75,6 +75,8 @@ def test_openrouter_catalog_and_add(monkeypatch):
     assert len(router.openrouter_catalog(free_only=True)) == 1
     m = router.add_openrouter_model("deepseek/deepseek-chat")
     assert m["model_id"] == "openrouter/deepseek/deepseek-chat" and m["output_cost"] == 1.2
+    assert m["terms"] == {"billing": "api", "context_window": 128000} and m["terms_due"], "from the catalog, unverified"
+    assert router.add_openrouter_model("qwen/qwen3-coder:free")["terms"]["billing"] == "free_tier"
     assert m["available"] is False
     monkeypatch.setenv("OPENROUTER_API_KEY", "k")
     router.set_route("research", m["name"])
@@ -113,3 +115,27 @@ def test_openai_compatible_provider_catalogs(monkeypatch):
     except ValueError as e:
         assert "MISTRAL_API_KEY" in str(e)
     assert {p["id"] for p in router.providers()} == {"groq", "mistral", "cohere", "sambanova"}
+
+
+def test_model_terms_are_validated_merged_and_verified_by_a_person():
+    """G-R-18: billing, context, tool calling, data terms, licence page and when a person last checked them."""
+    import pytest
+
+    m = router.add_model({"name": "Local", "kind": "llm", "model_id": "ollama/qwen3", "terms": {"billing": "local"}})
+    assert m["terms"] == {"billing": "local"} and m["terms_due"], "never verified"
+    for bad in ({"billing": "unlimited"}, {"context_window": -1}, {"tool_calling": "maybe"},
+                {"terms_url": "file:///etc/passwd"}, {"price": 0}):
+        with pytest.raises(ValueError):
+            router.update_model(m["id"], {"terms": bad})
+    out = router.update_model(m["id"], {"terms": {"context_window": 32768, "trains_on_prompts": "no",
+                                                  "terms_url": "https://ollama.com/library/qwen3", "verified": True}})
+    assert out["terms"]["billing"] == "local" and out["terms"]["context_window"] == 32768, "merged, not replaced"
+    assert out["terms"]["verified_at"] and out["terms_due"] is False
+    out = router.update_model(m["id"], {"terms": {"trains_on_prompts": ""}})
+    assert "trains_on_prompts" not in out["terms"], "empty clears a field"
+    from agent_company.db import ModelEntry, session
+
+    with session() as s:
+        row = s.get(ModelEntry, m["id"])
+        row.terms = {**row.terms, "verified_at": "2026-01-01T00:00:00+00:00"}
+    assert next(x for x in router.list_models() if x["id"] == m["id"])["terms_due"], "older than 90 days"

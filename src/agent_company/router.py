@@ -103,7 +103,61 @@ def model_dict(m: ModelEntry) -> dict[str, Any]:
             "daily_token_limit": m.daily_token_limit, "weekly_token_limit": m.weekly_token_limit,
             "enabled": m.enabled, "builtin": m.builtin, "notes": m.notes, "base_url": m.base_url,
             "api_key_env": m.api_key_env, "session_id": m.session_id, "available": ok, "unavailable_reason": why,
-            "clearance": clearance(m), "clearance_set": bool(m.clearance)}
+            "clearance": clearance(m), "clearance_set": bool(m.clearance),
+            "terms": m.terms or {}, "terms_due": terms_due(m)}
+
+
+# --- a model's terms (G-R-18) -----------------------------------------------------------------
+# "Free" means four different things (a provider's free tier, trial credits, open weights run here, a web chat that is
+# no API at all), and a subscription is not API access: routing and data handling depend on what was verified.
+
+BILLING = ("api", "subscription", "free_tier", "trial", "local")
+TERMS_STALE_DAYS = 90
+_YES_NO = ("yes", "no")
+TERMS = {"billing", "context_window", "tool_calling", "trains_on_prompts", "commercial_use", "terms_url"}
+
+
+def check_terms(data: dict[str, Any]) -> dict[str, Any]:
+    """The terms given, validated; `verified: true` stamps them as checked by a person now. "" clears a field."""
+    import re
+    from datetime import datetime, timezone
+
+    unknown = set(data) - TERMS - {"verified"}
+    if unknown:
+        raise ValueError(f"unknown model terms: {', '.join(sorted(unknown))}")
+    out: dict[str, Any] = {}
+    for k in TERMS & set(data):
+        v = data[k]
+        if k == "context_window":
+            if v in ("", None):
+                v = 0
+            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                raise ValueError("context_window must be a whole number of tokens (0 = unknown)")
+        elif k == "billing":
+            if v not in ("", *BILLING):
+                raise ValueError(f"billing must be one of {', '.join(BILLING)}")
+        elif k == "terms_url":
+            if v and not re.match(r"^https?://\S+$", str(v)):
+                raise ValueError("terms_url must be an http(s) URL")
+        elif v not in ("", *_YES_NO):
+            raise ValueError(f"{k} must be yes, no or empty (unknown)")
+        out[k] = v
+    if data.get("verified"):
+        out["verified_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return out
+
+
+def terms_due(m: ModelEntry) -> bool:
+    """A model that sends prompts somewhere whose terms no person verified in the last TERMS_STALE_DAYS days."""
+    from datetime import datetime, timedelta, timezone
+
+    if m.kind == "offline":
+        return False
+    at = (m.terms or {}).get("verified_at")
+    try:
+        return not at or datetime.fromisoformat(at) < datetime.now(timezone.utc) - timedelta(days=TERMS_STALE_DAYS)
+    except ValueError:
+        return True
 
 
 # --- classification clearance (SPEC-14 S14-R-05) --------------------------------------------
@@ -361,6 +415,7 @@ MODEL_FIELDS = {"name", "kind", "model_id", "input_cost", "output_cost", "daily_
 
 
 def add_model(data: dict[str, Any]) -> dict[str, Any]:
+    terms = check_terms(data.get("terms") or {})
     data = {k: v for k, v in data.items() if k in MODEL_FIELDS}
     if data.get("clearance"):
         from agent_company.learning import check_level
@@ -376,13 +431,14 @@ def add_model(data: dict[str, Any]) -> dict[str, Any]:
     with session() as s:
         if s.scalars(select(ModelEntry).where(ModelEntry.name == data["name"])).first():
             raise ValueError("a model with that name exists")
-        m = ModelEntry(**{"model_id": "", **data})
+        m = ModelEntry(**{"model_id": "", **data}, terms=terms)
         s.add(m)
         s.flush()
         return model_dict(m)
 
 
 def update_model(model_id: int, data: dict[str, Any]) -> dict[str, Any]:
+    terms = check_terms(data["terms"]) if isinstance(data.get("terms"), dict) else None
     if data.get("clearance"):
         from agent_company.learning import check_level
 
@@ -396,6 +452,8 @@ def update_model(model_id: int, data: dict[str, Any]) -> dict[str, Any]:
         for k, v in data.items():
             if k in fields:
                 setattr(m, k, v)
+        if terms is not None:  # a new dict: in-place changes of a JSON column are not seen
+            m.terms = {k: v for k, v in {**(m.terms or {}), **terms}.items() if v not in ("", None)}
         s.flush()
         return model_dict(m)
 
@@ -495,6 +553,9 @@ def add_openrouter_model(or_id: str, name: str | None = None, **costs: float) ->
         "input_cost": costs.get("input_cost", row["input_cost"] if row else 0.0),
         "output_cost": costs.get("output_cost", row["output_cost"] if row else 0.0),
         "notes": "OpenRouter. Needs OPENROUTER_API_KEY.",
+        # from the catalog, not verified: a ":free" model is a free tier with daily caps, not free production use
+        "terms": {"billing": "free_tier" if row and row["free"] else "api",
+                  "context_window": int(row["context_length"] or 0) if row else 0},
     })
 
 
@@ -553,4 +614,5 @@ def add_provider_model(provider: str, model: str, name: str | None = None) -> di
     return add_model({"name": name or f"{cfg['label']} · {model}", "kind": "llm", "model_id": f"openai/{model}",
                       "base_url": cfg["base_url"], "api_key_env": cfg["key"],
                       "input_cost": row["input_cost"] if row else 0.0, "output_cost": row["output_cost"] if row else 0.0,
-                      "notes": f"{cfg['label']} (OpenAI-compatible API). Needs {cfg['key']}."})
+                      "notes": f"{cfg['label']} (OpenAI-compatible API). Needs {cfg['key']}.",
+                      "terms": {"billing": "api", "context_window": int(row["context_length"] or 0) if row else 0}})

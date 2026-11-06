@@ -410,6 +410,9 @@ class ModelEntry(Base):
     session_id: Mapped[str] = mapped_column(String(64), default="")  # claude_code: every run forks this session
     # the highest classification it may receive (SPEC-14 S14-R-05); "" = by locality (router.clearance)
     clearance: Mapped[str] = mapped_column(String(16), default="")
+    # G-R-18: what routing and data handling depend on, as a person verified it (router.TERMS):
+    # billing, context_window, tool_calling, trains_on_prompts, commercial_use, terms_url, verified_at
+    terms: Mapped[dict[str, Any]] = mapped_column(default=dict)
 
 
 class Route(Base):

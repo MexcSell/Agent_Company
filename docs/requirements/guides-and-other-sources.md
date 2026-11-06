@@ -322,7 +322,10 @@ for room X" until theirs is written.
   `trial`, `local`), context window, tool calling, whether the provider may retain or train on prompts, licence or
   terms URL, commercial use, and when a person last verified these; the Models page shows entries not verified for
   90 days.
-- **Status: open.**
+- **Status: done** (`ModelEntry.terms`, `router.check_terms`, `router.terms_due`, `TERMS_STALE_DAYS` 90; a model
+  added from OpenRouter or a provider catalog gets billing (`free_tier` for a `:free` model) and context window,
+  unverified; Models → a model's terms dialog with "I checked these now"; `tests/test_router.py`). Nothing is taken
+  from a model's or a chat's own claims: a person verifies against the provider's pages.
 
 ### G-R-19 A study rewrite is a candidate — architecture PDF §3 ("never overwrite the original configuration directly"), §6
 - The study rotation (`agentdefs.study`) writes an agent's new working method straight into its definition (each
