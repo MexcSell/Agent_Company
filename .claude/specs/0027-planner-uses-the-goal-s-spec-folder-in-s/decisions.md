@@ -13,3 +13,10 @@ no tests ran in 0.00s
 ERROR: file or directory not found: tests/test_spec_paths.py
 
 Next: fix the findings (loop back to Build).
+
+## Iteration 2: PASS
+- spec_helpers (developer): done
+- loop_wiring (developer): done
+- qa_review (qa): done
+
+Next: approval and merge.
