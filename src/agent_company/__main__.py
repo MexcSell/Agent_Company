@@ -125,6 +125,8 @@ def main(argv: list[str] | None = None) -> None:
     ev.add_argument("--role", default="developer", help="the role --model stands in for")
     ev.add_argument("--room", help="a room trial (G-R-04): staff this gated room's agents in the suite's goals")
     ev.add_argument("--gate", metavar="ROOM", help="show the enablement gate of this gated room (G-R-04) and exit")
+    ev.add_argument("--review", action="store_true", help="run the scheduled benchmark review now (G-R-14; needs "
+                    "benchmark_budget_usd in Settings) and exit")
     le = sub.add_parser("learn", help="capability gaps, learning plans and experiments (SPEC-13)")
     le.add_argument("action", choices=["gaps", "raise", "plans", "plan", "start", "cancel", "experiments", "metrics",
                                        "retrieval", "generate", "suites", "approve"],
@@ -235,6 +237,15 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "eval":
         from agent_company import evaluation
 
+        if args.review:
+            from agent_company import prefs
+
+            prefs.load()
+            out = evaluation.scheduled_review(force=True)
+            print("not run: set benchmark_budget_usd (Settings) above 0" if out is None else
+                  f"{out['label']}: {out['summary']['passed']}/{out['summary']['runs']} passed"
+                  + (f", no longer passing: {', '.join(out['regressions'])}" if out.get("regressions") else ""))
+            return
         if args.compare:
             out = evaluation.compare(*args.compare)
             print(f"pass rate {out['a']['pass_rate']:.0%} -> {out['b']['pass_rate']:.0%} "

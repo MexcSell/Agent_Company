@@ -25,7 +25,9 @@ before and after a routing change) can be compared. Eval goals never wait for ap
 from __future__ import annotations
 
 import json
+import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -313,3 +315,84 @@ def labels() -> list[dict[str, Any]]:
                                 func.max(EvalRun.created_at)).group_by(EvalRun.label)).all()
     return [{"label": r[0], "runs": r[1], "passed": int(r[2] or 0), "at": r[3].isoformat() if r[3] else None}
             for r in rows]
+
+
+# --- G-R-14: the scheduled benchmark review (research guide §8: daily collection, weekly benchmark review) ---------
+
+SCHEDULES = {"daily": 86400, "weekly": 7 * 86400, "monthly": 30 * 86400}
+SCHEDULED = "scheduled-"  # label prefix of the scheduled runs: scheduled-<suite>-<UTC stamp>
+_review_lock = threading.Lock()
+
+
+def _scheduled_labels(suite: str) -> list[dict[str, Any]]:
+    return sorted((x for x in labels() if x["label"].startswith(f"{SCHEDULED}{suite}-")), key=lambda x: x["at"] or "")
+
+
+def review_due(at: datetime | None = None) -> bool:
+    """Whether the scheduled review should run now: a schedule is set, a budget too (0 = never), and the last
+    scheduled run of the suite is older than the schedule's interval."""
+    s = settings()
+    if s.benchmark_schedule not in SCHEDULES or s.benchmark_budget_usd <= 0:
+        return False
+    last = _scheduled_labels(s.benchmark_suite)
+    if not last or not last[-1]["at"]:
+        return True
+    when = datetime.fromisoformat(last[-1]["at"])
+    when = when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+    return ((at or datetime.now(timezone.utc)) - when).total_seconds() >= SCHEDULES[s.benchmark_schedule]
+
+
+def scheduled_review(at: datetime | None = None, force: bool = False) -> dict[str, Any] | None:
+    """Run the configured suite once within its budget and compare it with the previous scheduled run (G-R-11):
+    an administrator is notified of the pass rate, the cost and every task that no longer passes. Nothing runs
+    without a schedule and a budget (`force` skips only the interval), or under an E5 stop."""
+    from agent_company.governance import notify, stopped
+
+    s = settings()
+    if s.benchmark_budget_usd <= 0 or not (force or review_due(at)):
+        return None
+    if why := stopped():
+        log_event("eval", f"scheduled benchmark review skipped: {why}")
+        return None
+    if not _review_lock.acquire(blocking=False):
+        return None
+    try:
+        suite = s.benchmark_suite
+        previous = _scheduled_labels(suite)
+        label = f"{SCHEDULED}{suite}-{(at or datetime.now(timezone.utc)).strftime('%Y%m%d%H%M%S')}"
+        summary = run_suite(suite, label, repeats=1, budget_usd=s.benchmark_budget_usd)
+        if not summary.get("runs"):
+            return summary
+        out: dict[str, Any] = {"label": label, "summary": summary, "previous": None, "regressions": []}
+        line = (f"{suite}: {summary['passed']}/{summary['runs']} passed ({summary['pass_rate']:.0%}), "
+                f"${summary['total_cost']:.4f}" + (" (stopped on its budget)" if summary.get("stopped_on_budget") else ""))
+        if previous:
+            cmp = compare(previous[-1]["label"], label)
+            out |= {"previous": previous[-1]["label"], "regressions": cmp["regressions"],
+                    "pass_rate_change": cmp["pass_rate_change"]}
+            line += f"; {cmp['pass_rate_change']:+.0%} against {previous[-1]['label']}"
+            if cmp["regressions"]:
+                line += f"; no longer passing: {', '.join(cmp['regressions'])}"
+        with session() as db:
+            notify("Scheduled benchmark review", line, level="warning" if out["regressions"] else "info",
+                   source="evaluation", admin_only=True, s=db)
+            log_event("eval", f"scheduled benchmark review {label}: {line}", s=db)
+        return out
+    finally:
+        _review_lock.release()
+
+
+class BenchmarkThread(threading.Thread):
+    """Checks every few minutes whether the scheduled benchmark review is due (G-R-14)."""
+
+    def __init__(self, every: int = 900) -> None:
+        super().__init__(daemon=True, name="benchmark-review")
+        self.every = every
+        self.stop = threading.Event()
+
+    def run(self) -> None:
+        while not self.stop.wait(self.every):
+            try:
+                scheduled_review()
+            except Exception as e:  # noqa: BLE001 - a broken suite must not stop the schedule
+                log_event("error", f"scheduled benchmark review failed: {type(e).__name__}: {e}")

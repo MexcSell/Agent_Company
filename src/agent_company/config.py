@@ -67,6 +67,10 @@ class Settings:
     escalate_after: int = 2
     # A candidate playbook must pass the smoke suite before it is tried on users' goals (S13-D-02).
     candidate_smoke: bool = True
+    # G-R-14 scheduled benchmark review: off|daily|weekly|monthly, the suite, and its budget per run (0 = never runs).
+    benchmark_schedule: str = "off"
+    benchmark_suite: str = "smoke"
+    benchmark_budget_usd: float = 0.0
     # A goal waiting for approval longer than this many hours becomes a project blocker (ASEAO05 S05-R-02; 0 = never).
     approval_blocker_hours: int = 24
     # Agents idle longer than this many days are listed for retirement review (SPEC-02 S02-R-02).
@@ -167,6 +171,9 @@ def load_settings() -> Settings:
         budget_exhausted_action=(os.environ.get("BUDGET_EXHAUSTED_ACTION") or "pause").lower(),
         escalate_after=_int("ESCALATE_AFTER", 2),
         candidate_smoke=_bool("CANDIDATE_SMOKE", True),
+        benchmark_schedule=(os.environ.get("BENCHMARK_SCHEDULE") or "off").lower(),
+        benchmark_suite=os.environ.get("BENCHMARK_SUITE") or "smoke",
+        benchmark_budget_usd=float(os.environ.get("BENCHMARK_BUDGET_USD") or 0),
         approval_blocker_hours=_int("APPROVAL_BLOCKER_HOURS", 24),
         inactive_days=_int("INACTIVE_DAYS", 30),
         explore_rate=float(os.environ.get("EXPLORE_RATE") or 0.1),

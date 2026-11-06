@@ -55,7 +55,7 @@ everywhere else (README → Stack).
 | A fixed, versioned benchmark per agent with reference tasks | coding: `evals/*.json` with practice/final/adversarial/room suites; research agent: open, G-R-13 |
 | Metrics: success, accuracy, citation correctness, completeness, latency, cost per success, tool failures, regression rate | eval dimensions S09-R-05 (completion, tool use, efficiency incl. cost per passed run, reliability), claim checks per report (S06-R-03); regression rate: G-R-11 |
 | "Did it improve on a fixed set without damaging existing capabilities?" | G-R-11 |
-| Daily collection, weekly benchmark review | daily: source intervals and the rotation; weekly benchmark: open, G-R-14 |
+| Daily collection, weekly benchmark review | daily: source intervals and the rotation; scheduled benchmark review: G-R-14 |
 | Research → experiment → QA → integrate → compare versions → decide | research proposals (S06-R-07), hypotheses and experiments (S07-R-03, SPEC-13), an administrator applies (E0-E6 policy) |
 | Human approval for model, prompt, tool and deployment changes; baselines and rollback | done (routes and templates applied by an administrator, self-evolution approval and rollback, playbook versions) |
 | Sandboxed benchmark code | done (S14-R-07 L3) |
@@ -278,8 +278,14 @@ for room X" until theirs is written.
 ### G-R-14 A scheduled benchmark review — research guide §8 (daily collection, weekly benchmark review)
 - A setting that runs a chosen suite on a schedule and compares it with the last run (G-R-11), reporting
   regressions as a notification.
-- **Status: open, needs a decision**: every run uses real models and costs money; the owner sets whether, which
-  suite and the budget (S10-R-02 budgets apply).
+- **Status: done, switched off** (approved by the owner 2026-11-06; `evaluation.scheduled_review`, `review_due`,
+  `BenchmarkThread` started with the API, `eval --review` runs it now; `tests/test_benchmark_review.py`). Settings
+  `benchmark_schedule` (off|daily|weekly|monthly, default off), `benchmark_suite` (default `smoke`, validated when
+  saved) and `benchmark_budget_usd` (the spend one run may use, default 0 = it never runs, at most 1000). A due run
+  is one repeat per task under the label `scheduled-<suite>-<UTC stamp>`, stopped by the budget (S10-R-02), compared
+  with the previous scheduled run of the suite (G-R-11); administrators get a notification with the pass rate, the
+  cost and the tasks that no longer pass (a warning when there are any). An E5 stop skips it. Every run uses real
+  models: it stays off until the owner sets a schedule and a budget.
 
 ### G-R-15 A changed MCP tool loses its permission — Organization PDF §5, §5.1 ("Register: hash, schema"; "Operate: periodically revalidate; disable stale or compromised components")
 - Each discovered tool records a digest of its definition (description, input schema, annotations). When a later
@@ -297,7 +303,10 @@ for room X" until theirs is written.
 - `performance.operations` adds the p95 cycle time beside the median, the tool-call failure rate of agent runs
   (`Run.tool_calls[].ok`) and the human override rate: the share of a person's merge decisions that rejected a goal
   the gate had passed.
-- **Status: open.** Acceptance: each with its sample size, None without samples (as G-R-02).
+- **Status: done** (`performance._median` adds `p95_seconds` (nearest rank) to cycle time and approval latency;
+  `operations` adds `human_override_rate` and `tool_call_failure_rate`; Performance → Operational metrics;
+  `tests/test_performance.py`). Each with its sample size, None without samples (as G-R-02); benchmark goals are
+  left out.
 
 ### G-R-17 Root causes by failure layer — Organization PDF §4 ("Diagnose: classify failures"), self-improving guide §4
 - A confirmed or contributing cause of a root-cause analysis (S07-R-02) names its layer from `selfevolve.LAYERS`

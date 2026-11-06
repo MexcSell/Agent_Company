@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,11 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "budget_exhausted_action": (str, "When a goal's budget runs out: 'pause' (wait for an administrator) or 'stop' (fail it)"),
     "escalate_after": (int, "Consecutive iterations the same check may fail before it is escalated to the planner"),
     "candidate_smoke": (bool, "A candidate playbook must pass the smoke suite before it is tried on users' goals"),
+    "benchmark_schedule": (str, "Scheduled benchmark review: 'off', 'daily', 'weekly' or 'monthly' runs of the "
+                                "benchmark suite with real models, compared with the previous run; tasks that no "
+                                "longer pass are notified (needs a budget)"),
+    "benchmark_suite": (str, "Suite of the scheduled benchmark review (an evals/ suite name, e.g. smoke)"),
+    "benchmark_budget_usd": (float, "Model spend in USD one scheduled benchmark review may use; 0 = it never runs"),
     "approval_blocker_hours": (int, "Hours a goal may wait for approval before it becomes a project blocker (0 = never)"),
     "inactive_days": (int, "Days without work after which an agent is listed for retirement review"),
     "explore_rate": (float, "Share of non-critical tasks given to a new agent that has too little evidence yet (0-1)"),
@@ -98,7 +104,7 @@ LIMITS: dict[str, tuple[float, float]] = {
     "approval_blocker_hours": (0, 720), "inactive_days": (1, 3650), "explore_rate": (0, 1),
     "improvement_min_score": (0, 100), "improvement_max_regression": (0, 100),
     "shift_seconds": (0, 7 * 86400), "health_recovery_minutes": (0, 1440),
-    "mcp_revalidate_hours": (0, 720),
+    "mcp_revalidate_hours": (0, 720), "benchmark_budget_usd": (0, 1000),
     "sandbox_memory_mb": (128, 262_144), "sandbox_tasks": (16, 65_536), "sandbox_cpus": (0.1, 256),
     **{k: (0, 10) for k in RETRIEVAL_KEYS},
 }
@@ -106,7 +112,8 @@ CHOICES: dict[str, set[str]] = {"proposal_policy": {"user", "superiors"}, "execu
                                 "transport": {"https", "http"}, "budget_exhausted_action": {"pause", "stop"},
                                 "recruit_requires_approval": {"never", "permanent_only", "always"},
                                 "sandbox": {"off", "auto", "required"}, "dependency_audit": {"off", "warn", "block"},
-                                "contradiction_judge": {"off", "advise", "decide"}}
+                                "contradiction_judge": {"off", "advise", "decide"},
+                                "benchmark_schedule": {"off", "daily", "weekly", "monthly"}}
 
 
 def _coerce(key: str, value: Any) -> Any:
@@ -162,6 +169,16 @@ def _coerce(key: str, value: Any) -> Any:
             raise ValueError(f"{key} must be between {lo:g} and {hi:g}")
     if key in CHOICES and value not in CHOICES[key]:
         raise ValueError(f"{key} must be one of {sorted(CHOICES[key])}")
+    if key == "benchmark_suite":
+        from agent_company import evaluation
+
+        value = value.strip()
+        try:
+            if "/" in value or not value:
+                raise ValueError("a suite name, not a path")
+            evaluation.load_suite(value)
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            raise ValueError(f"benchmark_suite: {value!r} is not a usable suite ({e})") from e
     return value
 
 

@@ -128,9 +128,9 @@ the order is safety and correctness of that pipeline first, then management, the
    - **Conditional on evidence**: S11 embedding search, only if S11-R-08 shows keyword and FTS retrieval
      insufficient (recall@5 holds today).
    - **From the research agent guide** (2026-11-06, `111.pdf`): G-R-10 feeds with publication date and licence and
-     G-R-11 the regression guard are done, then G-R-12 PDF text in the sandbox (approved 2026-11-06); open are G-R-13 a fixed
-     research-agent benchmark (a research-task runner: a goal for the goal loop) and G-R-14 a scheduled benchmark
-     review (real model runs: the owner sets whether and the budget). Research through a provider's hosted web
+     G-R-11 the regression guard are done, then G-R-12 PDF text in the sandbox and G-R-14 the scheduled benchmark review (approved 2026-11-06; off until a
+     schedule and a budget are set); open is G-R-13 a fixed research-agent benchmark (a research-task runner: a goal
+     for the goal loop). Research through a provider's hosted web
      search is not taken: its claims cannot be checked against stored sources (S06-R-03).
    - **Deliberately not taken**: S06-FR-04 date ranges and languages (no such data in the knowledge store),
      S02-FR-17 runtime migration (single host).

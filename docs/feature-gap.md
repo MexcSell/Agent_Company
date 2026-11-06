@@ -151,7 +151,8 @@ Machines code):
 | RSS/Atom feeds as research sources; publication date and licence per document | research guide (`111.pdf`) §3, §11 | done (`research.parse_feed`, `Document.published_at`/`license`, G-R-10) |
 | No regression on tasks the baseline solved: experiments, templates, playbook smoke trials, `eval --compare` | research guide §7 | done (`experiments.regressions`, G-R-11) |
 | PDF text extraction of collected papers, parsed in the L3 sandbox | research guide §8 | done (`research.extract_pdf`, `pdftext.py`, G-R-12) |
-| A fixed research-agent benchmark; a scheduled benchmark review | research guide §6, §8 | open (G-R-13 a research-task runner, G-R-14 a run budget) |
+| Scheduled benchmark review: a suite on a schedule within a budget, compared with the previous run, regressions notified | research guide §8 | done, off until a schedule and budget are set (`evaluation.scheduled_review`, G-R-14) |
+| A fixed research-agent benchmark | research guide §6 | open (G-R-13: a research-task runner, a goal for the goal loop) |
 
 ## From docs/temp/advanced_self_improving_agent_guide.pdf (verified self-evolution)
 
