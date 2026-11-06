@@ -222,6 +222,8 @@ def test_operational_metrics_report_verified_outcomes_with_sample_sizes():
     assert o["escaped_defects"] == {"rate": 1.0, "hits": 1, "n": 1}
     assert o["cycle_time"]["n"] == 3 and o["cycle_time"]["median_seconds"] >= 0
     assert o["approval_latency"]["n"] == 1, "only a person's decision on a waiting goal"
+    assert o["cycle_time"]["p95_seconds"] >= o["cycle_time"]["median_seconds"]
+    assert o["human_override_rate"] == {"rate": 0.0, "hits": 0, "n": 1}, "the person approved what the gate passed"
     assert o["blocked_time"]["n"] == 3 and o["blocked_time"]["seconds"] >= 0
     assert o["review_rejection_rate"]["n"] >= 1 and o["review_rejection_rate"]["rate"] is not None
     assert o["retry_rate"]["n"] > 0 and o["cost_per_accepted_goal"]["n"] == 1
@@ -229,3 +231,21 @@ def test_operational_metrics_report_verified_outcomes_with_sample_sizes():
     assert o["security_findings"]["secret_scan"] == 1 and o["security_findings"]["total"] >= 1
     gate = performance.enablement_gate()["metrics"]
     assert gate["accepted_goals"] == 1 and gate["retry_rate"] == o["retry_rate"]["rate"]
+
+
+def test_tool_call_failures_and_human_overrides_are_counted():
+    """G-R-16: failed tool calls of real work's runs, and a person rejecting a goal the gate passed."""
+    from agent_company.db import Run
+
+    gid = loop.create_goal("Rejected after a pass", quality_commands=["test -f WORKLOG.md"])
+    loop.run_goal(gid)
+    assert loop._goal(gid).status == "awaiting_approval"
+    loop.reject(gid, actor="user:admin")
+    bench = loop.create_goal("Benchmark", origin="eval")
+    with session() as s:
+        s.add(Run(goal_id=gid, model_name="m", kind="claude_code", tool_calls=[{"tool": "Bash", "ok": False},
+                                                                        {"tool": "Read", "ok": True}]))
+        s.add(Run(goal_id=bench, model_name="m", kind="claude_code", tool_calls=[{"tool": "Bash", "ok": False}]))
+    o = performance.report()["operations"]
+    assert o["human_override_rate"] == {"rate": 1.0, "hits": 1, "n": 1}
+    assert o["tool_call_failure_rate"] == {"rate": 0.5, "hits": 1, "n": 2}, "the benchmark goal's run is left out"

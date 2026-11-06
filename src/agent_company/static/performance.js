@@ -44,9 +44,12 @@ function operationsCard(o) {
     ${r("Review rejection rate", o.review_rejection_rate, "QA and security reviews that answered VERDICT: FAIL")}
     ${r("Escaped defects", o.escaped_defects, "Defects closed at a merge and reopened afterwards (a retest failed)")}
     ${t("Median cycle time", o.cycle_time, "From the order to the goal's end (merged, rejected, cancelled or failed)")}
+    <tr title="The cycle time 95% of ended goals stayed within: the tail the median hides"><td>p95 cycle time</td><td class="num">${o.cycle_time.p95_seconds == null ? "–" : dur(o.cycle_time.p95_seconds)}</td><td class="num">${n(o.cycle_time)}</td></tr>
     <tr title="Time ended goals spent paused, and its share of their cycle time"><td>Blocked time</td><td class="num">${dur(o.blocked_time.seconds)}${o.blocked_time.share != null ? ` · ${pct(o.blocked_time.share)}` : ""}</td><td class="num">${n(o.blocked_time)}</td></tr>
     ${t("Human approval latency", o.approval_latency, "Median time a goal waited for a person's approve or reject")}
+    ${o.human_override_rate ? r("Human override rate", o.human_override_rate, "A person's merge decisions that rejected a goal the quality gate had passed") : ""}
     ${r("Retry rate", o.retry_rate, "Retries per model run")}
+    ${o.tool_call_failure_rate ? r("Tool-call failure rate", o.tool_call_failure_rate, "Tool calls of agent runs (Claude Code, Codex) that returned an error") : ""}
     <tr title="Model cost of merged goals"><td>Cost per accepted goal</td><td class="num">${o.cost_per_accepted_goal.usd == null ? "–" : money(o.cost_per_accepted_goal.usd)}</td><td class="num">${n(o.cost_per_accepted_goal)}</td></tr>
     ${r("Rollback rate", o.rollback_rate, "Deployed improvement contracts that were rolled back")}
     <tr title="Failed goals whose branch was reset to a better earlier iteration"><td>Best-iteration resets</td><td class="num">${Number(o.best_iteration_resets)}</td><td></td></tr>

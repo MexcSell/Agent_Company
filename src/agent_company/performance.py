@@ -20,6 +20,7 @@ its model cost. Reported with sample sizes; nothing is concluded from fewer than
 
 from __future__ import annotations
 
+import math
 import statistics
 from collections import defaultdict
 from datetime import timedelta
@@ -348,7 +349,10 @@ def _rate(hits: int, n: int) -> dict[str, Any]:
 
 
 def _median(values: list[float]) -> dict[str, Any]:
-    return {"median_seconds": round(statistics.median(values), 1) if values else None, "n": len(values)}
+    """The median and the 95th percentile (nearest rank: the tail a median hides, G-R-16)."""
+    tail = sorted(values)[max(0, math.ceil(0.95 * len(values)) - 1)] if values else None
+    return {"median_seconds": round(statistics.median(values), 1) if values else None,
+            "p95_seconds": round(tail, 1) if tail is not None else None, "n": len(values)}
 
 
 def _aware(dt):  # noqa: ANN001, ANN202 - SQLite hands datetimes back without their zone
@@ -375,6 +379,7 @@ def operations(s) -> dict[str, Any]:  # noqa: ANN001
             steps[t.goal_id].append(t)
     cycles: list[float] = []
     waits: list[float] = []
+    decided = overridden = 0  # a person's merge decisions, and those that rejected what the gate passed (G-R-16)
     blocked = 0.0
     for gid, g in goals.items():
         start, status, paused = _aware(g.created_at), "queued", 0.0
@@ -386,6 +391,8 @@ def operations(s) -> dict[str, Any]:  # noqa: ANN001
             if (status == "awaiting_approval" and t.to_status in ("approved", "rejected")
                     and (t.actor or "").startswith("user:")):
                 waits.append(max(0.0, (at - start).total_seconds()))
+                decided += 1
+                overridden += t.to_status == "rejected"
             if t.to_status in ENDED:
                 ended = (at - _aware(g.created_at)).total_seconds()
             start, status = at, t.to_status
@@ -414,6 +421,8 @@ def operations(s) -> dict[str, Any]:  # noqa: ANN001
         Event.kind == "gate", Event.message.like("Kept iteration %"), Event.goal_id.in_(list(goals)))) or 0
     rc = _retries_and_cost(s)
     total_cycle = sum(cycles)
+    calls = [c for (tc,) in s.execute(select(Run.tool_calls).where(Run.goal_id.in_(list(goals)))) for c in tc or []
+             if isinstance(c, dict)]
     return {
         "gate_pass_rate": _rate(sum(bool(h["passed"]) for h in gates), len(gates)),
         "first_iteration_pass_rate": _rate(first, len(judged)),
@@ -423,6 +432,8 @@ def operations(s) -> dict[str, Any]:  # noqa: ANN001
         "blocked_time": {"seconds": round(blocked, 1), "share": round(blocked / total_cycle, 3) if total_cycle else None,
                          "n": len(cycles)},
         "approval_latency": _median(waits),
+        "human_override_rate": _rate(overridden, decided),
+        "tool_call_failure_rate": _rate(sum(1 for c in calls if c.get("ok") is False), len(calls)),
         "retry_rate": {"rate": rc["retry_rate"], "hits": rc["retries"], "n": rc["runs"]},
         "cost_per_accepted_goal": {"usd": rc["cost_per_accepted_goal"], "n": rc["accepted_goals"]},
         "rollback_rate": _rate(rolled, deployed),
