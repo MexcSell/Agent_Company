@@ -214,7 +214,7 @@ window.WSP = window.WSP || {};
   const allPanes = () => [S, ...S.panes];
   const treeEl = (T) => T.box.querySelector(".wx-tree");
   const renderAll = () => allPanes().forEach((T) => renderTree(T));
-  const refreshAll = () => Promise.all(allPanes().map((T) => refresh(T)));
+  const refreshAll = () => Promise.all(allPanes().filter((T) => T.box?.isConnected).map((T) => refresh(T)));  // not while another page shows
   async function loadDir(T, path) {
     const d = await api(`/api/files/list?path=${encodeURIComponent(path)}`);
     const items = d.items.filter((it) => it.name !== ".git");

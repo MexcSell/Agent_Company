@@ -444,7 +444,7 @@ def start(prompt: str, cwd: str, owner: str, session_id: str = "", model: str = 
         raise ValueError("bad session id")
     # A run outlives a service restart (its own process group) while RUNS does not: resuming a
     # conversation that is still working would put two processes on one transcript.
-    busy = next((s for s in sessions(refresh=True) if s["session_id"] == session_id), None) if session_id and provider == "claude" else None
+    busy = next((s for s in sessions(everywhere=True) if s["session_id"] == session_id), None) if session_id and provider == "claude" else None
     if busy is not None:
         raise ValueError(f"this conversation is still running in another process (pid {busy['pid']}): "
                          "wait for it to finish, or stop it from the sessions window")
@@ -589,14 +589,15 @@ def _alive(pid: int, proc_start: str) -> bool:
     return not proc_start or (len(fields) > 19 and fields[19] == str(proc_start))
 
 
-def sessions(refresh: bool = False) -> list[dict[str, Any]]:
-    """Every live Claude Code session on this host, busy ones first (from ~/.claude/sessions)."""
+def sessions(refresh: bool = False, everywhere: bool = False) -> list[dict[str, Any]]:
+    """Every live Claude Code session on this host, busy ones first (from ~/.claude/sessions); `everywhere`: also
+    those running under the Models page's own sign-ins (a panel prompt on such a model outlives a restart too)."""
     global _sessions_cache
     at, cached = _sessions_cache
-    if not refresh and time.time() - at < SESSIONS_TTL:
+    if not refresh and not everywhere and time.time() - at < SESSIONS_TTL:
         return cached
     found: dict[str, dict[str, Any]] = {}
-    for f in (claude_home() / "sessions").glob("*.json"):
+    for f in (f for h in (_homes() if everywhere else [claude_home()]) for f in (h / "sessions").glob("*.json")):
         try:
             d = json.loads(f.read_text())
             pid = int(d.get("pid") or 0)
@@ -614,7 +615,8 @@ def sessions(refresh: bool = False) -> list[dict[str, Any]]:
     for s in found.values():
         s["title"] = _title_of(s["session_id"])
     out = sorted(found.values(), key=lambda s: (s["status"] != "busy", -s["updated"]))
-    _sessions_cache = (time.time(), out)
+    if not everywhere:
+        _sessions_cache = (time.time(), out)
     return out
 
 

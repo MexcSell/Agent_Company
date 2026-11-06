@@ -326,6 +326,14 @@ def test_claude_panel_runs_a_models_page_model_with_its_own_sign_in(admin, root,
     wait(admin.post("/api/workspace/claude", json={"prompt": "and here", "cwd": str(root), "session_id": sid}).json())
     cmd2, kw2 = FakeProc.calls[1]
     assert "--resume" in cmd2 and "--model" not in cmd2 and kw2["env"].get("CLAUDE_CONFIG_DIR") == os.environ["CLAUDE_CONFIG_DIR"]
+    # Still working under that sign-in (a prompt that outlived a restart): no second process on the transcript.
+    if Path("/proc/self/stat").exists():
+        (acct / "sessions").mkdir()
+        start = Path(f"/proc/{os.getpid()}/stat").read_text().rsplit(")", 1)[1].split()[19]
+        (acct / "sessions" / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": sid, "procStart": start}))
+        r = admin.post("/api/workspace/claude", json={"prompt": "x", "cwd": str(root), "session_id": sid})
+        assert r.status_code == 400 and "still running" in r.json()["detail"]
+        assert sid not in {s["session_id"] for s in workspace.sessions(refresh=True)}  # the host's list stays its own
     # Only a model of the conversation's own agent, by its name.
     assert admin.post("/api/workspace/claude", json={"prompt": "x", "cwd": str(root), "router_model": "Codex 5"}).status_code == 400
     assert admin.post("/api/workspace/claude", json={"prompt": "x", "cwd": str(root), "router_model": "nope"}).status_code == 400
