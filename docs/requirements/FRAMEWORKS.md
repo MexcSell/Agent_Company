@@ -61,6 +61,8 @@ Every `R` ends with an acceptance condition that is a pytest test (offline, temp
 
 ### FW-R-01 Repository map in a task's package — done (`repomap.py`, `learning.repo_map_context`, setting `repo_map_chars`)
 
+**Status: done**
+
 Source: aider `repomap.py`. A writing or reviewing agent gets a compact map of the repository: per file, its
 top-level definitions (classes, functions, methods with their signature line), ranked by how often other files
 refer to their names, cut to a character budget (setting `repo_map_chars`, default 4000; 0 = off). As in aider's graph, a function counts
@@ -76,6 +78,8 @@ with `repo_map_chars` = 0 the package has none.
 
 ### FW-R-02 Stop a run that repeats itself — done (`executors.StuckWatch`, `Executor._watched`, settings `stuck_repeat_limit`, `stuck_error_limit`)
 
+**Status: done**
+
 Source: OpenHands stuck detection, AutoGen Magentic-One `max_stalls`, mini-swe-agent limits. While an executor
 run streams its tool calls (Claude Code stream-json, Codex `--json`), the same call (tool name + input) repeated
 `stuck_repeat_limit` times in a row (setting, default 5; 0 = off), or the same call failing with the same error
@@ -89,6 +93,8 @@ same error do.
 
 ### FW-R-03 Metrics endpoint for Prometheus — done (`metrics.py`, `GET /metrics`, Settings → Metrics for Prometheus)
 
+**Status: done**
+
 Source: Flowise `metrics/` (Prometheus, OpenTelemetry, Grafana). `GET /metrics` answers the Prometheus text format
 (version 0.0.4): goals by status, tasks by status, runs and tool calls by executor, tokens and cost today and in
 total, gate pass rate, open incidents by severity, the emergency-stop level, agents by health. Access: an
@@ -101,6 +107,8 @@ rows created in the test.
 
 ### FW-R-04 Scheduled goals — done (`schedules.py`, `ScheduleThread`, Projects → Plan → Schedules, `gm schedule`/`gm schedules`)
 
+**Status: done**
+
 Source: OpenHands automations and the extensions automation catalog (`cron` triggers). A project has schedules:
 title, details, check commands, kind, an interval (`hourly`, `daily HH:MM`, `weekly <day> HH:MM`, UTC), enabled,
 next run, last goal. The `ScheduleThread` creates the goal when it is due (origin `schedule`, the creator's rights;
@@ -112,6 +120,8 @@ day; a second tick while that goal is queued creates none; a disabled schedule o
 the interval parser rejects `every 5 seconds`.
 
 ### FW-R-05 Import skills from a `SKILL.md` registry — done (`catalog.import_skills`, `POST /api/catalog/import`, `gm import-skills`)
+
+**Status: done**
 
 Source: OpenHands extensions `skills/<name>/SKILL.md`, Agent Framework skills. An administrator imports a folder
 of skills (`<dir>/<name>/SKILL.md` with front matter `name`, `description`, optional `triggers`) into the catalog
@@ -128,22 +138,30 @@ refuses one with its reason; importing again updates instead of duplicating; `ex
 
 ### FW-R-06 Goals from GitHub events — open (needs the owner's decision)
 
+**Status: open**
+
 Source: OpenHands automations (`event` triggers). A signed GitHub webhook (HMAC with a per-project secret) for
 an issue labelled `agent` creates a goal that waits for approval. It opens an inbound network path, so it needs
 the owner's decision and an entry in `docs/threat-model.md` before it is built.
 
 ### FW-R-07 Fork a goal from an earlier iteration — open
 
+**Status: open**
+
 Source: LangGraph time travel. "Continue from iteration N": a new goal whose branch starts at that iteration's
 checkpoint commit, with the original goal's plan and that iteration's feedback.
 
 ### FW-R-08 Condense long feedback — partial
+
+**Status: partial**
 
 Source: OpenHands condensers, SWE-agent `LastNObservations`. Claude Code and Codex compact their own sessions;
 the loop's own prompts (planner, CrewAI executors) could keep the last N iterations' feedback whole and summarise
 older ones. Open until a goal is measured to hit a context limit.
 
 ### FW-R-09 ACP executor — open
+
+**Status: open**
 
 Source: Agent Client Protocol in OpenHands and Open Interpreter. An executor speaking ACP (JSON-RPC over stdio)
 would add Gemini CLI, OpenCode or Open Interpreter as model kinds. Worth it once one of them is wanted.
