@@ -34,7 +34,7 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "enable_claude_code": (bool, "Let agents (and the General Manager) run the Claude Code CLI on the server's Claude login"),
     "enable_codex": (bool, "Let agents run the Codex CLI on the server's ChatGPT login"),
     "enable_copilot": (bool, "Let agents run the GitHub Copilot CLI on the server's GitHub login"),
-    "study_interval": (int, "Seconds between visits of the learning rotation, which rewrites one agent's definition (0 = manual)"),
+    "study_interval": (int, "Seconds between visits of the learning rotation; each visit produces a definition candidate for one agent that an administrator applies after seeing the diff (0 = manual)"),
     "retry_max_attempts": (int, "Attempts per model when a run fails with a transient error (429, 5xx, timeout)"),
     "retry_base_seconds": (float, "First retry delay in seconds; it doubles on each retry"),
     "retry_max_seconds": (float, "Longest delay between two retries, in seconds"),

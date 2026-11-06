@@ -119,7 +119,9 @@ feature came from.
   per-agent grants, call log; G-R-15 a tool whose definition `digest` changed loses its allow and is marked `changed`,
   `McpThread` re-tests every `mcp_revalidate_hours`; bundled servers in `mcp_servers/`); `catalog.py` (skills, plugins, rules, commands,
   hooks; exports a project's `.claude/`; FW-R-05 `import_skills` of a `<name>/SKILL.md` registry, screened, disabled until chosen); `agentdefs.py` (each agent's versioned definition file in `data/agents/`,
-  its own git repo: the loop runs agents from it, learning and the study rotation rewrite it); `gm.py` (the General
+  its own git repo: the loop runs agents from it, learning and the study rotation rewrite it; G-R-19 a study rewrite is a
+  pending `definition_candidates` row an administrator applies or discards after seeing the diff, `apply_candidate`;
+  a study visit and a preview write nothing); `gm.py` (the General
   Manager as Claude Code: its instructions and the `python -m agent_company gm …` toolbox); `specs.py`
   (`.claude/specs/<slug>/` artifacts of every goal, the GM's `.claude/` configure step); `hooks.py` (TaskCreated,
   TaskCompleted, TeammateIdle → `data/logs/team-hooks.jsonl`, fail-open);

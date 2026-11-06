@@ -3657,6 +3657,43 @@ def create_app(start_background: bool = True) -> FastAPI:
         _audit(admin, "learning_study", out.get("studied") or "", after=out)
         return out
 
+    # G-R-19: a study rewrite is a candidate a person applies after seeing the diff
+    @app.get("/api/agents/{agent_id}/definition/candidates")
+    def definition_candidates(agent_id: int, status: str | None = None,
+                              admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> list[dict[str, Any]]:
+        out = agentdefs.candidates(agent_id, status)
+        _audit(admin, "definition_candidates_read", agent_id, after={"count": len(out)})
+        return out
+
+    @app.get("/api/definition-candidates/{cid}")
+    def definition_candidate(cid: int, admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        try:
+            out = agentdefs.candidate(cid)
+        except KeyError as e:
+            raise HTTPException(404, "no such candidate") from e
+        _audit(admin, "definition_candidate_read", cid, after={"agent_id": out["agent_id"]})
+        return out
+
+    @app.post("/api/definition-candidates/{cid}/apply")
+    def definition_candidate_apply(cid: int, admin: dict[str, Any] = Depends(allowed("manage_agents"))
+                                   ) -> dict[str, Any]:
+        try:
+            out = agentdefs.apply_candidate(cid, f"user:{admin['name']}")
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+        _audit(admin, "definition_candidate_apply", cid, after={"agent_id": out["agent_id"]}, severity="high")
+        return out
+
+    @app.post("/api/definition-candidates/{cid}/discard")
+    def definition_candidate_discard(cid: int, body: NoteBody | None = None,
+                                     admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        try:
+            out = agentdefs.discard_candidate(cid, f"user:{admin['name']}", body.note if body else "")
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+        _audit(admin, "definition_candidate_discard", cid, after={"agent_id": out["agent_id"], "note": out["note"]})
+        return out
+
     @app.get("/api/hooks")
     def hooks_recent(_: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
         from agent_company import hooks

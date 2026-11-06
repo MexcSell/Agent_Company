@@ -144,6 +144,24 @@ class PlaybookVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class DefinitionCandidate(Base):
+    """A study visit's rewrite of an agent's learned sections, applied to its definition file only by a person
+    who saw the diff (agentdefs.py, G-R-19)."""
+
+    __tablename__ = "definition_candidates"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
+    sections: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"Working method": ..., "Knowledge notes": ...}
+    base_version: Mapped[int] = mapped_column(Integer, default=0)  # the agent's definition_version when made
+    model: Mapped[str] = mapped_column(String(128), default="")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|applied|discarded|superseded
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    decided_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class EvolutionEvent(Base):
     """Observe -> diagnose -> generate -> experiment -> evaluate -> promote/rollback."""
 
