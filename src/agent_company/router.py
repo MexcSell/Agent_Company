@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from agent_company import usage
 from agent_company.config import settings
@@ -471,11 +471,32 @@ def update_model(model_id: int, data: dict[str, Any]) -> dict[str, Any]:
         _check_endpoint(data)
         if data.get("account") and data.get("kind", m.kind) != "claude_code":
             raise ValueError("account is a Claude Code sign-in: only for claude_code models")
+        renamed = None
+        if "name" in data:
+            data = {**data, "name": str(data["name"] or "").strip()}
+            if data["name"] != m.name:
+                if m.builtin:
+                    raise ValueError("a built-in model keeps its name")
+                if not data["name"]:
+                    raise ValueError("name is required")
+                if s.scalars(select(ModelEntry).where(ModelEntry.name == data["name"])).first():
+                    raise ValueError("a model with that name exists")
+                renamed = (m.name, data["name"])
         for k, v in data.items():
             if k in fields:
                 setattr(m, k, v)
         if terms is not None:  # a new dict: in-place changes of a JSON column are not seen
             m.terms = {k: v for k, v in {**(m.terms or {}), **terms}.items() if v not in ("", None)}
+        if renamed:  # models are referenced by name: routes, agents' own models, and the runs quotas count
+            from agent_company.db import Agent, Run
+
+            old, new = renamed
+            for r in s.scalars(select(Route).where((Route.model_name == old) | (Route.escalation == old))):
+                r.model_name = new if r.model_name == old else r.model_name
+                r.escalation = new if r.escalation == old else r.escalation
+            for a in s.scalars(select(Agent).where(Agent.model_pref == old)):
+                a.model_pref = new
+            s.execute(update(Run).where(Run.model_name == old).values(model_name=new))
         s.flush()
         return model_dict(m)
 

@@ -90,6 +90,30 @@ def test_delete_model_moves_routes():
     assert router.list_routes()["analyst"] == router.DEFAULT_ROUTE_OTHER
 
 
+def test_rename_model_carries_routes_agents_and_usage():
+    import pytest
+
+    from agent_company import registry
+
+    m = router.add_model({"name": "Local", "kind": "llm", "model_id": "ollama/qwen3"})
+    router.set_route("analyst", "Local", escalation="Local")
+    agent = registry.create_agent("data_engineer")
+    registry.update_agent(agent["id"], {"model_pref": "Local"})
+    usage.record(model_name="Local", kind="llm", input_tokens=5, output_tokens=5)
+    with pytest.raises(ValueError):
+        router.update_model(m["id"], {"name": "Claude Opus 5.5"})
+    with pytest.raises(ValueError):
+        router.update_model(m["id"], {"name": "  "})
+    assert router.update_model(m["id"], {"name": " Qwen here "})["name"] == "Qwen here"
+    assert router.list_routes()["analyst"] == "Qwen here" and router.list_escalations()["analyst"] == "Qwen here"
+    assert next(a for a in registry.list_agents() if a["id"] == agent["id"])["model_pref"] == "Qwen here"
+    assert usage.tokens_since("Qwen here", usage.day_start()) == 10, "its quota keeps counting today's runs"
+    opus = next(x for x in router.list_models() if x["name"] == "Claude Opus 5.5")
+    with pytest.raises(ValueError):
+        router.update_model(opus["id"], {"name": "Opus"})
+    assert router.update_model(opus["id"], {"name": "Claude Opus 5.5"})["name"] == "Claude Opus 5.5", "unchanged is fine"
+
+
 def test_openai_compatible_provider_catalogs(monkeypatch):
     def handler(req):
         assert req.headers["authorization"] == "Bearer gsk-test"

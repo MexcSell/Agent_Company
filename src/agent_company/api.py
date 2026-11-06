@@ -2569,8 +2569,15 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.patch("/api/models/{model_id}")
     def model_update(model_id: int, data: dict[str, Any], admin: dict[str, Any] = Depends(allowed("manage_models"))
                      ) -> dict[str, Any]:
+        before = next((m["name"] for m in router.list_models() if m["id"] == model_id), None)
         out = router.update_model(model_id, data)
-        _audit(admin, "model_update", out["name"], after=data)
+        _audit(admin, "model_update", out["name"], before={"name": before} if before != out["name"] else None,
+               after=data)
+        if before and before != out["name"]:  # agents' definition files name their model
+            with session() as s:
+                ids = list(s.scalars(select(Agent.id).where(Agent.model_pref == out["name"])))
+            for aid in ids:
+                agentdefs.sync(aid, f"model {before!r} renamed to {out['name']!r} by {admin['name']}")
         return out
 
     @app.delete("/api/models/{model_id}")

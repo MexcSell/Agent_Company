@@ -25,7 +25,7 @@ async function viewModels(quiet) {
   $("#view").innerHTML = `<div class="mdl-page" id="mdl-page"><section class="card ag-scroll"><div class="row nowrap"><h2 class="grow" style="margin:0">Model catalog</h2>${admin ? ib("plus", "Add a model", 'id="m-add"', "primary") : ""}</div>
       <p class="muted">Executor mode: <code>${esc(m.executor)}</code>${m.default_model ? ` · MODEL: <code>${esc(m.default_model)}</code>` : ""}. Unavailable models fall back to MODEL, then to the offline simulator.</p>
       <div class="mdl-list">${m.models.map((x) => `<div class="mdl-item ${x.available ? "" : "off"}"><div class="row nowrap"><span class="mdl-kind k-${esc(x.kind)}">${esc(x.kind === "claude_code" ? "Claude Code" : x.kind === "codex" ? "Codex" : x.kind === "offline" ? "offline" : "API")}</span><strong class="grow">${esc(x.name)}</strong>
-          ${x.available ? pill("ok") : ""}${admin && x.available ? ib("bolt", "Test this model", `data-test="${x.id}"`, "sm") : ""}${admin && x.kind !== "offline" ? ib("edit", "Terms of this model", `data-terms="${x.id}"`, "sm") : ""}${admin && x.kind !== "offline" ? ib("trash", "Delete", `data-del="${x.id}"`, "sm danger") : ""}</div>
+          ${x.available ? pill("ok") : ""}${admin && x.available ? ib("bolt", "Test this model", `data-test="${x.id}"`, "sm") : ""}${admin && x.kind !== "offline" ? ib("edit", "Edit this model: name and terms", `data-terms="${x.id}"`, "sm") : ""}${admin && x.kind !== "offline" ? ib("trash", "Delete", `data-del="${x.id}"`, "sm danger") : ""}</div>
         <div class="muted mono ellipsis">${esc(x.model_id || "default model")}${x.base_url ? ` · ${esc(x.base_url)}` : ""}${x.session_id ? ` · session ${esc(x.session_id.slice(0, 8))}` : ""}${x.account ? ` · account ${esc(x.account)}` : ""}</div>
         <div class="muted">${x.input_cost || x.output_cost ? `$${x.input_cost} / $${x.output_cost} per 1M tokens` : "no per-token price"}${x.available ? "" : ` · <span class="mdl-why">${esc(x.unavailable_reason)}</span>`}</div>
         ${x.kind !== "offline" ? termsLine(x) : ""}
@@ -49,14 +49,16 @@ function termsDialog(x) {
   const t = x.terms || {};
   const sel = (id, opts, v) => `<select id="${id}">${opts.map(([k, label]) => `<option value="${k}" ${(v || "") === k ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>`;
   const tri = (id, v) => sel(id, [["", "unknown"], ["yes", "yes"], ["no", "no"]], v);
-  modal(`<h2>${icon("models", 18)} Terms of ${esc(x.name)}</h2><p class="muted">Check these on the provider's current pages: free tiers, limits and data terms change. Nothing here is filled in from a model's own claims.</p>
-    <form id="t-form"><label>Billing</label>${sel("t-bill", [["", "unknown"], ...Object.entries(BILLINGS)], t.billing)}
+  modal(`<h2>${icon("models", 18)} Edit ${esc(x.name)}</h2>
+    <form id="t-form"><label>Name${x.builtin ? " (built in: keeps its name)" : " (routes and agents using it follow the new name)"}</label><input id="t-name" required value="${esc(x.name)}" ${x.builtin ? "disabled" : ""}>
+      <h3 style="margin:14px 0 4px">Terms</h3><p class="muted" style="margin-top:0">Check these on the provider's current pages: free tiers, limits and data terms change. Nothing here is filled in from a model's own claims.</p>
+      <label>Billing</label>${sel("t-bill", [["", "unknown"], ...Object.entries(BILLINGS)], t.billing)}
       <label>Context window (tokens, 0 = unknown)</label><input id="t-ctx" type="number" min="0" step="1" value="${Number(t.context_window || 0)}">
       <div class="row"><div class="grow"><label>Tool calling</label>${tri("t-tools", t.tool_calling)}</div><div class="grow"><label>Provider may retain or train on prompts</label>${tri("t-train", t.trains_on_prompts)}</div><div class="grow"><label>Commercial use allowed</label>${tri("t-com", t.commercial_use)}</div></div>
       <label>Terms or pricing page</label><input id="t-url" placeholder="https://…" value="${esc(t.terms_url || "")}">
       <label class="row" style="margin-top:8px"><input type="checkbox" id="t-ver" style="width:auto"> I checked these against the provider's current terms now${t.verified_at ? ` (last: ${esc(t.verified_at.slice(0, 10))})` : ""}</label>
       <div class="row" style="margin-top:10px"><button class="btn icon primary" title="Save" aria-label="Save">${icon("check", 16)}</button></div></form>`);
-  $("#t-form").onsubmit = async (e) => { e.preventDefault(); try { await api(`/api/models/${x.id}`, { method: "PATCH", body: { terms: { billing: $("#t-bill").value, context_window: Math.max(0, Math.floor(+$("#t-ctx").value || 0)), tool_calling: $("#t-tools").value, trains_on_prompts: $("#t-train").value, commercial_use: $("#t-com").value, terms_url: $("#t-url").value.trim(), verified: $("#t-ver").checked } } }); toast("Saved"); $("#modal").hidden = true; viewModels(); } catch (err) { toast(err.message); } };
+  $("#t-form").onsubmit = async (e) => { e.preventDefault(); try { await api(`/api/models/${x.id}`, { method: "PATCH", body: { ...(x.builtin ? {} : { name: $("#t-name").value.trim() }), terms: { billing: $("#t-bill").value, context_window: Math.max(0, Math.floor(+$("#t-ctx").value || 0)), tool_calling: $("#t-tools").value, trains_on_prompts: $("#t-train").value, commercial_use: $("#t-com").value, terms_url: $("#t-url").value.trim(), verified: $("#t-ver").checked } } }); toast("Saved"); $("#modal").hidden = true; viewModels(); } catch (err) { toast(err.message); } };
 }
 
 function addModelDialog() {

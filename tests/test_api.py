@@ -103,6 +103,9 @@ def test_models_and_dashboard(app):
     assert r.status_code == 200 and r.json()["available"] is False
     assert app.put("/api/routes/qa", json={"model_name": "Local Qwen"}).status_code == 200
     assert app.put("/api/routes/qa", json={"model_name": "nope"}).status_code == 400
+    assert app.patch(f"/api/models/{r.json()['id']}", json={"name": "Claude Code"}).status_code == 400
+    assert app.patch(f"/api/models/{r.json()['id']}", json={"name": "Qwen"}).json()["name"] == "Qwen"
+    assert app.get("/api/models").json()["routes"]["qa"] == "Qwen"
     assert app.delete(f"/api/models/{r.json()['id']}").status_code == 200
     assert app.patch("/api/agents/1", json={"name": "renamed"}).status_code == 400
 
