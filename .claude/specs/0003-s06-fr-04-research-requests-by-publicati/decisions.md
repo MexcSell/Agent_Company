@@ -11,3 +11,10 @@ Findings:
 - task qa: skipped: a dependency failed
 
 Next: fix the findings (loop back to Build).
+
+## Iteration 2: PASS
+- spec (architect): done
+- impl (developer): done
+- review (qa): done
+
+Next: approval and merge.
