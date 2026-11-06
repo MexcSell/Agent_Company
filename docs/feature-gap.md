@@ -153,6 +153,11 @@ Machines code):
 | PDF text extraction of collected papers, parsed in the L3 sandbox | research guide §8 | done (`research.extract_pdf`, `pdftext.py`, G-R-12) |
 | Scheduled benchmark review: a suite on a schedule within a budget, compared with the previous run, regressions notified | research guide §8 | done, off until a schedule and budget are set (`evaluation.scheduled_review`, G-R-14) |
 | A fixed research-agent benchmark | research guide §6 | open (G-R-13: a research-task runner, a goal for the goal loop) |
+| An MCP tool whose definition changed loses its allow; periodic re-tests | `docs/temp/Continuously_Evolving_Agent_Organization.pdf` §5.1 | done (`mcp.digest`, `McpThread`, G-R-15) |
+| p95 latency, human override rate, tool-call failure rate | same, §4 | done (`performance.operations`, G-R-16) |
+| Root causes classified by failure layer | same, §4; self-improving guide §4 | done (`rca.parse`, `rca.layer_counts`, G-R-17) |
+| A model's terms: billing, context, tool calling, data terms, licence, last verified | same, §6; `docs/temp/1.md` | done (`ModelEntry.terms`, G-R-18) |
+| An agent-definition rewrite is a candidate evaluated before promotion | `docs/temp/continuously_evolving_agent_architecture.pdf` §3, §6 | needs the owner's decision (G-R-19) |
 
 ## From docs/temp/advanced_self_improving_agent_guide.pdf (verified self-evolution)
 
