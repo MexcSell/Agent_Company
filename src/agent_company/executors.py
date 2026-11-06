@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -611,6 +612,12 @@ def claude_env(choice: Choice) -> dict[str, str] | None:
     return env
 
 
+# EL-R-05: after each edit the file is parsed (never run) and a syntax error goes back to the agent at once
+EDIT_CHECK_SETTINGS = {"hooks": {"PostToolUse": [{"matcher": "Edit|Write|MultiEdit", "hooks": [
+    {"type": "command", "timeout": 30,
+     "command": f"python3 -I {shlex.quote(str(Path(__file__).with_name('edit_check.py')))}"}]}]}}
+
+
 class ClaudeCodeExecutor(Executor):
     kind = "claude_code"
 
@@ -628,7 +635,7 @@ class ClaudeCodeExecutor(Executor):
         cmd = ["claude", "-p", req.prompt, "--output-format", "stream-json", "--verbose",
                "--append-system-prompt", req.system, "--allowedTools", ",".join(tools)]
         if req.writes:
-            cmd += ["--permission-mode", "acceptEdits"]
+            cmd += ["--permission-mode", "acceptEdits", "--settings", json.dumps(EDIT_CHECK_SETTINGS)]
         if self.choice.model_id:
             cmd += ["--model", self.choice.model_id]
         if int(req.data.get("max_turns") or 0) > 0:  # the task contract's turn budget (G-R-01)

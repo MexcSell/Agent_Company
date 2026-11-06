@@ -7,7 +7,7 @@ feature came from.
 ## Layout
 
 - `src/agent_company/` – one module per service:
-  `registry.py` + `org.py` (agents, rooms; configuration versions with rollback, health: degraded/inactive; a degraded
+  `registry.py` + `org.py` (agents, rooms; clones capped by `max_clones` per original; configuration versions with rollback, health: degraded/inactive; a degraded
   agent's model is probed again, `recover_degraded`, S02-FR-18),
   `kpis.py` (SPEC-01 FR-08 department KPIs: formula from `METRICS`, target, interval, values with evidence in
   `kpi_values`, measured by the `KpiThread`; Performance → Department KPIs),
@@ -18,14 +18,19 @@ feature came from.
   `recruitment.py` (SPEC-03: capability gaps from verified proficiency, recruitment records with job descriptions,
   approval policy `recruit_requires_approval` that pauses the goal, probation with reviewed tasks; with `qualify_recruits` a
   new writing recruit is first a `candidate` that runs an eval suite, then approved or rejected), `scheduler.py`, `router.py` (models, routes, fallback,
-  provider catalogs, classification clearance per model; a `claude_code` model's own sign-in `account`:
+  provider catalogs, classification clearance per model; usage limits a run reports (`LIMIT_RE`: "hit your session
+  limit · resets 9:50pm") mark the model `limited_until` its reset and the route's ordered `fallback` models take the
+  work (`gm set-fallback`, Models → Routes); with every real model limited the simulator never stands in, staffing
+  raises `registry.ModelLimitReached` and the goal resumes at the earliest reset; `run` sends a request through the
+  chain for agents that call a model directly (the research room); a `claude_code` model's own sign-in `account`:
   `data/claude-accounts/<account>/.credentials.json`, its CLAUDE_CONFIG_DIR; a model's own API key encrypted in
   `api_key_enc` (only `key_hint` leaves the server); `model_type` API|CLI|Local; Test stores the provider's usage in
   `status`; `model_info`/`/api/models/info` is what the Models page shows per model, as the Claude Code panel shows a
   session (status, model, CLI version, account, usage windows: Claude plan via `workspace.claude_limits`, Codex plan
   windows from its session files, OpenRouter key limits, own daily/weekly token limits; `limitCards` in app.js); `copilot` kind (GitHub Copilot CLI, `enable_copilot`), `cli_status`/`install_cli`; G-R-18 `ModelEntry.terms` (billing, context, tool calling, data
   terms, licence page) validated by `check_terms`, `terms_due` after 90 days without a person's check), `contracts.py` (task contracts with scope, risk, budget, deadline; output lines),
-  `executors.py` (tracked subprocesses: `terminate` for stops; `gate`, the tool gateway every run passes: permissions and
+  `executors.py` (tracked subprocesses; a writing Claude Code run gets the `edit_check.py` PostToolUse hook (EL-R-05:
+  each edited .py/.js file is parsed, a syntax error goes back to the agent); `terminate` for stops; `gate`, the tool gateway every run passes: permissions and
   `Agent.autonomy` G0-G4 decide writes, Bash and MCP tools, the isolation level L0-L2 and every tool call (Claude Code
   stream-json, Codex `--json`) are recorded on the `Run`; FW-R-02 `StuckWatch` reads the stream while it runs and ends a run
   that repeats the same call `stuck_repeat_limit` times or fails the same way `stuck_error_limit` times), `dependencies.py` (S08-R-05: dependency changes per goal from git objects, `pip-audit`/`npm audit` at the gate's
@@ -91,7 +96,10 @@ feature came from.
   control plane, failure layers, a fixed benchmark from `benchmarks/` run on the base and candidate commits, approval,
   deploy via the safe restart, monitoring, rollback; docs/requirements/SELF-EVOLUTION.md); `performance.py` (defects with priority and a lifecycle
   the loop drives, S09-R-03; certification, metrics, estimate accuracy, G-R-02 operational metrics `operations` (G-R-16 p95 times, `human_override_rate`, `tool_call_failure_rate`; G-R-17 `failure_layers`); G-R-04 `enablement_gate` and `room_gate`: a gated role is enabled only after its room's own suite ran as a room trial, `Goal.trial.room`, whose disabled agents `registry.staff` takes for those eval goals only); `rca.py` (S07-R-02 root-cause analysis of failed goals and repeated failing checks:
-  evidence pack, causes that must cite it and name their layer from `selfevolve.LAYERS` (G-R-17), actions as proposals, follow-up); `evaluation.py` (eval harness; S09-R-05 dimensions with sample sizes per run and summary, no combined score; `adversarial` suites run like final ones; G-R-14 scheduled benchmark review `scheduled_review`/`BenchmarkThread`, settings `benchmark_schedule|suite|budget_usd`, off until a budget is set); `research.py` (crawl, knowledge, RSS/Atom feeds and each document's publication date and licence (G-R-10), PDFs parsed by `pdftext.py` in the L3 sandbox (G-R-12), sources with monitoring rules: versions on change, intelligence events; shifts on the
+  evidence pack, causes that must cite it and name their layer from `selfevolve.LAYERS` (G-R-17), actions as proposals, follow-up); `evaluation.py` (eval harness; S09-R-05 dimensions with sample sizes per run and summary, no combined score; `adversarial` suites run like final ones; G-R-14 scheduled benchmark review `scheduled_review`/`BenchmarkThread`, settings `benchmark_schedule|suite|budget_usd`, off until a budget is set); `research_agent.py` (the research lead's tool loop: its model plans JSON tool calls, validated against `TOOLS`
+  (search_knowledge, search_papers, fetch_url) and run by the platform through `research.collect`, results fed back
+  for `research_tool_rounds` rounds; the documents join the report's material, the steps are `tool_steps`);
+  `research.py` (crawl, knowledge, RSS/Atom feeds and each document's publication date and licence (G-R-10), PDFs parsed by `pdftext.py` in the L3 sandbox (G-R-12), sources with monitoring rules: versions on change, intelligence events; shifts on the
   rotation with handover packages, `research_shifts`; research requests with priority, deadline, budget, recurrence and
   duplicate detection, run by `ReportThread`; S06-R-03/R-04 claims checked against stored documents and an independent review (another agent, another model family when usable, else a person): only approved reports become `report://` documents, blackboard entries, `research` knowledge items and `research` proposals); `governance.py` (audit, notifications,
   command policy, emergency stops E0-E5, incidents, behaviour-rule alerts); `prefs.py` (DB settings); `gitsync.py` (push with each user's own GitHub token or SSH key, `data/git-keys/`); `files.py`; `supervisor.py` + `system.py`;
