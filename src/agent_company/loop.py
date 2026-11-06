@@ -567,6 +567,8 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                   + blackboard.inbox(goal.id, "general_manager", gm.id)
                   + (learning.experience_context(gm.id, goal_id=goal.id, query=f"{goal.title} {goal.description}")
                      + "\n\n")
+                  + ((rmap + "\n\n") if (rmap := learning.repo_map_context(goal.id, f"{goal.title} {goal.description}"))
+                     else "")  # FW-R-01
                   + PLAN_INSTRUCTIONS)
         for attempt in range(2):  # an invalid contract goes back to the planner once (S04-R-06)
             req = executors.Request(purpose="plan", role="general_manager", system=_system_for(gm), prompt=prompt,

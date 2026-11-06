@@ -59,6 +59,8 @@ feature came from.
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals (S10-R-01: a
   `PROPOSAL[product]` becomes a project only with its documented case, decided by a person), uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress and goal times;
   blockers and generated items are reconciled from goal state by `sync`; a new project GM gets a handover package); `kgraph.py` (SPEC-11 knowledge graph: `kg_edges` written as side effects, the paged neighbourhood API);
+  `repomap.py` (FW-R-01, after aider: the base branch's definitions ranked by use in other files, within
+  `repo_map_chars`, in the planner's prompt and each task's package via `learning.repo_map_context`);
   `learning.py` (knowledge items: provenance, experience reports, screening, scoped ranked retrieval over an FTS5
   index with `retrieval_w_*` weights guarded by `evals/retrieval.json` recall@5; SE-R-21 ranking procedure per query
   class (`query_class`, `retrieval_strategies` setting) learned on `evals/retrieval-classes.json` by `learn_strategies`; a task's package adds the project's

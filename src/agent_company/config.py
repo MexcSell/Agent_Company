@@ -68,6 +68,8 @@ class Settings:
     cost_overrun_factor: float = 2.0
     # The same check failing in this many consecutive iterations escalates to the planner (S04-R-06, S04-R-07).
     escalate_after: int = 2
+    # Characters of the repository map in the planner's prompt and a task's package (FW-R-01); 0 = no map.
+    repo_map_chars: int = 4000
     # A candidate playbook must pass the smoke suite before it is tried on users' goals (S13-D-02).
     candidate_smoke: bool = True
     # G-R-14 scheduled benchmark review: off|daily|weekly|monthly, the suite, and its budget per run (0 = never runs).
@@ -175,6 +177,7 @@ def load_settings() -> Settings:
         budget_exhausted_action=(os.environ.get("BUDGET_EXHAUSTED_ACTION") or "pause").lower(),
         cost_overrun_factor=float(os.environ.get("COST_OVERRUN_FACTOR") or 2),
         escalate_after=_int("ESCALATE_AFTER", 2),
+        repo_map_chars=_int("REPO_MAP_CHARS", 4000),
         candidate_smoke=_bool("CANDIDATE_SMOKE", True),
         benchmark_schedule=(os.environ.get("BENCHMARK_SCHEDULE") or "off").lower(),
         benchmark_suite=os.environ.get("BENCHMARK_SUITE") or "smoke",

@@ -59,11 +59,13 @@ Every `R` ends with an acceptance condition that is a pytest test (offline, temp
 
 ## 3. Requirements
 
-### FW-R-01 Repository map in a task's package — open (planned: `repomap.py`)
+### FW-R-01 Repository map in a task's package — done (`repomap.py`, `learning.repo_map_context`, setting `repo_map_chars`)
 
 Source: aider `repomap.py`. A writing or reviewing agent gets a compact map of the repository: per file, its
 top-level definitions (classes, functions, methods with their signature line), ranked by how often other files
-refer to their names, cut to a character budget (setting `repo_map_chars`, default 4000; 0 = off). Read from the
+refer to their names, cut to a character budget (setting `repo_map_chars`, default 4000; 0 = off). As in aider's graph, a function counts
+as used where another file calls it, a class or type wherever its name appears, each file by the square root of its
+uses, shared among the files that define the name; names and files the task mentions are boosted. Read from the
 goal's base branch with `git ls-files` / `git show` (like the project standards), never from an agent's worktree;
 Python is parsed with `ast`, JavaScript/TypeScript/Go/Rust/Java/Ruby/PHP by line patterns; files over 200 KB,
 vendored, generated and minified files are skipped. The map is data, not instructions, and is cached per base commit.
