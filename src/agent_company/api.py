@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, WebSocket
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -43,6 +45,7 @@ from agent_company import (
     management,
     mcp,
     mentoring,
+    mission,
     network,
     orchestration,
     organization,
@@ -67,7 +70,7 @@ from agent_company import (
     workspace,
 )
 from agent_company.config import settings
-from agent_company.db import Agent, AuditEvent, Decision, Event, Goal, Task, session
+from agent_company.db import Agent, AuditEvent, Decision, Event, Goal, Task, Upload, now, session
 
 STATIC = Path(__file__).parent / "static"
 COOKIE = "ac_session"
@@ -208,6 +211,28 @@ class GoalBody(BaseModel):
     permits: list[str] = Field(default_factory=list)  # change boundaries lifted (admins): dependencies, config
     estimated_cost_usd: float = Field(default=0.0, ge=0, le=10_000)  # twice this pauses the goal (S14-R-03)
     kind: str = ""  # S04-R-11: bugfix|feature|refactor|research|docs; "" = the planner picks
+
+
+class MissionResources(BaseModel):
+    repositories: list[str] = Field(default_factory=list, max_length=10)
+    files: list[str] = Field(default_factory=list, max_length=20)  # upload ids of the caller's uploads
+    links: list[str] = Field(default_factory=list, max_length=20)
+
+
+class MissionBody(BaseModel):
+    """REQ-003: the Simple mode mission form."""
+    project_id: int
+    title: str = Field(min_length=3, max_length=256)
+    description: str = Field(default="", max_length=20_000)
+    budget_usd: float = Field(gt=0, le=10_000)
+    deadline: datetime | None = None
+    notes: str = Field(default="", max_length=10_000)  # experience / notes
+    constraints: str = Field(default="", max_length=10_000)
+    resources: MissionResources = Field(default_factory=MissionResources)
+
+
+class UiModeBody(BaseModel):
+    mode: str = Field(max_length=16)
 
 
 class GoalTeamBody(BaseModel):
@@ -888,6 +913,17 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.get("/api/auth/me")
     def me(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         return {**user, "delegations": [] if user["is_admin"] else policies.list_delegations(user["id"], active_only=True)}
+
+    @app.get("/api/auth/me/ui_mode")
+    def ui_mode(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return {"mode": user.get("ui_mode") or "advanced"}
+
+    @app.put("/api/auth/me/ui_mode")
+    def ui_mode_set(body: UiModeBody, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        before = user.get("ui_mode") or "advanced"
+        out = auth.set_ui_mode(user["id"], body.mode)  # only the caller's own account
+        _audit(user, "ui_mode_set", user["id"], before={"mode": before}, after={"mode": out["ui_mode"]})
+        return {"mode": out["ui_mode"]}
 
     # --- delegated rights (S01-R-03) ---
     @app.get("/api/delegations")
@@ -2181,6 +2217,140 @@ def create_app(start_background: bool = True) -> FastAPI:
         d["rca"] = rca.list_analyses(goal_id=goal_id)  # S07-R-02
         d["digest"] = loop.digest(goal_id)  # G-R-09
         return d
+
+    @app.get("/api/goals/{goal_id}/report")
+    def goal_report(goal_id: int, format: str = "json", user: dict[str, Any] = Depends(current_user)) -> Any:
+        """REQ-004: the mission report of a finished goal; 409 while it is still active."""
+        with session() as s:
+            g = s.get(Goal, goal_id)
+            seen = _visible_project_ids(s, user)
+            if g is None or (seen is not None and g.project_id is not None and g.project_id not in seen):
+                raise KeyError(goal_id)
+        try:
+            d = mission.report(goal_id)
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+        if format == "md":
+            return PlainTextResponse(mission.report_markdown(d), media_type="text/markdown")
+        return d
+
+    # --- Simple mode (REQ-003) ---
+    @app.post("/api/simple/missions")
+    def mission_create(body: MissionBody, request: Request,
+                       user: dict[str, Any] = Depends(allowed("run", "goal_create"))) -> dict[str, Any]:
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+            p = s.get(projects.Project, body.project_id)
+            if p is None or (seen is not None and p.id not in seen):
+                raise HTTPException(404, f"project {body.project_id} not found")
+            project_repo, checks = p.path or "", list(p.quality_commands or [])
+            own = {u.id: u.user_id for u in s.scalars(select(Upload).where(Upload.id.in_(body.resources.files)))}
+        if body.deadline is not None:
+            deadline = body.deadline if body.deadline.tzinfo else body.deadline.replace(tzinfo=now().tzinfo)
+            if deadline <= now():
+                raise HTTPException(400, "the deadline must be in the future")
+        else:
+            deadline = None
+        repos = [r.strip() for r in body.resources.repositories if r.strip()]
+        if not user["is_admin"]:
+            mine = str(Path(project_repo).resolve()) if project_repo else ""
+            foreign = [r for r in repos if not mine or str(Path(r).expanduser().resolve()) != mine]
+            if foreign:
+                _audit(user, "mission_create_denied", body.project_id, after={"repositories": foreign},
+                       severity="warning")
+                raise HTTPException(403, "only administrators can name a repository outside the project")
+        bad = [f for f in body.resources.files if own.get(f, -1) != user["id"]]
+        if bad:
+            raise HTTPException(400, f"unknown upload(s): {', '.join(bad[:5])}")
+        links = [x.strip() for x in body.resources.links if x.strip()]
+        for x in links:
+            if len(x) > 2048 or not re.match(r"^https?://[^\s/]+\S*$", x):
+                raise HTTPException(400, f"not an http(s) link: {x[:200]}")
+        parts = [body.description.strip() or body.title.strip()]
+        for head, text in (("Experience / notes", body.notes), ("Constraints", body.constraints)):
+            if text.strip():
+                parts.append(f"## {head}\n{text.strip()}")
+        if repos:
+            parts.append("## Repositories\n" + "\n".join(f"- {r}" for r in repos))
+        try:
+            gid = loop.create_goal(body.title, "\n\n".join(parts), repo_path=repos[0] if repos else project_repo,
+                                   urls=links, quality_commands=checks,
+                                   created_by=user["id"], project_id=body.project_id,
+                                   attachments=projects.uploads(body.resources.files),
+                                   extract_checks=user["is_admin"], budget_usd=body.budget_usd, deadline=deadline)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        budget = budgets.set_budget(gid, f"user:{user['name']}", budget_usd=body.budget_usd)
+        _audit(user, "mission_create", gid, after={"project_id": body.project_id, "budget_usd": body.budget_usd,
+                                                    "deadline": deadline.isoformat() if deadline else None,
+                                                    "repositories": repos, "links": links,
+                                                    "files": list(body.resources.files)})
+        q = request.app.state.queue
+        if q is not None:
+            q.submit(gid)
+        else:
+            threading.Thread(target=_run_quietly, args=(gid,), daemon=True, name=f"goal-{gid}").start()
+        return {"id": gid, "budget": budget}
+
+    @app.get("/api/simple/overview")
+    def simple_overview(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        """REQ-003: running goals with progress, cost vs budget, time vs deadline and blockers; waiting approvals;
+        blocked goals; delivered results with their report summary. Only goals of projects the user can see."""
+        from agent_company.db import Risk
+
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+            rows = [g for g in s.scalars(select(Goal).where(Goal.origin != "eval").order_by(Goal.id.desc()).limit(300))
+                    if seen is None or g.project_id is None or g.project_id in seen]
+            names = dict(s.execute(select(projects.Project.id, projects.Project.name)).all())
+            ids = [g.id for g in rows]
+            counts: dict[int, list[int]] = {}
+            for gid, it, st in s.execute(select(Task.goal_id, Task.iteration, Task.status)
+                                         .where(Task.goal_id.in_(ids))) if ids else []:
+                counts.setdefault(gid, []).append((it, st))  # type: ignore[arg-type]
+            blockers: dict[int, list[str]] = {}
+            for r in s.scalars(select(Risk).where(Risk.goal_id.in_(ids), Risk.kind == "blocker",
+                                                  Risk.status == "open")) if ids else []:
+                blockers.setdefault(r.goal_id, []).append(r.title)
+            waiting = [{"id": d.id, "goal_id": d.goal_id, "topic": d.topic, "status": d.status}
+                       for d in s.scalars(select(Decision).where(Decision.goal_id.in_(ids),
+                                                                 Decision.requires_human_approval,
+                                                                 Decision.status.not_in(["approved", "rejected",
+                                                                                         "superseded"])))] if ids else []
+            heads = [(g.id, g.title, g.status, g.project_id, g.iteration, g.deadline, g.created_at, g.updated_at,
+                      (g.checkpoint or {}).get("paused_for", "")) for g in rows]
+
+        def card(gid: int, title: str, status: str, pid: int | None, it: int, deadline: Any, created: Any) -> dict:
+            mine = [st for i, st in counts.get(gid, []) if i == it]
+            spend = budgets.summary(gid)
+            dl = deadline if deadline is None or deadline.tzinfo else deadline.replace(tzinfo=now().tzinfo)
+            cr = created if created.tzinfo else created.replace(tzinfo=now().tzinfo)
+            return {"id": gid, "title": title, "status": status, "project_id": pid, "project": names.get(pid, ""),
+                    "progress": round(sum(st == "done" for st in mine) / len(mine), 3) if mine else 0.0,
+                    "tasks_done": sum(st == "done" for st in mine), "tasks": len(mine),
+                    "cost_usd": spend["used"]["cost_usd"], "budget_usd": spend["limits"].get("cost_usd", 0.0),
+                    "elapsed_s": round(max(0.0, (now() - cr).total_seconds()), 1),
+                    "deadline": dl.isoformat() if dl else None,
+                    "remaining_s": round((dl - now()).total_seconds(), 1) if dl else None,
+                    "overdue": bool(dl and dl < now()), "blockers": blockers.get(gid, [])}
+
+        out: dict[str, Any] = {"running": [], "approvals": [], "blocked": [], "delivered": [], "decisions": waiting}
+        for gid, title, status, pid, it, deadline, created, updated, paused_for in heads:
+            c = card(gid, title, status, pid, it, deadline, created)
+            if status == "awaiting_approval":
+                out["approvals"].append(c)
+            if status == "paused" or (status in workflow.ACTIVE and c["blockers"]):
+                out["blocked"].append(c | {"paused_for": paused_for})
+            if status in workflow.ACTIVE:
+                out["running"].append(c)
+            elif len(out["delivered"]) < 20:
+                try:
+                    labels = mission.report(gid)["tasks"]["labels"]
+                except (KeyError, ValueError):
+                    labels = {}
+                out["delivered"].append(c | {"finished_at": updated.isoformat(), "labels": labels,
+                                             "report": f"/api/goals/{gid}/report"})
+        return out
 
     # --- knowledge items (SPEC-11): lessons with provenance; people review, agents never do ---
     @app.get("/api/knowledge")
@@ -3553,6 +3723,7 @@ def _goal_dict(g: Goal) -> dict[str, Any]:
             "budget_tokens": g.budget_tokens or 0, "max_active_agents": g.max_active_agents or 0,
             "paused_for": (g.checkpoint or {}).get("paused_for", ""), "requirement_keys": g.requirement_keys or [],
             "kind": g.kind or "", "strategy": dict(g.strategy or {}), "test_strategy": dict(g.test_strategy or {}),
+            "deadline": g.deadline.isoformat() if g.deadline else None,
             "created_at": g.created_at.isoformat(), "updated_at": g.updated_at.isoformat()}
 
 
