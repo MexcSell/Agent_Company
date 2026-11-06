@@ -1658,13 +1658,22 @@ def create_app(start_background: bool = True) -> FastAPI:
 
     # /status: tokens and cost today and this week, every Claude Code session on the host, and the plan's limits.
     @app.get("/api/workspace/claude-usage")
-    def claude_usage(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
-        return workspace.claude_usage() | {"plan": workspace.claude_limits()}
+    # `model`: a Models-page model chosen in the panel; one with its own sign-in shows that sign-in's.
+    def claude_usage(model: str = "", _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        home = _model_home(model)
+        return workspace.claude_usage(home) | {"plan": workspace.claude_limits(home), "account": workspace._account(home),
+                                               "home": "own" if home else "host"}
 
-    # /agents and /tasks: what runs in every live Claude Code session on the host.
+    # /agents and /tasks: what runs in every live Claude Code session on the host (or of the chosen model's sign-in).
     @app.get("/api/workspace/claude-activity")
-    def claude_activity(cwd: str = "", _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
-        return workspace.host_activity(cwd)
+    def claude_activity(cwd: str = "", model: str = "", _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return workspace.host_activity(cwd, _model_home(model))
+
+    def _model_home(model: str) -> Any:
+        try:
+            return workspace.model_home(model)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
 
     @app.post("/api/workspace/claude")
     def claude_start(body: ClaudeBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
@@ -3363,8 +3372,9 @@ def create_app(start_background: bool = True) -> FastAPI:
         return {"key": key, "value": value}
 
     @app.get("/api/projects-defaults")
-    def projects_defaults(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-        return {"base": str(projects.default_base())}
+    def projects_defaults(path: str = "", user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        # `path`: a work folder chosen in the form (administrators); its GitHub remote fills in the URL.
+        return {"base": str(projects.default_base()), "github_url": projects.repo_remote(path) if path and user["is_admin"] else ""}
 
     # --- dashboard ---
     app.mount("/static", StaticFiles(directory=STATIC), name="static")

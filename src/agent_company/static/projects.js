@@ -70,7 +70,7 @@ async function projectForm(p = null) {
   modal(`<h2>${icon("projects", 18)} ${p ? "Edit project" : "New project"}</h2><form id="pf">
     <label for="pf-name">Name</label><input id="pf-name" required value="${esc(p?.name || "")}" ${p?.protected ? "disabled" : ""}>
     ${p || !me.is_admin ? "" : `<label for="pf-path">Work folder (git repository; by default a new folder next to Agent Company)</label><div class="row nowrap"><input id="pf-path" class="grow" placeholder="${esc(base)}/my-project">${typeof pickFolder === "function" ? ib("folder", "Browse…", 'type="button" id="pf-browse"') : ""}</div>`}
-    <label for="pf-gh">GitHub URL (recommended; approved work is pushed here)</label><input id="pf-gh" placeholder="https://github.com/owner/repo.git" value="${esc(p?.github_url || "")}">
+    <label for="pf-gh">GitHub URL (recommended; approved work is pushed here${p ? "" : "; filled in from the folder's git remote"})</label><input id="pf-gh" placeholder="https://github.com/owner/repo.git" value="${esc(p?.github_url || "")}">
     <label for="pf-desc">Description</label><textarea id="pf-desc">${esc(p?.description || "")}</textarea>
     ${me.is_admin ? `<label for="pf-checks">Quality commands (one per line)</label><textarea id="pf-checks" placeholder="uv run pytest -q">${esc((p?.quality_commands || []).join("\n"))}</textarea>` : ""}
     ${me.is_admin && p ? `<div class="row"><div class="grow"><label for="pf-stack">Stack (comma-separated)</label><input id="pf-stack" placeholder="python, fastapi" value="${esc((p.stack || []).join(", "))}"></div>
@@ -94,11 +94,21 @@ async function projectForm(p = null) {
   // The folder follows the name until it is edited: <folder above Agent Company>/<name>.
   let edited = false;
   const slug = (n) => n.trim().replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "");
+  // A folder already set up with GitHub fills in its URL (until the URL is typed by hand).
+  let ghTyped = false, ghAuto = "";
+  const remote = async () => {
+    const path = $("#pf-path")?.value.trim();
+    const url = path ? await api(`/api/projects-defaults?path=${encodeURIComponent(path)}`).then((d) => d.github_url).catch(() => "") : "";
+    if (!ghTyped && $("#pf-gh") && $("#pf-path")?.value.trim() === path) { $("#pf-gh").value = url; ghAuto = url; }
+  };
   if ($("#pf-path")) {
+    $("#pf-gh").oninput = () => (ghTyped = !!$("#pf-gh").value.trim() && $("#pf-gh").value.trim() !== ghAuto);
     $("#pf-path").oninput = () => (edited = true);
+    $("#pf-path").onchange = remote;
     $("#pf-name").oninput = () => { if (!edited) $("#pf-path").value = $("#pf-name").value.trim() ? `${base}/${slug($("#pf-name").value)}` : ""; };
+    $("#pf-name").onchange = () => { if (!edited) remote(); };
   }
-  $("#pf-browse") && ($("#pf-browse").onclick = async () => { const dir = await pickFolder($("#pf-path").value || base); if (dir) { $("#pf-path").value = dir; edited = true; } });
+  $("#pf-browse") && ($("#pf-browse").onclick = async () => { const dir = await pickFolder($("#pf-path").value || base); if (dir) { $("#pf-path").value = dir; edited = true; remote(); } });
   $("#pf").onsubmit = async (e) => {
     e.preventDefault();
     const body = { github_url: $("#pf-gh").value.trim(), description: $("#pf-desc").value };

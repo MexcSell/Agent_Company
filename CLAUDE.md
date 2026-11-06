@@ -55,7 +55,7 @@ feature came from.
   classes, independent reviews that send a disputed decision to a person); `escalation.py` (S04-R-07 levels 1-5 and their
   recipients: agent, goal GM, room manager, executive GM, a person; delivered as blackboard requests);
   `budgets.py` (S04-R-09 goal budgets: cost, tokens, agents at once; child goals capped by the parent's remainder;
-  daily room budgets over a room's subtree are `Room.daily_budget_usd`, checked with the agent quota in `registry.over_quota`); `projects.py` (projects with stack, skills, rooms, budget, deadline, priority and a lifecycle `set_status`; command window
+  daily room budgets over a room's subtree are `Room.daily_budget_usd`, checked with the agent quota in `registry.over_quota`); `projects.py` (projects with a GitHub URL, filled from the repository's remote (`repo_remote`), stack, skills, rooms, budget, deadline, priority and a lifecycle `set_status`; command window
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals (S10-R-01: a
   `PROPOSAL[product]` becomes a project only with its documented case, decided by a person), uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress and goal times;
   blockers and generated items are reconciled from goal state by `sync`; a new project GM gets a handover package); `kgraph.py` (SPEC-11 knowledge graph: `kg_edges` written as side effects, the paged neighbourhood API);
@@ -98,10 +98,10 @@ feature came from.
   (`.claude/specs/<slug>/` artifacts of every goal, the GM's `.claude/` configure step); `hooks.py` (TaskCreated,
   TaskCompleted, TeammateIdle → `data/logs/team-hooks.jsonl`, fail-open);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
-  (Workspace Claude Code panel: a tab per conversation of this browser session (new ones on the far left; earlier ones
-  only in the sessions window), titled by Haiku; a model menu (the CLI's aliases + the Models page's `claude_code`/`codex`
+  (Workspace Claude Code panel: a tab per conversation of this browser session (new ones on the far right; earlier ones
+  only in the sessions window, opened at their beginning), titled by Haiku; a model menu (the CLI's aliases + the Models page's `claude_code`/`codex`
   models, `router_model`: their id, sign-in and base URL; the transcript follows a conversation to another sign-in and
-  back) and effort, per prompt, also in a project's GM panel (default: the GM's model); each turn's prompt is a one-line
+  back; `/status`, `/tasks`, `/agents` follow a chosen model's own sign-in: `model_home`) and effort, per prompt, also in a project's GM panel (default: the GM's model); each turn's prompt is a one-line
   bar pinned to the top of the log (trimming the event window never drops it), tool calls and thinking fold into one
   "N steps" line, what the agent says and the result always show; other live host sessions only in the sessions window (a tab while one is
   opened), session history with resume/stop/delete); the Workspace explorer opens more file windows ("+", stacked or

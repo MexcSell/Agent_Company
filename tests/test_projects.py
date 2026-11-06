@@ -72,6 +72,28 @@ def test_create_edit_and_multi_delete(tmp_path):
     assert sorted(projects.delete([a["id"], b["id"]])) == sorted([a["id"], b["id"]])
 
 
+def test_a_repository_set_up_with_github_brings_its_url(tmp_path):
+    repo = tmp_path / "withgh"
+    repo.mkdir()
+    worktrees.git(repo, "init", "-q", "-b", "main")
+    worktrees.git(repo, "remote", "add", "origin", "https://user:ghp_secret@github.com/acme/app.git")
+    p = projects.create("WithGh", path=str(repo))
+    assert p["github_url"] == "https://github.com/acme/app.git", "the remote's URL, without the token in it"
+    # A URL typed for a repository without a remote becomes its origin.
+    bare = tmp_path / "nogh"
+    bare.mkdir()
+    q = projects.create("NoGh", path=str(bare), github_url="git@github.com:acme/other.git")
+    assert q["github_url"] == "git@github.com:acme/other.git"
+    assert worktrees.git(bare, "remote", "get-url", "origin") == "git@github.com:acme/other.git"
+    # Set up with GitHub after it was added: the URL shows from the next start.
+    (tmp_path / "later").mkdir()
+    later = projects.create("Later", path=str(tmp_path / "later"))
+    assert later["github_url"] == ""
+    worktrees.git(pathlib.Path(later["path"]), "remote", "add", "origin", "git@github.com:acme/later.git")
+    projects.seed()
+    assert projects.project_dict(projects.get(later["id"], ADMIN))["github_url"] == "git@github.com:acme/later.git"
+
+
 def test_command_window_order_runs_a_goal_and_reports_back():
     p = projects.create("Gamma", quality_commands=["test -f WORKLOG.md"])
     out = projects.command(p["id"], ADMIN, "Build a hello world script")

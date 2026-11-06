@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import re
+import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
@@ -207,6 +208,9 @@ def seed() -> None:
                           description="Develop the Agent Company platform itself. Approved changes are merged "
                                       "into this repository; restart the service to load them.",
                           quality_commands=["uv run pytest -q"]))
+        # Projects whose repository was set up with GitHub (at creation or since) show its URL.
+        for p in s.scalars(select(Project).where(Project.github_url == "", Project.path != "")).all():
+            p.github_url = repo_remote(p.path)
 
 
 def visible(user: dict[str, Any]):  # noqa: ANN201
@@ -252,12 +256,32 @@ def default_base() -> Path:
     return REPO_ROOT.resolve().parent
 
 
+GITHUB_URL_RE = re.compile(r"^(https://|git@)[\w.@:/~-]+$")
+
+
+def repo_remote(path: str | Path) -> str:
+    """The remote a project's repository was set up with (origin, else the first one), as its GitHub URL: an
+    https URL loses any user name or token in it (never stored). Empty when there is none."""
+    repo = Path(path or "").expanduser()
+    if not path or not (repo / ".git").exists():
+        return ""
+    try:
+        names = worktrees.git(repo, "remote", check=False).split()
+        if not names:
+            return ""
+        url = worktrees.git(repo, "remote", "get-url", "origin" if "origin" in names else names[0], check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    url = re.sub(r"^https://[^/@]*@", "https://", url.strip())
+    return url if GITHUB_URL_RE.match(url) else ""
+
+
 def _check(name: str, path: str, github_url: str, quality_commands: list[str]) -> str:
     from agent_company.governance import check_command
 
     if not NAME_RE.match(name or ""):
         raise ValueError("project names are 1-128 letters, digits, spaces, dots, dashes or underscores")
-    if github_url and not re.match(r"^(https://|git@)[\w.@:/~-]+$", github_url):
+    if github_url and not GITHUB_URL_RE.match(github_url):
         raise ValueError("GitHub URL must start with https:// or git@")
     for cmd in quality_commands:
         if check_command(cmd):
@@ -284,6 +308,12 @@ def _check(name: str, path: str, github_url: str, quality_commands: list[str]) -
 def create(name: str, path: str = "", github_url: str = "", description: str = "",
            quality_commands: list[str] | None = None, created_by: int | None = None) -> dict[str, Any]:
     path = _check(name, path, github_url, quality_commands or [])
+    # A repository already set up with GitHub brings its URL; a URL given for one without a remote becomes its origin.
+    remote = repo_remote(path) if path else ""
+    if not github_url:
+        github_url = remote
+    elif path and not remote and not worktrees.git(Path(path), "remote", check=False).strip():
+        worktrees.git(Path(path), "remote", "add", "origin", github_url, check=False)
     with session() as s:
         if s.scalars(select(Project).where(func.lower(Project.name) == name.lower())).first():
             raise ValueError("a project with that name exists")
