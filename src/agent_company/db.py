@@ -1398,6 +1398,17 @@ def _add_missing_columns(eng: Engine) -> None:
                     v = col.default.arg
                     default = f" DEFAULT {int(v) if isinstance(v, bool) else repr(v) if isinstance(v, str) else v}"
                 conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl}{default}'))
+        # A column whose default is computed (list, dict) cannot be a DDL default: rows that existed when it was added
+        # got NULL although the model says it never is (2026-11-06: projects.stack broke the first real goal). They
+        # get the default, also in databases migrated before this.
+        for table in Base.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            for col in table.columns:
+                d = col.default
+                if col.nullable or d is None or getattr(d, "is_scalar", True) or not callable(d.arg):
+                    continue
+                conn.execute(table.update().where(col.is_(None)).values({col.name: d.arg(None)}))
 
 
 def _knowledge_fts(eng: Engine) -> None:

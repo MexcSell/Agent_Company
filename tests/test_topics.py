@@ -2,6 +2,7 @@
 running in order (G-R-07)."""
 
 import secrets
+import subprocess
 import time
 
 import pytest
@@ -80,6 +81,28 @@ def test_old_databases_get_general_for_existing_messages(no_run):
         conn.execute(text("ALTER TABLE messages DROP COLUMN topic"))
     db.reset_engine()
     assert projects.messages(p["id"], topic="general")[-1]["content"] == "before topics"
+
+
+def test_old_databases_get_computed_defaults_for_existing_rows(tmp_path):
+    """A list column added after a project existed: its rows get [] (not NULL), and a goal's retrieval works."""
+    from agent_company import db, learning, loop
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    (repo / "a.txt").write_text("x")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i"], check=True)
+    p = projects.create("Old", path=str(repo))
+    with db.engine().begin() as conn:
+        conn.execute(text("ALTER TABLE projects DROP COLUMN stack"))
+        conn.execute(text("ALTER TABLE projects DROP COLUMN policy"))
+    db.reset_engine()
+    with db.session() as s:
+        row = s.get(db.Project, p["id"])
+        assert row.stack == [] and row.policy == {}
+    gid = loop.create_goal("x", repo_path=str(repo), project_id=p["id"], quality_commands=[])
+    assert learning.retrieve(1, gid, "anything") == []
 
 
 def test_an_order_in_a_topic_reports_in_that_topic():
