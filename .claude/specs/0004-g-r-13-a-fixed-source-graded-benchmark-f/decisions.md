@@ -25,3 +25,14 @@ Findings:
 - command grep -q 'check_claims' docs/specs/g-r-13-research-benchmark.md && grep -q 'eval-research://' docs/specs/g-r-13-research-benchmark.md && grep -qi 'forbidden' docs/specs/g-r-13-research-benchmark.md && grep -q 'REPORT_INSTRUCTIONS' docs/specs/g-r-13-research-benchmark.md && grep -qi 'isolation' docs/specs/g-r-13-research-benchmark.md && grep -q 'run_suite' docs/specs/g-r-13-research-benchmark.md: `grep -q 'check_claims' docs/specs/g-r-13-research-benchmark.md && grep -q 'eval-research://' docs/specs/g-r-13-research-benchmark.md && grep -qi 'forbidden' docs/specs/g-r-13-research-benchmark.md && grep -q 'REPORT_INSTRUCTIONS' docs/specs/g-r-13-research-benchmark.md && grep -qi 'isolation' docs/
 
 Next: fix the findings (loop back to Build).
+
+## Iteration 3: FAIL
+- suite (developer): done
+- runner (developer): done
+- docs (developer): done
+- review (qa): done
+
+Findings:
+- review review: reviewer: FAIL
+
+Next: fix the findings (loop back to Build).
