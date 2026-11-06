@@ -100,7 +100,8 @@ def test_certificates(monkeypatch):
 
 def test_nginx_site_rendering():
     https = transport.nginx_conf("https")
-    assert "listen 4900 ssl http2;" in https and "error_page 497 = @plain_http;" in https
+    assert "listen 4900 ssl http2 default_server;" in https and "error_page 497 = @plain_http;" in https
+    assert "server_name _;" in https  # no domain names: the catch-all only
     assert "X-Forwarded-Proto https;" in https and "X-Forwarded-Proto http;" in https
     assert "X-Forwarded-For $remote_addr;" in https and "ssl_session_cache" in https
     assert "ssl_session_tickets off;" in https
@@ -109,9 +110,113 @@ def test_nginx_site_rendering():
     assert f"server 127.0.0.1:{config.settings().port};" in https
     assert 'max-age=604800' in https and "alias" not in https
     http = transport.nginx_conf("http")
-    assert "ssl" not in http and "listen 4900;" in http and "X-Forwarded-Proto https" not in http
+    assert "ssl" not in http and "listen 4900 default_server;" in http and "X-Forwarded-Proto https" not in http
     with pytest.raises(ValueError):
         transport.nginx_conf("ftp")
+
+
+@pytest.fixture
+def applied(monkeypatch):
+    """Records transport.apply calls instead of running them: a test never touches the live nginx."""
+    calls = []
+    monkeypatch.delenv("TLS_DOMAINS", raising=False)
+    config.reset_settings()
+    monkeypatch.setattr(transport, "apply", lambda mode, force_reload=False: calls.append((mode, force_reload)))
+    return calls
+
+
+def _leaf_names():
+    leaf = x509.load_pem_x509_certificate(transport._paths()["crt"].read_bytes())
+    san = leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    return set(san.get_values_for_type(x509.DNSName)), set(san.get_values_for_type(x509.IPAddress))
+
+
+def test_parse_domains():
+    assert transport.parse_domains("Agent-Company.internal, dash.lan") == ["agent-company.internal", "dash.lan"]
+    assert transport.parse_domains("a.lan\nB.lan.  a.lan,,") == ["a.lan", "b.lan"]
+    assert transport.parse_domains(["x.internal", " Y.internal "]) == ["x.internal", "y.internal"]
+    assert transport.parse_domains("") == [] and transport.parse_domains([]) == []
+    assert transport.parse_domains("a" * 63 + ".b") == ["a" * 63 + ".b"]
+    for bad in ["http://x", "*.x", "a..b", "-a.b", "a-.b", "1.2.3.4", "::1", "x:443", "a" * 64 + ".b", "x;y",
+                "x{", "x}y", "a_b.lan", ".".join(["a" * 60] * 5)]:
+        with pytest.raises(ValueError):
+            transport.parse_domains(bad)
+    with pytest.raises(ValueError, match="x;y"):  # the error names the bad entry
+        transport.parse_domains("ok.lan, x;y")
+    with pytest.raises(ValueError, match="at most 20"):
+        transport.parse_domains([f"h{i}.lan" for i in range(21)])
+    with pytest.raises(ValueError):
+        transport.parse_domains([1])  # type: ignore[list-item]
+
+
+def test_invalid_env_domains_are_ignored(monkeypatch, capsys):
+    monkeypatch.setenv("TLS_DOMAINS", "good.lan,x;y")
+    assert config.load_settings().tls_domains == []
+    assert "TLS_DOMAINS ignored" in capsys.readouterr().out
+    monkeypatch.setenv("TLS_DOMAINS", "Good.lan, other.lan")
+    assert config.load_settings().tls_domains == ["good.lan", "other.lan"]
+
+
+def test_domains_in_certificate_and_nginx(applied):
+    assert prefs.set_value("tls_domains", "agent-company.internal") == ["agent-company.internal"]
+    assert applied == [("https", True)]  # reconfigured after the value was stored
+    assert config.settings().tls_domains == ["agent-company.internal"]
+    assert transport.ensure_certs() is True
+    dns, ips = _leaf_names()
+    assert "agent-company.internal" in dns and "localhost" in dns
+    assert ipaddress.ip_address("127.0.0.1") in ips  # access by IP keeps working
+    assert transport.ensure_certs() is False
+    assert transport.info()["domains"] == ["agent-company.internal"]
+    for mode in ("https", "http"):
+        conf = transport.nginx_conf(mode)
+        assert "server_name agent-company.internal _;" in conf
+        assert conf.count("default_server;") == 2
+
+    prefs.set_value("tls_domains", ["dash.lan", "Other.Lan"])  # another list: the leaf is reissued
+    assert transport.ensure_certs() is True
+    dns, _ = _leaf_names()
+    assert {"dash.lan", "other.lan"} <= dns and "agent-company.internal" not in dns
+    assert "server_name dash.lan other.lan _;" in transport.nginx_conf("https")
+
+    prefs.clear("tls_domains")  # removing every name renews it too
+    assert applied[-1] == ("https", True) and config.settings().tls_domains == []
+    assert transport.ensure_certs() is True
+    assert not {"dash.lan", "other.lan"} & _leaf_names()[0]
+    assert "server_name _;" in transport.nginx_conf("http")
+
+
+def test_bad_domains_store_nothing(applied):
+    with pytest.raises(ValueError):
+        prefs.set_value("tls_domains", "x;y")
+    with pytest.raises(ValueError):
+        prefs.set_value("tls_domains", "a.lan\nserver { listen 80; }")
+    assert applied == [] and config.settings().tls_domains == []
+    assert not any(r["overridden"] for r in prefs.describe() if r["key"] == "tls_domains")
+
+
+def test_failed_apply_restores_domains(monkeypatch, applied):
+    prefs.set_value("tls_domains", "keep.lan")
+
+    def refuse(mode, force_reload=False):
+        raise ValueError("nginx rejected the configuration")
+
+    monkeypatch.setattr(transport, "apply", refuse)
+    with pytest.raises(ValueError, match="nginx rejected"):
+        prefs.set_value("tls_domains", "new.lan")
+    assert config.settings().tls_domains == ["keep.lan"]
+    with pytest.raises(ValueError, match="nginx rejected"):
+        prefs.clear("tls_domains")
+    assert config.settings().tls_domains == ["keep.lan"]
+
+
+def test_domains_api(app, applied):
+    r = app.put("/api/settings/tls_domains", json={"value": "Agent-Company.internal, dash.lan"})
+    assert r.status_code == 200 and r.json()["value"] == ["agent-company.internal", "dash.lan"]
+    assert applied == [("https", True)]
+    info = app.get("/api/tls").json()
+    assert info["domains"] == ["agent-company.internal", "dash.lan"]
+    assert app.put("/api/settings/tls_domains", json={"value": "*.lan"}).status_code == 400
+    assert app.get("/api/tls").json()["domains"] == ["agent-company.internal", "dash.lan"]
 
 
 def test_apply_writes_nothing_unless_managed(tmp_path, monkeypatch):

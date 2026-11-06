@@ -53,6 +53,8 @@ class Settings:
     public_port: int = 4900  # the port nginx listens on when MANAGE_NGINX=1
     manage_nginx: bool = False  # write the nginx site and reload nginx (only the real server)
     nginx_dir: str = "/etc/nginx"
+    # REQ-009: domain names of the dashboard, in the server certificate and the nginx server_name.
+    tls_domains: list[str] = field(default_factory=list)
     study_interval: int = 0  # seconds between study visits of the learning rotation (0 = manual)
     # Transient executor errors (429, 5xx, timeouts) are retried with backoff before the next model (S04-R-06).
     retry_max_attempts: int = 3
@@ -140,6 +142,17 @@ class Settings:
         return self.data_dir / "workspaces"
 
 
+def _domains(value: str) -> list[str]:
+    """TLS_DOMAINS (comma separated); an invalid value is ignored with a warning instead of stopping the start."""
+    from agent_company.transport import parse_domains  # transport imports this module
+
+    try:
+        return parse_domains(value)
+    except ValueError as e:
+        print(f"warning: TLS_DOMAINS ignored: {e}")
+        return []
+
+
 def load_settings() -> Settings:
     data_dir = Path(os.environ.get("DATA_DIR") or REPO_ROOT / "data").resolve()
     db_url = os.environ.get("DATABASE_URL") or f"sqlite:///{data_dir / 'agent_company.db'}"
@@ -172,6 +185,7 @@ def load_settings() -> Settings:
         public_port=_int("PUBLIC_PORT", 4900),
         manage_nginx=_bool("MANAGE_NGINX", False),
         nginx_dir=os.environ.get("NGINX_DIR") or "/etc/nginx",
+        tls_domains=_domains(os.environ.get("TLS_DOMAINS") or ""),
         study_interval=_int("STUDY_INTERVAL", 0),
         retry_max_attempts=_int("RETRY_MAX_ATTEMPTS", 3),
         retry_base_seconds=float(os.environ.get("RETRY_BASE_SECONDS") or 2),
