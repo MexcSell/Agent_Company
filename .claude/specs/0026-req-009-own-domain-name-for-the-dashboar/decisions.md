@@ -15,3 +15,14 @@ Findings:
 - command grep -qi 'hosts' ReadMe.mdx && grep -q 'agent-company.internal' ReadMe.mdx: `grep -qi 'hosts' ReadMe.mdx && grep -q 'agent-company.internal' ReadMe.mdx` exit 1 (L3)
 
 Next: fix the findings (loop back to Build).
+
+## Iteration 2: FAIL
+- backend (developer): done
+- ui_docs (developer): failed
+- qa_review (qa): skipped
+
+Findings:
+- task ui_docs: the run cost $3.1626 (task budget $2.5000)
+- task qa_review: skipped: a dependency failed
+
+Next: fix the findings (loop back to Build).
