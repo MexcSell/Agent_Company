@@ -781,6 +781,7 @@ class GitTokenBody(BaseModel):
 class RouteBody(BaseModel):
     model_name: str
     escalation: str | None = None
+    fallback: list[str] | None = None  # models that take the role's work when the route's model is at its limit
 
 
 class OpenRouterBody(BaseModel):
@@ -2920,7 +2921,7 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.get("/api/models")
     def models(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         return {"models": router.list_models(), "routes": router.list_routes(),
-                "escalations": router.list_escalations(),
+                "escalations": router.list_escalations(), "fallbacks": router.list_fallbacks(),
                 "default_model": settings().default_model, "executor": settings().executor}
 
     @app.post("/api/models")
@@ -2982,9 +2983,15 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.put("/api/routes/{role}")
     def route_set(role: str, body: RouteBody, admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
         before = router.list_routes().get(role)
-        router.set_route(role, body.model_name, body.escalation)
-        _audit(admin, "route_set", role, before={"model": before},
-               after={"model": body.model_name, "escalation": body.escalation})
+        before_fb = router.list_fallbacks().get(role, [])
+        try:
+            router.set_route(role, body.model_name, body.escalation)
+            if body.fallback is not None:
+                router.set_fallback(role, body.fallback)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "route_set", role, before={"model": before, "fallback": before_fb},
+               after={"model": body.model_name, "escalation": body.escalation, "fallback": body.fallback})
         return {"role": role, "model_name": body.model_name}
 
     @app.get("/api/openrouter/models")

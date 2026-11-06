@@ -9,10 +9,12 @@ goal always runs (offline, at worst) and the reason is recorded.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import threading
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -120,7 +122,9 @@ def model_dict(m: ModelEntry) -> dict[str, Any]:
             "enabled": m.enabled, "builtin": m.builtin, "notes": m.notes, "base_url": m.base_url,
             "api_key_env": m.api_key_env, "session_id": m.session_id, "account": m.account, "available": ok, "unavailable_reason": why,
             "clearance": clearance(m), "clearance_set": bool(m.clearance),
-            "terms": m.terms or {}, "terms_due": terms_due(m)}
+            "terms": m.terms or {}, "terms_due": terms_due(m),
+            "limited_until": lu.isoformat(timespec="seconds") if (lu := limited_until(m)) else None,
+            "limited_reason": m.limited_reason if lu else ""}
 
 
 # --- a model's terms (G-R-18) -----------------------------------------------------------------
@@ -272,11 +276,105 @@ def provider_of(model_id: str) -> str:
     return model_id.split("/", 1)[0] if "/" in model_id else "openai"
 
 
-def available(m: ModelEntry) -> tuple[bool, str]:
+# --- plan and quota limits a provider reports on a run ------------------------------------------
+# Claude Code: "You've hit your session limit · resets 9:50pm (Europe/Berlin)"; Codex: "You've hit your usage limit
+# ... try again in 2 hours 5 minutes" / usage_limit_reached; API: insufficient_quota, credit balance too low. A
+# plain 429 is transient (loop.TRANSIENT) and retried; these are not, the model waits until its reset.
+LIMIT_RE = re.compile(r"(?i)hit your (?:\w+ )?limit|usage[ _]limit[ _](?:reached|exceeded)|usage_limit_reached"
+                      r"|rate_limit_reached|limit (?:reached|exceeded) for|quota (?:exceeded|exhausted)"
+                      r"|insufficient_quota|credit balance is too low|out of (?:credits|extra usage)")
+LIMIT_DEFAULT_MINUTES = 60  # when the message names no reset time
+LIMIT_MAX_DAYS = 8
+
+
+def is_limit_error(error: str | None) -> bool:
+    return bool(error) and bool(LIMIT_RE.search(error or ""))
+
+
+def limit_reset(error: str, at: datetime | None = None) -> datetime:
+    """When a limit named in `error` resets (UTC): 'resets 9:50pm (Europe/Berlin)', 'resets at 21:50',
+    'try again in 2 hours 5 minutes', 'try again at 3:05 PM'; else LIMIT_DEFAULT_MINUTES from now."""
+    from zoneinfo import ZoneInfo
+
+    at = at or datetime.now(UTC)
+    m = re.search(r"(?i)try again in ((?:\d+\s*(?:days?|d|hours?|h|minutes?|mins?|m|seconds?|s)\b[\s,and]*)+)", error)
+    if m:
+        units = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+        secs = sum(int(n) * units[u[0].lower()] for n, u in re.findall(r"(\d+)\s*([a-zA-Z]+)", m.group(1)))
+        if secs:
+            return at + timedelta(seconds=min(secs, LIMIT_MAX_DAYS * 86400))
+    m = re.search(r"(?i)(?:resets?|try again)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?\s*(?:\(([\w/+-]+)\))?",
+                  error)
+    if m:
+        hour, minute = int(m.group(1)), int(m.group(2) or 0)
+        ampm = (m.group(3) or "").lower().replace(".", "")
+        if ampm == "pm" and hour < 12:
+            hour += 12
+        elif ampm == "am" and hour == 12:
+            hour = 0
+        try:
+            tz = ZoneInfo(m.group(4)) if m.group(4) else UTC
+        except Exception:  # noqa: BLE001 - an unknown zone name: read the time as UTC
+            tz = UTC
+        if hour < 24 and minute < 60:
+            local = at.astimezone(tz)
+            reset = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if reset <= local:
+                reset += timedelta(days=1)
+            return reset.astimezone(UTC)
+    return at + timedelta(minutes=LIMIT_DEFAULT_MINUTES)
+
+
+def mark_limited(model_name: str, error: str) -> datetime | None:
+    """A run of `model_name` hit its plan or quota limit: the router skips it until the reset."""
+    until = limit_reset(error)
+    with session() as s:
+        m = s.scalars(select(ModelEntry).where(ModelEntry.name == model_name)).first()
+        if m is None or m.kind == "offline":
+            return None
+        m.limited_until, m.limited_reason = until, error.strip()[:300]
+    from agent_company.db import log_event
+
+    log_event("model", f"{model_name} is at its usage limit until {until:%Y-%m-%d %H:%M} UTC: its routes' fallbacks "
+              "take the work", model=model_name)
+    return until
+
+
+def clear_limit(model_name: str) -> None:
+    with session() as s:
+        m = s.scalars(select(ModelEntry).where(ModelEntry.name == model_name)).first()
+        if m is not None and m.limited_until is not None:
+            m.limited_until, m.limited_reason = None, ""
+
+
+def limited_until(m: ModelEntry, at: datetime | None = None) -> datetime | None:
+    if m.limited_until is None:
+        return None
+    until = m.limited_until if m.limited_until.tzinfo else m.limited_until.replace(tzinfo=UTC)
+    return until if until > (at or datetime.now(UTC)) else None
+
+
+def any_limited() -> bool:
+    with session() as s:
+        return any(limited_until(m) for m in s.scalars(select(ModelEntry).where(ModelEntry.limited_until.is_not(None))))
+
+
+def next_reset() -> datetime | None:
+    """The earliest reset among the models at their usage limit now."""
+    with session() as s:
+        times = [u for m in s.scalars(select(ModelEntry).where(ModelEntry.limited_until.is_not(None)))
+                 if (u := limited_until(m))]
+    return min(times) if times else None
+
+
+def available(m: ModelEntry, ignore_limit: bool = False) -> tuple[bool, str]:
     if not m.enabled:
         return False, "disabled"
     if m.kind == "offline":
         return True, ""
+    until = None if ignore_limit else limited_until(m)
+    if until is not None:
+        return False, f"usage limit reached; resets {until:%Y-%m-%d %H:%M} UTC"
     if m.kind == "claude_code":
         if not settings().enable_claude_code:
             return False, "set ENABLE_CLAUDE_CODE=1 to let agents run Claude Code"
@@ -362,8 +460,9 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
     Only models cleared for `classification` are used (S14-R-05). When that rules out every real model that
     would otherwise have been used, NotCleared is raised: the simulator must not stand in for real work.
 
-    Order: the escalation model (on retries), the agent's preference, the role's route,
-    MODEL from .env. With `avoid_provider` (a reviewer checking a developer's work), an
+    Order: the escalation model (on retries), the agent's preference, the role's route, the route's fallbacks,
+    MODEL from .env. A model at its usage limit (`mark_limited`) is skipped until its reset; when that leaves no
+    real model, the simulator's reason names the limit and `limit_blocked` tells the loop not to use it. With `avoid_provider` (a reviewer checking a developer's work), an
     available API model from another provider is tried first, so the reviewer is not
     blind to the same model family's mistakes.
     """
@@ -379,6 +478,9 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
             candidates.append((f"escalation for {role}", route.escalation))
         pref, via = agent_model(model_pref)
         candidates += [(via or "agent preference", pref), (f"route for {role}", route.model_name if route else None)]
+        # the role's fallbacks take the work when the models above are at their usage limit or fail
+        candidates += [(f"fallback for {role}", n.strip()) for n in ((route.fallback or "") if route else "").split(",")
+                       if n.strip()]
         default = settings().default_model
         if default:
             m = s.scalars(select(ModelEntry).where(ModelEntry.model_id == default)).first()
@@ -402,7 +504,9 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
             else:
                 skipped.append(f"{name}: {why}")
         if avoid_provider and (not chain or chain[0].provider == avoid_provider):
-            for m in s.scalars(select(ModelEntry).where(ModelEntry.kind == "llm").order_by(ModelEntry.id)):
+            # another family: an API model, else an agent CLI on another sign-in (Codex reviewing Claude's work)
+            for m in s.scalars(select(ModelEntry).where(ModelEntry.kind.in_(("llm", *CLI_KINDS)))
+                               .order_by(ModelEntry.kind != "llm", ModelEntry.id)):
                 c = _choice(m, f"different family from {avoid_provider}")
                 if (c.provider != avoid_provider and available(m)[0] and cleared(m, classification)
                         and all(x.name != m.name for x in chain)):
@@ -413,6 +517,41 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
                              "local model for it (Models), or lower the classification")
         chain.append(_choice(offline, "fallback (" + "; ".join(skipped) + ")" if skipped else "fallback"))
         return chain
+
+
+def run(role: str, req: Any, model_pref: str | None = None, *, first: Choice | None = None,
+        avoid_provider: str | None = None, classification: str = "internal", timeout: int | None = None,
+        agent_id: int | None = None, goal_id: int | None = None) -> tuple[Any, Choice]:
+    """Send `req` to the role's model and return (result, choice): what an agent that calls a model directly and then
+    works with the answer through its own tools (the research room) uses. A failed run, a usage limit above all,
+    moves the request to the chain's next model (the route's fallbacks: Codex when Claude is at its limit); every run
+    is recorded. With `first` that model is tried before the chain."""
+    from agent_company import executors
+
+    chain = resolve_chain(role, model_pref, avoid_provider=avoid_provider, classification=classification)
+    blocked = limit_blocked(chain)
+    if blocked and first is None:
+        return executors.Result(text="", ok=False, error=f"usage limit: {blocked}"), chain[0]
+    if first is not None:
+        chain = [first, *[c for c in chain if c.name != first.name]]
+    if chain[0].kind != "offline":  # once a real model is tried, the simulator never stands in for it
+        chain = [c for c in chain if c.kind != "offline"]
+    res, choice = None, chain[0]
+    for choice in chain[:3]:
+        res = executors.for_choice(choice, timeout or settings().command_timeout).run(req)
+        usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
+                     output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
+                     error=res.error, agent_id=agent_id, purpose=req.purpose, goal_id=goal_id, res=res)
+        if res.ok:
+            break
+    return res, choice
+
+
+def limit_blocked(chain: list[Choice]) -> str:
+    """Why the chain has no real model because of usage limits ('' when it has one, or for another reason)."""
+    if chain and chain[0].kind == "offline" and "usage limit reached" in chain[0].reason:
+        return chain[0].reason.removeprefix("fallback (").removesuffix(")")
+    return ""
 
 
 def resolve(role: str, model_pref: str | None = None, escalate: bool = False,
@@ -434,6 +573,29 @@ def list_routes() -> dict[str, str]:
 def list_escalations() -> dict[str, str]:
     with session() as s:
         return {r.role: r.escalation for r in s.scalars(select(Route).order_by(Route.role))}
+
+
+def list_fallbacks() -> dict[str, list[str]]:
+    with session() as s:
+        return {r.role: [n.strip() for n in (r.fallback or "").split(",") if n.strip()]
+                for r in s.scalars(select(Route).order_by(Route.role))}
+
+
+def set_fallback(role: str, models: list[str]) -> list[str]:
+    """The models that take `role`'s work, in order, when its route's model is at its usage limit or fails."""
+    names = [n.strip() for n in models if n and n.strip()]
+    with session() as s:
+        for name in names:
+            m = s.scalars(select(ModelEntry).where(ModelEntry.name == name)).first()
+            if m is None:
+                raise ValueError(f"unknown model {name!r}")
+            if m.kind == "offline":
+                raise ValueError("the offline simulator is always the last fallback; it is not listed")
+        r = s.get(Route, role)
+        if r is None:
+            raise ValueError(f"no route for role {role!r}")
+        r.fallback = ",".join(dict.fromkeys(names))[:512]
+        return [n for n in r.fallback.split(",") if n]
 
 
 def set_route(role: str, model_name: str, escalation: str | None = None) -> None:
@@ -561,6 +723,8 @@ def update_model(model_id: int, data: dict[str, Any]) -> dict[str, Any]:
             for r in s.scalars(select(Route).where((Route.model_name == old) | (Route.escalation == old))):
                 r.model_name = new if r.model_name == old else r.model_name
                 r.escalation = new if r.escalation == old else r.escalation
+            for r in s.scalars(select(Route).where(Route.fallback.contains(old))):
+                r.fallback = ",".join(new if n == old else n for n in r.fallback.split(","))
             for a in s.scalars(select(Agent).where(Agent.model_pref == old)):
                 a.model_pref = new
             s.execute(update(Run).where(Run.model_name == old).values(model_name=new))
@@ -597,6 +761,8 @@ def test_model(model_id: int) -> dict[str, Any]:
         if m is None:
             raise KeyError(model_id)
         ok, why = available(m)
+        if not ok and limited_until(m) is not None:  # a Test shows whether the limit is gone before its reset time
+            ok, why = available(m, ignore_limit=True)
         choice = _choice(m, "test")
         key = model_key(m)
     if not ok:
@@ -612,6 +778,8 @@ def test_model(model_id: int) -> dict[str, Any]:
                  error=res.error, purpose="test", res=res)
     from agent_company import registry
 
+    if res.ok:
+        clear_limit(choice.name)
     registry.recheck_model(choice.name)  # agents asking for this model first may now be degraded, or healthy
     status = _save_status(model_id, {"ok": res.ok, "error": res.error[:300], "seconds": round(res.duration, 2),
                                      **provider_status(choice, key)})
@@ -751,6 +919,8 @@ def delete_model(model_id: int) -> None:
             raise ValueError("the offline simulator cannot be deleted")
         for r in s.scalars(select(Route).where(Route.model_name == m.name)):
             r.model_name = DEFAULT_ROUTE_OTHER if m.name != DEFAULT_ROUTE_OTHER else OFFLINE
+        for r in s.scalars(select(Route).where(Route.fallback.contains(m.name))):
+            r.fallback = ",".join(n for n in r.fallback.split(",") if n != m.name)
         s.delete(m)
 
 

@@ -420,6 +420,10 @@ class ModelEntry(Base):
     api_key_enc: Mapped[str] = mapped_column(Text, default="")
     # the last Test: ok, error, checked_at and what the provider reports (plan or key usage, reset time)
     status: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # a plan or quota limit the provider reported on a run ("You've hit your session limit · resets 9:50pm"): the
+    # router skips the model until then and the role's fallbacks take the work (router.mark_limited)
+    limited_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    limited_reason: Mapped[str] = mapped_column(Text, default="")
 
 
 class Route(Base):
@@ -427,6 +431,8 @@ class Route(Base):
     role: Mapped[str] = mapped_column(String(64), primary_key=True)
     model_name: Mapped[str] = mapped_column(String(128))
     escalation: Mapped[str] = mapped_column(String(128), default="")  # model for retries after a failed gate
+    # models that take the role's work, in order, when the route's model is at its usage limit or fails
+    fallback: Mapped[str] = mapped_column(String(512), default="")  # comma-separated model names
 
 
 class Goal(Base):
@@ -847,6 +853,8 @@ class ResearchReport(Base):
     reviewed_by: Mapped[str] = mapped_column(String(128), default="")
     review_provider: Mapped[str] = mapped_column(String(32), default="")  # the reviewer's model family
     review_note: Mapped[str] = mapped_column(Text, default="")
+    # the research lead's own tool loop (research_agent.gather): each round's plan, refused tasks and tool results
+    tool_steps: Mapped[list[Any]] = mapped_column(default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

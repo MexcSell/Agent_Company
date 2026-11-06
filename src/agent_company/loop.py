@@ -19,6 +19,7 @@ import re
 import threading
 import time
 import traceback
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -306,6 +307,11 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
         log_event("security", f"{agent.name}: {e}", goal_id=goal_id, agent_id=agent.id, classification=level)
         return (executors.Result(text="", ok=False, error=str(e)),
                 router.Choice(name="(not cleared)", kind="offline", model_id="", reason=str(e)))
+    limited = router.limit_blocked(chain)
+    if limited:  # every real model is at its usage limit: the simulator must not do the work in their place
+        log_event("error", f"{agent.name}: no model available ({limited[:300]})", goal_id=goal_id, agent_id=agent.id)
+        return (executors.Result(text="", ok=False, error=f"usage limit: {limited[:500]}"),
+                router.Choice(name="(usage limit)", kind="offline", model_id="", reason=limited))
     if req.workdir is None:  # CLI agents only run inside a worktree
         chain = [c for c in chain if c.kind not in executors.CLI_KINDS]
     if chain and chain[0].kind != "offline":
@@ -1695,6 +1701,9 @@ def _out_of_quota(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, A
         row = s.get(Goal, goal_id)
         row.checkpoint = {**(row.checkpoint or {}), "paused_for": "quota", "paused_why": why,
                           "paused_day": registry.day_start().date().isoformat()}
+        reset = router.next_reset() if "usage limit" in why else None
+        if reset is not None:  # a model's usage limit: it resumes at the earliest reset, not the next UTC day
+            row.checkpoint = {**row.checkpoint, "resume_after": reset.isoformat(timespec="seconds")}
     log_event("goal", f"waiting for a quota: {why}", goal_id=goal_id)
     room = "daily budget" in why  # a room's budget (S04-R-09) rather than the agent's own quota
     notify(f"Goal #{goal_id} waits for {'a room' if room else 'an agent'}'s daily {'budget' if room else 'quota'}"[:256],
@@ -1707,9 +1716,14 @@ def _out_of_quota(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, A
 def resume_after_quota() -> list[int]:
     """Goals paused for a quota on an earlier UTC day go back to the queue (the goal queue's watcher calls this)."""
     today = registry.day_start().date().isoformat()
+    at = datetime.now(UTC).isoformat(timespec="seconds")
+
+    def due(cp: dict[str, Any]) -> bool:
+        return cp.get("paused_for") == "quota" and (cp.get("paused_day", today) < today
+                                                    or bool(cp.get("resume_after")) and cp["resume_after"] <= at)
+
     with session() as s:
-        ids = [g.id for g in s.scalars(select(Goal).where(Goal.status == "paused"))
-               if (g.checkpoint or {}).get("paused_for") == "quota" and (g.checkpoint or {}).get("paused_day", today) < today]
+        ids = [g.id for g in s.scalars(select(Goal).where(Goal.status == "paused")) if due(g.checkpoint or {})]
     resumed = []
     for gid in ids:
         try:
@@ -2010,7 +2024,7 @@ def resume(goal_id: int, actor: str = "system") -> None:
             raise ValueError(f"still over budget ({e}); raise the goal budget first") from e
         with session() as s:
             row = s.get(Goal, goal_id)
-            row.checkpoint = {k: v for k, v in (row.checkpoint or {}).items() if k not in {"paused_for", "paused_why"}}
+            row.checkpoint = {k: v for k, v in (row.checkpoint or {}).items() if k not in {"paused_for", "paused_why", "resume_after"}}
     workflow.transition(goal_id, "queued", "resumed", actor)
     log_event("goal", f"goal resumed by {actor}", goal_id=goal_id)
     enqueue(goal_id)

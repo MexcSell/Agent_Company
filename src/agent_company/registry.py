@@ -47,6 +47,30 @@ class QuotaExceeded(RuntimeError):
     """Every agent that could take the work has used its daily cost quota."""
 
 
+class ModelLimitReached(QuotaExceeded):
+    """Every model the role's agents may use (their own, the route's and its fallbacks) is at its usage limit: the
+    goal waits for the earliest reset (loop.resume_after_quota). A clone would ask for the same models."""
+
+
+class CloneLimitReached(QuotaExceeded):
+    """Every agent of the role is busy or degraded and the best one already has `max_clones` clones."""
+
+
+def _limit_blocked(role: str, pool: list[Agent]) -> str:
+    """Why no agent of the pool can get a real model right now because of usage limits ('' if one can)."""
+    from agent_company import router
+
+    if not router.any_limited():
+        return ""
+    reasons = []
+    for pref in {a.model_pref for a in pool}:
+        try:
+            reasons.append(router.limit_blocked(router.resolve_chain(role, pref)))
+        except Exception:  # noqa: BLE001 - not cleared etc.: not a limit, the run reports it
+            return ""
+    return reasons[0] if reasons and all(reasons) else ""
+
+
 def day_start():  # noqa: ANN201
     """Quotas are per UTC day."""
     t = now()
@@ -248,11 +272,12 @@ def first_model(role: str, model_pref: str | None) -> str | None:
 
 
 def _counts(r) -> bool:  # noqa: ANN001
-    """Stops and cancels, and refusals by the command policy (behaviour rules handle those), are not
-    executor errors."""
+    """Stops and cancels, refusals by the command policy (behaviour rules handle those) and a model's usage limit
+    (the router's fallbacks take the work until the reset) are not executor errors."""
     from agent_company.loop import NO_RETRY
+    from agent_company.router import is_limit_error
 
-    return not (STOPPED in (r.error or "") or NO_RETRY.search(r.error or ""))
+    return not (STOPPED in (r.error or "") or NO_RETRY.search(r.error or "") or is_limit_error(r.error))
 
 
 MODEL_TEST = "failed its test"
@@ -274,7 +299,9 @@ def _health_reason(s: Session, a: Agent, first: str | None) -> str:
     if not first:
         return ""
     test = s.scalars(select(Run).where(Run.purpose == "test", Run.model_name == first).order_by(Run.id.desc())).first()
-    if test is not None and not test.ok and (_since(a) is None or test.started_at.replace(tzinfo=None) > _since(a)):
+    from agent_company.router import is_limit_error
+
+    if test is not None and not test.ok and not is_limit_error(test.error) and (_since(a) is None or test.started_at.replace(tzinfo=None) > _since(a)):
         return f"its model {first} {MODEL_TEST} ({(test.error or 'no detail').strip()[:200]})."
     return ""
 
@@ -685,6 +712,9 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
                 raise RuntimeError(f"every {role} agent was released from goal #{goal_id}'s team; add one back "
                                    "or plan without the role")
         g = s.get(Goal, goal_id) if goal_id else None
+        limited = _limit_blocked(role, pool) if pool else ""
+        if limited:
+            raise ModelLimitReached(f"every model the {role} agents may use is at its usage limit ({limited[:300]})")
         quota ={a.id: over_quota(s, a) for a in pool}  # S02-R-03: the quota covers an agent and its clones
         idle = [a for a in pool if _free(a, goal_id) and a.health != "degraded" and not quota[a.id]]  # S02-R-02
         team = _team_weights(s, goal_id)
@@ -695,7 +725,7 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
                                                          and not quota[trainee.id])):
             agent, action = trainee, "assigned"
         elif trainee is not None and not quota[trainee.id]:  # busy: its clone, which merges back after the goal
-            agent, action = _clone(s, trainee), "cloned"
+            agent, action = _clone(s, trainee, cap=False), "cloned"  # the measured agent itself
         elif idle:
             ranks = _rank(s, idle, skills, team)
             agent = max(idle, key=lambda a: ranks[a.id]["score"])
@@ -853,9 +883,16 @@ def duplicates(threshold: float = 0.9) -> list[dict[str, Any]]:
         return sorted(out, key=lambda x: -x["similarity"])
 
 
-def _clone(s: Session, src: Agent) -> Agent:
+def _clone(s: Session, src: Agent, cap: bool = True) -> Agent:
+    from agent_company.config import settings
+
     base = s.get(Agent, src.parent_id) if src.parent_id else src
     n = s.scalar(select(func.count()).select_from(Agent).where(Agent.parent_id == base.id)) or 0
+    live = s.scalar(select(func.count()).select_from(Agent).where(Agent.parent_id == base.id,
+                                                                   Agent.lifecycle.in_(("active", "candidate")))) or 0
+    if cap and live >= settings().max_clones:  # 2026-11-06: a model limit once made 41 clones of the GM
+        raise CloneLimitReached(f"{base.name} already has {live} clone(s) (max_clones {settings().max_clones}); the "
+                                "work waits for one of them")
     name = f"{base.name} #{n + 2}"
     while s.scalars(select(Agent).where(Agent.name == name)).first():
         n += 1
@@ -1250,7 +1287,7 @@ def clone_agent(agent_id: int) -> dict[str, Any]:
             raise KeyError(agent_id)
         if src.lifecycle == "retired":
             raise ValueError("a retired agent cannot be cloned")
-        c = _clone(s, src)
+        c = _clone(s, src, cap=False)  # an administrator's own decision
         return agent_dict(c)
 
 

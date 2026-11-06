@@ -58,6 +58,7 @@ How you run the company (shell commands; GM below stands for: {gm}):
   GM agents                         every agent: id, role, skills, plugins, model
   GM create-agent <role> --title "…" --skills "python=7,api=6" --plugins "code-review" --mission "…" [--writes]
   GM set-model <agent id> "<model name>"   (see: gm models)
+  GM set-fallback <role> "<model>,<model>"   models that take a role's work when its model hits a usage limit
   GM models                         the model catalog and role routes
   GM catalog [--kind skill|plugin|rule|command|hook]
   GM add <kind> <name> --description "…" --content "…"   add what is missing, then use it
@@ -154,6 +155,9 @@ def main(argv: list[str]) -> None:
     sm = sub.add_parser("set-model")
     sm.add_argument("agent_id", type=int)
     sm.add_argument("model")
+    fb = sub.add_parser("set-fallback")
+    fb.add_argument("role")
+    fb.add_argument("models", help="comma-separated model names, in order; '' clears")
     cat = sub.add_parser("catalog")
     cat.add_argument("--kind", default="")
     ad = sub.add_parser("add")
@@ -228,8 +232,9 @@ def main(argv: list[str]) -> None:
         out = [{k: x[k] for k in ("id", "name", "role", "room", "skills", "plugins", "model_pref", "status",
                                   "lifecycle", "enabled")} for x in registry.list_agents() if x["lifecycle"] != "retired"]
     elif a.cmd == "models":
-        out = {"models": [{k: m[k] for k in ("name", "kind", "available", "unavailable_reason")} for m in router.list_models()],
-               "routes": router.list_routes()}
+        out = {"models": [{k: m[k] for k in ("name", "kind", "available", "unavailable_reason", "limited_until")}
+                          for m in router.list_models()],
+               "routes": router.list_routes(), "fallbacks": {k: v for k, v in router.list_fallbacks().items() if v}}
     elif a.cmd == "create-agent":
         skills = {k.strip(): int(v) for k, v in (x.split("=") for x in a.skills.split(",") if "=" in x)}
         out = registry.create_agent(a.role, a.title, skills, a.room, None, a.mission, a.writes)
@@ -240,6 +245,8 @@ def main(argv: list[str]) -> None:
         agentdefs.sync(out["id"], "created by the General Manager")
     elif a.cmd == "set-model":
         out = registry.update_agent(a.agent_id, {"model_pref": a.model or None})
+    elif a.cmd == "set-fallback":
+        out = {"role": a.role, "fallback": router.set_fallback(a.role, a.models.split(","))}
     elif a.cmd == "catalog":
         out = [{k: i[k] for k in ("kind", "name", "description")} for i in catalog.list_items(a.kind)]
     elif a.cmd == "add":
