@@ -11,3 +11,14 @@ Findings:
 - task review: skipped: a dependency failed
 
 Next: fix the findings (loop back to Build).
+
+## Iteration 2: FAIL
+- backend_verify (developer): done
+- ui_docs (developer): failed
+- qa_review (qa): skipped
+
+Findings:
+- task ui_docs: the run cost $2.2444 (task budget $2.0000)
+- task qa_review: skipped: a dependency failed
+
+Next: fix the findings (loop back to Build).
