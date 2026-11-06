@@ -209,7 +209,7 @@ def test_instructions_cannot_widen_permissions(tmp_path):
     out = imported(tmp_path)
     a = agent(out["agent_id"])
     assert a.permissions == ["read", "write", "shell"], "the role template, no network/mcp/admin"
-    assert a.autonomy == "G2" and a.model_pref == "claude-sonnet-5-5"
+    assert a.autonomy == "G2" and a.model_pref is None, "the manifest's models are shown, never applied"
     assert set(out["ceiling"]["not_granted"]) == {"network", "mcp", "admin"}
     out = marketplace.approve(out["id"], "admin", ["read", "write", "shell", "network", "admin"], admin=True,
                               autonomy="G4", acknowledge=True)
@@ -301,7 +301,7 @@ def test_definition_restore_rolls_back(tmp_path):
     before = agentdefs.read(out["agent_id"])
     agentdefs.write_section(out["agent_id"], "Provenance", "- tampered", "test edit")
     assert "tampered" in agentdefs.read(out["agent_id"])["text"]
-    after = agentdefs.restore(out["agent_id"], before["history"][0]["commit"], "admin")
+    after = agentdefs.restore(out["agent_id"], before["history"][0]["commit"], "admin", admin=True)
     assert "tampered" not in after["text"] and "licence: MIT" in after["text"]
     assert after["history"][0]["message"].endswith(f"restored {before['history'][0]['commit']} by admin")
 
@@ -310,7 +310,7 @@ def test_reject_retires_and_deletes_src(tmp_path):
     out = imported(tmp_path)
     src = marketplace.src_dir(out["id"])
     assert src.is_dir()
-    out = marketplace.reject(out["id"], "admin", "not needed")
+    out = marketplace.reject(out["id"], "admin", "not needed", admin=True)
     assert out["status"] == "rejected" and not src.exists() and not src.parent.exists()
     a = agent(out["agent_id"])
     assert a.lifecycle == "retired" and not a.enabled
@@ -331,6 +331,150 @@ def test_unknown_licence_needs_acceptance():
     out = marketplace.approve(out["id"], "admin", admin=True, acknowledge=True, accept_licence=True)
     assert out["status"] == "approved"
     assert "licence: unknown" in agentdefs.sections(agentdefs.read(out["agent_id"])["text"])["Provenance"]
+
+
+# --- iteration 2: the candidate flow the package cannot steer ------------------------------------
+
+def claiming(skills: list[str]) -> dict:
+    """The fixture package as an upload whose manifest claims these skills."""
+    files = sample_files()
+    m = json.loads(files["agent-package.json"])
+    m["skills"] = skills
+    files["agent-package.json"] = json.dumps(m).encode()
+    return marketplace.create_candidate(marketplace.fetch_upload(zip_bytes(files), "claims.zip", "admin")["id"])
+
+
+def test_sandbox_off_setting_cannot_weaken_the_candidate_eval(tmp_path, market, monkeypatch):
+    from agent_company import policies, prefs, projects, sandbox
+    from agent_company.db import Goal
+
+    prefs.set_value("sandbox", "off")
+    p = projects.create("Lax")
+    policies.set_project_rules(p["id"], {"sandbox": "off"}, "user:admin")
+    out = imported(tmp_path)
+    trial = market.calls[0]["trial"]
+    assert trial["sandbox"] == "required" and out["status"] == "qualified"
+    assert sandbox.mode_for(Goal(trial=trial, project_id=p["id"])) == "required"
+    assert sandbox.mode_for(Goal(project_id=p["id"])) == "off", "only the candidate's trial is forced"
+    market.calls.clear()
+    monkeypatch.setattr(sandbox, "available", lambda: (False, "no bwrap"))
+    second = marketplace.create_candidate(marketplace.fetch_upload(zip_bytes(sample_files()), "p.zip", "admin")["id"])
+    assert not market.calls and second["status"] == "failed" and "L3 sandbox" in second["eval"]["error"]
+
+
+def test_suite_comes_from_the_role_not_the_package_skills(tmp_path, market, monkeypatch):
+    from agent_company import evaluation
+
+    monkeypatch.setattr(evaluation, "list_suites", lambda: [
+        {"name": "easy-docs", "kind": "practice", "skills": ["markdown"]},
+        {"name": "developer-suite", "kind": "benchmark", "skills": ["developer"]},
+        {"name": "smoke", "kind": "benchmark", "skills": []}])
+    out = claiming(["markdown"])  # a skill outside the developer role that names the easy suite
+    assert out["manifest"]["skills"] == ["markdown"]
+    assert market.calls[0]["suite"] == "developer-suite"
+    assert recruitment.get(out["recruitment_id"])["qualification"]["suite"] == "developer-suite"
+
+
+def test_unevaluated_import_needs_explicit_acceptance(tmp_path, market, monkeypatch):
+    from agent_company import evaluation
+
+    monkeypatch.setattr(evaluation, "list_suites", lambda: [])  # no suite matches the role
+    out = imported(tmp_path)
+    assert not market.calls and out["status"] == "unevaluated" and out["eval"]["status"] == "skipped"
+    with pytest.raises(ValueError, match="unevaluated"):
+        marketplace.approve(out["id"], "admin", admin=True, acknowledge=True)
+    assert agent(out["agent_id"]).lifecycle == "candidate"
+    out = marketplace.approve(out["id"], "admin", admin=True, acknowledge=True, accept_unevaluated=True)
+    assert out["status"] == "approved" and out["eval"]["accepted_unevaluated_by"] == "admin"
+    assert "unevaluated, accepted by admin" in agentdefs.sections(agentdefs.read(out["agent_id"])["text"])["Provenance"]
+
+
+def test_qualified_needs_a_passed_eval(tmp_path):
+    out = imported(tmp_path)
+    with session() as s:
+        s.get(AgentImport, out["id"]).eval = {"status": "skipped"}
+    with pytest.raises(ValueError, match="qualified"):
+        marketplace.approve(out["id"], "admin", admin=True, acknowledge=True, accept_unevaluated=True)
+
+
+def test_claimed_skills_start_at_the_lowest_level():
+    out = claiming(["python", "security-review"])
+    out = marketplace.approve(out["id"], "admin", admin=True, acknowledge=True)
+    a = agent(out["agent_id"])
+    assert a.skills["python"] == a.skills["security-review"] == marketplace.IMPORTED_SKILL_LEVEL == 0
+    assert set(a.skills.values()) == {0}, "no skill above the lowest level without eval or probation evidence"
+    rec = recruitment.get(out["recruitment_id"])
+    assert rec["job_description"]["requested_skills"] == ["python", "security-review"]
+    assert "security-review" not in rec["job_description"]["expertise"]
+
+
+def test_requested_models_are_not_applied_admin_picks_a_catalog_model(tmp_path):
+    with session() as s:
+        s.add(ModelEntry(name="claude-sonnet-5-5", kind="llm", model_id="anthropic/claude-sonnet-5-5"))
+        s.add(ModelEntry(name="cheap", kind="llm", model_id="x/cheap"))
+    out = imported(tmp_path)
+    assert agent(out["agent_id"]).model_pref is None and "claude-sonnet-5-5" in out["manifest"]["models"]
+    with pytest.raises(ValueError, match="catalog"):
+        marketplace.approve(out["id"], "admin", admin=True, acknowledge=True, model="no-such-model")
+    assert agent(out["agent_id"]).model_pref is None
+    out = marketplace.approve(out["id"], "admin", admin=True, acknowledge=True)
+    assert agent(out["agent_id"]).model_pref is None, "approve without a choice keeps the role route"
+    other = marketplace.create_candidate(marketplace.fetch_upload(zip_bytes(sample_files()), "p.zip", "admin")["id"])
+    other = marketplace.approve(other["id"], "admin", admin=True, acknowledge=True, model="cheap")
+    assert agent(other["agent_id"]).model_pref == "cheap"
+
+
+def test_reject_and_restore_need_an_administrator(tmp_path):
+    out = imported(tmp_path)
+    with pytest.raises(PermissionError):
+        marketplace.reject(out["id"], "admin", "no")
+    with pytest.raises(PermissionError):
+        marketplace.reject(out["id"], "system", "no", admin=True)
+    assert marketplace.get(out["id"])["status"] == "qualified"
+    commit = agentdefs.read(out["agent_id"])["history"][-1]["commit"]
+    with pytest.raises(PermissionError):
+        agentdefs.restore(out["agent_id"], commit, "admin")
+    for bad in ("abcd", "abc123g", "HEAD~1", "a" * 41):
+        with pytest.raises(ValueError, match="hexadecimal"):
+            agentdefs.restore(out["agent_id"], bad, "admin", admin=True)
+    other = marketplace.create_candidate(marketplace.fetch_upload(zip_bytes(sample_files()), "p.zip", "admin")["id"])
+    foreign = agentdefs.read(other["agent_id"])["history"][0]["commit"]
+    with pytest.raises(ValueError, match="not a version"):
+        agentdefs.restore(out["agent_id"], foreign, "admin", admin=True)
+    assert agentdefs.restore(out["agent_id"], commit, "admin", admin=True)["history"][0]["message"].endswith(
+        f"restored {commit} by admin")
+
+
+def test_api_refused_approve_and_reject_are_audited(tmp_path, monkeypatch):
+    import secrets
+
+    from fastapi.testclient import TestClient
+    from sqlalchemy import select
+
+    from agent_company import evaluation
+    from agent_company.api import create_app
+    from agent_company.db import AuditEvent
+
+    monkeypatch.setattr(evaluation, "list_suites", lambda: [])
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
+        app.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
+        out = app.post("/api/marketplace/import", json={"url": git_repo(SAMPLE, tmp_path)}).json()
+        assert out["status"] == "unevaluated"
+        iid = out["id"]
+        r = app.post(f"/api/marketplace/{iid}/approve", json={"acknowledge": True})
+        assert r.status_code == 400 and "unevaluated" in r.json()["detail"]
+        assert app.post(f"/api/marketplace/{iid}/approve",
+                        json={"acknowledge": True, "accept_unevaluated": True, "model": "no-such"}).status_code == 400
+        assert app.post("/api/marketplace/9999/reject", json={}).status_code == 404
+        out = app.post(f"/api/marketplace/{iid}/approve", json={"acknowledge": True, "accept_unevaluated": True}).json()
+        assert out["status"] == "approved" and out["eval"]["accepted_unevaluated_by"] == "user:admin"
+        assert app.post(f"/api/marketplace/{iid}/reject", json={}).status_code == 400
+    with session() as s:
+        rows = [(e.action, e.severity, e.target) for e in s.scalars(select(AuditEvent))]
+    refused = [r for r in rows if r[0] == "marketplace_approve_refused"]
+    assert len(refused) == 2 and all(r[1] == "warning" and r[2] == str(iid) for r in refused)
+    assert [r[1:] for r in rows if r[0] == "marketplace_reject_refused"] == [("warning", "9999"), ("warning", str(iid))]
+    assert ("marketplace_approve", "info", str(iid)) in rows
 
 
 # --- API and CLI --------------------------------------------------------------------------------

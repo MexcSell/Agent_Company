@@ -57,11 +57,14 @@ def _marketplace(args: argparse.Namespace) -> None:
         elif act == "approve":
             grant = [g for x in args.grant for g in x.split(",") if g] if args.grant else None
             out = marketplace.approve(int(args.target), actor, grant, admin=True, autonomy=args.autonomy,
-                                      accept_licence=args.accept_licence, acknowledge=args.acknowledge)
+                                      accept_licence=args.accept_licence, acknowledge=args.acknowledge,
+                                      accept_unevaluated=args.accept_unevaluated, model=args.model)
             governance.audit(actor, "marketplace_approve", out["id"],
-                             after={"permissions": out["ceiling"].get("permissions"), "requested": grant})
+                             after={"permissions": out["ceiling"].get("permissions"), "requested": grant,
+                                    "model": args.model,
+                                    "accepted_unevaluated": bool(out["eval"].get("accepted_unevaluated_by"))})
         else:
-            out = marketplace.reject(int(args.target), actor, args.reason)
+            out = marketplace.reject(int(args.target), actor, args.reason, admin=True)
             governance.audit(actor, "marketplace_reject", out["id"], after={"reason": args.reason[:300]})
     except (ValueError, KeyError, PermissionError) as e:
         raise SystemExit(f"marketplace {act}: {e}") from e
@@ -211,6 +214,9 @@ def main(argv: list[str] | None = None) -> None:
     mk.add_argument("--autonomy", default="", help="approve: G0..G2, never above the ceiling")
     mk.add_argument("--accept-licence", action="store_true", help="approve: accept an unknown licence")
     mk.add_argument("--acknowledge", action="store_true", help="approve: acknowledge the screen's findings")
+    mk.add_argument("--accept-unevaluated", action="store_true",
+                    help="approve: accept an import no eval suite ran for (status unevaluated)")
+    mk.add_argument("--model", default="", help="approve: a router catalog model for the agent; default: the role route")
     mk.add_argument("--reason", default="", help="reject: why")
     mk.add_argument("--status", default="", help="list: only this status")
     h = sub.add_parser("host", help="Docker and LXD virtual machines on this host")

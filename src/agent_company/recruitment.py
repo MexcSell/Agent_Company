@@ -502,6 +502,8 @@ def qualify(recruitment_id: int) -> dict[str, Any]:
             if not ok:
                 return _finish(recruitment_id, None, f"the L3 sandbox is required for a marketplace candidate ({why})")
             trial["sandbox"] = "required"
+            if sandbox.mode_for(Goal(trial=trial)) == "off":  # the eval goals' mode, whatever `sandbox` is set to
+                return _finish(recruitment_id, None, "the L3 sandbox is off for this marketplace candidate's eval")
         summary = evaluation.run_suite(suite, label, repeats=1, trial=trial)
         return _finish(recruitment_id, summary)
     except Exception as e:  # noqa: BLE001 - a broken suite must not leave the record qualifying forever

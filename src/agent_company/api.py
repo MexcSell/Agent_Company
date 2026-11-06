@@ -718,6 +718,8 @@ class MarketApproveBody(BaseModel):
     autonomy: str = ""
     accept_licence: bool = False
     acknowledge: bool = False
+    accept_unevaluated: bool = False  # an import no eval suite ran for (status unevaluated)
+    model: str = ""  # a router catalog entry; "" = the role route
 
 
 class MarketRejectBody(BaseModel):
@@ -2333,17 +2335,30 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.post("/api/marketplace/{import_id}/approve")
     def marketplace_approve(import_id: int, body: MarketApproveBody, admin: dict[str, Any] = Depends(admin_user)
                             ) -> dict[str, Any]:
-        out = _market_call(marketplace.approve, import_id, f"user:{admin['name']}", body.grant, admin=True,
-                           autonomy=body.autonomy, accept_licence=body.accept_licence, acknowledge=body.acknowledge)
+        try:
+            out = _market_call(marketplace.approve, import_id, f"user:{admin['name']}", body.grant, admin=True,
+                               autonomy=body.autonomy, accept_licence=body.accept_licence,
+                               acknowledge=body.acknowledge, accept_unevaluated=body.accept_unevaluated,
+                               model=body.model)
+        except HTTPException as e:
+            _audit(admin, "marketplace_approve_refused", import_id, after={"error": str(e.detail)[:300]},
+                   severity="warning")
+            raise
         _audit(admin, "marketplace_approve", import_id,
                after={"agent_id": out["agent_id"], "permissions": out["ceiling"].get("permissions"),
-                      "autonomy": out["ceiling"].get("autonomy"), "requested": body.grant})
+                      "autonomy": out["ceiling"].get("autonomy"), "requested": body.grant, "model": body.model,
+                      "accepted_unevaluated": bool(out["eval"].get("accepted_unevaluated_by"))})
         return out
 
     @app.post("/api/marketplace/{import_id}/reject")
     def marketplace_reject(import_id: int, body: MarketRejectBody, admin: dict[str, Any] = Depends(admin_user)
                            ) -> dict[str, Any]:
-        out = _market_call(marketplace.reject, import_id, f"user:{admin['name']}", body.reason)
+        try:
+            out = _market_call(marketplace.reject, import_id, f"user:{admin['name']}", body.reason, admin=True)
+        except HTTPException as e:
+            _audit(admin, "marketplace_reject_refused", import_id, after={"error": str(e.detail)[:300]},
+                   severity="warning")
+            raise
         _audit(admin, "marketplace_reject", import_id, after={"status": out["status"], "reason": body.reason[:300]})
         return out
 

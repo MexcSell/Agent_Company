@@ -192,15 +192,21 @@ def write_section(agent_id: int, section: str, text: str, reason: str, limit: in
         return True
 
 
-def restore(agent_id: int, commit: str, actor: str) -> dict[str, Any]:
-    """Roll the definition back to an earlier version: that version's text becomes a new commit."""
-    if not re.fullmatch(r"[0-9a-f]{4,40}", commit or ""):
-        raise ValueError("commit is a hexadecimal git id")
+def restore(agent_id: int, commit: str, actor: str, *, admin: bool = False) -> dict[str, Any]:
+    """Roll the definition back to an earlier version: that version's text becomes a new commit. Only an
+    administrator restores, and only a commit from this definition's own history."""
+    if not admin or not actor:
+        raise PermissionError("only an administrator restores an agent definition")
+    if not re.fullmatch(r"[0-9a-f]{7,40}", commit or ""):
+        raise ValueError("commit is a hexadecimal git id of 7 to 40 characters")
     with _lock, session() as s:
         a = s.get(Agent, agent_id)
         if a is None:
             raise KeyError(agent_id)
         p = path_for(a)
+        own = _git(repo(), "log", "--format=%H", "--", p.name).stdout.split()
+        if not any(h.startswith(commit) for h in own):
+            raise ValueError(f"{commit} is not a version of {p.name}")
         old = _git(repo(), "show", f"{commit}:{p.name}")
         if old.returncode != 0:
             raise ValueError(f"no version {commit} of {p.name}")

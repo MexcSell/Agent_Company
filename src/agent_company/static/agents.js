@@ -374,14 +374,15 @@ async function viewMarketplace() {
 }
 
 async function marketDetail(id) {
-  const box = $("#mk-detail"), i = await api(`/api/marketplace/${id}`, { fresh: true });
+  const box = $("#mk-detail"), [i, cat] = await Promise.all([api(`/api/marketplace/${id}`, { fresh: true }), api("/api/models")]);
   const m = i.manifest || {}, c = i.ceiling || {}, sc = i.screen || {}, ev = i.eval || {};
   const req = c.requested || m.permissions || [], granted = c.permissions || [];
   const perms = [...new Set([...req, ...granted])].map((p) => `<tr><td>${esc(p)}</td><td>${req.includes(p) ? "requested" : ""}</td><td>${granted.includes(p) ? "granted" : `<span class="muted">not granted</span>`}</td></tr>`).join("");
   const dims = Object.entries(ev.dimensions || {}).map(([k, v]) => `<li>${esc(k)}: ${esc(String(v && typeof v === "object" ? v.value ?? v.mean ?? "" : v))} <span class="muted">(n=${esc(String(v?.n ?? "?"))})</span></li>`).join("");
   const sections = i.definition?.sections || {};
   const levels = ["G0", "G1", "G2", "G3", "G4"].slice(0, ["G0", "G1", "G2", "G3", "G4"].indexOf(c.autonomy || "G1") + 1).reverse();
-  const decide = ["qualified", "qualifying", "converted"].includes(i.status);
+  const decide = ["qualified", "unevaluated", "qualifying", "converted"].includes(i.status);
+  const approvable = (i.status === "qualified" && ev.status === "passed") || i.status === "unevaluated";
   box.innerHTML = `<div class="card" style="margin-top:12px"><h3>#${i.id} ${esc(m.name || "")} <span class="pill st-${esc(i.status)}">${esc(i.status)}</span></h3>
     ${i.error ? `<p class="bad">${esc(i.error)}</p>` : ""}
     <p class="muted">${esc(m.role || "")} · version ${esc(i.version || "?")} · by ${esc(i.author || "unknown")} · licence ${esc(i.licence)} · ${esc(i.kind)} ${esc(i.source)} <code>${esc(i.source_sha)}</code></p>
@@ -394,18 +395,20 @@ async function marketDetail(id) {
     ${sections.Provenance ? `<details open><summary>Provenance</summary><pre>${esc(sections.Provenance)}</pre></details>` : ""}
     ${decide ? `<form id="mk-dec"><h4>Decision</h4>
       <div class="row">${granted.map((p) => `<label class="row" style="margin:0"><input type="checkbox" name="grant" value="${esc(p)}" checked style="width:auto"> ${esc(p)}</label>`).join("")}
-      <select id="mk-aut" title="Autonomy, never above the ceiling">${levels.map((g) => `<option>${g}</option>`).join("")}</select></div>
+      <select id="mk-aut" title="Autonomy, never above the ceiling">${levels.map((g) => `<option>${g}</option>`).join("")}</select>
+      <select id="mk-model" title="Model: the role route, or a model of the router catalog (the package's requested models are only shown)"><option value="">role route</option>${(cat.models || []).map((x) => `<option value="${esc(x.name)}">${esc(x.name)}${(m.models || []).includes(x.name) ? " (requested)" : ""}</option>`).join("")}</select></div>
+      ${i.status === "unevaluated" ? `<label class="row"><input type="checkbox" id="mk-unev" required style="width:auto"> No eval suite ran for this import (${esc(ev.reason || "no suite")}): I accept it unevaluated</label>` : ""}
       ${i.licence === "unknown" ? `<label class="row"><input type="checkbox" id="mk-lic" required style="width:auto"> I accept a package without a known licence</label>` : ""}
       ${sc.acknowledge ? `<label class="row"><input type="checkbox" id="mk-ack" required style="width:auto"> I have read the screen's findings</label>` : ""}
       <div class="row"><input id="mk-reason" placeholder="Reason (reject)">
-      ${i.status === "qualified" ? ib("check", "Approve: enable the agent with the checked permissions", 'type="submit"', "primary") : ""}
+      ${approvable ? ib("check", "Approve: enable the agent with the checked permissions", 'type="submit"', "primary") : ""}
       ${ib("disable", "Reject: retire the candidate and delete the package", 'id="mk-rej"')}</div></form>` : ""}</div>`;
   const form = $("#mk-dec"); if (!form) return;
   form.onsubmit = async (e) => {
     e.preventDefault();
     const grant = [...form.querySelectorAll("[name=grant]:checked")].map((x) => x.value);
     try {
-      await api(`/api/marketplace/${id}/approve`, { method: "POST", body: { grant, autonomy: $("#mk-aut").value, accept_licence: !!$("#mk-lic")?.checked, acknowledge: !!$("#mk-ack")?.checked } });
+      await api(`/api/marketplace/${id}/approve`, { method: "POST", body: { grant, autonomy: $("#mk-aut").value, accept_licence: !!$("#mk-lic")?.checked, acknowledge: !!$("#mk-ack")?.checked, accept_unevaluated: !!$("#mk-unev")?.checked, model: $("#mk-model").value } });
       toast("Approved"); await viewMarketplace(); marketDetail(id);
     } catch (err) { toast(err.message); }
   };

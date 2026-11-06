@@ -496,9 +496,16 @@ def _after_fetch(import_id: int, sha: str) -> dict[str, Any]:
 
 # --- candidate ----------------------------------------------------------------------------------
 
-def _catalog_model(s: Session, models: list[str]) -> str | None:
-    names = set(s.scalars(select(ModelEntry.name)))
-    return next((m for m in models if m in names), None)
+# An imported agent's skills start here: registry._rank counts a missing skill as 0 (`skills.get(w, 0)`), so a
+# claimed skill at 0 gives the package no staffing weight; only eval or probation results raise it.
+IMPORTED_SKILL_LEVEL = 0
+
+
+def _catalog_model(s: Session, model: str) -> str:
+    """An administrator's model choice at approve: a Model Router catalog entry, else ValueError."""
+    if model not in set(s.scalars(select(ModelEntry.name))):
+        raise ValueError(f"{model!r} is not a model of the router catalog")
+    return model
 
 
 def create_candidate(import_id: int) -> dict[str, Any]:
@@ -513,12 +520,13 @@ def create_candidate(import_id: int) -> dict[str, Any]:
         if imp.status != "converted":
             raise ValueError(f"import #{imp.id} is {imp.status}")
         m, ceiling = imp.manifest, imp.ceiling
-        suite = recruitment.qualification_suite([*m["skills"], m["role"]])
+        role_skills = list(org.ROLES[m["role"]].skills)  # the package's own skills never choose the suite
+        suite = recruitment.qualification_suite([m["role"], *role_skills])
         writes = org.ROLES[m["role"]].writes
         jd = {"title": m["name"][:100], "role": m["role"], "summary": (m["description"] or
                                                                       f"Imported {m['role']} agent")[:400],
               "responsibilities": [f"Work as a {m['role'].replace('_', ' ')} imported from the marketplace"],
-              "expertise": m["skills"][:20] or [m["role"]], "tools": [], "permissions": ceiling["permissions"],
+              "expertise": role_skills or [m["role"]], "requested_skills": m["skills"][:20], "tools": [], "permissions": ceiling["permissions"],
               "reporting_manager": None, "room": org.ROLES[m["role"]].room, "evaluation_criteria":
                   [f"passes {recruitment.QUALIFY_PASS_RATE:.0%} of the {suite or 'role'} suite"],
               "budget": {}, "lifecycle": "permanent"}
@@ -539,12 +547,16 @@ def create_candidate(import_id: int) -> dict[str, Any]:
         agent.lifecycle = "candidate"  # never staffed for users' work (registry staffs active agents only)
         agent.permissions = list(ceiling["permissions"])
         agent.autonomy = clamp_autonomy(m.get("autonomy") or "", ceiling["autonomy"])
-        agent.model_pref = _catalog_model(s, m["models"])
-        agent.skills = {k: 5 for k in m["skills"][:20]} or {m["role"]: 5}
+        agent.model_pref = None  # the role route applies; the manifest's models are shown, the administrator picks
+        agent.skills = {k: IMPORTED_SKILL_LEVEL for k in [*role_skills, *m["skills"][:20]]} or \
+            {m["role"]: IMPORTED_SKILL_LEVEL}
         registry.record_version(s, agent, "marketplace", f"candidate from marketplace import #{imp.id}")
         rec.agent_id = agent.id
         imp.recruitment_id, imp.agent_id = rec.id, agent.id
-        imp.status = "qualifying" if rec.status == "qualifying" else "qualified"
+        # no eval ran (a role that doesn't write, or no suite matches it): approve needs accept_unevaluated
+        imp.status = "qualifying" if rec.status == "qualifying" else "unevaluated"
+        if imp.status == "unevaluated":
+            imp.eval = dict(rec.qualification)
         if rec.status == "pending":
             from agent_company.governance import notify
 
@@ -601,6 +613,12 @@ def write_provenance(import_id: int) -> bool:
                  f"- source: {imp.source}", f"- sha: {imp.source_sha or 'unknown'}",
                  f"- author: {imp.author or 'unknown'}", f"- licence: {imp.licence}",
                  f"- version: {imp.version or 'unknown'}", f"- eval: {eval_summary(ev or {})}",
+                 *([f"- unevaluated, accepted by {ev['accepted_unevaluated_by']}"]
+                   if (ev or {}).get("accepted_unevaluated_by") else []),
+                 f"- requested skills: {', '.join((imp.manifest or {}).get('skills') or []) or 'none'} "
+                 f"(shown, not granted)",
+                 f"- requested models: {', '.join((imp.manifest or {}).get('models') or []) or 'none'} "
+                 f"(shown, not applied)",
                  f"- granted: {', '.join((imp.ceiling or {}).get('permissions') or []) or 'none'}, autonomy "
                  f"{(imp.ceiling or {}).get('autonomy', '')}"]
         agent_id = imp.agent_id
@@ -611,9 +629,11 @@ def write_provenance(import_id: int) -> bool:
 # --- administrator decisions --------------------------------------------------------------------
 
 def approve(import_id: int, actor: str, grant: list[str] | None = None, *, admin: bool = False,
-            autonomy: str = "", accept_licence: bool = False, acknowledge: bool = False) -> dict[str, Any]:
-    """An administrator enables the candidate. `grant` is intersected with the ceiling; a licence that is unknown
-    and screen findings that ask for acknowledgement must be confirmed."""
+            autonomy: str = "", accept_licence: bool = False, acknowledge: bool = False,
+            accept_unevaluated: bool = False, model: str = "") -> dict[str, Any]:
+    """An administrator enables the candidate. `grant` is intersected with the ceiling; a licence that is unknown,
+    screen findings that ask for acknowledgement and an import no eval ran for must be confirmed. `model`, a router
+    catalog entry the administrator picks, becomes the agent's model; without it the role route applies."""
     from agent_company import recruitment, registry
 
     if not admin or not actor or actor in {"policy", "qualification", "system"}:
@@ -622,8 +642,11 @@ def approve(import_id: int, actor: str, grant: list[str] | None = None, *, admin
         imp = s.get(AgentImport, import_id)
         if imp is None:
             raise KeyError(import_id)
-        if imp.status != "qualified" or imp.recruitment_id is None:
+        passed = imp.status == "qualified" and (imp.eval or {}).get("status") == "passed"
+        if imp.recruitment_id is None or not (passed or imp.status == "unevaluated"):
             raise ValueError(f"import #{imp.id} is {imp.status}; only a qualified one can be approved")
+        if imp.status == "unevaluated" and not accept_unevaluated:
+            raise ValueError(f"import #{imp.id} ran no eval suite: accept it unevaluated explicitly")
         if imp.licence == "unknown" and not accept_licence:
             raise ValueError("the package has no known licence: accept it explicitly")
         if (imp.screen or {}).get("acknowledge") and not acknowledge:
@@ -631,6 +654,10 @@ def approve(import_id: int, actor: str, grant: list[str] | None = None, *, admin
         ceiling = permission_ceiling(imp.manifest["role"], imp.manifest.get("permissions"),
                                      list(grant) if grant is not None else None)
         a = s.get(Agent, imp.agent_id)
+        if model:
+            a.model_pref = _catalog_model(s, model)
+        if imp.status == "unevaluated":
+            imp.eval = {**(imp.eval or {}), "accepted_unevaluated_by": actor[:128], "accepted_at": now().isoformat()}
         a.permissions = ceiling["permissions"]
         a.autonomy = clamp_autonomy(autonomy or a.autonomy, ceiling["autonomy"])
         registry.record_version(s, a, actor, f"granted {', '.join(ceiling['permissions']) or 'nothing'} "
@@ -646,10 +673,12 @@ def approve(import_id: int, actor: str, grant: list[str] | None = None, *, admin
     return {**get(import_id), "recruitment": out}
 
 
-def reject(import_id: int, actor: str, reason: str = "") -> dict[str, Any]:
+def reject(import_id: int, actor: str, reason: str = "", *, admin: bool = False) -> dict[str, Any]:
     """Retire the candidate (through recruitment.reject) and delete the fetched package."""
     from agent_company import recruitment
 
+    if not admin or not actor or actor in {"policy", "qualification", "system"}:
+        raise PermissionError("only an administrator rejects a marketplace import")
     with session() as s:
         imp = s.get(AgentImport, import_id)
         if imp is None:
