@@ -71,7 +71,9 @@ def _search_papers(args: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     if ctx.get("client") is not None:
         resp = ctx["client"].get(OPENALEX, params=params)
     else:
-        with httpx.Client(timeout=20, headers={"User-Agent": research.USER_AGENT}) as client:
+        from agent_company import netpin
+
+        with netpin.pinned_client(timeout=20, headers={"User-Agent": research.USER_AGENT}) as client:
             resp = client.get(OPENALEX, params=params)
     resp.raise_for_status()
     pages = []
