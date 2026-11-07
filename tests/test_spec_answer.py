@@ -146,6 +146,87 @@ def test_unwritable_target_logged(goal):
     assert any(path in m for m in errors)
 
 
+@pytest.mark.parametrize("name", ["spec.md", "notes.md"])
+def test_writing_task_with_unknown_changes_keeps_out_of_its_folder(goal, name):
+    path = f"{own(goal)}/{name}"
+    specs._write(specs.Path(goal.worktree) / path, "maybe the run's own")
+    assert specs.save_answer(goal, contract(path, f"{own(goal)}/new.md", writes=True), ANSWER, writes=True,
+                             changed=None) == []
+    assert read(goal, path) == "maybe the run's own\n"
+    assert not (specs.Path(goal.worktree) / own(goal) / "new.md").exists()
+
+
+def run_with(monkeypatch, key: str, rel: str, run_writes: str = "") -> int:
+    """Run a goal offline whose task `key` names `<own folder>/rel` in its acceptance; a writing run also writes
+    `run_writes` itself there."""
+    gid = loop.create_goal("Spec it", quality_commands=["test -f WORKLOG.md"])
+    path = f"{specs.relative_folder(loop._goal(gid))}/{rel}"
+    task = executors.OfflineExecutor._task
+
+    def plan(self, req):
+        p = executors.standard_plan(req.data.get("goal", "g"))
+        next(t for t in p["tasks"] if t["key"] == key)["acceptance"].append({"type": "file_exists", "path": path})
+        return json.dumps(p)
+
+    def run(self, req):
+        out = task(self, req)
+        return out + f"\n=== FILE: {path} ===\n{run_writes}\n=== END FILE ===\n" if req.writes and run_writes else out
+
+    monkeypatch.setattr(executors.OfflineExecutor, "_plan", plan)
+    monkeypatch.setattr(executors.OfflineExecutor, "_task", run)
+    loop.run_goal(gid)
+    return gid
+
+
+def gate_of(gid: int, key: str) -> tuple[str, dict]:
+    with session() as s:
+        t = s.scalars(select(Task).where(Task.goal_id == gid, Task.key == key, Task.iteration == 1)).one()
+        return t.status, t.gate
+
+
+def test_writing_run_keeps_its_own_non_ascii_file(monkeypatch):
+    gid = run_with(monkeypatch, "build", "über.md", run_writes="the run's own über")
+    wt, path = loop._goal(gid).worktree, f"{specs.relative_folder(loop._goal(gid))}/über.md"
+    status, gate = gate_of(gid, "build")
+    assert status == "done" and gate["saved_answer"] == []
+    assert path in gate["files"]  # unquoted from git: core.quotepath=off
+    assert worktrees.git(wt, "show", f"{gate['commit']}:{path}") == "the run's own über"
+
+
+def test_read_only_answer_committed_on_its_own(monkeypatch):
+    calls: list[tuple[str, str, str]] = []
+    checkpoint = loop._checkpoint
+
+    def spy(goal_id, iteration, key, paths=None):
+        commit, changed = checkpoint(goal_id, iteration, key, paths)
+        calls.append((key, commit, (loop._goal(goal_id).checkpoint or {}).get("commit")))
+        return commit, changed
+
+    monkeypatch.setattr(loop, "_checkpoint", spy)
+    gid = run_with(monkeypatch, "spec", "answer.md")
+    wt, path = loop._goal(gid).worktree, f"{specs.relative_folder(loop._goal(gid))}/answer.md"
+    status, gate = gate_of(gid, "spec")
+    assert status == "done" and gate["saved_answer"] == [path]
+    commit = gate["commit"]
+    assert worktrees.git(wt, "log", "-1", "--format=%s", commit) == f"Goal {gid} iteration 1: spec answer"
+    assert worktrees.git(wt, "diff-tree", "--no-commit-id", "--name-only", "-r", commit).splitlines() == [path]
+    assert ("spec answer", commit, commit) in calls  # the goal's checkpoint points at the answer's commit
+    status, build = gate_of(gid, "build")
+    assert status == "done" and path not in build["files"] and "WORKLOG.md" in build["files"]
+    assert worktrees.git(wt, "rev-parse", f"{build['commit']}^") == commit
+
+
+def test_saved_spec_md_kept_by_write_outputs(monkeypatch):
+    gid = run_with(monkeypatch, "review", "spec.md")
+    wt, path = loop._goal(gid).worktree, f"{specs.relative_folder(loop._goal(gid))}/spec.md"
+    status, gate = gate_of(gid, "review")
+    assert status == "done" and gate["saved_answer"] == [path]
+    assert gate_of(gid, "spec")[0] == "done"  # the architect's 'spec' task ran in the same iteration
+    text = read(SimpleNamespace(worktree=wt), path)
+    assert "VERDICT: PASS" in text and "# Specification:" not in text
+    assert worktrees.git(wt, "show", f"HEAD:{path}") == text.rstrip("\n")
+
+
 def test_writing_task_answer_committed_by_the_loop(monkeypatch):
     gid = loop.create_goal("Spec it", quality_commands=["test -f WORKLOG.md"])
     path = f"{specs.relative_folder(loop._goal(gid))}/notes.md"

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import itertools
 import json
@@ -868,22 +869,31 @@ def _plan_commit(goal: Goal, iteration: int) -> str:
     return worktrees.git(goal.worktree, "rev-parse", "HEAD")
 
 
-def _checkpoint(goal_id: int, iteration: int, key: str) -> tuple[str, list[str]]:
+def _checkpoint(goal_id: int, iteration: int, key: str, paths: list[str] | None = None) -> tuple[str, list[str] | None]:
     """Commit what a writing task changed and record the commit as the goal's checkpoint (S04-R-05).
     Returns (commit, files changed since the previous checkpoint): the task's own changes, also when the
-    agent committed some of them itself."""
+    agent committed some of them itself; None when the checkpoint failed (the changes are unknown).
+    `paths` commits only those files (a task's saved answer); the caller holds the worktree's write lock."""
     from agent_company.gitsync import identity_for
 
     g = _goal(goal_id)
     wt = Path(g.worktree)
-    before = (g.checkpoint or {}).get("commit") or worktrees.git(wt, "rev-parse", "HEAD")
+    message, author = f"Goal {goal_id} iteration {iteration}: {key}", identity_for(g.created_by)
     try:
-        worktrees.commit_all(wt, f"Goal {goal_id} iteration {iteration}: {key}", author=identity_for(g.created_by))
+        before = (g.checkpoint or {}).get("commit") or worktrees.git(wt, "rev-parse", "HEAD")
+        if paths is None:
+            worktrees.commit_all(wt, message, author=author)
+        else:
+            worktrees.ensure_sandboxed(wt)
+            worktrees.git(wt, "add", "--", *paths)
+            if worktrees.git(wt, "diff", "--cached", "--name-only", "--", *paths):
+                worktrees.git(wt, "commit", "-q", "-m", message, "--", *paths, env=worktrees.identity_env(author))
         head = worktrees.git(wt, "rev-parse", "HEAD")
-        changed = [p for p in worktrees.git(wt, "diff", "--name-only", before, head).splitlines() if p]
+        changed = [p for p in worktrees.git(wt, "-c", "core.quotepath=off", "diff", "--name-only",
+                                            before, head).splitlines() if p]
     except worktrees.WorktreeError as e:  # a broken checkpoint must not lose the task's result
         log_event("error", f"checkpoint after task {key}: {e}", goal_id=goal_id)
-        return "", []
+        return "", None
     with session() as s:
         row = s.get(Goal, goal_id)
         row.checkpoint = {**(row.checkpoint or {}), "commit": head}
@@ -997,16 +1007,21 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                               evidence=[{"type": "task", "id": task_id, "error": res.error[:500]}])
             from agent_company.governance import on_command_refused
 
+            saved: list[str] = []
             if res.ok:  # a document the acceptance names (a spec): the loop writes the answer where agents cannot
-                try:
-                    saved = specs.save_answer(goal, contract, res.text, writes=contract.writes, changed=changed)
-                    if saved:
-                        if contract.writes:  # its own commit, under the write lock; `changed` stays the run's
-                            commit = _checkpoint(goal.id, goal.iteration, f"{contract.key} answer")[0] or commit
-                        log_event("task", f"saved {agent.name}'s answer as {', '.join(saved)}", goal_id=goal.id,
-                                  agent_id=agent.id)
-                except Exception as e:  # noqa: BLE001 - fail-open: the acceptance check reports the missing file
-                    log_event("error", f"saving the answer of task {contract.key}: {e}", goal_id=goal.id)
+                # its own commit under the worktree's write lock, so no writing task's commit or `changed` holds it;
+                # a writing task already holds the lock (not reentrant), a read-only one takes it
+                from agent_company.scheduler import write_lock
+
+                with contextlib.nullcontext() if contract.writes else write_lock(goal.worktree):
+                    try:
+                        saved = specs.save_answer(goal, contract, res.text, writes=contract.writes, changed=changed)
+                        if saved:
+                            commit = _checkpoint(goal.id, goal.iteration, f"{contract.key} answer", saved)[0] or commit
+                            log_event("task", f"saved {agent.name}'s answer as {', '.join(saved)}", goal_id=goal.id,
+                                      agent_id=agent.id)
+                    except Exception as e:  # noqa: BLE001 - fail-open: the acceptance check reports the missing file
+                        log_event("error", f"saving the answer of task {contract.key}: {e}", goal_id=goal.id)
             set_task_stage(task_id, "review", "acceptance conditions and contract limits")
             # the planner wrote the acceptance commands: a refusal counts against it
             acceptance = contracts.check(contract, output, Path(goal.worktree), settings().command_timeout,
@@ -1016,6 +1031,7 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             ok = res.ok and all(c["passed"] for c in acceptance)
             set_status(task_id, "done" if ok else "failed", output=output[-50_000:], model_name=choice.name,
                        gate={"acceptance": acceptance, "files": changed or res.files, "commit": commit,
+                             "saved_answer": saved,
                              "findings": contracts.findings(output), "next_actions": contracts.next_actions(output),
                              "blockers": contracts.blockers(output),
                              "recommendation": contracts.recommendation(output) if contract.decision_topic else ""},
