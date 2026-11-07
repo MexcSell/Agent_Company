@@ -49,6 +49,7 @@ class Grant:
 
     writes: bool = False
     shell: bool = False
+    checks: bool = False  # the run may run the syntax check and the test commands, without writes (EL-R-05)
     mcp: bool = False
     isolation: str = "L0"  # L0 text only, L1 read-only tools, L2 writes in the worktree (S14-R-07)
     permissions: list[str] = field(default_factory=list)  # the permissions this run uses
@@ -357,15 +358,21 @@ def gate(req: Request, kind: str) -> Grant:
     shell = shell_ok and writes
     if writes and kind in CLI_KINDS and not shell and not configure:  # configure only edits .claude/
         dropped.append("shell: no shell permission")
+    # a run without writes (a QA review) may still run the check list: syntax check, pytest, read-only git
+    checks = shell_ok and req.workdir is not None and not configure and CHECK_OK
+    if not req.writes and kind in CLI_KINDS and "shell" in perms and not checks:  # a writing request says why above
+        dropped.append(f"checks: autonomy G{n}" if n < 2 else "check: path not usable in a rule" if not CHECK_OK
+                       else "checks: no worktree" if req.workdir is None else "checks: configure step")
     servers, _ = req.data.get("mcp") or ({}, [])
     mcp = kind == "claude_code" and bool(servers.get("mcpServers")) and n >= 3
     if servers.get("mcpServers") and kind == "claude_code" and not mcp:
         dropped.append(f"mcp: autonomy G{n}")
-    used = sorted({"read"} | ({"write"} if writes else set()) | ({"shell"} if shell else set()))
+    used = sorted({"read"} | ({"write"} if writes else set()) | ({"shell"} if shell or checks else set()))
     if configure and writes and "write" not in perms:
         used = [p if p != "write" else "write:.claude" for p in used]
     isolation = "L2" if writes else "L1" if kind in CLI_KINDS else "L0"
-    return Grant(writes=writes, shell=shell, mcp=mcp, isolation=isolation, permissions=used, dropped=dropped)
+    return Grant(writes=writes, shell=shell, checks=checks, mcp=mcp, isolation=isolation, permissions=used,
+                 dropped=dropped)
 
 
 def _track(pid: int, program: str, kind: str, req: Request) -> None:
@@ -588,9 +595,24 @@ class LLMExecutor(Executor):
                       output_tokens=u.completion_tokens or estimate_tokens(text), files=files)
 
 
-# Claude Code may run tests and inspect git, nothing else, through Bash.
+EDIT_CHECK = Path(__file__).with_name("edit_check.py")  # the server's copy, never the worktree's
+CHECK_CMD = f"python3 -I {EDIT_CHECK}"
+CHECK_OK = bool(re.fullmatch(r"[A-Za-z0-9_./-]+", str(EDIT_CHECK)))  # rule syntax has no quoting
+CHECK_HINT = (f"Syntax check: run `{CHECK_CMD} <files>` (node --check for each .js file, compile() for each .py "
+              "file); a raw node command is refused.")
+
+# Claude Code may run tests, the syntax check and inspect git, nothing else, through Bash. `node` only through the
+# platform's wrapper: a `Bash(node --check:*)` prefix rule would also allow -r/--require/--import/--loader.
 CLAUDE_BASH = ["Bash(pytest:*)", "Bash(python -m pytest:*)", "Bash(uv run:*)", "Bash(npm test:*)",
                "Bash(npm run:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(ls:*)"]
+# a run without writes: no `uv run:*`/`npm run:*`/`npm test:*`, which run any code (and so could write files)
+CLAUDE_CHECK = ["Bash(pytest:*)", "Bash(python -m pytest:*)", "Bash(uv run pytest:*)", "Bash(git status:*)",
+                "Bash(git diff:*)", "Bash(ls:*)"]
+if CHECK_OK:
+    CLAUDE_BASH.append(f"Bash({CHECK_CMD}:*)")
+    CLAUDE_CHECK.insert(0, f"Bash({CHECK_CMD}:*)")
+# `git diff --output=<path>` writes a file; a deny rule is a prefix too, so `git diff HEAD --output=x` is a known gap
+CLAUDE_CHECK_DENY = ["Bash(git diff --output:*)"]
 
 
 def claude_env(choice: Choice) -> dict[str, str] | None:
@@ -618,13 +640,19 @@ EDIT_CHECK_SETTINGS = {"hooks": {"PostToolUse": [{"matcher": "Edit|Write|MultiEd
      "command": f"python3 -I {shlex.quote(str(Path(__file__).with_name('edit_check.py')))}"}]}]}}
 
 
+def with_check_hint(system: str, grant: Grant) -> str:
+    """The system prompt plus the syntax check's command line (an absolute path) when the run may run it."""
+    return f"{system}\n\n{CHECK_HINT}" if (grant.shell or grant.checks) and CHECK_OK else system
+
+
 class ClaudeCodeExecutor(Executor):
     kind = "claude_code"
 
     def tools(self, grant: Grant) -> list[str]:
-        """--allowedTools: Edit/Write need `write`, Bash needs `shell` (SEC-011), MCP tools autonomy G3."""
+        """--allowedTools: Edit/Write need `write`, Bash needs `shell` (SEC-011), MCP tools autonomy G3; a run
+        without writes gets at most the check list."""
         return (["Read", "Grep", "Glob"] + (["Edit", "Write"] if grant.writes else [])
-                + (list(CLAUDE_BASH) if grant.shell else []))
+                + (list(CLAUDE_BASH) if grant.shell else list(CLAUDE_CHECK) if grant.checks else []))
 
     def _run(self, req: Request) -> Result:
         if req.workdir is None:
@@ -633,7 +661,9 @@ class ClaudeCodeExecutor(Executor):
         grant = req.grant or Grant()
         tools = self.tools(grant)
         cmd = ["claude", "-p", req.prompt, "--output-format", "stream-json", "--verbose",
-               "--append-system-prompt", req.system, "--allowedTools", ",".join(tools)]
+               "--append-system-prompt", with_check_hint(req.system, grant), "--allowedTools", ",".join(tools)]
+        if grant.checks and not grant.shell:
+            cmd += ["--disallowedTools", ",".join(CLAUDE_CHECK_DENY)]
         if req.writes:
             cmd += ["--permission-mode", "acceptEdits", "--settings", json.dumps(EDIT_CHECK_SETTINGS)]
         if self.choice.model_id:
@@ -715,9 +745,15 @@ class CodexExecutor(Executor):
                       tool_calls=parsed["tool_calls"])
 
 
-# Copilot may run tests and inspect git, nothing else, through its shell tool (as CLAUDE_BASH).
+# Copilot may run tests, the syntax check and inspect git, nothing else, through its shell tool (as CLAUDE_BASH).
 COPILOT_SHELL = ["shell(pytest)", "shell(python -m pytest)", "shell(uv run)", "shell(npm test)", "shell(npm run)",
                  "shell(git status)", "shell(git diff)", "shell(ls)"]
+COPILOT_CHECK = ["shell(pytest)", "shell(python -m pytest)", "shell(uv run pytest)", "shell(git status)",
+                 "shell(git diff)", "shell(ls)"]
+if CHECK_OK:
+    COPILOT_SHELL.append(f"shell({CHECK_CMD})")
+    COPILOT_CHECK.insert(0, f"shell({CHECK_CMD})")
+COPILOT_CHECK_DENY = ["shell(git diff --output)"]  # as CLAUDE_CHECK_DENY
 
 
 class CopilotExecutor(Executor):
@@ -726,18 +762,22 @@ class CopilotExecutor(Executor):
     kind = "copilot"
 
     def tools(self, grant: Grant) -> list[str]:
-        return (["write"] if grant.writes else []) + (list(COPILOT_SHELL) if grant.shell else [])
+        return (["write"] if grant.writes else []) + (
+            list(COPILOT_SHELL) if grant.shell else list(COPILOT_CHECK) if grant.checks else [])
 
     def _run(self, req: Request) -> Result:
         if req.workdir is None:
             raise RuntimeError("Copilot needs a worktree")
         cwd = ensure_sandboxed(req.workdir)
-        tools = self.tools(req.grant or Grant())
-        prompt = req.system + "\n\n" + req.prompt
+        grant = req.grant or Grant()
+        tools = self.tools(grant)
+        prompt = with_check_hint(req.system, grant) + "\n\n" + req.prompt
         cmd = ["copilot", "-p", prompt]
         for t in tools:
             cmd += ["--allow-tool", t]
         cmd += ["--deny-tool", "shell(git push)"]
+        for t in COPILOT_CHECK_DENY if grant.checks and not grant.shell else []:
+            cmd += ["--deny-tool", t]
         if self.choice.model_id:
             cmd += ["--model", self.choice.model_id]
         proc = self._spawn(cmd, req, cwd)
