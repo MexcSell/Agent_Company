@@ -241,7 +241,8 @@ def test_search_papers_is_pinned(monkeypatch, net):
 
 
 CATCH_ALL = "MAP * ~NOTFOUND"
-PIN_FLAGS = ["--disable-features=DnsOverHttps,AsyncDns", "--no-proxy-server", "--proxy-server=direct://"]
+PIN_FLAGS = ["--disable-features=DnsOverHttps,AsyncDns", "--no-proxy-server", "--proxy-server=direct://",
+             "--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
 
 
 def test_chromium_pin_maps_the_host_to_its_checked_address(monkeypatch):
@@ -305,11 +306,47 @@ def test_chromium_pin_refuses_rule_injection(monkeypatch):
     assert asked == []
 
 
-def test_chromium_pin_of_a_literal_address_keeps_only_the_catch_all(monkeypatch):
+def test_chromium_pin_of_a_literal_address_maps_it_to_itself_before_the_catch_all(monkeypatch):
     asked = resolving(monkeypatch, lambda host, n: ["127.0.0.1"])
-    assert netpin.chromium_pin_args(f"https://{PUBLIC}/")[0] == f"--host-resolver-rules={CATCH_ALL}"
-    assert netpin.chromium_pin_args(f"http://[{V6}]:8080/")[0] == f"--host-resolver-rules={CATCH_ALL}"
-    assert netpin.chromium_resolver_rules([(PUBLIC, PUBLIC)]) == CATCH_ALL
+    assert netpin.chromium_pin_args(f"https://{PUBLIC}/")[0] == \
+        f"--host-resolver-rules=MAP {PUBLIC} {PUBLIC},{CATCH_ALL}"
+    assert netpin.chromium_pin_args(f"http://[{V6}]:8080/")[0] == \
+        f"--host-resolver-rules=MAP [{V6}] [{V6}],{CATCH_ALL}"
+    assert netpin.chromium_resolver_rules([(PUBLIC, PUBLIC)]) == f"MAP {PUBLIC} {PUBLIC},{CATCH_ALL}"
+    with pytest.raises(ValueError):  # a literal host never maps to another address
+        netpin.chromium_resolver_rules([(PUBLIC, OTHER)])
     with pytest.raises(netpin.NotPublic):
         netpin.chromium_pin_args("http://127.0.0.1/")
     assert asked == []  # literals never reach DNS
+
+
+@pytest.mark.parametrize("host", ["%31%32%37.0.0.1", "0x7f.1", "2130706433", "127.0.0.1.", "0X7F.0.0.1",
+                                  "a.example.0x1", "docs.123", "1.2.3.4%25eth0", "a\\b.example",
+                                  "１２７.0.0.1"])
+def test_chromium_pin_refuses_hosts_chromium_reads_as_ipv4(monkeypatch, host):
+    asked = resolving(monkeypatch, lambda host, n: [PUBLIC])
+    with pytest.raises(ValueError) as e:
+        netpin.chromium_pin_args(f"https://{host}/")
+    assert not isinstance(e.value, netpin.NotPublic)
+    assert asked == []  # refused before any lookup
+
+
+def test_chromium_pin_rechecks_the_host_after_idna(monkeypatch):
+    asked = resolving(monkeypatch, lambda host, n: [PUBLIC])
+    assert "a，b.example".encode("idna") == b"a,b.example"  # NFKC turns the fullwidth comma into ','
+    for url in ("https://a，b.example/", "https://a～b.example/"):
+        with pytest.raises(ValueError) as e:
+            netpin.chromium_pin_args(url)
+        assert not isinstance(e.value, netpin.NotPublic)
+    assert asked == []  # the mapped separator never reaches getaddrinfo
+    assert netpin.chromium_pin_args("https://bücher.example/")[0] == \
+        f"--host-resolver-rules=MAP xn--bcher-kva.example {PUBLIC},{CATCH_ALL}"
+    assert asked == [("xn--bcher-kva.example", 443)]
+
+
+def test_chromium_pin_turns_off_quic_and_non_proxied_webrtc(monkeypatch):
+    resolving(monkeypatch, lambda host, n: [PUBLIC])
+    args = netpin.chromium_pin_args("https://docs.example/")
+    assert "--disable-quic" in args
+    assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in args
+    assert len({a.split("=")[0] for a in args}) == len(args)  # each switch once

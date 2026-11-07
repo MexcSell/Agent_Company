@@ -95,9 +95,13 @@ def chromium_resolver_rules(pins: list[tuple[str, str]]) -> str:
         addr = _literal(_rule_token(ip, "address").strip("[]"))
         if addr is None:
             raise ValueError(f"not a literal address: {ip!r}")
-        if _literal(host) is not None:
-            continue  # Chromium never resolves an address literal
-        rules.append(f"MAP {host} [{addr}]" if addr.version == 6 else f"MAP {host} {addr}")
+        target = f"[{addr}]" if addr.version == 6 else str(addr)
+        lit = _literal(host)
+        if lit is not None:
+            if lit != addr:
+                raise ValueError(f"a literal host maps only to itself: {host!r} -> {ip!r}")
+            host = target  # loads whether or not Chromium applies `MAP *` to literals
+        rules.append(f"MAP {host} {target}")
     return ",".join([*rules, "MAP * ~NOTFOUND"])
 
 
@@ -114,15 +118,29 @@ def chromium_pin_args(url: str, *, allow_private: bool = False) -> list[str]:
         raise ValueError(f"only http(s) URLs are pinned, not {scheme or url!r}")
     if "@" in parts.netloc:
         raise ValueError("a pinned URL must not carry a user name or password")
-    host = _rule_token(parts.hostname or "", "host")
+    host = _browser_host(parts.hostname or "")
     if _literal(host) is None:
         try:
             host = host.encode("idna").decode("ascii")  # the name Chromium looks up
         except UnicodeError:
             raise ValueError(f"host not usable in a resolver rule: {host!r}") from None
+        host = _browser_host(host)  # IDNA's NFKC mapping can make a separator (U+FF0C -> ',') or digits
+        if not host.isascii():
+            raise ValueError(f"host not usable in a resolver rule: {host!r}")
+        labels = host.rstrip(".").split(".")
+        if labels[-1].isdigit() or labels[-1].lower().startswith("0x"):
+            raise ValueError(f"host Chromium would read as an IPv4 address: {host!r}")
     ip = resolve_public(host, port or (443 if scheme == "https" else 80), check=not allow_private)[0]
     return [f"--host-resolver-rules={chromium_resolver_rules([(host, ip)])}",
-            "--disable-features=DnsOverHttps,AsyncDns", "--no-proxy-server", "--proxy-server=direct://"]
+            "--disable-features=DnsOverHttps,AsyncDns", "--no-proxy-server", "--proxy-server=direct://",
+            "--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
+
+
+def _browser_host(host: str) -> str:
+    """A host that is a rule token without a percent-escape or backslash, which Chromium's URL parser would rewrite."""
+    if "%" in _rule_token(host, "host") or "\\" in host:
+        raise ValueError(f"host not usable in a resolver rule: {host!r}")
+    return host
 
 
 class Pins:
