@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from agent_company import executors, loop, quality, router
 from agent_company.contracts import TaskContract
-from agent_company.db import Notification, Task, session
+from agent_company.db import Goal, Notification, Task, session
 
 BLOCKER = "BLOCKER: missing credentials"
 
@@ -96,8 +96,41 @@ def test_an_empty_diff_without_a_blocker_line_does_not_pause(goal_loop):
     out = loop.run_goal(gid)
     assert out["status"] != "paused" and "blocker" not in out
     assert (loop._goal(gid).checkpoint or {}).get("paused_for") != "blocker"
-    assert _tasks(gid)["implement"][0] == "done"
-    assert goal_loop["ran"] == ["implement", "review"] and goal_loop["evaluated"] == [1]
+    # no command condition and nothing changed: the diff rule fails it instead (S09-R-01)
+    assert _tasks(gid)["implement"][0] == "failed"
+    assert goal_loop["ran"][0] == "implement" and goal_loop["evaluated"] == [1]
+
+
+def test_an_empty_build_on_old_files_without_a_blocker_line_fails(goal_loop, monkeypatch):
+    """S09-R-01: acceptance that only checks a file committed before the run cannot pass a build that changed nothing."""
+    from agent_company import worktrees
+
+    plan = [TaskContract(key="implement", title="implement", role="developer", description="Build it.", writes=True,
+                         acceptance=[{"type": "file_exists", "path": "old.txt"}])]
+    monkeypatch.setattr(loop, "_plan", lambda goal, it, fb, notes: ([p.model_copy() for p in plan], None))
+    goal_loop["outputs"]["implement"] = "Done: old.txt is there."
+    fake = loop._execute
+
+    def execute(agent, req, purpose, task_id=None, **kw):
+        if purpose == "task":  # old.txt is committed before the task's diff starts: it is an old file
+            wt = Path(loop._goal(gid).worktree)
+            (wt / "old.txt").write_text("from main\n")
+            worktrees.commit_all(wt, "an old file")
+            with session() as s:
+                row = s.get(Goal, gid)
+                row.checkpoint = {**(row.checkpoint or {}), "commit": worktrees.git(wt, "rev-parse", "HEAD")}
+        return fake(agent, req, purpose, task_id=task_id, **kw)
+
+    monkeypatch.setattr(loop, "_execute", execute)
+    gid = loop.create_goal("Add a feature", quality_commands=[], max_iterations=1)
+    out = loop.run_goal(gid)
+    assert out["status"] != "paused" and "blocker" not in out
+    with session() as s:
+        t = s.scalars(select(Task).where(Task.goal_id == gid, Task.key == "implement")).one()
+        status, gate = t.status, t.gate
+    assert status == "failed" and gate["files"] == []
+    assert [r["passed"] for r in gate["acceptance"] if r["condition"]["type"] == "file_exists"] == [True]
+    assert [r["passed"] for r in gate["acceptance"] if r["condition"]["type"] == "diff"] == [False]
 
 
 def test_a_read_only_task_with_a_blocker_line_does_not_pause(goal_loop, monkeypatch):
