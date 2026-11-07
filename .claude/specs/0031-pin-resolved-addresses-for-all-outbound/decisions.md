@@ -10,3 +10,9 @@ Findings:
 - task qa_review: the run cost $2.6356 (task budget $2.5000)
 
 Next: fix the findings (loop back to Build).
+
+## Iteration 2: PASS
+- fix_review_findings (developer): done
+- qa_rereview (qa): done
+
+Next: approval and merge.
