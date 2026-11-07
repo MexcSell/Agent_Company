@@ -33,7 +33,7 @@ IDs `EL-R-nn`; status words as in [README.md](README.md).
 | Codex cooperates with the research agent (owner); an independent evaluator of another family (evolving agents) | the review of a research report used another family only among API models | **EL-R-03** done |
 | Execute → evaluate → evolve; evaluation-driven evolution with a baseline, hard constraints, no combined score, regressions reject (a_1, a_6, evolving agents) | experiments with baseline vs candidate, regressions, canary and rollback (`experiments.py`, SPEC-13, G-R-11); verified self-evolution of the platform's code (`selfevolve.py`) | done (`experiments.py`, `selfevolve.py`) |
 | Failure log collected automatically (a_1 `failures.jsonl`) | every failed run, check and gate result is in the DB; RCA of failed goals with failure layers (`rca.py`, G-R-17) | done, adapted (`rca.py`, `performance.operations`) |
-| A recurring failure becomes a rule proposal (a_1 "CI → LLM analysis → AGENTS.md rule as a PR"; a_3 lessons update the rules) | RCA actions become proposals; playbooks are curated from lessons (`evolution.py`); nothing proposes a project *rule* | **EL-R-04** open |
+| A recurring failure becomes a rule proposal (a_1 "CI → LLM analysis → AGENTS.md rule as a PR"; a_3 lessons update the rules) | RCA actions become proposals; playbooks are curated from lessons (`evolution.py`); `rca.propose_rules`: a cause in `rule_proposal_min_goals` failed goals is one pending `kind="rule"` proposal; approved by a person, `projects._to_rule` adds a catalog rule | **EL-R-04** done |
 | Hooks check quality after each edit and the agent corrects itself (a_1 PreToolUse/PostToolUse) | the team hooks only log (`hooks.py`); syntax was checked at the gate, after the run | **EL-R-05** done |
 | Reflexion: evaluator, self-reflection, experience memory (a_2); memories distilled and recalled by new agents (a_5) | lessons after every task, success and failure, screened and retrieved into the next task package; clones and recruits inherit experience (`learning.py`, SPEC-11, S12-R-02) | done (`learning.learn`, `learning.retrieve`) |
 | Orchestrator, event bus, state store, observability, specialised agents (a_4); runtime with teacher, critique and evaluation agents and metrics (a_9) | goal loop, blackboard, SQLite state, `/metrics`, roles; instructor, QA, evaluation harness | done (`loop.py`, `blackboard.py`, `metrics.py`, `training.py`, `evaluation.py`) |
@@ -89,7 +89,7 @@ Acceptance: `tests/test_model_limits.py::test_another_family_can_be_an_agent_cli
 
 ### EL-R-04 A recurring failure becomes a proposed rule
 
-**Status: open**
+**Status: done (`rca.propose_rules`, `rca._draft_rule`, `projects._to_rule`; `tests/test_rule_proposals.py`)**
 
 When the RCA finds the same cause (layer and check)
 in N goals, the instructor drafts a one-line rule for `.claude/rules/` with the evidence; it is a proposal decided like

@@ -20,6 +20,7 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "rotation_interval": (int, "Seconds between rotation visits of the external-data room (0 = manual); restart to apply"),
     "proposal_policy": (str, "Who decides agent proposals: 'user' (administrator) or 'superiors' (the GM)"),
     "max_proposal_goals": (int, "Goals a single goal may spawn through approved proposals"),
+    "rule_proposal_min_goals": (int, "Failed goals with one RCA cause before a project rule is proposed (EL-R-04)"),
     "goal_budget_usd": (float, "Maximum model spend per goal in USD (0 = no limit)"),
     "goal_time_budget": (int, "Maximum wall-clock seconds per goal (0 = no limit)"),
     "goal_token_budget": (int, "Maximum model tokens per goal (0 = no limit)"),
@@ -112,7 +113,7 @@ SCHEMA: dict[str, tuple[type, str]] = {
 RETRIEVAL_KEYS = {k for k in SCHEMA if k.startswith("retrieval_w_")}
 LIMITS: dict[str, tuple[float, float]] = {
     "max_iterations": (1, 10), "max_parallel": (1, 16), "command_timeout": (10, 7200),
-    "rotation_interval": (0, 86400), "max_proposal_goals": (0, 20), "goal_budget_usd": (0, 10_000),
+    "rotation_interval": (0, 86400), "max_proposal_goals": (0, 20), "rule_proposal_min_goals": (2, 20), "goal_budget_usd": (0, 10_000),
     "goal_time_budget": (0, 7 * 86400), "study_interval": (0, 7 * 86400),
     "goal_token_budget": (0, 1_000_000_000), "goal_agent_limit": (0, 16),
     "retry_max_attempts": (1, 10), "retry_base_seconds": (0, 600), "retry_max_seconds": (0, 3600),

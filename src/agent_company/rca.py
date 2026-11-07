@@ -231,7 +231,144 @@ def analyse(goal_id: int, trigger: str, goal_ids: list[int] | None = None,
                   f"cause(s), {len(report['actions'])} proposal(s)", goal_id=goal_id, agent_id=gm.id, s=s,
                   knowledge_id=item.id, trigger=trigger)
         report["id"] = item.id
+        project_id = row.project_id
+    try:  # after the session: drafting a rule may run a model (EL-R-04)
+        report["rules"] = propose_rules(project_id)
+    except Exception as e:  # noqa: BLE001 - a rule proposal never breaks the analysis or the goal's ending
+        log_event("error", f"rule proposals of goal #{goal_id}: {type(e).__name__}: {e}", goal_id=goal_id)
     return report
+
+
+TEMPLATE = "Before handing work back, make sure the check '{check}' passes; it failed for a {layer} cause in goals {ids}."
+_RULE_PREFIX = re.compile(r"^[\s*#-]*(RULE:\s*)?", re.I)
+
+
+def _causes(s: Any, project_id: int) -> dict[tuple[str, str], dict[str, set[int]]]:
+    """Causes (layer, failing check) of the project's approved analyses and the distinct failed goals of each."""
+    from agent_company.learning import goal_level
+
+    out: dict[tuple[str, str], dict[str, set[int]]] = {}
+    ok: dict[int, bool] = {}
+
+    def counts(gid: int) -> bool:
+        if gid not in ok:
+            g = s.get(Goal, gid)
+            ok[gid] = bool(g is not None and g.project_id == project_id and g.status == "failed"
+                           and g.origin not in ("eval", "improvement") and goal_level(s, g) != "secret")
+        return ok[gid]
+
+    for item in s.scalars(select(Lesson).where(Lesson.project_id == project_id, Lesson.kind == "operational",
+                                               Lesson.status == "approved", Lesson.classification != "secret")
+                          .order_by(Lesson.id)):
+        rep = item.report or {}
+        if not rep.get("rca"):
+            continue
+        watch = [c for c in rep.get("watch") or [] if not c.startswith("task ")]  # task keys are per plan
+        goals = {int(g) for g in rep.get("goals") or [] if counts(int(g))}
+        if not goals:
+            continue
+        for c in rep.get("confirmed") or []:
+            if c.get("layer") not in LAYERS:
+                continue
+            cited = [r[6:] for r in c.get("evidence") or [] if r.startswith("check:") and r[6:] in watch]
+            for chk in cited or watch:
+                v = out.setdefault((c["layer"], chk), {"goals": set(), "lessons": set()})
+                v["goals"] |= goals
+                v["lessons"].add(item.id)
+    return out
+
+
+def _ids(goal_ids: list[int]) -> str:
+    return ", ".join(f"#{g}" for g in goal_ids)
+
+
+def _draft_rule(layer: str, check: str, goal_ids: list[int]) -> tuple[str, int | None]:
+    """The instructor's one-line rule for this cause, else the template line. Returns (line, instructor id)."""
+    from agent_company import executors, router, usage
+    from agent_company.config import settings
+    from agent_company.db import Agent as A
+    from agent_company.learning import goal_level, screen
+
+    chk = " ".join(check.split())[:120]
+    template = TEMPLATE.format(check=chk, layer=layer, ids=_ids(goal_ids))
+    try:
+        with session() as s:
+            judge = s.scalars(select(A).where(A.role == "instructor", A.enabled.is_(True)).order_by(A.id)).first()
+            if judge is None:
+                return template, None
+            jid, jname, pref = judge.id, judge.name, judge.model_pref
+            level = goal_level(s, s.get(Goal, max(goal_ids)))
+        if _out_of_budget(max(goal_ids)):
+            return template, jid
+        choice = router.resolve("instructor", pref, classification=level)
+        req = executors.Request(
+            purpose="rule", role="instructor", agent_id=jid, goal_id=max(goal_ids),
+            system=f"You are {jname}, the instructor.",
+            prompt=(f"Write ONE line, a rule for `.claude/rules/` that would have prevented this cause: layer {layer}, "
+                    f"failing check '{chk}', goals {_ids(goal_ids)}. Answer with the line only."),
+            data={"fallback": template, "layer": layer, "check": check})
+        res = executors.for_choice(choice, settings().command_timeout).run(req)
+        usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
+                     output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
+                     error=res.error, agent_id=jid, purpose="rule", goal_id=max(goal_ids), res=res)
+        lines = [x for x in (res.text or "").strip().splitlines() if x.strip()]
+        if not res.ok or len(lines) != 1:
+            return template, jid
+        line = _RULE_PREFIX.sub("", lines[0]).strip()
+        if not 20 <= len(line) <= 200 or screen(line)[0] != "approved":
+            return template, jid
+        return line, jid
+    except Exception:  # noqa: BLE001 - router.NotCleared, a failed run: the template stands in
+        return template, None
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9_.-]+", "-", text.lower()).strip("-")
+
+
+def propose_rules(project_id: int | None) -> list[int]:
+    """EL-R-04: a cause (layer, failing check) confirmed in `rule_proposal_min_goals` failed goals of the project
+    becomes one pending rule proposal citing them; never a second one for the same cause. Returns the new ids."""
+    from agent_company.config import settings
+
+    if project_id is None:
+        return []
+    least = settings().rule_proposal_min_goals
+
+    def existing(s: Any) -> set[tuple[str, str]]:
+        out = set()
+        for p in s.scalars(select(Proposal).where(Proposal.project_id == project_id, Proposal.kind == "rule")):
+            cause = (p.case or {}).get("cause") or {}
+            out.add((cause.get("layer", ""), cause.get("check", "")))
+        return out
+
+    with session() as s:
+        causes = _causes(s, project_id)
+        have = existing(s)
+    due = sorted(k for k, v in causes.items() if len(v["goals"]) >= least and k not in have)
+    drafts = {k: _draft_rule(k[0], k[1], sorted(causes[k]["goals"])) for k in due}
+    made: list[int] = []
+    with session() as s:
+        have = existing(s)
+        for (layer, check), (line, jid) in drafts.items():
+            if (layer, check) in have:
+                continue
+            goals, lessons = sorted(causes[(layer, check)]["goals"]), sorted(causes[(layer, check)]["lessons"])
+            name = f"rca-{layer}-{_slug(check)}"[:64].rstrip("-.")
+            p = Proposal(goal_id=max(goals), project_id=project_id, agent_id=jid, kind="rule", tag="rule",
+                         status="pending", title=f"Rule: {line}"[:256],
+                         description=(f"{line}\n\nCause: {layer} layer, failing check '{check}', confirmed by "
+                                      f"root-cause analyses {', '.join(f'K{k}' for k in lessons)} in goals "
+                                      f"{_ids(goals)}."),
+                         case={"cause": {"layer": layer, "check": check}, "goals": goals, "rule": line,
+                               "name": name, "lessons": lessons})
+            s.add(p)
+            s.flush()
+            have.add((layer, check))
+            made.append(p.id)
+            log_event("rca", f"rule proposal {p.id} for {layer}/{check} from goals {_ids(goals)}",
+                      goal_id=max(goals), s=s)
+    return made
 
 
 def follow_up(goal_id: int) -> list[int]:
