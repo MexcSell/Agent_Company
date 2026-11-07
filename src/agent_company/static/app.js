@@ -219,7 +219,7 @@ async function boot() {
 }
 // --- rail: two groups (top, bottom) in the order an administrator set (Settings → Navigation) -----------
 // Notifications, the audit log, settings and users are buttons at the top right instead (TOPBAR), never on the rail.
-const NAV_DEFAULT = { top: ["dashboard", "projects", "agents", "models", "evolution", "research", "knowledge", "performance"],
+const NAV_DEFAULT = { top: ["dashboard", "projects", "agents", "companymap", "models", "evolution", "research", "knowledge", "performance"],
   bottom: ["workspace", "machines", "security", "system"] };
 const TOPBAR = ["notifications", "audit", "settings", "users"];
 let navLayout = null, railEditing = false;
