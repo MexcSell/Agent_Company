@@ -1267,7 +1267,7 @@ class McpServer(Base):
     secrets: Mapped[str] = mapped_column(Text, default="")  # encrypted {"env": {...}, "headers": {...}}
     secret_names: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"env": [names], "headers": [names]}
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    everyone: Mapped[bool] = mapped_column(Boolean, default=True)  # every agent may use it (else only granted ones)
+    everyone: Mapped[bool] = mapped_column(Boolean, default=False)  # every agent may use it (else only granted ones; a new server: none)
     tools: Mapped[list[Any]] = mapped_column(default=list)  # [{name, description, read_only, allowed}]
     status: Mapped[str] = mapped_column(String(16), default="untested")  # untested|ok|error
     last_error: Mapped[str] = mapped_column(Text, default="")

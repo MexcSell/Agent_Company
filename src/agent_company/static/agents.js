@@ -371,7 +371,7 @@ function mcpForm(s = null) {
     <div id="ms-stdio"><label>Command</label><input id="ms-cmd" value="${esc(s?.command || "")}" placeholder="npx"><label>Arguments (one per line)</label><textarea id="ms-args" rows="3">${esc((s?.args || []).join("\n"))}</textarea>
       <label>Environment (NAME=value per line; an empty value keeps the stored one)</label><textarea id="ms-env" rows="2" class="mono">${esc(pairs(s?.env))}</textarea></div>
     <div id="ms-http"><label>URL</label><input id="ms-url" value="${esc(s?.url || "")}" placeholder="https://example.com/mcp"><label>Headers (Name=value per line; empty keeps the stored value)</label><textarea id="ms-hdr" rows="2" class="mono">${esc(pairs(s?.headers))}</textarea></div>
-    <label class="row" style="margin-top:8px"><input type="checkbox" id="ms-every" style="width:auto" ${s?.everyone === false ? "" : "checked"}> Every agent may use it</label>
+    <label class="row" style="margin-top:8px"><input type="checkbox" id="ms-every" style="width:auto" ${s?.everyone === true ? "checked" : ""}> Every agent may use it</label>
     <div class="row" style="margin-top:12px"><button class="btn icon primary" title="Save" aria-label="Save">${icon("save", 16)}</button></div></form>`);
   const sync = () => { const h = $("#ms-tr").value === "http"; $("#ms-http").hidden = !h; $("#ms-stdio").hidden = h; };
   $("#ms-tr").onchange = sync; sync();

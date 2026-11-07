@@ -454,7 +454,7 @@ class McpServerBody(BaseModel):
     url: str = ""
     env: dict[str, str] = Field(default_factory=dict)
     headers: dict[str, str] = Field(default_factory=dict)
-    everyone: bool = True
+    everyone: bool = False
     enabled: bool = True
 
 
