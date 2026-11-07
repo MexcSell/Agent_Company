@@ -14,3 +14,13 @@ nds": ["test -f WORKLOG.md"]}).json()["id"]
             r = app.post(f"/api/projects/{pid}/
 
 Next: fix the findings (loop back to Build).
+
+## Iteration 2: FAIL
+- fix_label_cache (developer): done
+- review_label_cache (qa): done
+- full_suite (qa): done
+
+Findings:
+- review full_suite: reviewer: FAIL
+
+Next: fix the findings (loop back to Build).
