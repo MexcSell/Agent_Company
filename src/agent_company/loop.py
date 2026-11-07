@@ -1036,6 +1036,16 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                 log_event("task", f"'{contract.title}' skipped: the sandbox did not start ({infra})", goal_id=goal.id,
                           agent_id=agent.id)
                 return False
+            # `changed` None: the checkpoint failed and the change is unknown, so it is not an empty diff
+            blocked = contracts.blockers(output) if contract.writes and changed == [] else []
+            if blocked:  # a build that changed nothing and names a BLOCKER: a person clears it, no review of nothing
+                set_status(task_id, "skipped", stage="blocked", output=f"{BLOCKER_SKIP}{'; '.join(blocked)}",
+                           model_name=choice.name, gate={"acceptance": acceptance, "files": changed or res.files,
+                                                         "commit": commit, "saved_answer": saved, "blockers": blocked},
+                           session_id=res.session_id)
+                log_event("task", f"'{contract.title}' skipped: blocked with no change ({'; '.join(blocked)})"[:1000],
+                          goal_id=goal.id, agent_id=agent.id)
+                return False
             ok = res.ok and all(c["passed"] for c in acceptance)
             set_status(task_id, "done" if ok else "failed", output=output[-50_000:], model_name=choice.name,
                        gate={"acceptance": acceptance, "files": changed or res.files, "commit": commit,
@@ -1448,6 +1458,9 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
             waiting = _skipped_with(goal_id, iteration, RECRUIT_SKIP)
             if waiting:  # a recruit it needs waits for approval: the iteration is incomplete, do not judge it
                 return _out_for_recruitment(goal_id, waiting, report)
+            blocker = _skipped_with(goal_id, iteration, BLOCKER_SKIP)
+            if blocker:  # a writing task changed nothing and named a BLOCKER: a person clears it, nothing to judge
+                return _out_for_blocker(goal_id, blocker, report)
             if _budget_skipped(goal_id, iteration):  # the iteration is incomplete: do not judge it
                 try:
                     _budget_note(_goal(goal_id), started)
@@ -1662,6 +1675,7 @@ QUOTA_SKIP = "skipped (quota): "
 
 RECRUIT_SKIP = "skipped (recruitment): "
 INFRA_SKIP = "skipped (infrastructure): "  # the L3 sandbox did not start (`sandbox.startup_failure`)
+BLOCKER_SKIP = "skipped (blocker): "  # a writing task named a `BLOCKER:` and changed no file
 
 
 def _quota_skipped(goal_id: int, iteration: int) -> str:
@@ -1776,6 +1790,26 @@ def _out_for_infrastructure(goal_id: int, why: str, report: dict[str, Any]) -> d
            f"{g.title}\n{why}\nFix the host (bubblewrap, user namespaces, the bound paths, systemd-run) and resume "
            "the goal.", level="warning", source="goal", goal_id=goal_id, project_id=g.project_id, admin_only=True)
     return {"status": "paused", "iterations": g.iteration, "report": report, "infrastructure": why}
+
+
+def _out_for_blocker(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, Any]:
+    """A writing task reported a `BLOCKER:` and changed no file: the goal pauses for a person instead of reviewing
+    nothing and starting another iteration; a resume requeues the same iteration. Benchmark runs end instead."""
+    from agent_company.governance import notify
+
+    g = _goal(goal_id)
+    if g.origin == "eval":
+        _update_goal(goal_id, status="failed", result=f"Stopped: blocker: {why}.")
+        return {"status": "failed", "iterations": g.iteration, "report": report, "blocker": why}
+    _update_goal(goal_id, status="paused", reason=f"blocker: {why}"[:500])
+    with session() as s:
+        row = s.get(Goal, goal_id)
+        row.checkpoint = {**(row.checkpoint or {}), "paused_for": "blocker", "paused_why": why}
+    log_event("goal", f"paused: a task is blocked with no change: {why}", goal_id=goal_id)
+    notify(f"Goal #{goal_id} paused: a task is blocked"[:256],
+           f"{g.title}\n{why}\nClear the blocker and resume the goal.", level="warning", source="goal",
+           goal_id=goal_id, project_id=g.project_id)
+    return {"status": "paused", "iterations": g.iteration, "report": report, "blocker": why}
 
 
 def resume_after_quota() -> list[int]:
