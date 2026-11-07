@@ -42,6 +42,7 @@ class Settings:
     # Proposals agents raise: "user" waits for an administrator, "superiors" lets the GM decide.
     proposal_policy: str = "user"
     max_proposal_goals: int = 3  # goals one goal may spawn through approved proposals
+    rule_proposal_min_goals: int = 3  # failed goals with one RCA cause before a project rule is proposed (EL-R-04)
     goal_budget_usd: float = 0.0  # 0 = no limit
     goal_time_budget: int = 0  # seconds, 0 = no limit
     goal_token_budget: int = 0  # model tokens per goal, 0 = no limit (S04-R-09)
@@ -177,6 +178,7 @@ def load_settings() -> Settings:
         quality_commands=commands,
         proposal_policy=(os.environ.get("PROPOSAL_POLICY") or "user").lower(),
         max_proposal_goals=_int("MAX_PROPOSAL_GOALS", 3),
+        rule_proposal_min_goals=_int("RULE_PROPOSAL_MIN_GOALS", 3),
         goal_budget_usd=float(os.environ.get("GOAL_BUDGET_USD") or 0),
         goal_time_budget=_int("GOAL_TIME_BUDGET", 0),
         goal_token_budget=_int("GOAL_TOKEN_BUDGET", 0),
