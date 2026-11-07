@@ -1,0 +1,24 @@
+# Tasks (iteration 1)
+
+
+
+## 1. Specify a read-only node --check allow-list for developer and QA sessions
+- key: `spec` · role: architect · writes: no
+
+Read src/agent_company/executors.py (Grant, gate() lines 329-368, CLAUDE_BASH line 592, ClaudeCodeExecutor.tools/_run, COPILOT_SHELL line 719, the Codex executor), src/agent_company/edit_check.py, governance.check_command, tests/test_gateway.py, tests/test_router.py and docs/threat-model.md. Write a technical spec covering these points. (1) Why developer and QA sessions cannot run `node --check src/agent_company/static/*.js` today. Cite file:line. (2) The exact permission entries to add, for example `Bash(node --check:*)` for Claude Code and `shell(node --check)` for Copilot. Say whether the Codex read-only sandbox already allows it. (3) How a read-only run (QA review, writes=false) gets a separate check-only grant. It gets the syntax check and the existing test commands only: no Edit/Write, and no shell grant for writes. Name the new Grant field or rule, and keep the autonomy and permission rules (G2+, 'shell' permission). (4) Flags that would run code under `node --check` (`-r/--require`, `--import`, `--loader`, `-e/--eval`, `-p/--print`, `--experimental-*`). Say how a Claude Code prefix rule can or cannot exclude them, and the chosen mitigation. Options: a wrapper (`python3 -I <abs path>/edit_check.py <files>`, which already runs `node --check` per file) allowed instead of or beside the raw node prefix, or a governance.check_command refusal. Recommend one and state the residual risk. (5) The tests the developer must add, with names and assertions. (6) The threat-model.md row to add. Label each statement FACT, INFERENCE or HYPOTHESIS. End with a list of the files to change.
+
+Acceptance: {"type": "file_exists", "path": ".claude/specs/0086-allow-node-check-src-agent-company-stati/design.md"}; {"type": "contains", "value": "node --check"}; {"type": "regex", "pattern": "executors\\.py:\\d+"}; {"type": "min_length", "value": 1500}
+
+## 2. Allow the read-only node --check for developer and QA runs, with tests
+- key: `impl` · role: developer · writes: yes · after: spec
+
+Implement .claude/specs/0086-allow-node-check-src-agent-company-stati/design.md. Add the node --check entry chosen in the spec to CLAUDE_BASH and COPILOT_SHELL in src/agent_company/executors.py. Implement the check-only grant so a non-writing run with the 'shell' permission at autonomy G2+ gets only the syntax-check and test entries. It must never get Edit/Write. Apply the spec's mitigation for flags that run code. Add tests/test_node_check.py with these tests. (a) ClaudeCodeExecutor.tools() contains the node --check entry for a writing developer grant and for a read-only QA grant. (b) A read-only grant contains no Edit/Write. (c) A grant without the 'shell' permission, or at G1, has no node entry. (d) When `node` is on PATH (skip otherwise), the check passes on a valid fixture written to tmp_path and fails with a non-zero exit and an error on an invalid fixture. Use the spec's chosen path, e.g. edit_check.check(), or a direct node --check through contracts.run_command. (e) The refused flags are refused. Add the row to docs/threat-model.md. Do not touch the Workspace terminal or the Claude panel, and change no other entry of CLAUDE_BASH. Run the checks below before handing back.
+
+Acceptance: {"type": "file_exists", "path": "tests/test_node_check.py"}; {"type": "command", "run": "uv run pytest -q tests/test_node_check.py tests/test_gateway.py tests/test_router.py", "requirement_keys": ["EL-R-05"], "stage": "unit"}; {"type": "command", "run": "for f in src/agent_company/static/*.js; do node --check \"$f\" || exit 1; done", "requirement_keys": ["EL-R-05"], "stage": "static"}
+
+## 3. Review the node --check allow-list and rerun the JS syntax check yourself
+- key: `review` · role: qa · writes: no · after: impl
+
+Review the diff of `impl` against design.md in .claude/specs/0086-allow-node-check-src-agent-company-stati/. In this read-only session, run `node --check src/agent_company/static/*.js` (or a loop over each file) and report the exact output or refusal text. This is the evidence the goal needs: QA must be able to run it. Run `uv run pytest -q tests/test_node_check.py tests/test_gateway.py`. Verify the data flow of three cases. Normal: a QA read-only run gets the check entry and no Edit/Write. Edge: a run without 'shell' or at G1 gets nothing. Error: an invalid .js fixture gives a non-zero exit, and a code-running flag (`-r`, `--import`, `-e`) is refused. Confirm that no other CLAUDE_BASH entry changed and that threat-model.md was updated. List each problem as a FINDING line with file:line, then an OUTCOME line, and end with VERDICT: PASS or VERDICT: FAIL.
+
+Acceptance: {"type": "regex", "pattern": "VERDICT: (PASS|FAIL)"}; {"type": "contains", "value": "OUTCOME"}; {"type": "contains", "value": "node --check"}
