@@ -24,10 +24,8 @@ from __future__ import annotations
 import difflib
 import email.utils
 import hashlib
-import ipaddress
 import os
 import re
-import socket
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -41,6 +39,7 @@ from urllib.robotparser import RobotFileParser
 import httpx
 from sqlalchemy import or_, select, update
 
+from agent_company import netpin
 from agent_company.db import (
     Agent,
     Document,
@@ -278,16 +277,13 @@ def extract_pdf(data: bytes) -> dict[str, Any]:
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _is_public_host(host: str) -> bool:
+def _is_public_host(host: str, port: int = 443) -> bool:
+    """Every address of host is global (netpin.resolve_public); the check for a client the caller passes in."""
     try:
-        infos = socket.getaddrinfo(host, None)
-    except socket.gaierror:
+        netpin.resolve_public(host, port)
+        return True
+    except netpin.NotPublic:
         return False
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            return False
-    return True
 
 
 def _normalise(url: str) -> str:
@@ -303,6 +299,10 @@ def crawl(start_url: str, depth: int = 1, max_pages: int = 20, same_host: bool =
     depth 0 fetches only the start page; depth 1 adds every page it links to, and so
     on. Stays on the start host unless same_host is False, obeys robots.txt, and
     refuses private/loopback addresses unless ALLOW_PRIVATE_CRAWL=1.
+
+    Without a client the fetches use netpin.pinned_client: robots.txt, every page and every redirect hop connect
+    only to the addresses checked for their host (one lookup per host and port). A client passed in by the caller
+    is not pinned: its transport resolves the name again (tests only).
     """
     if allow_private is None:
         allow_private = os.environ.get("ALLOW_PRIVATE_CRAWL", "").lower() in {"1", "true", "yes"}
@@ -313,20 +313,34 @@ def crawl(start_url: str, depth: int = 1, max_pages: int = 20, same_host: bool =
     host = urlparse(start).netloc
     own = client is None
     # Redirects are followed by hand so every hop goes through the address and host checks.
-    c = client or httpx.Client(timeout=15, follow_redirects=False, headers={"User-Agent": USER_AGENT})
+    pins = netpin.Pins(allow_private=allow_private)
+    c = client or netpin.pinned_client(pins=pins, timeout=15, headers={"User-Agent": USER_AGENT})
     robots: dict[str, RobotFileParser] = {}
-    public: dict[str, bool] = {}
+    public: dict[tuple[str, int], bool] = {}
     pages: list[dict[str, Any]] = []
     seen = {start}
     queue: deque[tuple[str, int]] = deque([(start, 0)])
     try:
         while queue and len(pages) < max_pages:
             url, d = queue.popleft()
-            p = urlparse(url)
             if not allow_private:
-                if p.hostname not in public:
-                    public[p.hostname or ""] = _is_public_host(p.hostname or "")
-                if not public[p.hostname or ""]:
+                try:
+                    u = httpx.URL(url)
+                    key = (u.raw_host.decode("ascii"), u.port or (443 if u.scheme == "https" else 80))
+                except (httpx.InvalidURL, UnicodeError):
+                    key = ("", 0)
+                if key not in public:
+                    if not key[0]:
+                        public[key] = False
+                    elif not own:  # the caller's transport: checked, but it resolves again (unpinned)
+                        public[key] = _is_public_host(key[0])
+                    else:
+                        try:
+                            pins.check(*key)  # seeds the pinned transport: the connect uses these addresses
+                            public[key] = True
+                        except netpin.NotPublic:
+                            public[key] = False
+                if not public[key]:
                     pages.append({"url": url, "error": "private or unresolvable address"})
                     continue
             if not _robots_ok(c, robots, url):
