@@ -11,6 +11,8 @@ Plan → Build → Review → Fix (docs/1.claude-code-multi-agent.jpg). The loop
     decisions.md     one entry per iteration: plan summary, gate result, findings
 
 They are committed with the goal's branch, so the approved merge carries them into the project.
+`check_plan()` rejects (never rewrites) a plan whose acceptance names another spec folder or a loop-written file;
+the GM is told why and plans again (K54).
 `configure()` lets a CLI General Manager (Claude Code / Codex) update the project's `.claude/` configuration
 in the worktree; anything it changes outside `.claude/` and `.mcp.json` is put back.
 """
@@ -28,7 +30,9 @@ from agent_company.db import Goal, Task, session
 
 CONFIG_PATHS = (".claude/", ".mcp.json")
 LOOP_FILES = ("requirements.md", "tasks.md", "review.md", "sa-review.md", "decisions.md")  # the loop writes them
-SPEC_DIR = re.compile(r"\.claude/specs/([^/\s'\"`]+)/")
+# A `.claude/specs/<X>` folder, with or without a trailing slash; check_plan rejects any <X> but the goal's own (K54).
+SPEC_DIR = re.compile(r"\.claude/specs/([^/\s'\"`;|&<>()]+)")
+LOOP_FILE = re.compile(rf"\.claude/specs/[^/\s'\"`;|&<>()]+/({'|'.join(map(re.escape, LOOP_FILES))})(?![\w.-])")
 
 
 def slug(title: str, goal_id: int) -> str:
@@ -53,13 +57,26 @@ def planner_note(goal: Any) -> str:
 
 
 def check_plan(goal: Any, plan: list[Any]) -> list[str]:
-    """Point every `.claude/specs/<X>/` path of the plan's acceptance conditions at this goal's spec folder (K54).
-    Mutates the conditions; returns `<key>: <old> -> <new>` per rewrite. Raises ValueError on a condition about a
-    file the loop writes itself."""
+    """Reject a plan whose acceptance conditions name a `.claude/specs/<X>` folder other than this goal's, or a file
+    the loop writes itself in any spec folder (K54): such a plan can never pass. Paths are not rewritten; the only
+    change is the harmless normalisation of a spec file_exists path (a leading `./`, the absolute worktree prefix),
+    returned as `<key>: <old> -> <new>`. Every problem of the plan is listed in one ValueError, one per line."""
     own = slug(goal.title, goal.id)
+    rel = relative_folder(goal)
     prefix = str(goal.worktree).rstrip("/") + "/" if goal.worktree else ""
-    loop_file = re.compile(rf"\.claude/specs/{re.escape(own)}/({'|'.join(map(re.escape, LOOP_FILES))})(?![\w.-])")
-    report = []
+    report, problems, fixes = [], [], []
+
+    def scan(key: str, text: str, whole: bool = False) -> None:  # a file_exists path is named whole
+        for m in SPEC_DIR.finditer(text):
+            if m.group(1) != own:
+                problems.append(f"task {key}: {text if whole else m.group(0)} is outside this goal's spec folder "
+                                f"{rel}/; put spec documents there or in the source tree")
+                if whole:
+                    break
+        for m in LOOP_FILE.finditer(text):
+            problems.append(f"task {key}: {text if whole else m.group(0)} is written by the loop itself, not by a "
+                            "task (the gate writes decisions.md)")
+
     for c in plan:
         for cond in c.acceptance:
             if cond.type == "file_exists" and cond.path:
@@ -68,21 +85,16 @@ def check_plan(goal: Any, plan: list[Any]) -> list[str]:
                     path = path[len(prefix):]
                 while path.startswith("./"):
                     path = path[2:]
-                if not SPEC_DIR.match(path):
-                    continue
-                new = SPEC_DIR.sub(f".claude/specs/{own}/", path, count=1)
-                if new != cond.path:
-                    report.append(f"{c.key}: {cond.path} -> {new}")
-                    cond.path = new
-                if loop_file.fullmatch(new):
-                    raise ValueError(f"task {c.key}: {new} is written by the loop itself, not by a task")
+                scan(c.key, path, whole=True)
+                if path != cond.path and SPEC_DIR.match(path):
+                    report.append(f"{c.key}: {cond.path} -> {path}")
+                    fixes.append((cond, path))
             elif cond.type == "command" and cond.run:
-                new = SPEC_DIR.sub(f".claude/specs/{own}/", cond.run)
-                if new != cond.run:
-                    report.append(f"{c.key}: {cond.run} -> {new}")
-                    cond.run = new
-                if m := loop_file.search(new):
-                    raise ValueError(f"task {c.key}: {m.group(0)} is written by the loop itself, not by a task")
+                scan(c.key, cond.run)
+    if problems:
+        raise ValueError("\n".join(problems))
+    for cond, path in fixes:
+        cond.path = path
     return report
 
 

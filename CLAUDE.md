@@ -124,7 +124,8 @@ feature came from.
   pending `definition_candidates` row an administrator applies or discards after seeing the diff, `apply_candidate`;
   a study visit and a preview write nothing); `gm.py` (the General
   Manager as Claude Code: its instructions and the `python -m agent_company gm …` toolbox); `specs.py`
-  (`.claude/specs/<slug>/` artifacts of every goal, the GM's `.claude/` configure step); `hooks.py` (TaskCreated,
+  (`.claude/specs/<slug>/` artifacts of every goal, the GM's `.claude/` configure step; K54 `check_plan` rejects
+  acceptance paths outside the goal's spec folder and conditions on loop-written files, the GM re-plans); `hooks.py` (TaskCreated,
   TaskCompleted, TeammateIdle → `data/logs/team-hooks.jsonl`, fail-open);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
   (Workspace Claude Code panel: a tab per conversation of this browser session (new ones on the far right; earlier ones
