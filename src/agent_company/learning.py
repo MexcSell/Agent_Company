@@ -785,8 +785,9 @@ def review(item_id: int, approve: bool, reviewer: str, note: str = "") -> dict[s
         if approve:
             kgraph.on_knowledge(s, i)
             kgraph.link(s, ("knowledge", i.id), "VERIFIED_BY", ("user", reviewer.removeprefix("user:").lower()))
-            if was == "draft" and i.outcome == "imported":  # an approved import joins contradiction checking (REQ-005)
-                edges = _link_contradictions(s, i)
+            g = s.get(Goal, i.goal_id) if i.goal_id else None
+            if was == "draft" and not (g and g.origin == "eval"):  # an approved draft (an import, REQ-005, or a
+                edges = _link_contradictions(s, i)  # held-back lesson) joins contradiction checking; evals as learn()
         agent = i.agent_id
     judge_contradictions(edges)
     if was == "approved" and not approve:
