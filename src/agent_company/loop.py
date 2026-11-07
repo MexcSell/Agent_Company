@@ -30,7 +30,7 @@ from agent_company import (adr, blackboard, budgets, contracts, decisions, execu
                            rca, recruitment, registry, requirements, research, router, sandbox, specs, strategies,
                            teams, teststrategy, usage, workflow, worktrees)
 from agent_company.config import settings
-from agent_company.db import Agent, Event, Goal, Task, log_event, session
+from agent_company.db import Agent, Event, Goal, Task, event_iteration, log_event, session
 from agent_company.org import ROLES
 
 OUTPUT_CAP = 6000
@@ -1347,7 +1347,9 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
             base = quality.baseline(goal_id)
             failing = [c for c, r in base.items() if not r["passed"]]
             if failing:
-                log_event("gate", "already failing before any change: " + ", ".join(failing), goal_id=goal_id)
+                # iteration 0: the baseline runs before any change of the first iteration
+                log_event("gate", "already failing before any change: " + ", ".join(failing), goal_id=goal_id,
+                          iteration=0)
         started = time.monotonic()
         feedback, report = "", {}
         first = max(1, goal.iteration)
@@ -1820,7 +1822,8 @@ def _keep_best(goal_id: int) -> str:
     worktrees.git(worktrees.ensure_sandboxed(g.worktree), "reset", "-q", "--hard", best["commit"])
     msg = (f"\nKept iteration {best['iteration']} (score {best['score']:.0%}) instead of the last one "
            f"({last['score']:.0%}): the branch was reset to {best['commit'][:10]}.")
-    log_event("gate", msg.strip(), goal_id=goal_id)
+    # the message stays as it is: performance.report counts these events by "Kept iteration %"
+    log_event("gate", msg.strip(), goal_id=goal_id, iteration=last["iteration"], kept_iteration=best["iteration"])
     return msg
 
 
@@ -2072,7 +2075,8 @@ def trace(goal_id: int) -> dict[str, Any]:
                  "withheld": list(r.dropped or []), "denied_tools": list(r.denied_tools or []),
                  "tool_calls": list(r.tool_calls or [])}
                 for r in s.scalars(select(Run).where(Run.goal_id == goal_id).order_by(Run.id))]
-        gates = [{"at": e.created_at.isoformat(), "passed": e.data.get("passed"), "commit": e.data.get("commit"),
+        gates = [{"at": e.created_at.isoformat(), "iteration": event_iteration(e),
+                  "passed": e.data.get("passed"), "commit": e.data.get("commit"),
                   "checks": e.data.get("checks", []), "message": e.message}
                  for e in s.scalars(select(Event).where(Event.goal_id == goal_id, Event.kind == "gate")
                                     .order_by(Event.id)) if "checks" in (e.data or {})]

@@ -7,6 +7,7 @@ to use PostgreSQL; the schema is the same.
 
 from __future__ import annotations
 
+import re
 import threading
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
@@ -792,7 +793,33 @@ class Event(Base):
     kind: Mapped[str] = mapped_column(String(32))
     message: Mapped[str] = mapped_column(Text)
     data: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # the goal iteration the event belongs to (gate events, S04-R-12); NULL on rows written before the column existed
+    iteration: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+_ITER = re.compile(r"iteration (\d+):")
+
+
+def _as_int(v: Any) -> int | None:
+    """An int-like value as int (7, "7"), else None; a bool is not an iteration."""
+    if isinstance(v, bool):
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def event_iteration(e: Event) -> int | None:
+    """An event's iteration: its column, else `data["iteration"]`, else the one in its message (older rows)."""
+    if e.iteration is not None:
+        return e.iteration
+    it = _as_int((e.data or {}).get("iteration"))
+    if it is not None:
+        return it
+    m = _ITER.search(e.message or "")
+    return int(m.group(1)) if m else None
 
 
 class Document(Base):
@@ -1478,6 +1505,7 @@ def _add_missing_columns(eng: Engine) -> None:
             if not insp.has_table(table.name):
                 continue
             have = {c["name"] for c in insp.get_columns(table.name)}
+            added = set()
             for col in table.columns:
                 if col.name in have:
                     continue
@@ -1487,6 +1515,11 @@ def _add_missing_columns(eng: Engine) -> None:
                     v = col.default.arg
                     default = f" DEFAULT {int(v) if isinstance(v, bool) else repr(v) if isinstance(v, str) else v}"
                 conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl}{default}'))
+                added.add(col.name)
+            # An added column's indexes (index=True: ix_<table>_<column>, the name create_all gives them).
+            for idx in table.indexes:
+                if added & {c.name for c in idx.columns}:
+                    idx.create(conn, checkfirst=True)
         # A column whose default is computed (list, dict) cannot be a DDL default: rows that existed when it was added
         # got NULL although the model says it never is (2026-11-06: projects.stack broke the first real goal). They
         # get the default, also in databases migrated before this.
@@ -1558,7 +1591,8 @@ def log_event(
     **data: Any,
 ) -> None:
     """Record an event. Pass `s` when called inside an open session (SQLite allows one writer)."""
-    ev = Event(kind=kind, message=message, goal_id=goal_id, agent_id=agent_id, data=data)
+    ev = Event(kind=kind, message=message, goal_id=goal_id, agent_id=agent_id, data=data,
+               iteration=_as_int(data.get("iteration")))
     if s is not None:
         s.add(ev)
         return

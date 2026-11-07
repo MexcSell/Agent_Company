@@ -13,16 +13,15 @@ else to its `depends_on`, else to the writing tasks of its iteration.
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select
 
-from agent_company.db import Defect, Event, Goal, GoalTransition, Lesson, Risk, Run, Task, now, session
+from agent_company.db import (Defect, Event, Goal, GoalTransition, Lesson, Risk, Run, Task, event_iteration, now,
+                               session)
 
 REVIEW_ROLES = {"qa", "security", "network_security"}  # quality.REVIEW_ROLES
-_ITER = re.compile(r"iteration (\d+):")
 
 
 def _aware(t: datetime | None) -> datetime | None:
@@ -40,13 +39,10 @@ def _gates(s: Any, goal_id: int) -> dict[int, list[dict[str, Any]]]:
         data = e.data or {}
         if "checks" not in data:
             continue
-        it = data.get("iteration")
+        it = event_iteration(e)
         if it is None:
-            m = _ITER.search(e.message or "")
-            if not m:
-                continue
-            it = int(m.group(1))
-        out[int(it)] = [c for c in data["checks"] if isinstance(c, dict)]
+            continue
+        out[it] = [c for c in data["checks"] if isinstance(c, dict)]
     return out
 
 
