@@ -3,10 +3,10 @@ overview and RCA instead of rebuilding the report on every poll."""
 import sqlite3
 
 import pytest
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, select
 
 from agent_company import db, loop, mission, projects, rca, workflow
-from agent_company.db import Goal, session
+from agent_company.db import Event, Goal, session
 
 from test_mission_report import OK, gate, make_goal, task
 from test_simple_mode import app, goal_row  # noqa: F401 - the app fixture
@@ -79,6 +79,67 @@ def test_store_label_counts_is_fail_open(monkeypatch):
 
     monkeypatch.setattr(mission, "report", boom)
     assert mission.store_label_counts(gid) is None  # never raises
+    assert stored(gid) == {}
+
+
+def test_failed_store_still_returns_the_counts(monkeypatch):
+    """A first read whose write fails (e.g. SQLite 'database is locked') returns the computed counts, logs the error."""
+    gid = finished_goal()
+
+    def locked(gid, counts):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(mission, "_write", locked)
+    assert mission.label_counts(gid) == {"verified": 1, "partial": 1, "failed": 1}
+    assert stored(gid) == {}
+    with session() as s:
+        assert s.scalars(select(Event.message).where(Event.goal_id == gid, Event.kind == "error",
+                                                     Event.message.contains("not stored"))).first()
+
+
+def test_failed_store_and_failed_log_still_return_the_counts(monkeypatch):
+    gid = finished_goal()
+    monkeypatch.setattr(mission, "_write", lambda g, c: (_ for _ in ()).throw(RuntimeError("database is locked")))
+    monkeypatch.setattr(mission, "log_event", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("locked too")))
+    assert mission.label_counts(gid) == {"verified": 1, "partial": 1, "failed": 1}
+
+
+def test_overview_survives_a_raising_label_count(app, monkeypatch):
+    p = projects.create("Shop")
+    gid = goal_row(p["id"], "approved", "merged")
+
+    def locked(gid):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(mission, "label_counts", locked)
+    r = app.get("/api/simple/overview")
+    assert r.status_code == 200
+    assert {c["id"]: c["labels"] for c in r.json()["delivered"]}[gid] == {}
+
+
+def test_store_skipped_for_a_goal_active_at_write_time():
+    """A goal resumed between its finish and the store gets no counts."""
+    gid = finished_goal()
+    with session() as s:
+        s.get(Goal, gid).status = "running"
+    mission._write(gid, {"verified": 1, "partial": 1, "failed": 1})  # the write itself checks the status
+    assert stored(gid) == {}
+    mission.store_label_counts(gid)  # report() refuses an active goal; fail-open, nothing stored
+    assert stored(gid) == {}
+
+
+def test_store_skipped_when_the_goal_resumes_during_the_count(monkeypatch):
+    gid = finished_goal()
+    real = mission.report
+
+    def resumed_meanwhile(g):
+        out = real(g)
+        with session() as s:
+            s.get(Goal, g).status = "recovering"
+        return out
+
+    monkeypatch.setattr(mission, "report", resumed_meanwhile)
+    assert mission.label_counts(gid) == {"verified": 1, "partial": 1, "failed": 1}
     assert stored(gid) == {}
 
 

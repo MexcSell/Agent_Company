@@ -181,7 +181,8 @@ LABELS = ("verified", "partial", "failed")
 
 def label_counts(goal_id: int) -> dict[str, int]:
     """report()'s task labels of a finished goal, stored in Goal.label_counts so that the Simple overview and RCA do
-    not rebuild the report; computed and stored on the first read. KeyError/ValueError as report()."""
+    not rebuild the report; computed and stored on the first read, a failed store still returns the counts.
+    KeyError/ValueError as report()."""
     from agent_company import workflow
 
     with session() as s:
@@ -192,17 +193,40 @@ def label_counts(goal_id: int) -> dict[str, int]:
             raise ValueError(f"goal {goal_id} is not finished")
         if g.label_counts:
             return {k: int(g.label_counts.get(k, 0)) for k in LABELS}
-    return _store(goal_id)
+    counts = _count(goal_id)
+    try:
+        _write(goal_id, counts)
+    except Exception as e:  # noqa: BLE001 - e.g. "database is locked": the read still gets its counts
+        _log_not_stored(goal_id, e)
+    return counts
+
+
+def _count(goal_id: int) -> dict[str, int]:
+    labels = report(goal_id)["tasks"]["labels"]
+    return {k: int(labels.get(k, 0)) for k in LABELS}
+
+
+def _write(goal_id: int, counts: dict[str, int]) -> None:
+    """Store the counts unless the goal is gone or active again (resumed after its counts were computed)."""
+    from agent_company import workflow
+
+    with session() as s:  # opened after report() closed its own: SQLite allows one writer
+        g = s.get(Goal, goal_id)
+        if g is not None and g.status not in workflow.ACTIVE:
+            g.label_counts = counts
 
 
 def _store(goal_id: int) -> dict[str, int]:
-    labels = report(goal_id)["tasks"]["labels"]
-    counts = {k: int(labels.get(k, 0)) for k in LABELS}
-    with session() as s:  # opened after report() closed its own: SQLite allows one writer
-        g = s.get(Goal, goal_id)
-        if g is not None:
-            g.label_counts = counts
+    counts = _count(goal_id)
+    _write(goal_id, counts)
     return counts
+
+
+def _log_not_stored(goal_id: int, e: Exception) -> None:
+    try:
+        log_event("error", f"label counts of goal #{goal_id} not stored: {type(e).__name__}: {e}", goal_id=goal_id)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def store_label_counts(goal_id: int) -> None:
@@ -210,11 +234,7 @@ def store_label_counts(goal_id: int) -> None:
     try:
         _store(goal_id)
     except Exception as e:  # noqa: BLE001 - the cache never changes a goal's outcome
-        try:
-            log_event("error", f"label counts of goal #{goal_id} not stored: {type(e).__name__}: {e}",
-                      goal_id=goal_id)
-        except Exception:  # noqa: BLE001
-            pass
+        _log_not_stored(goal_id, e)
 
 
 def report_markdown(d: dict[str, Any]) -> str:

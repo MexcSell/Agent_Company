@@ -2365,7 +2365,7 @@ def create_app(start_background: bool = True) -> FastAPI:
             elif len(out["delivered"]) < 20:
                 try:
                     labels = mission.label_counts(gid)  # stored per finished goal, not the full report
-                except (KeyError, ValueError):
+                except Exception:  # noqa: BLE001 - one goal's counts never break the overview
                     labels = {}
                 out["delivered"].append(c | {"finished_at": updated.isoformat(), "labels": labels,
                                              "report": f"/api/goals/{gid}/report"})

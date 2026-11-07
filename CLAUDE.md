@@ -49,7 +49,8 @@ feature came from.
   time vs `Goal.deadline`, limitations, lessons, RCA recommendations; each task verified|partial|failed only from
   `Task.gate["acceptance"]` and gate review verdicts, never task output; `GET /api/goals/{id}/report[?format=md]`;
   `label_counts` cached per finished goal in `Goal.label_counts` (stored when the goal finishes, filled on first read
-  for older goals, cleared by any status change), read by the Simple overview and RCA;
+  for older goals, never for a goal active at write time, cleared by any status change; a failed store still returns
+  the counts), read by the Simple overview and RCA;
   REQ-003 Simple mode: `User.ui_mode` simple|advanced, `/api/simple/missions` and `/api/simple/overview`); `workflow.py` (goal
   state machine, `goal_transitions`; task lifecycle stages `Task.stage` beside the execution status, S05-R-08); `strategies.py` (S04-R-11 workflow templates per goal kind
   bugfix|feature|refactor|research|docs, versioned: roles, writes, checks, iteration limit, execution mode, review
