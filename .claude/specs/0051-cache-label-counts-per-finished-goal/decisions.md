@@ -24,3 +24,9 @@ Findings:
 - review full_suite: reviewer: FAIL
 
 Next: fix the findings (loop back to Build).
+
+## Iteration 3: PASS
+- store_after_outcome (developer): done
+- review_cache (qa): done
+
+Next: approval and merge.
