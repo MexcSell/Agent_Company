@@ -177,7 +177,8 @@ def check(contract: TaskContract, output: str, workdir: Path | None, timeout: in
         info: dict[str, Any] = {}
         ok, detail = _check_one(cond, contract, output, workdir, timeout, on_refused, mode, info)
         results.append({"condition": cond.model_dump(exclude_none=True), "passed": ok, "detail": detail}
-                       | ({"isolation": info["isolation"]} if info.get("isolation") else {}))
+                       | ({"isolation": info["isolation"]} if info.get("isolation") else {})
+                       | ({"infra": info["infra"]} if info.get("infra") else {}))
     return results
 
 
@@ -215,7 +216,8 @@ def run_command(cmd: str, workdir: Path, timeout: int,
                 info: dict[str, Any] | None = None) -> tuple[bool, str]:
     """Run a check command in the worktree: in the L3 sandbox as `mode` (sandbox.MODES, default the company
     setting) allows, with a filtered environment either way. `info` receives the isolation level and its note,
-    the exit code (None when it did not run), whether it timed out, the duration and the output tail (S09-R-04)."""
+    the exit code (None when it did not run), whether it timed out, the duration, the output tail (S09-R-04) and
+    `infra`, the start-up line when the sandbox itself did not start (`sandbox.startup_failure`)."""
     import time
 
     from agent_company import sandbox
@@ -236,11 +238,13 @@ def run_command(cmd: str, workdir: Path, timeout: int,
     if info is not None:
         info.update(isolation=res.isolation, isolation_note=res.note, timed_out=res.timed_out,
                     exit_code=res.returncode if res.isolation else None,
-                    duration_s=round(time.monotonic() - started, 2), output_tail=res.output[-800:])
+                    duration_s=round(time.monotonic() - started, 2), output_tail=res.output[-800:], infra=res.infra)
     level = f" ({res.isolation})" if res.isolation else ""
     note = f"\n[{res.note}]" if res.note else ""
     if not res.isolation:
         return False, f"`{cmd}` {res.note}"
+    if res.infra:  # bwrap did not start: the command never ran, never a pass (S14-R-03)
+        return False, f"`{cmd}` infrastructure: the sandbox did not start{level}: {res.infra}{note}"
     if res.timed_out:
         return False, f"`{cmd}` timed out after {timeout}s{level}{note}"
     return res.returncode == 0, f"`{cmd}` exit {res.returncode}{level}{note}\n{res.output[-1500:]}".strip()
