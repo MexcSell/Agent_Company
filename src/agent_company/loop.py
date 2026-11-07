@@ -1028,6 +1028,14 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                                          on_refused=lambda cmd, why: on_command_refused(goal.id, planner_id, cmd, why),
                                          mode=sandbox.mode_for(goal))
             acceptance += contracts.limits(contract, changed or res.files, usage.task_spend(task_id))
+            infra = next((c["infra"] for c in acceptance if c.get("infra")), "")
+            if infra:  # the sandbox did not start: not this task's failure, no attempt (S14-R-03)
+                set_status(task_id, "skipped", stage="blocked", output=f"{INFRA_SKIP}{infra}", model_name=choice.name,
+                           gate={"acceptance": acceptance, "files": changed or res.files, "commit": commit,
+                                 "saved_answer": saved}, session_id=res.session_id)
+                log_event("task", f"'{contract.title}' skipped: the sandbox did not start ({infra})", goal_id=goal.id,
+                          agent_id=agent.id)
+                return False
             ok = res.ok and all(c["passed"] for c in acceptance)
             set_status(task_id, "done" if ok else "failed", output=output[-50_000:], model_name=choice.name,
                        gate={"acceptance": acceptance, "files": changed or res.files, "commit": commit,
@@ -1431,6 +1439,9 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
             halted = _halted(goal_id)
             if halted:
                 return {"status": halted}
+            infra = _skipped_with(goal_id, iteration, INFRA_SKIP)
+            if infra:  # the sandbox did not start: the iteration is incomplete, do not judge it; before quota, which
+                return _out_for_infrastructure(goal_id, infra, report)  # resumes by itself into the same sandbox
             quota = _quota_skipped(goal_id, iteration)
             if quota:  # an agent it needs is out of quota: the iteration is incomplete, do not judge it
                 return _out_of_quota(goal_id, quota, report)
@@ -1650,6 +1661,7 @@ QUOTA_SKIP = "skipped (quota): "
 
 
 RECRUIT_SKIP = "skipped (recruitment): "
+INFRA_SKIP = "skipped (infrastructure): "  # the L3 sandbox did not start (`sandbox.startup_failure`)
 
 
 def _quota_skipped(goal_id: int, iteration: int) -> str:
@@ -1741,6 +1753,29 @@ def _out_of_quota(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, A
            f"{'room budget (Agents → Rooms)' if room else 'quota'} and resume it.", level="warning", source="goal", goal_id=goal_id,
            project_id=g.project_id, admin_only=True)
     return {"status": "paused", "iterations": g.iteration, "report": report, "quota": why}
+
+
+def _out_for_infrastructure(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, Any]:
+    """The L3 sandbox did not start (`sandbox.INFRA_RE`): one incident per goal (S07-R-02 evidence), the goal pauses
+    until a person fixes the host and resumes it. Benchmark runs end instead."""
+    from agent_company.governance import notify, open_incident
+
+    g = _goal(goal_id)
+    open_incident("infrastructure", "SEV-3", f"The sandbox could not start for goal #{goal_id}",
+                  "rule:sandbox_startup", rule="sandbox_startup", goal_id=goal_id,
+                  evidence=[{"type": "sandbox", "iteration": g.iteration, "line": why[:500]}])
+    if g.origin == "eval":
+        _update_goal(goal_id, status="failed", result=f"Stopped: infrastructure: {why}.")
+        return {"status": "failed", "iterations": g.iteration, "report": report, "infrastructure": why}
+    _update_goal(goal_id, status="paused", reason=f"infrastructure: {why}"[:500])
+    with session() as s:
+        row = s.get(Goal, goal_id)
+        row.checkpoint = {**(row.checkpoint or {}), "paused_for": "infrastructure", "paused_why": why}
+    log_event("goal", f"paused: the sandbox did not start: {why}", goal_id=goal_id)
+    notify(f"Goal #{goal_id} paused: the sandbox could not start"[:256],
+           f"{g.title}\n{why}\nFix the host (bubblewrap, user namespaces, the bound paths, systemd-run) and resume "
+           "the goal.", level="warning", source="goal", goal_id=goal_id, project_id=g.project_id, admin_only=True)
+    return {"status": "paused", "iterations": g.iteration, "report": report, "infrastructure": why}
 
 
 def resume_after_quota() -> list[int]:

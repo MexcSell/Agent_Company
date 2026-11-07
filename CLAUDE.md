@@ -38,7 +38,9 @@ feature came from.
   milestone commands and code benchmarks run agent-written code under bubblewrap: no network, the worktree writable
   with its `.git` read-only, `data/`/`.env` hidden, allow-listed env, systemd-scope limits; setting `sandbox`
   auto|required|off, a project only stricter, A2A goals required; a changed lock file is installed first with
-  network into `data/sandbox/home`), `worktrees.py`,
+  network into `data/sandbox/home`; a bwrap/systemd-run start-up failure (`INFRA_RE`, also in required mode)
+  becomes `Outcome.infra`: the task is skipped with `INFRA_SKIP`, an `infrastructure` incident opens and the goal
+  pauses until a person resumes it), `worktrees.py`,
   `quality.py` + `checks.py` (gate: contracts, review verdicts with logic verification, secrets, syntax, scope,
   change boundaries, baseline) + `teststrategy.py` (S09-R-02 risk-based test strategy per goal: mandatory stages
   for high-risk goals, staged command conditions the gate runs again), `usage.py`; `loop.py` (circular goal loop, budgets that pause, best-iteration
