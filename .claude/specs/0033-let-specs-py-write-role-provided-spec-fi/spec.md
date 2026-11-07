@@ -1,3 +1,7 @@
+# Specification: Let specs.py write role-provided spec files to the task's acceptance path
+
+## Specify how specs.py saves role-provided spec files at a task's acceptance path (architect, done)
+
 The checks are done. `spec.md` doesn't exist yet, so the current `_save_answer` will save my answer to it. `.claude/` isn't excluded from `commit_all`. Here is the specification.
 
 # Spec: `specs.save_answer` saves a role's answer at a task's acceptance path
