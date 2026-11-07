@@ -64,6 +64,8 @@ SCHEMA: dict[str, tuple[type, str]] = {
                                        "agent) or 'always' (also a clone made for a role nobody holds)"),
     "qualify_recruits": (bool, "A new recruit of a writing role first passes an eval suite as a candidate before it is "
                                "used (costs model calls; the offline simulator always fails it)"),
+    "task_critic": (bool, "After each writing task, a critic of another model family reviews its diff before dependent "
+                          "tasks start; a FAIL returns the task to its author, at most twice (EL-R-06; costs model calls)"),
     "improvement_min_score": (float, "Percent a code-improvement candidate's weighted benchmark score must beat the baseline by"),
     "improvement_max_regression": (int, "Percent any single benchmark metric of a candidate may get worse before it is rejected"),
     "improvement_auto_rollback": (bool, "Revert a deployed code improvement automatically when the safe restart refuses it"),

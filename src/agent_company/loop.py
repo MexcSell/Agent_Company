@@ -280,7 +280,7 @@ def _stopped_result(why: str) -> tuple[executors.Result, router.Choice]:
 def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | None = None,
              goal_id: int | None = None, escalate: bool = False,
              avoid_provider: str | None = None, timeout: int | None = None,
-             deadline: float | None = None) -> tuple[executors.Result, router.Choice]:
+             deadline: float | None = None, other_cli: bool = False) -> tuple[executors.Result, router.Choice]:
     """Run the request on the role's best model. Transient errors are retried with backoff; then the next
     model in the chain is tried. Nothing starts while an emergency stop covers the agent, its room, its
     goal's project or the executor (S14-R-01). `timeout` caps one run (the task's deadline); `deadline` is
@@ -304,8 +304,9 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
     req.permissions, req.autonomy = list(agent.permissions or []), agent.autonomy or ""  # the tool gateway's inputs
     try:  # only models cleared for the goal's classification (S14-R-05)
         # a code review on another family's CLI cannot run the tests yet (Codex's read-only sandbox writes nothing,
-        # not even uv's cache; goal 112 hands QA the gate's own output): until then an API model of another family
-        chain = router.resolve_chain(agent.role, pref, escalate, avoid_provider, level, other_cli=False)
+        # not even uv's cache; goal 112 hands QA the gate's own output): until then an API model of another family;
+        # a diff critic runs no tests, so it may be another family's CLI (`other_cli`, EL-R-03/EL-R-06)
+        chain = router.resolve_chain(agent.role, pref, escalate, avoid_provider, level, other_cli=other_cli)
     except router.NotCleared as e:
         log_event("security", f"{agent.name}: {e}", goal_id=goal_id, agent_id=agent.id, classification=level)
         return (executors.Result(text="", ok=False, error=str(e)),
@@ -981,14 +982,13 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                 dep_text = (f"Not delivered (failed or skipped): {', '.join(missing)}. Review only what was "
                             "delivered; the gate already fails this iteration for them.\n\n" + dep_text).strip()
             accept = "\n".join(f"- {json.dumps(c.model_dump(exclude_none=True))}" for c in contract.acceptance)
-            prompt = (f"Overall goal: {goal.title}\n{goal.description}\n\n## Your task: {contract.title}\n"
-                      f"{contract.description}\n\nInputs: {json.dumps(contract.inputs)}\n\n"
-                      f"Acceptance conditions (checked automatically):\n{accept}\n\n"
-                      + _contract_note(contract)
-                      + (f"{dep_text}\n\n" if dep_text else "")
-                      + (f"Research notes:\n{notes}\n\n" if notes else "")
-                      + (f"Findings from the last failed attempt:\n{feedback}\n\n" if feedback else "")
-                      + handover
+            head = (f"Overall goal: {goal.title}\n{goal.description}\n\n## Your task: {contract.title}\n"
+                    f"{contract.description}\n\nInputs: {json.dumps(contract.inputs)}\n\n"
+                    f"Acceptance conditions (checked automatically):\n{accept}\n\n"
+                    + _contract_note(contract)
+                    + (f"{dep_text}\n\n" if dep_text else "")
+                    + (f"Research notes:\n{notes}\n\n" if notes else ""))
+            tail = (handover
                       + blackboard.context_for(goal.id, role, exclude={contract.key, *contract.depends_on})
                       + blackboard.inbox(goal.id, role, agent.id)
                       + learning.experience_context(agent.id, goal_id=goal.id, query=" ".join(
@@ -999,19 +999,53 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                          else "\n\nDo not change files; answer in text.")
                       + ("\n\n" + REVIEW_CHECKLIST if role in REVIEW_ROLES else "")
                       + "\n\n" + PROPOSAL_HELP + "\n" + blackboard.MESSAGE_HELP + budget)
-            req = executors.Request(purpose="task", role=role, system=_system_for(agent), prompt=prompt,
+
+            def compose(fb: str) -> str:
+                return head + (f"Findings from the last failed attempt:\n{fb}\n\n" if fb else "") + tail
+
+            req = executors.Request(purpose="task", role=role, system=_system_for(agent), prompt=compose(feedback),
                                     workdir=Path(goal.worktree), writes=writes,
                                     data={"title": contract.title, "description": contract.description,
                                           "feedback": feedback, "resume": _resumable_session(goal.id, agent.id),
                                           "max_turns": contract.budget.turns})
             avoid = _developer_provider(goal.id, goal.iteration) if role in REVIEW_ROLES else None
-            res, choice = _execute(agent, req, "task", task_id=task_id, goal_id=goal.id,
-                                   escalate=goal.iteration >= 2, avoid_provider=avoid,
-                                   timeout=contract.deadline or None, deadline=_deadline(started))
-            output = res.text if res.ok else f"{res.text}\n\nERROR: {res.error}"
-            # a finished writing task is committed, so a restart can drop a later task's partial edits (S04-R-05);
-            # the scheduler's write lock is held here, so the commit holds this task's changes only
-            commit, changed = _checkpoint(goal.id, goal.iteration, contract.key) if contract.writes else ("", [])
+            # EL-R-06: a critic of another model family reviews the task's diff before its dependants start (they wait
+            # for this worker); a FAIL returns the task to the same agent, at most CRITIC_RETRIES times
+            critic_on = bool(settings().task_critic and contract.writes and writes)
+            base = _critic_base(goal) if critic_on else ""
+            critics: list[dict[str, Any]] = []
+            for attempt in range(1, CRITIC_RETRIES + 2):
+                res, choice = _execute(agent, req, "task", task_id=task_id, goal_id=goal.id,
+                                       escalate=goal.iteration >= 2, avoid_provider=avoid,
+                                       timeout=contract.deadline or None, deadline=_deadline(started))
+                output = res.text if res.ok else f"{res.text}\n\nERROR: {res.error}"
+                # a finished writing task is committed, so a restart can drop a later task's partial edits
+                # (S04-R-05); the scheduler's write lock is held here, so the commit holds this task's changes only
+                commit, step = _checkpoint(goal.id, goal.iteration, contract.key) if contract.writes else ("", [])
+                if attempt == 1:
+                    changed, files = step, list(res.files or [])
+                else:  # a retry: the task's change is the union of its attempts
+                    changed = None if changed is None or step is None else sorted(set(changed) | set(step))
+                    files = sorted(set(files) | set(res.files or []))
+                if not (critic_on and base and res.ok and commit and changed and choice.kind != "offline"):
+                    break
+                entry = _critic(goal, contract, task_id, agent, choice, base, commit, attempt, started)
+                critics.append(entry)
+                if entry["verdict"] != "FAIL":
+                    break
+                points = "\n".join(entry["points"])
+                if attempt > CRITIC_RETRIES:  # the gate and QA decide; the dependent review sees the points
+                    output += f"\n\nCritic (attempt {attempt}, {entry['model']}): VERDICT: FAIL\n{points}"
+                    break
+                try:
+                    _budget_note(goal, started)
+                except BudgetExhausted as e:
+                    log_event("critic", f"no retry of '{contract.title}': {e}", goal_id=goal.id, agent_id=agent.id,
+                              task_id=task_id)
+                    break
+                fb = (f"A critic of another model family ({entry['model']}) failed your change (attempt {attempt}):\n"
+                      + points + (f"\n\n{feedback}" if feedback else ""))
+                req.prompt, req.data["feedback"], req.data["resume"] = compose(fb), fb, res.session_id or ""
             if "WorktreeError" in (res.error or ""):  # rule: writing outside the goal's worktree (S14-R-03)
                 from agent_company.governance import open_incident
 
@@ -1040,15 +1074,15 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             acceptance = contracts.check(contract, output, Path(goal.worktree), settings().command_timeout,
                                          on_refused=lambda cmd, why: on_command_refused(goal.id, planner_id, cmd, why),
                                          mode=sandbox.mode_for(goal))
-            acceptance += contracts.limits(contract, changed or res.files, usage.task_spend(task_id))
+            acceptance += contracts.limits(contract, changed or files, usage.task_spend(task_id))
             # a loop-saved answer counts as a change; `changed` only, the executor's `res.files` are not the diff
             acceptance += contracts.requires_change(contract, None if changed is None
                                                     else sorted(set(changed) | set(saved)))
             infra = next((c["infra"] for c in acceptance if c.get("infra")), "")
             if infra:  # the sandbox did not start: not this task's failure, no attempt (S14-R-03)
                 set_status(task_id, "skipped", stage="blocked", output=f"{INFRA_SKIP}{infra}", model_name=choice.name,
-                           gate={"acceptance": acceptance, "files": changed or res.files, "commit": commit,
-                                 "saved_answer": saved}, session_id=res.session_id)
+                           gate={"acceptance": acceptance, "files": changed or files, "commit": commit,
+                                 "saved_answer": saved}, session_id=res.session_id, critic=critics)
                 log_event("task", f"'{contract.title}' skipped: the sandbox did not start ({infra})", goal_id=goal.id,
                           agent_id=agent.id)
                 return False
@@ -1057,20 +1091,20 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             blocked = contracts.blockers(output) if contract.writes and changed == [] and not saved else []
             if blocked:  # a build that changed nothing and names a BLOCKER: a person clears it, no review of nothing
                 set_status(task_id, "skipped", stage="blocked", output=f"{BLOCKER_SKIP}{'; '.join(blocked)}",
-                           model_name=choice.name, gate={"acceptance": acceptance, "files": changed or res.files,
+                           model_name=choice.name, gate={"acceptance": acceptance, "files": changed or files,
                                                          "commit": commit, "saved_answer": saved, "blockers": blocked},
-                           session_id=res.session_id)
+                           session_id=res.session_id, critic=critics)
                 log_event("task", f"'{contract.title}' skipped: blocked with no change ({'; '.join(blocked)})"[:1000],
                           goal_id=goal.id, agent_id=agent.id)
                 return False
             ok = res.ok and all(c["passed"] for c in acceptance)
             set_status(task_id, "done" if ok else "failed", output=output[-50_000:], model_name=choice.name,
-                       gate={"acceptance": acceptance, "files": changed or res.files, "commit": commit,
+                       gate={"acceptance": acceptance, "files": changed or files, "commit": commit,
                              "saved_answer": saved,
                              "findings": contracts.findings(output), "next_actions": contracts.next_actions(output),
                              "blockers": contracts.blockers(output),
                              "recommendation": contracts.recommendation(output) if contract.decision_topic else ""},
-                       session_id=res.session_id)
+                       session_id=res.session_id, critic=critics)
             log_event("task", f"{agent.name} {'finished' if ok else 'failed'} '{contract.title}' "
                               f"with {choice.name}", goal_id=goal.id, agent_id=agent.id)
             from agent_company.projects import extract_proposals, post_for_goal
@@ -1097,6 +1131,82 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
 
 
 RESUME_WINDOW_MINUTES = 60
+
+CRITIC_RETRIES = 2  # EL-R-06: a task the critic fails goes back to its author at most this often
+CRITIC_DIFF_CHARS = 40_000
+_CRITIC_VERDICT = re.compile(r"VERDICT:\s*\**\s*(PASS|FAIL)", re.I)  # as quality.py, without the logic section
+
+
+def _critic_base(goal: Goal) -> str:
+    """The commit a writing task starts from: the critic reviews everything the task changed since then."""
+    try:
+        return (_goal(goal.id).checkpoint or {}).get("commit") or worktrees.git(goal.worktree, "rev-parse", "HEAD")
+    except worktrees.WorktreeError as e:
+        log_event("error", f"critic: no base commit: {e}", goal_id=goal.id)
+        return ""
+
+
+def _critic(goal: Goal, contract: contracts.TaskContract, task_id: int, author: Agent, author_choice: router.Choice,
+            base: str, commit: str, attempt: int, started: float) -> dict[str, Any]:
+    """EL-R-06: a critic of another model family than the author's (EL-R-03) reviews the task's diff. Returns the
+    entry recorded on `Task.critic`; verdict PASS|FAIL, `skipped` when no critic or no other family is usable,
+    `error` when the run failed or gave no verdict. Only FAIL sends the task back."""
+    from agent_company.db import Run
+
+    provider = author_choice.provider
+    entry: dict[str, Any] = {"attempt": attempt, "model": "", "provider": "", "verdict": "skipped", "points": [],
+                             "reason": "", "run_id": None}
+    try:
+        critic = registry.staff("qa", ["review"], goal.id, writes=False, task_id=task_id)
+    except Exception as e:  # noqa: BLE001 - no critic never blocks the task
+        entry["reason"] = f"no critic staffed: {e}"[:500]
+        log_event("critic", f"no critic for '{contract.title}' attempt {attempt}: {entry['reason']}", goal_id=goal.id,
+                  task_id=task_id)
+        return entry
+    try:
+        if critic.id == author.id:
+            entry["reason"] = "the only critic is the author"
+        else:
+            wt = Path(goal.worktree)
+            try:
+                stat = worktrees.git(wt, "diff", "--stat", base, commit)
+                diff = worktrees.git(wt, "-c", "core.quotepath=off", "diff", base, commit)
+            except worktrees.WorktreeError as e:
+                stat, diff = "", ""
+                entry["reason"] = f"no diff: {e}"[:500]
+            if diff:
+                if len(diff) > CRITIC_DIFF_CHARS:
+                    diff = (diff[:CRITIC_DIFF_CHARS]
+                            + f"\n[diff truncated, {len(diff) - CRITIC_DIFF_CHARS} more characters]")
+                accept = "\n".join(f"- {json.dumps(c.model_dump(exclude_none=True))}" for c in contract.acceptance)
+                prompt = (f"Overall goal: {goal.title}\n\n## Task under review: {contract.title}\n{contract.description}"
+                          f"\n\nAcceptance conditions:\n{accept}\n\n## Changed files\n{stat}\n\n## Diff\n{diff}\n\n"
+                          "Review this change of another agent. List each defect as `FINDING: <file:line> | <risk> | "
+                          "<fix>`. FAIL only for defects that break the task's contract or its acceptance. End with "
+                          "exactly one line `VERDICT: PASS` or `VERDICT: FAIL`.")
+                req = executors.Request(purpose="critic", role="qa", prompt=prompt, workdir=wt, writes=False,
+                                        system=_system_for(critic) + " You did not write this change.")
+                res, choice = _execute(critic, req, "critic", task_id=task_id, goal_id=goal.id,
+                                       avoid_provider=provider, other_cli=True, deadline=_deadline(started))
+                entry.update(model=choice.name, provider=choice.provider)
+                if choice.provider in (provider, "offline"):
+                    entry["reason"] = "no usable model of another family"
+                else:
+                    found = _CRITIC_VERDICT.findall(res.text or "") if res.ok else []
+                    entry["verdict"] = found[-1].upper() if found else "error"
+                    entry["points"] = contracts.findings(res.text) or ([res.text[-1500:]] if res.text else [])
+                    if not found:
+                        entry["reason"] = (res.error or "no verdict")[:500]
+                with session() as s:
+                    entry["run_id"] = s.scalar(select(Run.id).where(Run.task_id == task_id, Run.purpose == "critic")
+                                               .order_by(Run.id.desc()).limit(1))
+        log_event("critic", f"{critic.name} ({entry['model'] or '-'}) on '{contract.title}' attempt {attempt}: "
+                  f"{entry['verdict']}" + (f" ({entry['reason']})" if entry["reason"] else ""), goal_id=goal.id,
+                  agent_id=critic.id, task_id=task_id, provider=entry["provider"], author_provider=provider,
+                  points=entry["points"][:10])
+        return entry
+    finally:
+        registry.release(critic.id, goal.id)
 
 
 def _resumable_session(goal_id: int, agent_id: int) -> str:
