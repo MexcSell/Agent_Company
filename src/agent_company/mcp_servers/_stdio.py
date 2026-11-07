@@ -8,8 +8,8 @@ import json, sys, traceback
 class ToolError(Exception):
     """A problem the agent should read (bad input, nothing found): answered as the tool's own error, not a protocol error."""
 
-def tool(name, description, props, required=(), title=None):
-    return {"name": name, "description": description, "annotations": {"readOnlyHint": True, **({"title": title} if title else {})},
+def tool(name, description, props, required=(), title=None, read_only=True):
+    return {"name": name, "description": description, "annotations": {"readOnlyHint": bool(read_only), **({"title": title} if title else {})},
             "inputSchema": {"type": "object", "properties": props, "required": list(required)}}
 
 def serve(name, version, tools, handlers):
