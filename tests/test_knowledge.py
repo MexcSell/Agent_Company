@@ -641,3 +641,73 @@ def test_without_a_model_verdict_the_pair_waits_for_a_person():
     learning.learn(dev, g2, "Never cache the rendered invoice template.", True, ["jinja"])
     [pair] = learning.contradictions()
     assert pair["state"] == "open" and pair["judge"]["verdict"] == "unsure"
+
+
+def _contradicts_edges(src):
+    from agent_company.db import KgEdge
+
+    with session() as s:
+        return s.scalars(select(KgEdge).where(KgEdge.rel == "CONTRADICTS", KgEdge.src_id == str(src))).all()
+
+
+def _draft(agent, goal, text, success, skills, outcome=None):
+    with session() as s:
+        i = Lesson(agent_id=agent, goal_id=goal, text=text, outcome=outcome or ("success" if success else "failure"),
+                   kind="episodic", evidence_class="MEASURED", technologies=skills, status="draft")
+        s.add(i)
+        s.flush()
+        return i.id
+
+
+def test_approving_a_draft_lesson_links_its_contradictions_and_notifies():
+    from agent_company.db import Notification
+
+    dev = agent_of("developer")
+    g1, g2 = loop.create_goal("pool one"), loop.create_goal("pool two")
+    learning.learn(dev, g1, "Use connection pooling for the reporting database.", True, ["postgres"])
+    draft = _draft(dev, g2, "Never use connection pooling for the reporting database.", False, ["postgres"])
+    assert not _contradicts_edges(draft), "a draft is not checked yet"
+    learning.review(draft, True, "user:admin")
+    [edge] = _contradicts_edges(draft)
+    assert edge.evidence["state"] == "open"
+    with session() as s:
+        assert s.scalars(select(Event).where(Event.kind == "knowledge",
+                                             Event.message.contains(f"K{draft} contradicts"))).first()
+        assert s.scalars(select(Notification).where(Notification.title.contains(f"K{draft} contradicts"))).first()
+    assert [p["new"]["id"] for p in learning.contradictions()] == [draft]
+
+
+def test_approving_an_imported_draft_still_links_its_contradictions():
+    dev = agent_of("developer")
+    learning.learn(dev, loop.create_goal("tz"), "Store timestamps in UTC for the billing service.", True, ["python"])
+    draft = _draft(dev, None, "Never store timestamps in UTC for the billing service.", True, ["python"],
+                   outcome="imported")
+    learning.review(draft, True, "user:admin")
+    assert len(_contradicts_edges(draft)) == 1
+
+
+def test_re_approving_or_rejecting_creates_no_contradiction_edge():
+    dev = agent_of("developer")
+    g1, g2, g3 = loop.create_goal("q one"), loop.create_goal("q two"), loop.create_goal("q three")
+    learning.learn(dev, g1, "Retry the payment queue consumer on timeouts.", True, ["rabbitmq"])
+    approved = _draft(dev, g2, "Never retry the payment queue consumer on timeouts.", True, ["rabbitmq"])
+    learning.review(approved, True, "user:admin")
+    assert len(_contradicts_edges(approved)) == 1
+    learning.review(approved, True, "user:admin")
+    assert len(_contradicts_edges(approved)) == 1, "re-approving adds no duplicate edge"
+    rejected = _draft(dev, g3, "Do not retry the payment queue consumer on timeouts.", True, ["rabbitmq"])
+    learning.review(rejected, False, "user:admin")
+    assert not _contradicts_edges(rejected)
+
+
+def test_approving_a_draft_of_an_eval_goal_links_no_contradictions():
+    dev = agent_of("developer")
+    learning.learn(dev, loop.create_goal("disk"), "Mount the build cache on tmpfs.", True, ["linux"])
+    g = loop.create_goal("eval disk")
+    with session() as s:
+        from agent_company.db import Goal
+
+        s.get(Goal, g).origin = "eval"
+    draft = _draft(dev, g, "Never mount the build cache on tmpfs.", True, ["linux"])
+    learning.review(draft, True, "user:admin")
+    assert learning.item(draft)["status"] == "approved" and not _contradicts_edges(draft)
