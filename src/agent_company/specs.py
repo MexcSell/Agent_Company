@@ -13,6 +13,8 @@ Plan → Build → Review → Fix (docs/1.claude-code-multi-agent.jpg). The loop
 They are committed with the goal's branch, so the approved merge carries them into the project.
 `check_plan()` rejects (never rewrites) a plan whose acceptance names another spec folder or a loop-written file;
 the GM is told why and plans again (K54).
+`save_answer()` writes a finished task's answer to its .md/.txt file_exists path: in the goal's own spec folder also
+over a stale file (read-only) or where the run made none (writing), never a loop file, another goal's folder or .git.
 `configure()` lets a CLI General Manager (Claude Code / Codex) update the project's `.claude/` configuration
 in the worktree; anything it changes outside `.claude/` and `.mcp.json` is put back.
 """
@@ -26,8 +28,9 @@ from typing import Any
 
 from sqlalchemy import select
 
-from agent_company.db import Goal, Task, session
+from agent_company.db import Goal, Task, log_event, session
 
+ANSWER_FILES = (".md", ".markdown", ".txt", ".rst")  # documents a task's answer may become
 CONFIG_PATHS = (".claude/", ".mcp.json")
 LOOP_FILES = ("requirements.md", "tasks.md", "review.md", "sa-review.md", "decisions.md")  # the loop writes them
 # A `.claude/specs/<X>` folder, with or without a trailing slash; check_plan rejects any <X> but the goal's own (K54).
@@ -103,6 +106,48 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
 
 
+def save_answer(goal: Any, contract: Any, text: str, *, writes: bool, changed: list[str] | None) -> list[str]:
+    """A finished task's acceptance names a document to exist: its whole answer becomes that document, so the check
+    measures the work, not the file permission (agents cannot write `.claude/`). In the goal's own spec folder a
+    read-only task's answer replaces a stale file from an earlier iteration (K336) and a writing task's answer fills
+    a path its run did not change (`changed` None: unknown, so none); loop files are never written. Another goal's
+    spec folder and `.git` are never
+    written, nor anything outside the worktree. Elsewhere only a read-only task writes, and only a new file.
+    Returns the worktree-relative paths written; a path that cannot be written is logged and skipped."""
+    if not text.strip() or not goal.worktree:
+        return []
+    root = Path(goal.worktree).resolve()
+    prefix = str(goal.worktree).rstrip("/") + "/"
+    own = relative_folder(goal) + "/"
+    saved: list[str] = []
+    for cond in contract.acceptance:
+        path = cond.path or ""
+        if cond.type != "file_exists" or not path.lower().endswith(ANSWER_FILES):
+            continue
+        if path.startswith(prefix):
+            path = path[len(prefix):]
+        while path.startswith("./"):
+            path = path[2:]
+        target = (root / path).resolve()
+        if root not in target.parents:
+            continue
+        rel = target.relative_to(root).as_posix()
+        if ".git" in target.relative_to(root).parts or rel in saved:
+            continue
+        if rel.startswith(own):
+            if target.name in LOOP_FILES or (writes and (changed is None or rel in changed)):  # a folder: _write logs
+                continue
+        elif rel.split("/")[:2] == [".claude", "specs"] or writes or target.exists():
+            continue
+        try:
+            _write(target, text)
+        except OSError as e:
+            log_event("error", f"saving the answer of task {contract.key} as {rel}: {e}", goal_id=goal.id)
+            continue
+        saved.append(rel)
+    return saved
+
+
 def write_plan(goal: Goal, iteration: int, plan: list[Any], summary: str = "") -> None:
     d = folder(goal)
     _write(d / "requirements.md", f"# Requirements: {goal.title}\n\n{goal.description or goal.title}\n\n"
@@ -119,11 +164,14 @@ def write_plan(goal: Goal, iteration: int, plan: list[Any], summary: str = "") -
 
 
 def write_outputs(goal: Goal, iteration: int, _: Any = None) -> None:
-    """After the tasks ran, before the gate commits: spec/design/review files from the outputs."""
+    """After the tasks ran, before the gate commits: spec/design/review files from the outputs. A spec.md or
+    design.md that save_answer wrote for a task of this iteration (`gate["saved_answer"]`) is that task's, kept."""
     d = folder(goal)
     with session() as s:
         tasks = s.scalars(select(Task).where(Task.goal_id == goal.id, Task.iteration == iteration).order_by(Task.id)).all()
         rows = [(t.key, t.title, t.role, t.status, (t.output or "").strip()) for t in tasks]
+        saved_answer = {p for t in tasks for p in (t.gate or {}).get("saved_answer") or []}
+    own = relative_folder(goal)
 
     def section(items: list[tuple[str, str, str, str, str]]) -> str:  # whole: a spec cut at its start loses its frame
         return "\n\n".join(f"## {title} ({role}, {status})\n\n{out or '(no output)'}" for _, title, role, status, out in items)
@@ -132,9 +180,9 @@ def write_outputs(goal: Goal, iteration: int, _: Any = None) -> None:
     design = [r for r in rows if r[2] == "architect" and r not in spec]
     review = [r for r in rows if r[2] in {"qa", "reviewer"}]
     sa = [r for r in rows if r[2] in {"security", "network_security", "analyst", "comprehensive_analyst"}]
-    if spec:
+    if spec and f"{own}/spec.md" not in saved_answer:
         _write(d / "spec.md", f"# Specification: {goal.title}\n\n{section(spec)}")
-    if design:
+    if design and f"{own}/design.md" not in saved_answer:
         _write(d / "design.md", f"# Design: {goal.title}\n\n{section(design)}")
     if review:
         _write(d / "review.md", f"# Review (iteration {iteration})\n\n{section(review)}")
