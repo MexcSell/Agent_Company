@@ -16,14 +16,18 @@ def _c(key, role="developer", **extra):
     return contracts.validate({"key": key, "title": key, "role": role, "description": "work"} | extra)
 
 
-def _run(gid, plan, outcomes, gates=None):
-    """Run the plan with a stub worker; returns (call order, final states by key, task ids by key)."""
+def _run(gid, plan, outcomes, gates=None, worktree=None):
+    """Run the plan with a stub worker; returns (call order, final states by key, task ids by key).
+    With `worktree`, the worker first applies the loop's real precondition check (`loop._skip_unmet`)."""
     ids = loop._persist(gid, 1, plan)
     key_of = {tid: c.key for tid, c in zip(ids, plan, strict=True)}
+    contract_of = dict(zip(ids, plan, strict=True))
     calls, lock = [], threading.Lock()
 
     def worker(tid):
         key = key_of[tid]
+        if worktree is not None and loop._skip_unmet(gid, tid, contract_of[tid], worktree):
+            return False
         with lock:
             calls.append(("start", key))
         if gates and key in gates:
@@ -70,6 +74,19 @@ def test_k237_threat_model_and_review_run_after_dns_fix_fails(tmp_path):
     assert states == {"build": "done", "dns_fix": "failed", "threat_model": "done", "qa_review": "done"}
     assert calls.index(("start", "threat_model")) > calls.index(("end", "dns_fix"))
     assert calls[-2:] == [("start", "qa_review"), ("end", "qa_review")]
+
+
+def test_k237_unmet_requires_skips_threat_model_review_still_runs(tmp_path):
+    wt = _worktree(tmp_path)
+    (wt / "src/agent_company/mcp_servers/browser.py").unlink()
+    gid = loop.create_goal("K237 unmet")
+    calls, _, ids = _run(gid, _k237_plan(), {"dns_fix": False}, worktree=wt)
+    with session() as s:
+        stored = {k: s.get(Task, tid).status for k, tid in ids.items()}
+    assert stored == {"build": "done", "dns_fix": "failed", "threat_model": "skipped", "qa_review": "done"}
+    out = _output(ids["threat_model"])
+    assert out.startswith(loop.REQUIRES_SKIP) and "browser.py" in out
+    assert ("start", "threat_model") not in calls
 
 
 def test_k237_partial_review_never_passes_the_iteration():

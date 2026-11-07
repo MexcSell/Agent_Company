@@ -937,11 +937,7 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
         from agent_company.scheduler import set_status
 
         # K237: preconditions on the worktree decide the task before any agent is staffed
-        unmet = contracts.unmet_requires(contract, Path(goal.worktree)) if contract.requires else []
-        if unmet:
-            set_status(task_id, "skipped", output=REQUIRES_SKIP + "; ".join(unmet))
-            log_event("task", f"'{contract.title}' skipped: precondition not met: {'; '.join(unmet)}"[:500],
-                      goal_id=goal.id)
+        if _skip_unmet(goal.id, task_id, contract, Path(goal.worktree)):
             return False
 
         role, note = registry.resolve_role(contract.role, goal.id)
@@ -1698,6 +1694,18 @@ RECRUIT_SKIP = "skipped (recruitment): "
 INFRA_SKIP = "skipped (infrastructure): "  # the L3 sandbox did not start (`sandbox.startup_failure`)
 BLOCKER_SKIP = "skipped (blocker): "  # a writing task named a `BLOCKER:` and changed no file
 REQUIRES_SKIP = "skipped (precondition): "  # a contract's `requires` was not met in the worktree (K237)
+
+
+def _skip_unmet(goal_id: int, task_id: int, contract: contracts.TaskContract, worktree: Path) -> bool:
+    """Skip the task with REQUIRES_SKIP when a `requires` precondition is unmet in the worktree; True if skipped."""
+    from agent_company.scheduler import set_status
+
+    unmet = contracts.unmet_requires(contract, worktree) if contract.requires else []
+    if unmet:
+        set_status(task_id, "skipped", output=REQUIRES_SKIP + "; ".join(unmet))
+        log_event("task", f"'{contract.title}' skipped: precondition not met: {'; '.join(unmet)}"[:500],
+                  goal_id=goal_id)
+    return bool(unmet)
 
 
 def _quota_skipped(goal_id: int, iteration: int) -> str:
