@@ -1,47 +1,30 @@
-# Tasks (iteration 1)
+# Tasks (iteration 2)
 
 
 
-## 1. Specify mutation testing of the quality gate (EL-R-08) in evaluation.py
-- key: `spec` · role: architect · writes: no
+## 1. Fix mutation_test review findings: run_command, line splitting, worktree cleanup, tests, threat model
+- key: `fix_mutation` · role: developer · writes: yes
 
-Write a short technical specification for EL-R-08 (docs/requirements/EVOLUTION-LOOPS.md). Read src/agent_company/evaluation.py, sandbox.py (run(argv, cwd, timeout, *, mode, writable, env) -> Outcome with rc/out/level/note/timed_out/infra), worktrees.py (ensure_sandboxed, remove), contracts.run_command and quality.py so the design uses the existing pieces. Specify:
-(1) The public API in evaluation.py, for example `mutation_test(repo, base, head='HEAD', checks=[...], kinds=('remove_assert','flip_boundary'), max_mutations=20, timeout=120, mode=None) -> dict`.
-(2) The scratch worktree: a detached `git worktree add` of `head` under settings().data_dir/worktrees/mutation-<uuid>. It must pass worktrees.ensure_sandboxed and be removed in a finally block. The repository the agent changed is never touched.
-(3) The precondition: every check passes on the unmutated head. If one does not, return an error result and run no mutations.
-(4) Mutation sites, taken only from .py files the change touched (git diff --name-only base..head). Find them with ast and keep them deterministic, sorted by path and line. remove_assert replaces an `assert` statement with `pass` at the same indentation. flip_boundary swaps `<`↔`<=` and `>`↔`>=` in one ast.Compare, edited by column offset.
-(5) Each mutation is applied, all checks run through sandbox.run with the effective mode (sandbox.mode_for or settings), and the file is restored with `git checkout -- <file>` before the next one. A check that exits non-zero or times out catches the mutation. An Outcome with infra set is reported as `infra` and is not counted as caught.
-(6) The result shape: {'baseline': [...], 'mutations': [{'kind','path','line','caught_by':[check...],'level'}], 'per_check': {check: {'mutations': n, 'caught': k, 'share': k/n or None}}, 'overall': {...}, 'level': 'L3'|'L2'}.
-(7) Edge cases: no sites, max_mutations reached, timeouts.
-(8) The test plan for tests/test_mutation.py. The test seeds a tiny git repository in tmp: a base commit, plus a change that adds `def is_adult(age): return age >= 18` and a test file with `assert is_adult(18)` and `assert not is_adult(17)`. The check is `<sys.executable> -m pytest -q -p no:cacheprovider`. The test asserts that the remove_assert mutation is caught by that check (share > 0) and that the scratch worktree is gone afterwards. The test also covers the error case where the head fails its check and no mutations are run. It must pass whether or not bwrap is available (mode 'auto' falls back to L2) and must run offline.
-Do not specify any API or UI. A CLI entry point is optional. Give a recommendation for each choice, not a survey.
+Read src/agent_company/evaluation.py (mutation_test, _mutate, _run_checks, the site finder near lines 450-610), contracts.run_command (contracts.py:269), tests/test_mutation.py and .claude/specs/0099-el-r-08-mutation-testing-of-the-quality/design.md §0.2 and §5.2 first. Then fix each item below.
+1. _run_checks (evaluation.py:512-522): replace `sandbox.run(shlex.split(check), ...)` with `info = {}; ok, out = contracts.run_command(check, root, timeout, mode=mode, info=info)`. Fill each result entry from info: isolation, exit_code, timed_out, infra, output_tail (and duration if present). A refused command (`info.get('isolation') == ''`, or run_command reports a refusal) is handled like infra: it is excluded from the caught/total counts and reported with a reason. A failing baseline still returns the existing error result. Keep the empty-check validation, but do not split commands into argv. Remove `import shlex` if nothing uses it anymore.
+2. Line splitting: in _mutate (line ~456) and in the site finder (line ~489), stop using str.splitlines. Split only on \n, \r\n and \r, as ast/tokenize count lines. Example: `re.split(r'(?<=\n)', text)` with keepends, or an equivalent helper used in both places; '\r'-only files must still work. Line numbers from ast must index the same lines.
+3. Worktree cleanup (line ~553-606): set `created = True` only after `git worktree add` succeeds. In `finally`, call worktrees.remove(repo, path) only when created. Always keep the shutil.rmtree(path, ignore_errors=True) and `git worktree prune`. The original exception must reach the caller unchanged.
+4. Tests in tests/test_mutation.py (offline, own temp DATA_DIR as the other tests do; use sys.executable for the python path):
+   a. a chained check `f"{sys.executable} -m pytest -q -p no:cacheprovider && true"`: the baseline passes and the removed assertion is caught;
+   b. a refused check (a command governance.check_command refuses, e.g. one containing `rm -rf /` or `curl ... | sh`; check which command the policy really refuses): the result has no caught count for it, and it is reported as refused/infra or as an error, not as caught;
+   c. `mutation_test(repo, 'nope', checks=[CHECK])`: `'error' in result`, and no `mutation-*` directory exists under the worktrees dir;
+   d. a seeded file with a form feed (\x0c) in a comment before an assert: the assert after it is removed on the correct line and caught;
+   e. git worktree add raising (monkeypatch) propagates the original error, and worktrees.remove is not called.
+   Keep the existing test_removed_assertion_is_caught (the acceptance test) passing.
+5. docs/threat-model.md: add a row in the existing table format: mutation testing (evaluation.mutation_test) runs agent-written code under mutation → controls: governance.check_command via contracts.run_command, the L3 sandbox (sandbox mode), a scratch worktree under worktrees_dir that is always removed → tests: tests/test_mutation.py.
+6. If design.md says something different from these changes, update only the affected lines. Do not touch requirements.md, tasks.md, review.md or decisions.md.
+Run `uv run pytest -q tests/test_mutation.py tests/test_evaluation.py` serially and read the summary line (there is no xdist). Run `python3 -I /home/luca/Agent_Company/src/agent_company/edit_check.py src/agent_company/evaluation.py tests/test_mutation.py`. Remove any .pytest_cache you create. Report the commands and their output as evidence.
 
-Acceptance: {"type": "file_exists", "path": ".claude/specs/0099-el-r-08-mutation-testing-of-the-quality/design.md"}; {"type": "contains", "value": "remove_assert"}; {"type": "contains", "value": "flip_boundary"}; {"type": "contains", "value": "per_check"}; {"type": "min_length", "value": 1500}
+Acceptance: {"type": "command", "run": "uv run pytest -q tests/test_mutation.py", "requirement_keys": ["EL-R-08"], "stage": "unit"}; {"type": "command", "run": "uv run pytest -q tests/test_evaluation.py", "stage": "integration"}; {"type": "command", "run": "grep -q 'run_command(' src/agent_company/evaluation.py", "requirement_keys": ["EL-R-08"], "stage": "static"}; {"type": "command", "run": "grep -q 'mutation' docs/threat-model.md", "stage": "security"}; {"type": "command", "run": "python3 -I /home/luca/Agent_Company/src/agent_company/edit_check.py src/agent_company/evaluation.py tests/test_mutation.py", "stage": "static"}
 
-## 2. Implement evaluation.mutation_test with its offline pytest
-- key: `implement` · role: developer · writes: yes · after: spec
+## 2. Review mutation testing against the EL-R-08 spec and the iteration-1 findings
+- key: `qa_review` · role: qa · writes: no · after: fix_mutation
 
-Implement the specification in .claude/specs/0099-el-r-08-mutation-testing-of-the-quality/design.md. Read evaluation.py, sandbox.py and worktrees.py before changing anything.
-- In src/agent_company/evaluation.py, add the mutation-testing function and its helpers: find sites with ast, apply mutations with text edits by line and column, make the scratch worktree under data_dir/worktrees and always remove it in a finally block, run checks through sandbox.run, restore with git checkout between mutations, and aggregate the per_check shares.
-- Run every check command through sandbox.run, never through a bare subprocess with the server's environment. Use shlex.split for string checks. Use git only for the worktree and diff plumbing.
-- Add tests/test_mutation.py, which must run offline with the temp DATA_DIR the test fixtures provide. It must include: (a) the acceptance test, in which a tiny seeded git repository whose change adds is_adult() plus asserts on 18 and 17 has its removed assertion caught by its pytest command (`sys.executable -m pytest -q -p no:cacheprovider`), with per_check share > 0 and the worktree removed afterwards; (b) a flip_boundary mutation on `>=` that is caught; (c) the error case, a head that fails its check, which returns an error with no mutations run; (d) a change with no .py sites, which returns zero mutations and share None. The tests must pass whether or not bwrap is usable (pass mode='auto').
-- Add one line about EL-R-08 to the evaluation.py entry in CLAUDE.md, and mark EL-R-08's status in docs/requirements/EVOLUTION-LOOPS.md as implemented.
-- Do not add or edit files under .claude/specs/ and do not leave a .pytest_cache behind (K474, K323).
-- Run the syntax check `python3 -I /home/luca/Agent_Company/src/agent_company/edit_check.py src/agent_company/evaluation.py tests/test_mutation.py`, then run both pytest files below, and report their summary lines.
+Review the diff of src/agent_company/evaluation.py, tests/test_mutation.py and docs/threat-model.md against EL-R-08 and .claude/specs/0099-el-r-08-mutation-testing-of-the-quality/design.md. Confirm that each of the five iteration-1 findings is fixed: (1) checks run through contracts.run_command (check_command plus audit, shell syntax works, info fields fill the result, a refused command is treated like infra and never counted as caught); (2) line splitting matches ast/tokenize (\n, \r\n, \r only; form feed safe) in both _mutate and the site finder; (3) worktrees.remove is called only after the worktree was created, and the original error propagates; (4) there are tests for a chained check, a refused check, an unresolvable base/head with no leftover mutation-* directory, and a form-feed file; (5) the threat-model row exists. Trace the data flow of a normal case (assert removed → check fails → caught), an edge case (boundary flip survives → reported as a survivor; a form feed before the site) and an error case (failing baseline, refused command, bad revision). Run `uv run pytest -q tests/test_mutation.py tests/test_evaluation.py` and quote the summary line. Also check that the scratch worktree is always under worktrees_dir and that no data/ or .env path is exposed. List FINDING lines with file:line, then an OUTCOME line, then end with exactly 'VERDICT: PASS' or 'VERDICT: FAIL'.
 
-Acceptance: {"type": "file_exists", "path": "tests/test_mutation.py"}; {"type": "command", "run": "uv run pytest -q tests/test_mutation.py", "requirement_keys": ["EL-R-08"], "stage": "unit"}; {"type": "command", "run": "uv run pytest -q tests/test_evaluation.py", "stage": "integration"}
-
-## 3. Review mutation testing against the EL-R-08 spec
-- key: `qa_review` · role: qa · writes: no · after: implement
-
-Review the implementation in src/agent_company/evaluation.py and tests/test_mutation.py against .claude/specs/0099-el-r-08-mutation-testing-of-the-quality/design.md and EL-R-08. Run `uv run pytest -q tests/test_mutation.py tests/test_evaluation.py` and quote the summary line as evidence. Trace the data flow of three cases: the normal case (an assertion is removed, the check fails, the mutation counts as caught in per_check), an edge case (no mutation sites, or max_mutations reached), and an error case (the head fails its check before any mutation, or the sandbox infra fails). Also check these points:
-- check commands go only through sandbox.run;
-- the scratch worktree lives under data_dir/worktrees and is removed even when an exception is raised;
-- the original repository and its branch are unchanged;
-- the file is restored between mutations, so the mutations do not accumulate;
-- an infra outcome is not counted as caught;
-- the shares are computed correctly;
-- the tests run offline and do not depend on bwrap.
-List each problem as a FINDING line with file:line, end with an OUTCOME line, and then give "VERDICT: PASS" or "VERDICT: FAIL".
-
-Acceptance: {"type": "regex", "pattern": "VERDICT: (PASS|FAIL)"}; {"type": "contains", "value": "OUTCOME"}
+Acceptance: {"type": "regex", "pattern": "VERDICT: (PASS|FAIL)"}; {"type": "contains", "value": "OUTCOME"}; {"type": "min_length", "value": 400}
