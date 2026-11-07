@@ -590,8 +590,6 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                 data = contracts.extract_json(res.text)
                 tasks = data["tasks"] if isinstance(data, dict) else data
                 plan = contracts.validate_plan(tasks)
-                if fixed := specs.check_plan(goal, plan):  # K54: only this goal's spec folder, no loop files
-                    log_event("plan", "Spec paths corrected: " + "; ".join(fixed), goal_id=goal.id, agent_id=gm.id)
                 named = str(data.get("kind") or "").strip().lower() if isinstance(data, dict) else ""
                 if tmpl is None and named in strategies.KINDS:  # the planner picks the template (S04-R-11)
                     tmpl = strategies.choose(goal.id, named, "planner", str(data.get("summary", ""))[:200])
@@ -603,6 +601,8 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                     plan = strategies.with_review(tmpl, plan)
                 _in_rooms(plan, rooms)
                 plan = _risk_based(goal, iteration, plan)
+                if fixed := specs.check_plan(goal, plan):  # K54, on the final plan: only this goal's spec folder
+                    log_event("plan", "Spec paths normalised: " + "; ".join(fixed), goal_id=goal.id, agent_id=gm.id)
                 break
             except (ValueError, KeyError, TypeError) as e:
                 if attempt == 0 and res.ok:
@@ -615,12 +615,15 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                           goal_id=goal.id, agent_id=gm.id)
                 kind = (tmpl or {}).get("kind", "")
                 plan = contracts.validate_plan(strategies.fallback_plan(goal.title, kind)["tasks"])
-                specs.check_plan(goal, plan)
                 try:
                     _in_rooms(plan, rooms)
                 except ValueError as e:  # nothing to fall back to inside the project's rooms
                     raise RuntimeError(f"no valid plan within the project's rooms: {e}") from e
                 plan = _risk_based(goal, iteration, plan)
+                try:
+                    specs.check_plan(goal, plan)
+                except ValueError as e:
+                    raise RuntimeError(f"no valid standard plan: {e}") from e
                 if tmpl is None:
                     strategies.choose(goal.id, strategies.infer(goal.title, plan), "inferred")
                 _board_plan(goal, iteration, plan, "standard plan", gm.id)
