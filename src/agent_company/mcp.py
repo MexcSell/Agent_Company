@@ -13,6 +13,8 @@ Taken from AXoR (/home/thomas/subnet-scout, backend/app/mcp_hub.py), reduced to 
   ticks it again: a server can change what an allowed tool says or takes without the name changing. `McpThread`
   re-tests every enabled server each `mcp_revalidate_hours`.
 - Grants (`mcp_grants`): a server open to `everyone` is offered to every agent; otherwise only to granted agents.
+  A new server (also one from the catalog) is open to no agent until an administrator grants agents or ticks
+  'every agent'.
 - Runtime: `claude_config(agent_id)` is the `--mcp-config` JSON for Claude Code (granted, enabled, tested
   servers only, with their allowed tools as `mcp__<slug>__<tool>` names). `call()` runs one tool and is
   written to `mcp_calls`, as every call from the dashboard is.
