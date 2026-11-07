@@ -9,3 +9,9 @@ Findings:
 - task tool_steps: the run cost $3.1470 (task budget $2.5000)
 
 Next: fix the findings (loop back to Build).
+
+## Iteration 2: PASS
+- followups (developer): done
+- qa (qa): done
+
+Next: approval and merge.
