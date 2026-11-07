@@ -1,24 +1,26 @@
-# Tasks (iteration 1)
+# Tasks (iteration 2)
 
 
 
-## 1. Specify where architect text answers still fail to become the goal's spec.md
-- key: `spec` · role: architect · writes: no
+## 1. Run the spec-answer regression tests on the committed fix and repair only what fails
+- key: `verify_fix` · role: developer · writes: yes
 
-Read-only. Your whole answer is saved as .claude/specs/0084-save-architect-text-answers-as-the-spec/spec.md. Read src/agent_company/specs.py (save_answer, write_outputs, check_plan, ANSWER_FILES, LOOP_FILES), src/agent_company/loop.py around lines 995-1060 (where save_answer is called, `res.ok`, `_checkpoint`, `changed`, then contracts.check), src/agent_company/contracts.py `_check` for file_exists, and tests/test_spec_answer.py and tests/test_spec_paths.py. Trace the data flow of an architect task whose acceptance has {"type":"file_exists","path":".claude/specs/<slug>/spec.md"}, for writes=false and writes=true. For each case below, say CONFIRMED or NOT A BUG, with file:line evidence. (a) The run returns useful text but `res.ok` is false (turn limit, budget, a non-zero exit after the answer). save_answer is not called, so file_exists fails. (b) write_outputs maps only the keys `spec`/`specification` to spec.md. An architect task such as `spec_v2`, whose answer is a spec but whose acceptance does not name spec.md, goes to design.md (K336). Decide whether an architect task whose acceptance names `<own>/spec.md` is always written there, and whether the fallback should also count an architect task whose acceptance names spec.md. (c) A writing architect task that changed the spec file itself, or whose `changed` is None. (d) Path forms: absolute worktree prefix, `./`, a trailing slash, different case in the `.md` extension. (e) A file_exists check that runs before the answer is saved, or reads a stale iteration-1 file. For every CONFIRMED case, specify the exact change: function, condition, and the behaviour you expect. Also give one regression test per case for tests/test_spec_answer.py. Never let anything write a LOOP_FILES file, another goal's spec folder, `.git`, or a path outside the worktree. End with a section 'Changes' that lists each change in one line.
+The fix for this goal is already committed on this branch: 97cf040 changed src/agent_company/loop.py, src/agent_company/specs.py and tests/test_spec_answer.py. Read the 'Changes' list (items 1-7) in .claude/specs/0084-save-architect-text-answers-as-the-spec/spec.md, then `git show 97cf040`. Steps:
+1. Run `uv run pytest -q tests/test_spec_answer.py tests/test_spec_paths.py` and paste its summary line.
+2. If a test fails, find the cause. Fix the code when the code is wrong, or the test when it contradicts the spec. Keep the change minimal, then re-run.
+3. Check that each of Changes 1-5 is present. Check that the five spec tests exist: test_failed_run_answer_not_saved, test_spec_v2_answer_is_the_spec_not_design, test_read_only_architect_with_writing_contract_saves, test_trailing_slash_saved, test_answer_on_disk_before_acceptance_check. Check that test_writing_task_with_unknown_changes_keeps_out_of_its_folder is unchanged in meaning. Add anything that is missing.
+4. Run `uv run pytest -q tests/test_spec_answer.py tests/test_spec_paths.py tests/test_loop.py` if tests/test_loop.py exists, otherwise any tests/test_*loop*.py, and paste the summary line.
+Do NOT run the whole suite (`uv run pytest -q` with no paths). The last run timed out at 600 s, and the gate runs the suite itself. Do not refactor and do not touch files outside the in_scope paths. If everything passes and nothing is missing, change no file and say so with the pasted summary lines. End with a line `RESULT: <n> passed, <m> failed`.
 
-Acceptance: {"type": "file_exists", "path": ".claude/specs/0084-save-architect-text-answers-as-the-spec/spec.md"}; {"type": "contains", "value": "save_answer"}; {"type": "regex", "pattern": "(?i)changes"}; {"type": "min_length", "value": 1500}
+Acceptance: {"type": "command", "run": "uv run pytest -q tests/test_spec_answer.py tests/test_spec_paths.py", "requirement_keys": ["S08-R-01"], "stage": "unit"}; {"type": "regex", "pattern": "RESULT: \\d+ passed, 0 failed"}
 
-## 2. Save architect text answers as spec.md in the cases the spec confirms, with regression tests
-- key: `fix` · role: developer · writes: yes · after: spec
+## 2. Review the spec-answer fix against the spec
+- key: `qa_review` · role: qa · writes: no · after: verify_fix
 
-Implement each change in the 'Changes' section of .claude/specs/0084-save-architect-text-answers-as-the-spec/spec.md, and nothing else. Keep the existing guarantees of specs.save_answer: never write a LOOP_FILES file, another goal's .claude/specs folder, .git, or a path outside the worktree. Add regression tests to tests/test_spec_answer.py. At least: a text-only (writes=false) architect answer for `.claude/specs/<slug>/spec.md` creates that file with the answer's text before contracts.check runs its file_exists condition, and the condition passes. Add one test per other confirmed case, plus one test showing that a loop file is still never written. Follow the style of the existing tests (the `save` helper, temp DATA_DIR, offline). Run `uv run pytest -q tests/test_spec_answer.py tests/test_spec_paths.py` before you hand back and report its last line. If the spec confirms no case at all, still add the text-only regression test and state that in your answer.
+Review only `git diff 212acd9..HEAD -- src/agent_company/loop.py src/agent_company/specs.py tests/test_spec_answer.py` against Changes 1-7 and §2-§3 of .claude/specs/0084-save-architect-text-answers-as-the-spec/spec.md. Read the code: run no test suite, because the gate does that, and the earlier QA ran over budget (K336). Verify the data flow of the following cases:
+- normal case: a read-only architect task whose file_exists names <own>/spec.md gets its answer saved before contracts.check;
+- edge case: a trailing-slash path, a `spec_v2` key, and a contract-writes architect with `changed` None;
+- error case: res.ok false, so nothing is saved and the task still fails.
+Confirm the invariants in §3: no LOOP_FILES, no other goal's folder, no .git, nothing outside the worktree or reached through a symlink. Confirm the lock choice stays on contract.writes. Check that each regression test would fail without its change. List FINDING lines with file:line, then an OUTCOME line, and end with "VERDICT: PASS" or "VERDICT: FAIL".
 
-Acceptance: {"type": "command", "run": "uv run pytest -q tests/test_spec_answer.py tests/test_spec_paths.py", "requirement_keys": ["S08-R-01"], "stage": "unit"}; {"type": "command", "run": "grep -q 'spec.md' tests/test_spec_answer.py"}
-
-## 3. Review the spec-answer fix against the spec
-- key: `qa_review` · role: qa · writes: no · after: fix
-
-Read-only. Compare the diff of task `fix` (src/agent_company/specs.py, src/agent_company/loop.py, tests/test_spec_answer.py) with the 'Changes' section of .claude/specs/0084-save-architect-text-answers-as-the-spec/spec.md. Check the logic through three cases. Normal: a read-only architect task answers with text, and `.claude/specs/<slug>/spec.md` exists with that text when its file_exists check runs. Edge: a writing task, an absolute or `./` path, or a re-run in iteration 2 that replaces the stale file. Error: a loop file, another goal's spec folder, `.git`, `..` escapes, or an empty answer, none of which may be written. Confirm that the tests cover each confirmed case. Confirm that `uv run pytest -q tests/test_spec_answer.py tests/test_spec_paths.py` passes, either from the task's recorded gate result or by reading the tests. Write one `FINDING:` line per problem, with file:line. End with `OUTCOME:` followed by one sentence, then `VERDICT: PASS` or `VERDICT: FAIL`.
-
-Acceptance: {"type": "regex", "pattern": "VERDICT: (PASS|FAIL)"}; {"type": "contains", "value": "OUTCOME"}
+Acceptance: {"type": "regex", "pattern": "VERDICT: (PASS|FAIL)"}; {"type": "contains", "value": "OUTCOME"}; {"type": "min_length", "value": 400}
