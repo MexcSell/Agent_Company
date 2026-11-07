@@ -96,7 +96,20 @@ def test_add_missing_columns_adds_iteration(tmp_path):
     con.close()
     eng = create_engine(f"sqlite:///{path}")
     db._add_missing_columns(eng)
+    db._add_missing_columns(eng)  # idempotent: the index exists, checkfirst skips it
     assert "iteration" in {c["name"] for c in inspect(eng).get_columns("events")}
     with eng.connect() as c:
-        assert c.exec_driver_sql("SELECT iteration FROM events").scalar() is None  # no backfill
+        assert "ix_events_iteration" in {r[1] for r in c.exec_driver_sql("PRAGMA index_list(events)")}
+        row = c.exec_driver_sql("SELECT iteration, message, data FROM events").one()
+    assert row[0] is None  # no backfill
+    old = Event(kind="gate", message=row[1], data={}, iteration=row[0])
+    assert event_iteration(old) == 4  # falls back to the message
+    old.data = {"iteration": 5}
+    assert event_iteration(old) == 5  # and before that to data
     eng.dispose()
+
+
+def test_fresh_database_has_the_same_index_name():
+    with session() as s:
+        names = {r[1] for r in s.connection().exec_driver_sql("PRAGMA index_list(events)")}
+    assert "ix_events_iteration" in names

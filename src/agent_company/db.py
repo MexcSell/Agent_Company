@@ -1505,6 +1505,7 @@ def _add_missing_columns(eng: Engine) -> None:
             if not insp.has_table(table.name):
                 continue
             have = {c["name"] for c in insp.get_columns(table.name)}
+            added = set()
             for col in table.columns:
                 if col.name in have:
                     continue
@@ -1514,6 +1515,11 @@ def _add_missing_columns(eng: Engine) -> None:
                     v = col.default.arg
                     default = f" DEFAULT {int(v) if isinstance(v, bool) else repr(v) if isinstance(v, str) else v}"
                 conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl}{default}'))
+                added.add(col.name)
+            # An added column's indexes (index=True: ix_<table>_<column>, the name create_all gives them).
+            for idx in table.indexes:
+                if added & {c.name for c in idx.columns}:
+                    idx.create(conn, checkfirst=True)
         # A column whose default is computed (list, dict) cannot be a DDL default: rows that existed when it was added
         # got NULL although the model says it never is (2026-11-06: projects.stack broke the first real goal). They
         # get the default, also in databases migrated before this.

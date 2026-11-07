@@ -2075,7 +2075,8 @@ def trace(goal_id: int) -> dict[str, Any]:
                  "withheld": list(r.dropped or []), "denied_tools": list(r.denied_tools or []),
                  "tool_calls": list(r.tool_calls or [])}
                 for r in s.scalars(select(Run).where(Run.goal_id == goal_id).order_by(Run.id))]
-        gates = [{"at": e.created_at.isoformat(), "iteration": event_iteration(e), "passed": e.data.get("passed"), "commit": e.data.get("commit"),
+        gates = [{"at": e.created_at.isoformat(), "iteration": event_iteration(e),
+                  "passed": e.data.get("passed"), "commit": e.data.get("commit"),
                   "checks": e.data.get("checks", []), "message": e.message}
                  for e in s.scalars(select(Event).where(Event.goal_id == goal_id, Event.kind == "gate")
                                     .order_by(Event.id)) if "checks" in (e.data or {})]
