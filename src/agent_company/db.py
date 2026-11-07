@@ -7,6 +7,7 @@ to use PostgreSQL; the schema is the same.
 
 from __future__ import annotations
 
+import re
 import threading
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
@@ -792,7 +793,33 @@ class Event(Base):
     kind: Mapped[str] = mapped_column(String(32))
     message: Mapped[str] = mapped_column(Text)
     data: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # the goal iteration the event belongs to (gate events, S04-R-12); NULL on rows written before the column existed
+    iteration: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+_ITER = re.compile(r"iteration (\d+):")
+
+
+def _as_int(v: Any) -> int | None:
+    """An int-like value as int (7, "7"), else None; a bool is not an iteration."""
+    if isinstance(v, bool):
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def event_iteration(e: Event) -> int | None:
+    """An event's iteration: its column, else `data["iteration"]`, else the one in its message (older rows)."""
+    if e.iteration is not None:
+        return e.iteration
+    it = _as_int((e.data or {}).get("iteration"))
+    if it is not None:
+        return it
+    m = _ITER.search(e.message or "")
+    return int(m.group(1)) if m else None
 
 
 class Document(Base):
@@ -1558,7 +1585,8 @@ def log_event(
     **data: Any,
 ) -> None:
     """Record an event. Pass `s` when called inside an open session (SQLite allows one writer)."""
-    ev = Event(kind=kind, message=message, goal_id=goal_id, agent_id=agent_id, data=data)
+    ev = Event(kind=kind, message=message, goal_id=goal_id, agent_id=agent_id, data=data,
+               iteration=_as_int(data.get("iteration")))
     if s is not None:
         s.add(ev)
         return
