@@ -26,7 +26,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from agent_company import (adr, blackboard, budgets, contracts, decisions, executors, learning, network, quality,
+from agent_company import (adr, blackboard, bridge, budgets, contracts, decisions, executors, learning, network, quality,
                            rca, recruitment, registry, requirements, research, router, sandbox, specs, strategies,
                            teams, teststrategy, usage, workflow, worktrees)
 from agent_company.config import settings
@@ -342,7 +342,13 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
         fresh_session_tried = False
         attempt = 0
         while True:
-            res = executors.for_choice(choice, run_timeout).run(req)
+            # EL-R-09: a fresh bridge token per attempt (a task run only), revoked when the attempt ends
+            token = bridge.attach(req, purpose, goal_id, task_id, agent.id)
+            try:
+                res = executors.for_choice(choice, run_timeout).run(req)
+            finally:
+                if token:
+                    bridge.revoke(token)
             usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
                          output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
                          error=res.error, task_id=task_id, agent_id=agent.id, purpose=purpose, goal_id=goal_id,

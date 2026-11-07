@@ -75,7 +75,7 @@ def revoke(token: str) -> None:
             row.revoked_at = time.time()
 
 
-def attach(req: Any, purpose: str, goal_id: int, task_id: int | None, agent_id: int) -> str | None:
+def attach(req: Any, purpose: str, goal_id: int | None, task_id: int | None, agent_id: int) -> str | None:
     """Put a fresh token into the bridge entry of `req.data["mcp"]` (a task run), or drop the entry (anything else).
     Called on every run, so a request reused for a retry never carries a revoked token."""
     data = getattr(req, "data", None)
@@ -89,7 +89,7 @@ def attach(req: Any, purpose: str, goal_id: int, task_id: int | None, agent_id: 
     if slug is None or slug not in servers:
         return None
     url = api_url()
-    if purpose != "task" or task_id is None or url is None:
+    if purpose != "task" or task_id is None or goal_id is None or url is None:
         servers.pop(slug)
         data["mcp"] = ({**config, "mcpServers": servers},
                        [n for n in allowed if not n.startswith(f"mcp__{slug}__")])

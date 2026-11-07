@@ -9,11 +9,12 @@ import sys
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from agent_company import blackboard, bridge, mcp, registry
+from agent_company import blackboard, bridge, executors, loop, mcp, registry, router
 from agent_company.api import create_app
-from agent_company.db import Goal, McpCall, McpServer, Task, session
+from agent_company.config import settings
+from agent_company.db import Agent, BridgeToken, Goal, McpCall, McpServer, Task, session
 
 TEXT = "Wrote the bridge module; tests next."
 
@@ -179,3 +180,71 @@ def test_insights_and_review_requests_stay_on_the_goal_within_their_budgets(benv
     assert board[("messages", "t1:review:1")]["meta"]["to"] == "qa"
     assert "Check it" in blackboard.inbox(benv["g1"], "qa", benv["b"])
     assert blackboard.read(benv["g2"]) == []
+
+
+# --- the token's life around one run (loop._execute) -------------------------------------------
+
+def run_once(monkeypatch, agent_id, purpose, task_id, during=lambda req: None):  # noqa: ANN001
+    """loop._execute on a fake Claude Code model; returns what the run was given."""
+    seen = {}
+
+    class Fake:
+        def run(self, req):  # noqa: ANN001
+            seen["mcp"] = req.data["mcp"]
+            during(req)
+            return executors.Result(text="done", ok=True)
+
+    monkeypatch.setattr(router, "resolve_chain", lambda *a, **k: [router.Choice("cc", "claude_code", "sonnet", "test")])
+    monkeypatch.setattr(executors, "for_choice", lambda choice, timeout=0: Fake())
+    with session() as s:
+        agent = s.get(Agent, agent_id)
+        s.expunge(agent)
+    req = executors.Request(purpose=purpose, role="developer", system="", prompt="p", workdir=settings().worktrees_dir,
+                            data={"mcp": mcp.claude_config(agent_id)})
+    res, _ = loop._execute(agent, req, purpose, task_id=task_id, goal_id=benv_goal(task_id))
+    assert res.ok
+    return seen
+
+
+def benv_goal(task_id):  # noqa: ANN001
+    with session() as s:
+        return s.get(Task, task_id).goal_id if task_id else None
+
+
+def tokens():
+    with session() as s:
+        return s.scalar(select(func.count()).select_from(BridgeToken))
+
+
+def test_a_task_run_gets_a_live_token_that_dies_with_the_run(benv, monkeypatch):
+    slug = mcp.get_server(benv["srv"])["slug"]
+    live = {}
+
+    def during(req):  # noqa: ANN001
+        env = req.data["mcp"][0]["mcpServers"][slug]["env"]
+        live["token"] = env["AC_BRIDGE_TOKEN"]
+        assert env["AC_BRIDGE_URL"].startswith("http://127.0.0.1:")
+        assert bridge.handle(f"Bearer {live['token']}", "post_progress", {"text": TEXT}, False, "127.0.0.1")[0] == 200
+
+    run_once(monkeypatch, benv["a"], "task", benv["t1"], during)
+    assert [e["content"] for e in progress(benv["g1"])] == [TEXT]
+    assert call(benv, live["token"], "post_progress", {"text": "late"}).status_code == 401, "revoked when the run ended"
+    second = {}
+    run_once(monkeypatch, benv["a"], "task", benv["t1"],
+             lambda req: second.update(t=req.data["mcp"][0]["mcpServers"][slug]["env"]["AC_BRIDGE_TOKEN"]))
+    assert second["t"] != live["token"], "each run mints its own token"
+
+
+def test_an_ungranted_agent_gets_no_bridge_and_no_token(benv, monkeypatch):
+    before = tokens()
+    seen = run_once(monkeypatch, benv["b"], "task", benv["t1"])
+    assert seen["mcp"][0].get("mcpServers", {}) == {} and tokens() == before
+
+
+def test_a_plan_run_drops_the_bridge_and_its_tools(benv, monkeypatch):
+    slug = mcp.get_server(benv["srv"])["slug"]
+    assert slug in mcp.claude_config(benv["a"])[0]["mcpServers"]
+    before = tokens()
+    config, allowed = run_once(monkeypatch, benv["a"], "plan", None)["mcp"]
+    assert slug not in config["mcpServers"] and not any(n.startswith(f"mcp__{slug}__") for n in allowed)
+    assert tokens() == before
