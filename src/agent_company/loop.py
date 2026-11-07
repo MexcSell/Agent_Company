@@ -1015,7 +1015,7 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
 
                 with contextlib.nullcontext() if contract.writes else write_lock(goal.worktree):
                     try:
-                        saved = specs.save_answer(goal, contract, res.text, writes=contract.writes, changed=changed)
+                        saved = specs.save_answer(goal, contract, res.text, writes=writes, changed=changed)
                         if saved:
                             commit = _checkpoint(goal.id, goal.iteration, f"{contract.key} answer", saved)[0] or commit
                             log_event("task", f"saved {agent.name}'s answer as {', '.join(saved)}", goal_id=goal.id,
@@ -1039,8 +1039,9 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                 log_event("task", f"'{contract.title}' skipped: the sandbox did not start ({infra})", goal_id=goal.id,
                           agent_id=agent.id)
                 return False
-            # `changed` None: the checkpoint failed and the change is unknown, so it is not an empty diff
-            blocked = contracts.blockers(output) if contract.writes and changed == [] else []
+            # `changed` None: the checkpoint failed and the change is unknown, so it is not an empty diff; a saved
+            # answer is a change
+            blocked = contracts.blockers(output) if contract.writes and changed == [] and not saved else []
             if blocked:  # a build that changed nothing and names a BLOCKER: a person clears it, no review of nothing
                 set_status(task_id, "skipped", stage="blocked", output=f"{BLOCKER_SKIP}{'; '.join(blocked)}",
                            model_name=choice.name, gate={"acceptance": acceptance, "files": changed or res.files,

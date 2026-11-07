@@ -59,14 +59,23 @@ def planner_note(goal: Any) -> str:
             "conditions.\n")
 
 
+def _normalise(goal: Any, path: str) -> str:
+    """A file_exists path in the worktree-relative form the loop writes and checks: without the absolute worktree
+    prefix, a leading `./` or a trailing `/` (characters only; containment is decided after resolving)."""
+    prefix = str(goal.worktree).rstrip("/") + "/" if goal.worktree else ""
+    if prefix and path.startswith(prefix):
+        path = path[len(prefix):]
+    while path.startswith("./"):
+        path = path[2:]
+    return path.rstrip("/")
+
+
 def check_plan(goal: Any, plan: list[Any]) -> list[str]:
     """Reject a plan whose acceptance conditions name a `.claude/specs/<X>` folder other than this goal's, or a file
     the loop writes itself in any spec folder (K54): such a plan can never pass. Paths are not rewritten; the only
-    change is the harmless normalisation of a spec file_exists path (a leading `./`, the absolute worktree prefix),
-    returned as `<key>: <old> -> <new>`. Every problem of the plan is listed in one ValueError, one per line."""
+    change is the harmless normalisation of a spec file_exists path (`_normalise`), returned as `<key>: <old> -> <new>`. Every problem of the plan is listed in one ValueError, one per line."""
     own = slug(goal.title, goal.id)
     rel = relative_folder(goal)
-    prefix = str(goal.worktree).rstrip("/") + "/" if goal.worktree else ""
     report, problems, fixes = [], [], []
 
     def scan(key: str, text: str, whole: bool = False) -> None:  # a file_exists path is named whole
@@ -83,11 +92,7 @@ def check_plan(goal: Any, plan: list[Any]) -> list[str]:
     for c in plan:
         for cond in c.acceptance:
             if cond.type == "file_exists" and cond.path:
-                path = cond.path
-                if prefix and path.startswith(prefix):
-                    path = path[len(prefix):]
-                while path.startswith("./"):
-                    path = path[2:]
+                path = _normalise(goal, cond.path)
                 scan(c.key, path, whole=True)
                 if path != cond.path and SPEC_DIR.match(path):
                     report.append(f"{c.key}: {cond.path} -> {path}")
@@ -117,17 +122,12 @@ def save_answer(goal: Any, contract: Any, text: str, *, writes: bool, changed: l
     if not text.strip() or not goal.worktree:
         return []
     root = Path(goal.worktree).resolve()
-    prefix = str(goal.worktree).rstrip("/") + "/"
     own = relative_folder(goal) + "/"
     saved: list[str] = []
     for cond in contract.acceptance:
-        path = cond.path or ""
+        path = _normalise(goal, cond.path or "")
         if cond.type != "file_exists" or not path.lower().endswith(ANSWER_FILES):
             continue
-        if path.startswith(prefix):
-            path = path[len(prefix):]
-        while path.startswith("./"):
-            path = path[2:]
         target = (root / path).resolve()
         if root not in target.parents:
             continue
@@ -164,25 +164,31 @@ def write_plan(goal: Goal, iteration: int, plan: list[Any], summary: str = "") -
 
 
 def write_outputs(goal: Goal, iteration: int, _: Any = None) -> None:
-    """After the tasks ran, before the gate commits: spec/design/review files from the outputs. A spec.md or
-    design.md that save_answer wrote for a task of this iteration (`gate["saved_answer"]`) is that task's, kept."""
+    """After the tasks ran, before the gate commits: spec/design/review files from the outputs. An architect task is
+    the spec when its key is `spec`/`specification` or its acceptance or saved answer names this goal's spec.md, and
+    then never also design. A spec.md or design.md that save_answer wrote (`gate["saved_answer"]`) or a run changed
+    itself (`gate["files"]`) for a task of this iteration is that task's, kept."""
     d = folder(goal)
     with session() as s:
         tasks = s.scalars(select(Task).where(Task.goal_id == goal.id, Task.iteration == iteration).order_by(Task.id)).all()
         rows = [(t.key, t.title, t.role, t.status, (t.output or "").strip()) for t in tasks]
-        saved_answer = {p for t in tasks for p in (t.gate or {}).get("saved_answer") or []}
+        kept = {p for t in tasks for field in ("saved_answer", "files") for p in (t.gate or {}).get(field) or []}
+        named = [{*((t.gate or {}).get("saved_answer") or []),  # the documents each task's acceptance names
+                  *(_normalise(goal, c.get("path") or "") for c in (t.contract or {}).get("acceptance") or []
+                    if c.get("type") == "file_exists")} for t in tasks]
     own = relative_folder(goal)
 
     def section(items: list[tuple[str, str, str, str, str]]) -> str:  # whole: a spec cut at its start loses its frame
         return "\n\n".join(f"## {title} ({role}, {status})\n\n{out or '(no output)'}" for _, title, role, status, out in items)
 
-    spec = [r for r in rows if r[2] == "architect" and r[0] in {"spec", "specification"}]
+    spec = [r for r, n in zip(rows, named)
+            if r[2] == "architect" and (r[0] in {"spec", "specification"} or f"{own}/spec.md" in n)]
     design = [r for r in rows if r[2] == "architect" and r not in spec]
     review = [r for r in rows if r[2] in {"qa", "reviewer"}]
     sa = [r for r in rows if r[2] in {"security", "network_security", "analyst", "comprehensive_analyst"}]
-    if spec and f"{own}/spec.md" not in saved_answer:
+    if spec and f"{own}/spec.md" not in kept:
         _write(d / "spec.md", f"# Specification: {goal.title}\n\n{section(spec)}")
-    if design and f"{own}/design.md" not in saved_answer:
+    if design and f"{own}/design.md" not in kept:
         _write(d / "design.md", f"# Design: {goal.title}\n\n{section(design)}")
     if review:
         _write(d / "review.md", f"# Review (iteration {iteration})\n\n{section(review)}")
