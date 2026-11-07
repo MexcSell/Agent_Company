@@ -810,24 +810,7 @@ def _configure(goal: Goal) -> None:
         registry.release(gm.id, goal.id)
 
 
-ANSWER_FILES = (".md", ".markdown", ".txt", ".rst")
-
-
-def _save_answer(worktree: Path, contract: contracts.TaskContract, text: str) -> list[str]:
-    """A task that may not write files (an architect's spec) but whose acceptance names a document to exist: its
-    whole answer becomes that document, so the check measures the work, not the file permission. Only text
-    documents inside the worktree (never under .git) that do not exist yet; returns the paths written."""
-    root, saved = worktree.resolve(), []
-    for cond in contract.acceptance:
-        if cond.type != "file_exists" or not (cond.path or "").lower().endswith(ANSWER_FILES) or not text.strip():
-            continue
-        target = (root / cond.path).resolve()
-        if root not in target.parents or ".git" in target.relative_to(root).parts or target.exists():
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text.rstrip() + "\n", encoding="utf-8")
-        saved.append(cond.path)
-    return saved
+ANSWER_FILES = specs.ANSWER_FILES  # a task's answer saved as a document: specs.save_answer
 
 
 def _chat_plan(goal: Goal, iteration: int, plan: list[contracts.TaskContract], summary: str, gm_id: int) -> None:
@@ -1014,11 +997,16 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                               evidence=[{"type": "task", "id": task_id, "error": res.error[:500]}])
             from agent_company.governance import on_command_refused
 
-            if res.ok and not contract.writes:  # a read-only task's document (a spec): the loop writes its answer
-                saved = _save_answer(Path(goal.worktree), contract, res.text)
-                if saved:
-                    log_event("task", f"saved {agent.name}'s answer as {', '.join(saved)}", goal_id=goal.id,
-                              agent_id=agent.id)
+            if res.ok:  # a document the acceptance names (a spec): the loop writes the answer where agents cannot
+                try:
+                    saved = specs.save_answer(goal, contract, res.text, writes=contract.writes, changed=changed)
+                    if saved:
+                        if contract.writes:  # its own commit, under the write lock; `changed` stays the run's
+                            commit = _checkpoint(goal.id, goal.iteration, f"{contract.key} answer")[0] or commit
+                        log_event("task", f"saved {agent.name}'s answer as {', '.join(saved)}", goal_id=goal.id,
+                                  agent_id=agent.id)
+                except Exception as e:  # noqa: BLE001 - fail-open: the acceptance check reports the missing file
+                    log_event("error", f"saving the answer of task {contract.key}: {e}", goal_id=goal.id)
             set_task_stage(task_id, "review", "acceptance conditions and contract limits")
             # the planner wrote the acceptance commands: a refusal counts against it
             acceptance = contracts.check(contract, output, Path(goal.worktree), settings().command_timeout,

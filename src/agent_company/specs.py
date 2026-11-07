@@ -13,6 +13,8 @@ Plan → Build → Review → Fix (docs/1.claude-code-multi-agent.jpg). The loop
 They are committed with the goal's branch, so the approved merge carries them into the project.
 `check_plan()` rejects (never rewrites) a plan whose acceptance names another spec folder or a loop-written file;
 the GM is told why and plans again (K54).
+`save_answer()` writes a finished task's answer to its .md/.txt file_exists path: in the goal's own spec folder also
+over a stale file (read-only) or where the run made none (writing), never a loop file, another goal's folder or .git.
 `configure()` lets a CLI General Manager (Claude Code / Codex) update the project's `.claude/` configuration
 in the worktree; anything it changes outside `.claude/` and `.mcp.json` is put back.
 """
@@ -26,8 +28,9 @@ from typing import Any
 
 from sqlalchemy import select
 
-from agent_company.db import Goal, Task, session
+from agent_company.db import Goal, Task, log_event, session
 
+ANSWER_FILES = (".md", ".markdown", ".txt", ".rst")  # documents a task's answer may become
 CONFIG_PATHS = (".claude/", ".mcp.json")
 LOOP_FILES = ("requirements.md", "tasks.md", "review.md", "sa-review.md", "decisions.md")  # the loop writes them
 # A `.claude/specs/<X>` folder, with or without a trailing slash; check_plan rejects any <X> but the goal's own (K54).
@@ -101,6 +104,47 @@ def check_plan(goal: Any, plan: list[Any]) -> list[str]:
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
+
+
+def save_answer(goal: Any, contract: Any, text: str, *, writes: bool, changed: list[str]) -> list[str]:
+    """A finished task's acceptance names a document to exist: its whole answer becomes that document, so the check
+    measures the work, not the file permission (agents cannot write `.claude/`). In the goal's own spec folder a
+    read-only task's answer replaces a stale file from an earlier iteration (K336) and a writing task's answer fills
+    a path its run did not change; loop files are never written. Another goal's spec folder and `.git` are never
+    written, nor anything outside the worktree. Elsewhere only a read-only task writes, and only a new file.
+    Returns the worktree-relative paths written; a path that cannot be written is logged and skipped."""
+    if not text.strip() or not goal.worktree:
+        return []
+    root = Path(goal.worktree).resolve()
+    prefix = str(goal.worktree).rstrip("/") + "/"
+    own = relative_folder(goal) + "/"
+    saved: list[str] = []
+    for cond in contract.acceptance:
+        path = cond.path or ""
+        if cond.type != "file_exists" or not path.lower().endswith(ANSWER_FILES):
+            continue
+        if path.startswith(prefix):
+            path = path[len(prefix):]
+        while path.startswith("./"):
+            path = path[2:]
+        target = (root / path).resolve()
+        if root not in target.parents:
+            continue
+        rel = target.relative_to(root).as_posix()
+        if ".git" in target.relative_to(root).parts or rel in saved:
+            continue
+        if rel.startswith(own):
+            if target.name in LOOP_FILES or (writes and rel in changed):  # a folder there fails in _write, logged
+                continue
+        elif rel.split("/")[:2] == [".claude", "specs"] or writes or target.exists():
+            continue
+        try:
+            _write(target, text)
+        except OSError as e:
+            log_event("error", f"saving the answer of task {contract.key} as {rel}: {e}", goal_id=goal.id)
+            continue
+        saved.append(rel)
+    return saved
 
 
 def write_plan(goal: Goal, iteration: int, plan: list[Any], summary: str = "") -> None:
