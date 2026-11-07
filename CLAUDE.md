@@ -50,7 +50,9 @@ feature came from.
   rollback, handovers, checkpoint commits per writing task + worktree reconcile on resume, retry policy,
   re-plan, conflict review, escalation, behaviour rules, a writing task with a `BLOCKER:` line and no changed file
   is skipped (`BLOCKER_SKIP`) and the goal pauses for a person before any review (`paused_for="blocker"`, an eval
-  goal fails instead; resume requeues the same iteration), idempotent merge/push, trace; goals of one project topic
+  goal fails instead; resume requeues the same iteration), EL-R-06 with setting `task_critic` a writing task's diff is
+  reviewed in its worker by a critic of another model family (`_critic`, `avoid_provider` + `other_cli`) before its
+  dependants start, a FAIL returns it to the same agent at most `CRITIC_RETRIES` (2) times, runs in `Task.critic`, idempotent merge/push, trace; goals of one project topic
   run in order, `lane_ahead`; G-R-08 overlapping `allowed_paths` of one repository wait, `paths_ahead`; G-R-09 mission digest `digest` in the result message, with a `report` link once finished) + `mission.py`
   (REQ-004 mission report of a finished goal: objective, plan, tasks done/failed/retried, checks and reviews, cost,
   time vs `Goal.deadline`, limitations, lessons, RCA recommendations; each task verified|partial|failed only from

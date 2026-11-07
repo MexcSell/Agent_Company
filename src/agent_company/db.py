@@ -756,6 +756,9 @@ class Task(Base):
     gate: Mapped[dict[str, Any]] = mapped_column(default=dict)
     model_name: Mapped[str] = mapped_column(String(128), default="")
     session_id: Mapped[str] = mapped_column(String(64), default="")  # Claude Code session, for resuming
+    # EL-R-06: the critic runs on this task's diff, {attempt, model, provider, verdict, points, reason, run_id};
+    # NULL on rows from before the column (readers use `t.critic or []`)
+    critic: Mapped[list[Any]] = mapped_column(default=list)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

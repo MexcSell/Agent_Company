@@ -37,7 +37,7 @@ IDs `EL-R-nn`; status words as in [README.md](README.md).
 | Hooks check quality after each edit and the agent corrects itself (a_1 PreToolUse/PostToolUse) | the team hooks only log (`hooks.py`); syntax was checked at the gate, after the run | **EL-R-05** done |
 | Reflexion: evaluator, self-reflection, experience memory (a_2); memories distilled and recalled by new agents (a_5) | lessons after every task, success and failure, screened and retrieved into the next task package; clones and recruits inherit experience (`learning.py`, SPEC-11, S12-R-02) | done (`learning.learn`, `learning.retrieve`) |
 | Orchestrator, event bus, state store, observability, specialised agents (a_4); runtime with teacher, critique and evaluation agents and metrics (a_9) | goal loop, blackboard, SQLite state, `/metrics`, roles; instructor, QA, evaluation harness | done (`loop.py`, `blackboard.py`, `metrics.py`, `training.py`, `evaluation.py`) |
-| A critic loop per specialist inside the iteration (a_8 purple loops) | review tasks check a whole iteration's change (`quality.REVIEW_ROLES`), not one task before it is handed on | **EL-R-06** open |
+| A critic loop per specialist inside the iteration (a_8 purple loops) | review tasks check a whole iteration's change (`quality.REVIEW_ROLES`), not one task before it is handed on | **EL-R-06** done (`loop._critic`, setting `task_critic`) |
 | A red-team agent (a_8) | adversarial suite (S09-R-05), security review role | done (`evals/adversarial.json`) |
 | An archive of designs with their evaluation logs; the next candidate sampled from it (a_7) | experiments keep baseline and candidate, no lineage between candidates | **EL-R-07** open |
 | Several competing candidates per improvement (evolving agents *(summary)*) | one candidate per experiment | part of EL-R-07 |
@@ -108,7 +108,7 @@ received the error at once. Acceptance: `tests/test_edit_check.py`.
 
 ### EL-R-06 A critic per writing task
 
-**Status: open**
+**Status: done (`loop._critic`, `loop.CRITIC_RETRIES`, `Task.critic`, setting `task_critic`; `tests/test_task_critic.py`)**
 
 With the setting `task_critic` on, a writing task's diff is reviewed
 by a critic of another model family (EL-R-03) before its dependants start; a FAIL returns it to the same agent with

@@ -95,6 +95,8 @@ class Settings:
     # A new recruit of a writing role first runs an eval suite as a candidate (SPEC-03 S03-R-04); off by default: it
     # costs model calls, and the offline simulator fails the smoke suite on purpose.
     qualify_recruits: bool = False
+    # EL-R-06: a critic of another model family reviews each writing task's diff before its dependants start
+    task_critic: bool = False
     # Verified self-evolution (selfevolve.py): a candidate is accepted when its weighted benchmark score beats the
     # baseline by this many percent and no metric is worse by more than `improvement_max_regression` percent.
     improvement_min_score: float = 2.0
@@ -211,6 +213,7 @@ def load_settings() -> Settings:
         explore_rate=float(os.environ.get("EXPLORE_RATE") or 0.1),
         recruit_requires_approval=(os.environ.get("RECRUIT_REQUIRES_APPROVAL") or "never").lower(),
         qualify_recruits=_bool("QUALIFY_RECRUITS", False),
+        task_critic=_bool("TASK_CRITIC", False),
         improvement_min_score=float(os.environ.get("IMPROVEMENT_MIN_SCORE") or 2),
         improvement_max_regression=_int("IMPROVEMENT_MAX_REGRESSION", 25),
         improvement_auto_rollback=_bool("IMPROVEMENT_AUTO_ROLLBACK", True),
