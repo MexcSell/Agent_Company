@@ -1,58 +1,34 @@
-# Tasks (iteration 1)
+# Tasks (iteration 2)
 
 
 
-## 1. Store label counts per finished goal; read them in the Simple overview and RCA
-- key: `impl_label_cache` · role: developer · writes: yes
+## 1. Make label-count reads fail-open, skip storing for active goals, fix the project-message test race
+- key: `fix_label_cache` · role: developer · writes: yes
 
-Read src/agent_company/mission.py (label, report), the simple_overview endpoint in src/agent_company/api.py (around line 2314-2372), rca.evidence in src/agent_company/rca.py:88, workflow.set_status in src/agent_company/workflow.py:99 and the end of loop.run_goal around src/agent_company/loop.py:1873 first.
+Work in this worktree. Read each file before you change it.
 
-1. db.py: add `label_counts: Mapped[dict[str, Any]] = mapped_column(default=dict)` to Goal, with a short comment (`# cached mission.report labels of a finished goal; empty = not cached`). _add_missing_columns must migrate existing databases. Check that it does, and add whatever is needed for a JSON column if not.
+1. `src/agent_company/mission.py`: `label_counts(goal_id)` must never fail because the store failed. Split `_store` into computing the counts (`report(goal_id)["tasks"]["labels"]` → `{k: int(...) for k in LABELS}`) and writing them. In `label_counts`, wrap only the write in `try/except Exception`. On failure, `log_event("error", ...)` (itself guarded by try/except, as in `store_label_counts`) and return the computed counts. Missing goal → `KeyError`, active goal → `ValueError` stay as they are.
+2. `_store` / the write: inside the write session, re-read the goal (`s.get(Goal, goal_id)`) and write nothing when `g is None` or `g.status in workflow.ACTIVE`, so a goal resumed between `_update_goal` and the store never gets counts. Return the computed counts either way.
+3. `src/agent_company/api.py` around line 2366 (`/api/simple/overview` delivered cards): change `except (KeyError, ValueError)` to `except Exception:  # noqa: BLE001 - one goal's counts never break the overview` → `labels = {}`.
+4. `rca.evidence` already catches `Exception`. Leave it alone.
+5. `tests/test_projects.py::test_project_api_flow` failed in the full suite. `wait(gid)` returns once the status is final, but `loop._chat_outcome` posts the goal's outcome message ('Goal #N: ...', kind result/error) after that, so it can arrive after the test read `msgs[-1]`. Fix the test, not production timing: add a helper in tests/test_projects.py that, after `wait(...)`, polls (timeout 20 s, 0.05 s sleep) until a ProjectMessage / project message for that goal whose content starts with `f"Goal #{gid}:"` exists. Use it in `test_project_api_flow` (and in any other test in that file with the same `wait` → read-last-message pattern). Check how `projects.post_for_goal` stores messages (model and columns) before you query.
+6. `tests/test_label_cache.py`: add tests for (a) `label_counts` on a finished goal without stored counts, where the write raises (monkeypatch the write helper, or make `session` raise on the second use): it returns the correct counts and does not raise; (b) `/api/simple/overview` (TestClient, as tests/test_simple_mode.py does) returns 200 with `labels == {}` for a delivered goal when `mission.label_counts` is monkeypatched to raise `RuntimeError("database is locked")`; (c) the store is skipped when the goal's status is in ACTIVE at write time: set the goal to `running` and call `_store`/`store_label_counts`, and `Goal.label_counts` stays `{}`.
+7. Update the one-line `label_counts` note in CLAUDE.md only if the behaviour description changes (e.g. 'a failed store still returns the counts'). Keep the edit minimal.
 
-2. mission.py: add `label_counts(goal_id: int) -> dict[str, int]`.
-   - Unknown goal: KeyError. Goal in workflow.ACTIVE: ValueError, as report() does.
-   - If Goal.label_counts is non-empty, return it without calling report().
-   - Otherwise compute `report(goal_id)["tasks"]["labels"]` and store it in a new session() opened after report() has returned. Never write from inside another open session, because SQLite allows one writer. Then return it.
-   - The stored dict always has the keys verified, partial and failed, so a goal with zero tasks stores {verified:0, partial:0, failed:0}. That is non-empty, so it is cached too.
-   - Add `store_label_counts(goal_id)`, which recomputes and overwrites the counts. It is fail-open: log_event an error on an exception and never raise.
+Run the commands in the acceptance conditions and paste their summary lines in your answer.
 
-3. workflow.set_status: when `to` is in ACTIVE and the goal's cur status is not, set `g.label_counts = {}` in the same session, so a resumed or reopened goal is recomputed.
+Acceptance: {"type": "command", "run": "uv run pytest -q tests/test_label_cache.py tests/test_mission_report.py tests/test_simple_mode.py tests/test_rca.py", "requirement_keys": ["S07-R-02"], "stage": "unit"}; {"type": "command", "run": "uv run pytest -q tests/test_projects.py", "stage": "integration"}; {"type": "command", "run": "grep -n 'except Exception' src/agent_company/api.py | grep -q 'one goal'", "stage": "static"}; {"type": "command", "run": "grep -n 'workflow.ACTIVE' src/agent_company/mission.py | wc -l | awk '$1>=2{exit 0} {exit 1}'", "stage": "static"}
 
-4. loop.py: when a goal finishes, call `mission.store_label_counts(goal_id)` right before `rca.after_goal(goal_id, status)` at ~line 1873, outside any open session. A failure must not change the goal's outcome.
+## 2. Review the label-count cache against the goal and the iteration-1 findings
+- key: `review_label_cache` · role: qa · writes: no · after: fix_label_cache
 
-5. api.py simple_overview: replace `mission.report(gid)["tasks"]["labels"]` with `mission.label_counts(gid)`, keeping the `except (KeyError, ValueError): labels = {}` fallback. The JSON shape of `delivered[].labels` must stay identical.
-
-6. rca.evidence: for a goal that is not ACTIVE, append ` (task labels: verified V, partial P, failed F)` to the existing `goal:{gid}` line, using mission.label_counts. Wrap it in try/except so that missing counts never break the evidence pack. Do not call it inside the open session; collect the counts before `with session() as s:` or after it. Avoid recursion: report() calls rca.list_analyses, not evidence, so this is safe, but do not make report() call evidence.
-
-7. tests/test_label_cache.py (offline, own DATA_DIR like the other tests; reuse the fixtures and helpers of tests/test_mission_report.py and tests/test_simple_mode.py). Cover:
-   - (a) after a goal finishes, Goal.label_counts equals report()["tasks"]["labels"];
-   - (b) the stored counts survive a new session/re-read from the DB;
-   - (c) an older finished goal with label_counts={} is filled on the first label_counts() call, and the second call does not call report() (monkeypatch mission.report to raise and count calls);
-   - (d) GET /api/simple/overview called twice for a finished goal with stored counts does not call mission.report, and its delivered labels match the report's;
-   - (e) moving the goal back to an ACTIVE status clears the cache, and label_counts raises ValueError while it is active;
-   - (f) an unknown goal raises KeyError;
-   - (g) rca.evidence text contains `task labels: verified` for a finished goal.
-
-8. Add a short line to CLAUDE.md's mission.py description: `label_counts` cached per finished goal in `Goal.label_counts`, read by the Simple overview and RCA.
-
-Run `uv run pytest -q tests/test_label_cache.py tests/test_mission_report.py tests/test_simple_mode.py tests/test_rca.py tests/test_workflow*.py` before handing back.
-
-Acceptance: {"type": "file_exists", "path": "tests/test_label_cache.py"}; {"type": "command", "run": "grep -q 'label_counts' src/agent_company/db.py && grep -q 'def label_counts' src/agent_company/mission.py && grep -q 'label_counts' src/agent_company/rca.py"}; {"type": "command", "run": "! grep -n 'mission.report(gid)' src/agent_company/api.py"}; {"type": "command", "run": "uv run pytest -q tests/test_label_cache.py", "requirement_keys": ["S07-R-02"], "stage": "unit"}; {"type": "command", "run": "uv run pytest -q tests/test_mission_report.py tests/test_simple_mode.py tests/test_rca.py", "requirement_keys": ["S07-R-02"], "stage": "integration"}
-
-## 2. Review the label-count cache against the goal
-- key: `qa_review` · role: qa · writes: no · after: impl_label_cache
-
-Review the diff of impl_label_cache (git diff main...HEAD) independently. Trace the data flow of three cases and report them:
-- normal: a goal finishes, the counts are stored before rca.after_goal, and the Simple overview reads them without calling mission.report;
-- edge: an older finished goal with label_counts={} or a goal with zero tasks is filled once and then served from the cache, and a goal that moves back to an ACTIVE status (resume) has its cache cleared;
-- error: an unknown goal or an active goal falls back to labels={} in the overview, and a failing store_label_counts leaves the goal's outcome and the RCA evidence pack unaffected.
-Also check that no DB write opens a second connection inside an open session() (CLAUDE.md rule), that the delivered[].labels JSON shape is unchanged, and that the db.py column migrates on an existing database. Run `uv run pytest -q tests/test_label_cache.py tests/test_mission_report.py tests/test_simple_mode.py tests/test_rca.py` and quote the summary line. Report each issue as a `FINDING:` line with file:line, then an `OUTCOME:` line, and end with `VERDICT: PASS` or `VERDICT: FAIL`. If the environment blocks you (permissions, read-only cache), say `OUTCOME: ESCALATED` with `BLOCKER: environment` instead of failing the code (K293).
+Review the branch diff against b06b418 (`git diff b06b418 -- src tests CLAUDE.md`). Check every iteration-1 finding: (1) `/api/simple/overview` cannot return a 500 when a label-count store or read fails, and `mission.label_counts` returns the computed counts when the write fails; (2) `_store` checks the status inside the write session and skips active goals; (3) `workflow` clears `Goal.label_counts` on any move into ACTIVE, and a reopened then finished goal gets fresh counts from `loop`'s `store_label_counts`; (4) test_project_api_flow now waits for the outcome message, and the test change does not hide a real defect: confirm by reading `loop._chat_outcome` that the message is posted after the final status, as before this goal. Trace the data flow for the normal case (goal finishes → stored → overview/RCA read the stored dict, no `report()` call), an edge case (older goal without counts → computed once, then stored) and an error case (write raises → counts returned, overview 200). Run `uv run pytest -q tests/test_label_cache.py tests/test_mission_report.py tests/test_simple_mode.py tests/test_rca.py tests/test_projects.py` and quote its summary line. If the environment refuses the command, write 'BLOCKER: environment' and do not count that as a code defect. List FINDING lines (file:line | defect | fix), then OUTCOME and 'VERDICT: PASS' or 'VERDICT: FAIL'.
 
 Acceptance: {"type": "regex", "pattern": "VERDICT: (PASS|FAIL)"}; {"type": "contains", "value": "OUTCOME"}; {"type": "min_length", "value": 400}
 
 ## 3. Run the full test suite after the change
-- key: `qa_full_suite` · role: qa · writes: no · after: impl_label_cache
+- key: `full_suite` · role: qa · writes: no · after: fix_label_cache
 
-Run `uv run pytest -q` in the worktree and report the summary line plus any failures. For each failure, say whether it is related to Goal.label_counts / mission.label_counts / workflow.set_status / simple_overview / rca.evidence, or whether it also fails on main (check with `git stash`-free means: compare against `git show main:<file>` or re-run the single test). End with `VERDICT: PASS` when there is no failure caused by this goal, otherwise `VERDICT: FAIL`.
+Run `uv run pytest -q` in this worktree and quote the final summary line. For every failure, give its first assertion line. Say whether the test touches code this goal changed (mission.label_counts, store_label_counts, the overview, rca.evidence, tests/test_projects.py), and whether it also fails on base b06b418 (`git stash` is forbidden; use `git worktree add /tmp/<unique> b06b418` only if you need it, then remove it). End with 'VERDICT: PASS' when everything passes, otherwise 'VERDICT: FAIL'.
 
-Acceptance: {"type": "regex", "pattern": "VERDICT: (PASS|FAIL)"}; {"type": "command", "run": "uv run pytest -q", "stage": "integration"}
+Acceptance: {"type": "command", "run": "uv run pytest -q", "stage": "integration"}; {"type": "regex", "pattern": "VERDICT: (PASS|FAIL)"}
