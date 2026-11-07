@@ -157,7 +157,9 @@ feature came from.
   side by side) that share one code path, clipboard and drag and drop, and keeps its lists and open files while the server is
   unreachable, without a notice; the terminal keeps its screen, reconnects quietly from the last byte it has (`?after=`),
   and a shell lost to a restart is replaced in place on the next input; `api.py`; `static/` (dashboard, plain JS, one file per area; `agents.js` (org chart, Agent network, Tools & MCP, Skills & plugins, agent card; agent card Runs tab: paged runs, run detail with task output and tool calls (REQ-006)), `network.js` (the
-  Agents page's Agent network tab: overview counts, paged relationship graph from `network.graph`),
+  Agents page's Agent network tab: overview counts, paged relationship graph from `network.graph`), `companymap.js` (the
+  Company map: the engine line of rooms from /api/rooms, each room's active agents with their model and route
+  fallbacks as badges, live goals with their lifecycle step; read-only),
   `models.js`; `knowledge.js` (Knowledge: items, review queue, contradictions, graph explorer); `security.js` (Security: stops, incidents,
   refused commands, alerts); rail order shared by all users via `/api/ui/nav_layout` (Settings → Navigation); Notifications,
   Audit log, Settings and Users are top-bar buttons (`TOPBAR` in app.js), never on the rail; the tab icon (`setFavicon`) shows

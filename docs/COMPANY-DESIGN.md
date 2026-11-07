@@ -80,7 +80,7 @@ screen serves the structure above:
 | Evolution, Performance, Knowledge | Evolution Engine | none |
 | Research | the research room; a report now carries its `tool_steps` | show the steps on the report (part of the goal below) |
 | Workspace, Machines, Security, System | administrator's tools | none |
-| **Company map** (new) | one picture of §1–§3: the engine line with each room's agents, each agent's model and fallbacks as badges, the live goals with the lifecycle step they are in | queued as a goal |
+| **Company map** (new) | one picture of §1–§3: the engine line with each room's agents, each agent's model and fallbacks as badges, the live goals with the lifecycle step they are in | done (`static/companymap.js`, goal 101) |
 
 The Company map is a read-only view built from existing endpoints (`/api/rooms`, `/api/agents`, `/api/models`
 routes and fallbacks, running goals); no new data. It replaces nothing.

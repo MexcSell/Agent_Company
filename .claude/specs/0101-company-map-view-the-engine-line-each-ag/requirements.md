@@ -1,0 +1,6 @@
+# Requirements: Company map view: the engine line, each agent's model and fallbacks, live goals by lifecycle step
+
+Specified in docs/COMPANY-DESIGN.md §4 (and §1-§3). A new read-only dashboard view 'Company map' (static/companymap.js, registered with registerView like the other view files, added to NAV_DEFAULT top after 'agents'): draws the room tree from /api/rooms (parent_key) as nested boxes, General Management -> Organization Engine -> Evolution Engine -> Orchestrator -> Bridge -> Development Flow, with the side rooms beside it; inside each room its active agents from /api/agents with a badge for the model they use (agent model_pref, else the role's route from /api/models) and the route's fallbacks; running goals (from the existing overview/goals endpoint) listed with their lifecycle step (discover/plan/execute/critique/validate/learn mapped from goal status and task stages as in COMPANY-DESIGN §3). Also show a research report's tool_steps on the Research page's report detail. No new backend data; plain JS like the other static files, escape all text with esc(). Acceptance: node --check passes for the new and changed static files (a test in tests/ that runs node --check on static/*.js if node exists), and a pytest that index.html/app.js reference the new view.
+
+## Quality commands
+- `uv run pytest -q`
