@@ -33,7 +33,7 @@ import ast
 import fnmatch
 import io
 import json
-import shlex
+import re
 import shutil
 import tokenize
 from uuid import uuid4
@@ -45,7 +45,7 @@ from typing import Any
 
 from sqlalchemy import case, func, select
 
-from agent_company import loop, sandbox, worktrees
+from agent_company import contracts, loop, sandbox, worktrees
 from agent_company.config import REPO_ROOT, settings
 from agent_company.db import EvalRun, Goal, Run, log_event, session
 
@@ -450,15 +450,27 @@ class BenchmarkThread(threading.Thread):
 MUTATION_KINDS = ("remove_assert", "flip_boundary")
 TEST_FILE = ("tests/*", "*/tests/*", "test_*.py", "*/test_*.py", "*_test.py",
              "conftest.py", "*/conftest.py")
+_LINE_END = re.compile(r"(?<=\n)|(?<=\r)(?!\n)")
+
+
+def _lines(text: str) -> list[str]:
+    """The lines with their ends, split only at \\n, \\r\\n and \\r as ast and tokenize count them
+    (str.splitlines also splits at \\x0c, \\x1c, \\u2028 …, which would shift every later site)."""
+    lines = _LINE_END.split(text)
+    return lines[:-1] if lines and not lines[-1] else lines
+
+
+def _end(line: str) -> str:
+    return line[len(line.rstrip("\r\n")):] or "\n"
 
 
 def _mutate(text: str, site: dict[str, Any]) -> str | None:
-    lines = text.splitlines(keepends=True)
+    lines = _lines(text)
     i = site["line"] - 1
     if site["kind"] == "remove_assert":
-        lines[i] = lines[i][:site["col"]] + "pass\n"
+        lines[i] = lines[i][:site["col"]] + "pass" + _end(lines[i])
         for j in range(i + 1, site["end_line"]):
-            lines[j] = "\n"
+            lines[j] = _end(lines[j])
     else:
         col, old = site["col"], site["token"]
         replacement = {"<": "<=", "<=": "<", ">": ">=", ">=": ">"}[old]
@@ -486,7 +498,7 @@ def _sites(root: Path, files: list[str], kinds: tuple[str, ...], skipped: list) 
         except (SyntaxError, UnicodeError) as exc:
             skipped.append({"path": rel, "line": 0, "kind": "", "reason": str(exc)})
             continue
-        lines = text.splitlines()
+        lines = _lines(text)
         spans = []
         for node in ast.walk(tree):
             if "remove_assert" in kinds and isinstance(node, ast.Assert):
@@ -498,7 +510,7 @@ def _sites(root: Path, files: list[str], kinds: tuple[str, ...], skipped: list) 
             if "flip_boundary" in kinds and isinstance(node, ast.Compare):
                 if any(isinstance(op, (ast.Lt, ast.LtE, ast.Gt, ast.GtE)) for op in node.ops):
                     spans.append(((node.lineno, node.col_offset), (node.end_lineno, node.end_col_offset)))
-        for token in tokenize.generate_tokens(io.StringIO(text).readline):
+        for token in tokenize.generate_tokens(io.StringIO(text, newline=None).readline):
             if token.type != tokenize.OP or token.string not in ("<", "<=", ">", ">="):
                 continue
             start = (token.start[0], len(lines[token.start[0] - 1][:token.start[1]].encode()))
@@ -510,14 +522,22 @@ def _sites(root: Path, files: list[str], kinds: tuple[str, ...], skipped: list) 
 
 
 def _run_checks(root: Path, checks: list[str], timeout: int, mode: str | None) -> list[dict[str, Any]]:
+    """Each check as the gate runs it: `contracts.run_command` (command policy, `/bin/sh -c` in the L3 sandbox).
+    A check that did not run (refused by the policy, sandbox unavailable or not started) carries its reason
+    in `infra` and is never counted as caught."""
     results = []
     for check in checks:
-        out = sandbox.run(shlex.split(check), root, timeout, mode=mode, prepare=True)
-        infra = out.infra or ((out.note or "check did not start") if not out.isolation else "")
-        results.append({"check": check, "ok": not infra and bool(out.isolation)
-                        and out.returncode == 0 and not out.timed_out,
-                        "exit_code": out.returncode, "timed_out": out.timed_out,
-                        "infra": infra, "level": out.isolation, "tail": out.output[-300:]})
+        info: dict[str, Any] = {}
+        refusals: list[str] = []
+        ok, out = contracts.run_command(check, root, timeout, lambda _cmd, why: refusals.append(why),
+                                        mode=mode, info=info)
+        level = info.get("isolation") or ""
+        refused = bool(refusals)
+        infra = info.get("infra") or ("" if level else out or "check did not run")
+        results.append({"check": check, "ok": ok and not infra, "exit_code": info.get("exit_code"),
+                        "timed_out": bool(info.get("timed_out")), "infra": infra, "refused": refused,
+                        "level": level, "duration_s": info.get("duration_s"),
+                        "tail": (info.get("output_tail") or "")[-300:]})
     return results
 
 
@@ -530,7 +550,7 @@ def mutation_test(repo: str | Path, base: str, head: str = "HEAD", checks: list[
                   kinds: tuple[str, ...] = MUTATION_KINDS, max_mutations: int = 20, timeout: int = 120,
                   mode: str | None = None) -> dict[str, Any]:
     """Measure EL-R-08 check sensitivity in a disposable worktree, without changing the source repo."""
-    if not checks or any(not shlex.split(check) for check in checks):
+    if not checks or any(not check.strip() for check in checks):
         raise ValueError("mutation testing needs non-empty checks")
     if any(kind not in MUTATION_KINDS for kind in kinds):
         raise ValueError("unknown mutation kind")
@@ -549,8 +569,10 @@ def mutation_test(repo: str | Path, base: str, head: str = "HEAD", checks: list[
     path = settings().worktrees_dir / f"mutation-{uuid4().hex[:12]}"
     path.parent.mkdir(parents=True, exist_ok=True)
     all_runs = []
+    created = False
     try:
         worktrees.git(repo, "worktree", "add", "--detach", "-q", str(path), result["head"])
+        created = True
         worktrees.ensure_sandboxed(path)
         mode = mode or sandbox.mode_for()
         baseline = _run_checks(path, checks, timeout, mode)
@@ -559,7 +581,8 @@ def mutation_test(repo: str | Path, base: str, head: str = "HEAD", checks: list[
         result["level"] = _mutation_level(all_runs)
         for run in baseline:
             if not run["ok"]:
-                reason = "did not start (infra)" if run["infra"] else "failed"
+                reason = ("refused by the command policy" if run["refused"]
+                          else "did not start (infra)" if run["infra"] else "failed")
                 result["error"] = f"baseline: {run['check']} {reason}"
                 return result
         files = worktrees.git(path, "diff", "--name-only", "-z", "--diff-filter=AM",
@@ -603,7 +626,8 @@ def mutation_test(repo: str | Path, base: str, head: str = "HEAD", checks: list[
         return result
     finally:
         try:
-            worktrees.remove(repo, path)
+            if created:  # never remove a worktree that was not added: a second error would hide the first
+                worktrees.remove(repo, path)
         finally:
             shutil.rmtree(path, ignore_errors=True)
             worktrees.git(repo, "worktree", "prune", check=False)
