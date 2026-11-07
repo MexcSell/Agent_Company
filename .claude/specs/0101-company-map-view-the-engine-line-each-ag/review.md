@@ -1,92 +1,85 @@
-# Review (iteration 1)
+# Review (iteration 2)
 
-## QA review of the Company map and the tool_steps detail against COMPANY-DESIGN §1-§4 (qa, done)
+## QA review of the Company map, tool_steps detail and the follow-up tests against COMPANY-DESIGN §1-§4 (qa, done)
 
-**Logic verification**
+## Logic verification
 
-I traced the four endpoint shapes against the backend:
-- `organization.room_dict` (`organization.py:34`) returns `parent`, not `parent_key`. The code reads `r.parent ?? r.parent_key`.
-- `registry.agent_dict` has `room`, `role`, `enabled` and `model_pref`.
-- `/api/models` (`api.py:2944`) returns `routes` as role → name, `fallbacks` as role → [names] in order (`router.list_fallbacks`), and `default_model`.
-- `/api/goals/{id}` (`api.py:2244`) gives each task `iteration`, `role`, `status` and `stage`, where `stage` is one of `workflow.TASK_STAGES`.
+**Unchanged since iteration 1.** `git diff 20d1a6e HEAD --stat -- src` prints nothing, so `companymap.js`, `app.js` (`reportToolSteps`, `NAV_DEFAULT`) and `index.html` are identical to what review.md approved. Iteration 2 changed only `tests/test_company_map.py`, `CLAUDE.md` and the spec folder. No backend `.py` file under `src/` changed on the branch: `git diff main...HEAD --name-only -- 'src/**/*.py'` is empty, and the stat lists only `static/` files under `src/`.
 
-*Normal case (`viewCompanyMap`, `cmRoom`, `cmModels`).*
-- A room is a child when its parent key exists and differs from its own key; otherwise it is a root. With the §1 tree, the root is `general_management`. Its non-engine children (research, analysis, security, business) move into the side column, and its engine child stays in `kids`.
-- `cmRoom` puts the first engine child last as `next`, which nests organization_engine → evolution_engine → orchestrator → bridge → development. Other children, such as Agent Management and Study Room, appear as a row of smaller boxes above the next engine box. This matches the spec's layout section.
-- Only enabled agents are kept, grouped by `room`.
-- Badge order: an `agent:<id>` preference shows "via agent #id", then any other `model_pref`, then `routes[role]` "(route)", then `default_model` "(default)". After that come the `fallbacks[role]` entries in order as small "→ name" badges.
-- The task text puts "model_pref" before "agent:<id>". The code checks `agent:` first, which is the only correct order, because `agent:<id>` is itself a `model_pref` value.
-- Live goals use the six live statuses, capped at 20. Their tasks are filtered to `t.iteration === g.iteration` before calling `cmLifecycleStep`.
+**Normal case: a running goal with a developer task in progress, and the agent's badge.**
+- **Lifecycle step:** the goal is `running` in iteration 2 and its task is `{iteration: 2, role: "developer", stage: "in_progress"}`.
+  - `goalRow` keeps the task, since `t.iteration === g.iteration`.
+  - In `cmLifecycleStep`, the status is live and the task list is not empty.
+  - The critique check fails: the stage is not `review` and `reviewer(t)` is false for a developer.
+  - The execute check matches `in_progress`, so the step is **execute**. This is case 4 of the node test.
+- **Model badge:** the agent's `model_pref` is `""` and `routes.developer` is `claude_code`.
+  - `cmModels` gives `cmBadge("claude_code (route)")`.
+  - Each entry of `fallbacks.developer` (`codex`, `claude_37`) follows in order as a small "→ name" badge.
+  - Every badge's text and title go through `esc()`.
 
-*Edge cases, traced by hand.*
-- A room with no agents shows "no active agents".
-- An agent whose room is missing, null or empty falls into the dashed "Unassigned" box. Disabled agents are dropped.
-- `enabled === false` dims the room to `opacity:.55` and adds `pill("disabled")`.
-- With no live goals the card says "No live goals."
-- A running goal whose tasks all belong to an earlier iteration gets an empty list after the filter, so it maps to plan.
-- `awaiting_approval` maps to learn.
-- A paused goal shows its status pill, an extra "paused" pill, and its step from its tasks.
-- If a goal's detail request fails, `.catch(() => null)` shows "tasks unavailable" and the step comes from the status alone.
+**Edge cases.**
+- **Tasks only from an earlier iteration:** a goal in iteration 2 whose tasks are all from iteration 1 has an empty list after the filter. `cmLifecycleStep` returns **plan** because `!ts.length`. This is the last case in `CASES`.
+- **Report without tool_steps:** `reportToolSteps(undefined)` and `reportToolSteps([])` both turn the input into `[]` and return `""`. The node test asserts `none == ""` and `empty == ""`.
 
-*Error case.* Each list request is wrapped as `{d}|{e}`, so `Promise.all` cannot reject. A failed endpoint becomes an escaped `cmFail` card ("Could not load /api/rooms: …") and the rest falls back:
-- no rooms: "No rooms."
-- no models: `m = {}`, so the badge reads "? (default)"
-- no goals: an empty list
+**Error case: `/api/models` fails.**
+- `load` turns the rejection into `{e}`, so `Promise.all` cannot reject. `m` becomes `{}`.
+- `cmModels` finds no pref and no `m.routes`, and renders the badge "? (default)" with no fallbacks.
+- `cmFail("/api/models", e)` adds an escaped error card, and the room tree and goals still render. Nothing throws.
 
-I found no path that throws or leaves a blank page.
+The view reads only existing endpoint data and matches §1–§3. The follow-up tests close coverage gaps; they do not hide a defect.
 
-*`cmLifecycleStep`.* It matches the spec line for line:
-- queued → discover, planning → plan, awaiting_approval → learn.
-- For running, recovering and paused:
-  - no tasks → plan
-  - any task in stage `review`, or a qa/review-role task in `in_progress` or `assigned` → critique
-  - any task in `in_progress`, `assigned`, `planned` or `reopened`, or with status `running` or `queued` → execute
-  - all tasks closed (approved, completed, failed, skipped, cancelled) → validate
-  - anything else (created, blocked) → execute
-- Any other status → plan.
+**(a) New lifecycle cases against §3 and the spec.** All of them match:
+- `recovering` with a task `in_progress` → execute (live status, a task in progress).
+- `done` → plan (the spec says "any other status → plan").
+- A task at stage `created`, or at `blocked` beside a completed one → execute (the spec's "otherwise (created, blocked)").
+- A qa task `assigned` → critique (§3: Critique is the reviews).
+- Only earlier-iteration tasks → plan.
 
-This is consistent with §3: Critique is the reviews, Validate is the gate once the work is closed, and Learn is the approval or lessons step after the gate passes.
+All 14 cases pass through node.
 
-*`reportToolSteps`.* Its input shape matches `research_agent.py:176-188`: `{round, model, results[{action, <arg>, documents, titles, errors}], stopped | sufficient, reason, refused}`.
-- An empty or missing list renders nothing.
-- A round that stopped renders as a muted row.
-- Error strings are escaped and shortened.
+**(b) Read-only guard.**
+- `test_view_registers_and_escapes` fails if the file contains `method:`, `fetch(` or `XMLHttpRequest`.
+- `api_call_args` matches brackets, so `${encodeURIComponent(g.id)}` inside a template string stays balanced. The test requires at least 2 `api(` calls, each with exactly one argument, and its self-test proves that `api("/x", { method: "POST" })` counts as two.
+- The guard misses calls that are not written as `api(` (an alias such as `const f = api`, or `api.call`) and other write channels (`sendBeacon`, `WebSocket`, a form submit). None of these is in the file today, so this is a comment, not a failure.
 
-The change does what the task asks: it reads existing data and adds no workaround.
+**(d) Escaping.** The code is unchanged, so iteration 1's check of every interpolation still holds:
+- `companymap.js`: `esc()` covers names, keys, roles, model/fallback/pref text, `g.id` in `data-goal`, titles, steps and error text. `pill()`, which escapes its input (app.js:67), covers statuses and "disabled".
+- `reportToolSteps`: `round`, `model`, `stopped`, `reason`, `action`, the JSON arguments, `titles`, `errors` and `refused` all go through `esc()`. The only unescaped values are numbers.
+- The node test confirms `<b>` comes out as `&lt;b&gt;`.
 
-**Checklist**
-- **Contract.**
-  - Spec items 1–7 are met. The spec file is now committed at `.claude/specs/0101-…/company-map.md`.
-  - `index.html` loads `companymap.js` after `app.js` and before `start()`.
-  - `NAV_DEFAULT.top` is unchanged except that `"companymap"` now sits directly after `"agents"`. A saved rail order still picks up the new view in its default place (`navGroups`, app.js:231-238).
-  - The `network` icon exists (app.js:58).
-- **Escaping.**
-  - In `companymap.js`, every interpolated value goes through `esc()` or `pill()`, which escapes too (app.js:67). That covers `name`, `key`, `role`, the model, fallback and pref values, `g.id` in `data-goal`, `g.title`, the steps and the error text. The only unescaped pieces are literal class and style strings.
-  - In `reportToolSteps`, `round`, `model`, `stopped`, `reason`, `action`, the JSON arguments, `titles`, `errors` and `refused` are all escaped. `docs` and `rows.length` are numbers.
-  - The new test confirms in node that `<b>` comes out as `&lt;b&gt;`.
-- **Read-only, no backend change.**
-  - `git diff main...HEAD --stat` touches only `static/`, `tests/`, `docs/COMPANY-DESIGN.md` and `.claude/specs/`. No `.py` file under `src/` changed.
-  - `companymap.js` only calls `api(path)` with no options, which is a GET, plus a click handler that opens `goalModal`.
-- **Tests.**
-  - `uv run pytest -q tests/test_static_js.py tests/test_company_map.py`: **27 passed in 5.35s**. That is two more than the developer's 25, because the tool_steps commit added two tests.
-  - `python3 -I …/edit_check.py static/companymap.js static/app.js`: **`OK static/companymap.js`** and **`OK static/app.js`**.
-  - The lifecycle mapping runs through node in 8 cases.
-- **Security.** The page writes only escaped HTML through `innerHTML`, and every goal id in a URL is passed through `encodeURIComponent`.
-- **Performance.** See the finding on full goal-detail requests below.
-- **Docs.** COMPANY-DESIGN §4 is updated. CLAUDE.md does not list the new static file.
+## Checklist
+- **Contract:** met.
+  - The script tag is after `app.js` and before `start()`.
+  - `NAV_DEFAULT.top` has `companymap` right after `agents` and is otherwise unchanged.
+  - The view is registered as `registerView({ id: "companymap" … })`.
+  - The spec file is committed.
+- **Interfaces:** no API or backend change.
+- **Error handling:** each endpoint failure becomes its own error card; a failed goal-detail request shows "tasks unavailable".
+- **Tests:** the lifecycle, read-only and tool_steps tests cover what was asked.
+- **Dependencies:** none added.
+- **Security:** everything is escaped and the view only reads.
+- **Performance:** up to 20 full goal-detail requests each time the view opens (still open from iteration 1).
+- **Docs:** the CLAUDE.md `static/` list now has `companymap.js` after `network.js`, and COMPANY-DESIGN §4 is marked done.
 
-FINDING: src/agent_company/static/companymap.js:76 | Each time the view opens it fetches the full `/api/goals/{id}` for up to 20 live goals. Each response carries events, the blackboard, up to 8000 characters of output per task, RCA and the digest, which is slow on a busy company. | Accept for now, since adding a lighter endpoint would need a backend change. Note it as a follow-up, or lower the cap.
-FINDING: tests/test_company_map.py:33 | The read-only guard only checks for `"method:"`. A direct `fetch(`, `XMLHttpRequest`, or an `api(p, opts)` call built elsewhere would pass. | Also assert that `fetch(` and `XMLHttpRequest` are absent, and that every `api(` call takes a single argument.
-FINDING: tests/test_company_map.py:37-47 | The lifecycle cases miss `recovering`, an unknown status (should be plan), a `created` or `blocked` stage (should be execute), and a qa task in `assigned` (should be critique). The caller's iteration filter is not tested at all. | Add these four cases, and one goal whose only tasks belong to an earlier iteration, which should be plan.
-FINDING: src/agent_company/static/companymap.js:79 | A paused goal shows two identical "paused" pills: the status pill and the extra one. It does what the spec says literally, but it is cosmetic noise. | Keep it, or change the extra pill to something like "paused for a person".
-FINDING: CLAUDE.md:1 | The layout section of CLAUDE.md lists each static view file, but `companymap.js` is not among them. | Add one line to the `static/` list next to `network.js`.
+**Commands**
+- `uv run pytest -q tests/test_static_js.py tests/test_company_map.py`: **`28 passed in 5.44s`**. Nothing was skipped, so node ran.
+- `python3 -I …/edit_check.py src/agent_company/static/companymap.js src/agent_company/static/app.js`: **`OK src/agent_company/static/companymap.js`**, **`OK src/agent_company/static/app.js`**. Calling the wrapper by its worktree path needed approval, so I ran the main repository's copy (`/home/luca/Agent_Company/src/agent_company/edit_check.py`) on the worktree files.
 
-The tool_steps task is marked failed or skipped by the harness, but its code is in commit `20d1a6e`. I reviewed it for escaping and found no problem, and its two node-rendered tests pass.
+FINDING: tests/test_company_map.py:98-101 | The iteration-filter case runs a copy of the filter written in the test script, not `goalRow`'s own filter (companymap.js:78). A regression in the view's filter would still pass the test. | Move the filter into a small pure function in `companymap.js` (e.g. `cmCurrentTasks(g, tasks)`) and call that from both the view and the test.
+FINDING: tests/test_company_map.py:34,41 | The read-only guard does not catch an aliased or `.call` use of `api`, or other write channels (`sendBeacon`, `WebSocket`, form submit). Nothing like that is in the file today. | Add `sendBeacon`, `WebSocket` and `api.call` / `api.apply` to the banned strings.
+FINDING: src/agent_company/static/companymap.js:79 | A paused goal shows two identical "paused" pills: the status pill and the extra one the spec asks for. Cosmetic, carried over from iteration 1. | Give the extra pill a distinct label, or drop it when the status pill already reads "paused".
+FINDING: src/agent_company/static/companymap.js:76 | Up to 20 full `/api/goals/{id}` requests each time the view opens (events, blackboard, task output, RCA, digest). Carried over from iteration 1. | Lower the cap, or later add a lighter tasks-only read (that is a backend change, so outside this goal).
 
-OUTCOME: APPROVED_WITH_COMMENTS. Everything delivered meets the spec's layout, model badge rule, live-goal list and lifecycle mapping, as well as COMPANY-DESIGN §1–§4. Every interpolated string is escaped, no backend file changed, the view sends no writes, and the wiring tests pass. The five findings are follow-ups (load, test coverage, one cosmetic pill, docs). None violates the spec.
+OUTCOME: APPROVED_WITH_COMMENTS. The whole branch meets COMPANY-DESIGN §1–§4 and the spec:
+- The engine line is nested with the side rooms beside it.
+- Model badges follow model_pref → agent → route → default, with the fallbacks in order.
+- Live goals map to the §3 lifecycle steps.
+- tool_steps show on the report detail and render nothing for older reports.
+- Every value is escaped and the view sends no writes.
 
-NEXT: add the missing lifecycle and read-only test cases to `tests/test_company_map.py`.
-NEXT: add `companymap.js` to the CLAUDE.md layout list.
-MESSAGE recommendation to general-manager: the Company map is approved with comments; the follow-ups are listed as FINDING lines in this review (tests/test_company_map.py, CLAUDE.md).
+No backend file changed, and both commands pass. The four findings are about test robustness, one cosmetic duplicate pill and request load; none violates the spec.
+
+NEXT: optionally move the iteration filter into a pure function in `companymap.js` so the test calls the view's own filter.
+MESSAGE done to general-manager: goal 101 iteration 2 QA review passes (28 tests pass, syntax check OK, no backend change); the remaining FINDING lines are optional follow-ups.
 
 VERDICT: PASS
