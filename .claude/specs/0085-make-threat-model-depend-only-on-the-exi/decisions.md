@@ -10,3 +10,9 @@ Findings:
 - task qa_review: skipped: a dependency failed
 
 Next: fix the findings (loop back to Build).
+
+## Iteration 2: PASS
+- finish_deps (developer): done
+- qa_review (qa): done
+
+Next: approval and merge.
