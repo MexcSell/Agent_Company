@@ -39,8 +39,8 @@ IDs `EL-R-nn`; status words as in [README.md](README.md).
 | Orchestrator, event bus, state store, observability, specialised agents (a_4); runtime with teacher, critique and evaluation agents and metrics (a_9) | goal loop, blackboard, SQLite state, `/metrics`, roles; instructor, QA, evaluation harness | done (`loop.py`, `blackboard.py`, `metrics.py`, `training.py`, `evaluation.py`) |
 | A critic loop per specialist inside the iteration (a_8 purple loops) | review tasks check a whole iteration's change (`quality.REVIEW_ROLES`), not one task before it is handed on | **EL-R-06** done (`loop._critic`, setting `task_critic`) |
 | A red-team agent (a_8) | adversarial suite (S09-R-05), security review role | done (`evals/adversarial.json`) |
-| An archive of designs with their evaluation logs; the next candidate sampled from it (a_7) | experiments keep baseline and candidate, no lineage between candidates | **EL-R-07** open |
-| Several competing candidates per improvement (evolving agents *(summary)*) | one candidate per experiment | part of EL-R-07 |
+| An archive of designs with their evaluation logs; the next candidate sampled from it (a_7) | experiments keep their `parent_id` and an `eval_log`; the next candidate starts from the best or a diverse earlier one (`experiments.pick_parent`, `seed`) | **EL-R-07** done (`experiments.lineage`, `pick_parent`) |
+| Several competing candidates per improvement (evolving agents *(summary)*) | up to three route or strategy candidates on one suite against one shared baseline; only the best without regressions goes to review (`experiments.compete`, `select_best`) | **EL-R-07** done |
 | Evaluate the evaluator: mutation testing of the checks (evolving agents *(summary)*) | the eval suites' checks are verified to fail on the seed (`exercises.py`); the gate's own checks are not mutation-tested | **EL-R-08** open |
 | A bridge: an MCP server through which Codex calls the company's tools (get task, update progress, save insight, request review) (Codex and Bridge *(summary)*) | CLI agents get MCP servers an administrator granted (`mcp.py`); the company's own functions are not offered as tools | **EL-R-09** open |
 | GitHub Copilot CLI as a model (owner; a_8) | `copilot` kind behind `enable_copilot` (`executors.CopilotExecutor`); the CLI is not installed on this host | skip (needs the owner's GitHub sign-in: Models → Add model → Install, then `copilot` login) |
@@ -117,7 +117,8 @@ and passes the second, and the dependent task starts only after that.
 
 ### EL-R-07 An archive of candidates
 
-**Status: open**
+**Status: done (`Experiment.parent_id`, `Experiment.eval_log`, `experiments.lineage`, `seed`, `archive`,
+`pick_parent` best|diverse, `select_best`, `compete`, `run_competition`; tests/test_experiment_archive.py)**
 
 Experiments record their parent experiment and evaluation log; a new
 candidate for the same target may start from the best or a diverse earlier candidate, and up to three candidates may

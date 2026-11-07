@@ -261,8 +261,11 @@ class Experiment(Base):
     hypothesis: Mapped[str] = mapped_column(Text, default="")
     dataset: Mapped[dict[str, Any]] = mapped_column(default=dict)  # suite, repeats
     results: Mapped[dict[str, Any]] = mapped_column(default=dict)  # baseline, candidate, comparison, canary
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # EL-R-07: started from
+    eval_log: Mapped[list[Any]] = mapped_column(default=list)  # EL-R-07: append-only evaluation log, experiments._log
     status: Mapped[str] = mapped_column(String(16), default="proposed")
-    # proposed|baseline|candidate|review|canary|rolled_out|rolled_back|rejected|failed
+    # proposed|baseline|candidate|review|canary|rolled_out|rolled_back|rejected|failed;
+    # a competition's losers end rejected (EL-R-07)
     origin: Mapped[str] = mapped_column(String(16), default="evolution")  # evolution|user
     decision: Mapped[str] = mapped_column(Text, default="")
     reviewed_by: Mapped[str] = mapped_column(String(128), default="")

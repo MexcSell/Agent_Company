@@ -98,7 +98,10 @@ feature came from.
   suite, review by the E0-E6 policy, canary, rollback; routes only applied by an administrator; G-R-11 a candidate that breaks a task the
   baseline solved is never better (`regressions`); S10-R-02 the platform
   commit in `dataset` and a `budget_usd` that stops route/template experiments; `retrieval` target: ranking weights on
-  the retrieval evals + `benchmarks/retrieval.py`, applied and rolled back by an administrator); `hypotheses.py`
+  the retrieval evals + `benchmarks/retrieval.py`, applied and rolled back by an administrator; EL-R-07 archive: each
+  experiment's `parent_id` (same target and scope, `lineage`, `seed`) and append-only `eval_log`, `pick_parent`
+  best|diverse from the finished ones, `compete`: 2-3 route/strategy candidates on one suite against one shared
+  baseline, only the `select_best` winner (no regressions) goes to review, the others end rejected); `hypotheses.py`
   (ASEAO07 S07-R-03: statements under test with evidence; an experiment's comparison concludes its hypothesis; an agent
   never marks one supported without a recorded test result; a concluded one becomes a knowledge item); `training.py`
   (capability gaps, learning plans: practice + hidden final eval suites run by the trainee in scratch repos,

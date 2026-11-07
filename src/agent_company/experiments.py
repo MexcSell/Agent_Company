@@ -20,6 +20,13 @@ benchmark (benchmarks/retrieval.py, run with the weights of each side) are the w
 
 Playbook candidates of the evolution loop (evolution.py) are recorded here as well; their smoke trial is the
 baseline and candidate runs, their live trial the canary.
+
+The archive (EL-R-07): every experiment keeps its `parent_id` (the earlier candidate it started from, same target and
+scope; `seed` gives that candidate's text) and an append-only `eval_log` (proposed, each side, the comparison, status
+changes, competitions). `pick_parent` samples the next parent from the finished ones: the `best` (highest pass rate
+without regressions, then cheapest) or the most `diverse` (solved tasks furthest from the best's). `compete` runs 2-3
+route or strategy candidates on one suite against one shared baseline; `select_best` (built on `compare`, so a
+candidate with a regression never wins, G-R-11) picks the one that goes to review, the others end rejected.
 """
 
 from __future__ import annotations
@@ -53,6 +60,11 @@ AUTONOMY = {
 DEPLOY_BY = {"playbook": "system", "route": "administrator", "strategy": "administrator", "retrieval": "administrator"}
 CANARY_WINDOW = 3
 FINAL = {"rolled_out", "rolled_back", "rejected", "failed"}
+MAX_COMPETITORS = 3  # EL-R-07: candidates on one suite against one baseline
+EVAL_LOG_MAX = 200  # entries kept per experiment: the first ("proposed") and the newest
+ARCHIVED = {"review", "canary", "rolled_out", "rolled_back", "rejected"}  # measured and finished: parents to sample
+LOG_FIELDS = ("side", "label", "runs", "pass_rate", "solved_tasks", "cost_per_passed", "better", "regressions",
+              "needed", "status", "parent_id", "competition", "winner", "note")
 _running: set[int] = set()
 _running_lock = threading.Lock()
 
@@ -82,7 +94,8 @@ def to_dict(e: Experiment, names: dict[int, str] | None = None) -> dict[str, Any
             "role": e.role, "baseline_version": e.baseline_version, "candidate": e.candidate,
             "hypothesis": e.hypothesis, "dataset": e.dataset, "results": e.results, "status": e.status,
             "origin": e.origin, "decision": e.decision, "reviewed_by": e.reviewed_by, "created_by": e.created_by,
-            "deploy_by": DEPLOY_BY.get(e.target, "administrator"),
+            "deploy_by": DEPLOY_BY.get(e.target, "administrator"), "parent_id": e.parent_id,
+            "eval_log": e.eval_log or [], "competition": (e.dataset or {}).get("competition"),
             "created_at": e.created_at.isoformat(), "updated_at": e.updated_at.isoformat()}
 
 
@@ -100,18 +113,21 @@ def source_commit() -> str:
 def record(s: Session, target: str, *, agent_id: int | None = None, role: str = "", baseline_version: str = "",
            candidate: dict[str, Any] | None = None, hypothesis: str = "", suite: str = "smoke", repeats: int = 1,
            status: str = "proposed", origin: str = "evolution", created_by: str = "system",
-           budget_usd: float = 0.0) -> Experiment:
+           budget_usd: float = 0.0, parent_id: int | None = None) -> Experiment:
     """`dataset` keeps what reproduces it: suite, repeats, the platform's commit and the budget (0 = none) its eval
-    runs may cost; the configuration compared is `baseline_version` against `candidate`."""
+    runs may cost; the configuration compared is `baseline_version` against `candidate`. `parent_id`: the earlier
+    experiment of the same target and scope this candidate started from (EL-R-07)."""
     if budget_usd < 0:
         raise ValueError("the budget cannot be negative")
+    check_parent(s, target, parent_id, agent_id=agent_id, role=role)
     e = Experiment(target=check_target(target), agent_id=agent_id, role=role, baseline_version=baseline_version,
                    candidate=dict(candidate or {}), hypothesis=hypothesis[:2000],
                    dataset={"suite": suite, "repeats": repeats, "source_commit": source_commit(),
                             "budget_usd": round(float(budget_usd), 4)},
-                   status=status, origin=origin, created_by=created_by)
+                   status=status, origin=origin, created_by=created_by, parent_id=parent_id)
     s.add(e)
     s.flush()
+    _log(e, "proposed", status=e.status, parent_id=parent_id, note=hypothesis)
     from agent_company import hypotheses  # ASEAO07 S07-R-03: the experiment's hypothesis, under test
 
     hypotheses.for_experiment(s, e.id, hypothesis, f"{target} experiment #{e.id}: baseline vs candidate on the "
@@ -126,6 +142,7 @@ def update(s: Session, exp_id: int | None, status: str | None = None, decision: 
     e = s.get(Experiment, exp_id) if exp_id else None
     if e is None:
         return
+    prev = e.status
     if results:
         e.results = {**(e.results or {}), **results}
     if status:
@@ -136,6 +153,74 @@ def update(s: Session, exp_id: int | None, status: str | None = None, decision: 
         from agent_company import hypotheses
 
         hypotheses.conclude_experiment(s, e.id, results["comparison"], decision or "")
+    # EL-R-07: the evaluation log; an update that only carries the canary adds nothing (the canary is its own log)
+    for side in ("baseline", "candidate"):
+        if isinstance(m := results.get(side), dict):
+            _log(e, side, side=side, label=m.get("label"), runs=m.get("runs"), pass_rate=m.get("pass_rate"),
+                 solved_tasks=m.get("solved_tasks"), cost_per_passed=m.get("cost_per_passed"))
+    if isinstance(cmp := results.get("comparison"), dict):
+        _log(e, "comparison", better=cmp.get("better"), regressions=cmp.get("regressions"), needed=cmp.get("needed"),
+             note=decision or "")
+    if isinstance(comp := results.get("competition"), dict):
+        _log(e, "competition", competition=comp.get("id"), winner=comp.get("winner"), note=comp.get("why") or "")
+    if "deployed" in results:
+        _log(e, "deployed", note=decision or "")
+    if status and status != prev:
+        _log(e, "status", status=status, note=decision or "")
+
+
+def _log(e: Experiment, event: str, **fields: Any) -> None:
+    """One entry of the experiment's evaluation log (EL-R-07). The list is reassigned: JSON columns do not track
+    in-place changes."""
+    from agent_company.db import now
+
+    entry: dict[str, Any] = {"at": now().isoformat(), "event": event}
+    for k in LOG_FIELDS:
+        v = fields.get(k)
+        if v is not None:
+            entry[k] = v[:300] if k == "note" and isinstance(v, str) else v
+    log = [*(e.eval_log or []), entry]
+    if len(log) > EVAL_LOG_MAX:
+        log = log[:1] + log[-(EVAL_LOG_MAX - 1):]
+    e.eval_log = log
+
+
+def _scope(target: str, agent_id: int | None, role: str) -> tuple[str, Any]:
+    """What makes two experiments candidates for the same thing: the agent for a playbook, the role (a route's
+    role, a strategy's goal kind, "knowledge" for retrieval) for the rest."""
+    return ("playbook", agent_id) if target == "playbook" else (target, role)
+
+
+def check_parent(s: Session, target: str, parent_id: int | None, *, agent_id: int | None = None,
+                 role: str = "") -> None:
+    """A parent exists and is an experiment of the same target and scope. Its status does not matter; it always
+    has a lower id than its child, so a lineage has no cycle."""
+    if parent_id is None:
+        return
+    t = check_target(target)
+    p = s.get(Experiment, parent_id)
+    if p is None:
+        raise ValueError(f"parent experiment #{parent_id} does not exist")
+    if p.target != t:
+        raise ValueError(f"parent experiment #{parent_id} is a {p.target} experiment, not {t}")
+    p_scope, scope = _scope(t, p.agent_id, p.role), _scope(t, agent_id, role)
+    if p_scope != scope:
+        raise ValueError(f"parent experiment #{parent_id} is for {p_scope[1]}, not {scope[1]}")
+
+
+def lineage(s: Session, exp_id: int) -> list[int]:
+    """The ancestors of an experiment, root first, ending with the experiment itself."""
+    e = s.get(Experiment, exp_id)
+    if e is None:
+        raise KeyError(exp_id)
+    chain, seen = [e.id], {e.id}
+    while e.parent_id is not None and len(chain) < 100:
+        if e.parent_id in seen or (p := s.get(Experiment, e.parent_id)) is None:
+            break
+        chain.append(p.id)
+        seen.add(p.id)
+        e = p
+    return chain[::-1]
 
 
 def side_metrics(summary: dict[str, Any]) -> dict[str, Any]:
@@ -193,13 +278,14 @@ def get(exp_id: int) -> dict[str, Any]:
         if e is None:
             raise KeyError(exp_id)
         names = dict(s.execute(select(Agent.id, Agent.name)).all())
-        return to_dict(e, names)
+        return to_dict(e, names) | {"lineage": lineage(s, exp_id)}
 
 
 def propose(target: str, candidate: str, *, agent_id: int | None = None, role: str = "", hypothesis: str = "",
-            suite: str = "smoke", repeats: int = 1, created_by: str = "system", budget_usd: float = 0.0
-            ) -> dict[str, Any]:
-    """A user's experiment (E2). It runs nothing until it is started."""
+            suite: str = "smoke", repeats: int = 1, created_by: str = "system", budget_usd: float = 0.0,
+            parent_id: int | None = None) -> dict[str, Any]:
+    """A user's experiment (E2). It runs nothing until it is started. With `parent_id` it starts from that earlier
+    candidate (EL-R-07): an empty `candidate` takes the parent's own."""
     from agent_company import evaluation
 
     target = check_target(target)
@@ -210,6 +296,11 @@ def propose(target: str, candidate: str, *, agent_id: int | None = None, role: s
     if not 1 <= int(repeats) <= 10:
         raise ValueError("repeats must be between 1 and 10")
     candidate = (candidate or "").strip()
+    if not candidate and parent_id is not None:
+        try:
+            candidate = seed(parent_id).strip()
+        except KeyError:
+            raise ValueError(f"parent experiment #{parent_id} does not exist") from None
     if not candidate:
         raise ValueError("a candidate is required: the playbook text, the model for the route, the template "
                          "fields or the ranking weights to change")
@@ -220,20 +311,29 @@ def propose(target: str, candidate: str, *, agent_id: int | None = None, role: s
             e = record(s, target, role="knowledge", baseline_version=_weights_text(base),
                        candidate={"changes": changes, "weights": base | changes, "base": base,
                                   "strategies": _strategy_lines()},
-                       hypothesis=hypothesis, suite=suite, repeats=1, origin="user", created_by=created_by)
+                       hypothesis=hypothesis, suite=suite, repeats=1, origin="user", created_by=created_by,
+                       parent_id=parent_id)
         elif target == "strategy":  # S04-R-13: rejected at once when it breaks the §20.3 policy
-            from agent_company import orchestration
+            from agent_company import orchestration, strategies
 
+            check_parent(s, target, parent_id, role=strategies.check_kind(role))
             e = orchestration.record(s, role, orchestration.parse_changes(candidate),
                                      reasons=[f"proposed by {created_by}"], evidence=None, hypothesis=hypothesis,
                                      suite=suite, repeats=int(repeats), origin="user", created_by=created_by, budget_usd=budget_usd)
+            if parent_id is not None:  # orchestration.record knows no parent: linked here, in the same session
+                e.parent_id = parent_id
+                log = list(e.eval_log or [])
+                if log and log[0].get("event") == "proposed":
+                    log[0] = {**log[0], "parent_id": parent_id}
+                e.eval_log = log
         elif target == "playbook":
             a = s.get(Agent, agent_id) if agent_id else None
             if a is None:
                 raise KeyError(f"agent {agent_id}")
             e = record(s, target, agent_id=a.id, role=a.role, baseline_version=f"v{a.playbook_version}",
                        candidate={"playbook": candidate[:8000]}, hypothesis=hypothesis, suite=suite,
-                       repeats=int(repeats), origin="user", created_by=created_by, budget_usd=budget_usd)
+                       repeats=int(repeats), origin="user", created_by=created_by, budget_usd=budget_usd,
+                       parent_id=parent_id)
         else:
             role = (role or "").strip()
             if not role:
@@ -243,10 +343,300 @@ def propose(target: str, candidate: str, *, agent_id: int | None = None, role: s
             r = s.get(Route, role)
             e = record(s, target, role=role, baseline_version=r.model_name if r else "",
                        candidate={"model": candidate}, hypothesis=hypothesis, suite=suite, repeats=int(repeats),
-                       origin="user", created_by=created_by, budget_usd=budget_usd)
+                       origin="user", created_by=created_by, budget_usd=budget_usd, parent_id=parent_id)
         out = e.id
-    log_event("evolution", f"experiment #{out} proposed: {target} {role or agent_id} → {candidate[:60]}")
+    log_event("evolution", f"experiment #{out} proposed: {target} {role or agent_id} → {candidate[:60]}"
+              + (f" (from #{parent_id})" if parent_id else ""))
     return get(out)
+
+
+def seed(parent_id: int) -> str:
+    """The parent's candidate as the text `propose` takes: the start of the next candidate (EL-R-07)."""
+    import json
+
+    with session() as s:
+        p = s.get(Experiment, parent_id)
+        if p is None:
+            raise KeyError(parent_id)
+        c = p.candidate or {}
+        if p.target == "playbook":
+            return str(c.get("playbook") or "")
+        if p.target == "route":
+            return str(c.get("model") or "")
+        if p.target == "strategy":
+            return json.dumps(c.get("changes") or {})
+        return _weights_text(c.get("changes") or {})
+
+
+# --- the archive: choosing a parent (EL-R-07) ------------------------------------------------------------------------
+
+def archive(s: Session, target: str, *, role: str = "", agent_id: int | None = None) -> list[dict[str, Any]]:
+    """The measured, finished experiments of a target and scope: the candidates a new one may start from. Failed and
+    running ones are never in it."""
+    t = check_target(target)
+    q = select(Experiment).where(Experiment.target == t, Experiment.status.in_(list(ARCHIVED)))
+    q = q.where(Experiment.agent_id == agent_id) if t == "playbook" else q.where(Experiment.role == role)
+    out = []
+    for e in s.scalars(q.order_by(Experiment.id)):
+        r = e.results or {}
+        cand, cmp = r.get("candidate"), r.get("comparison")
+        if isinstance(cand, dict) and cand.get("pass_rate") is not None and isinstance(cmp, dict):
+            out.append({"id": e.id, "candidate": cand, "comparison": cmp})
+    return out
+
+
+def _cost(c: dict[str, Any]) -> float:
+    v = c.get("cost_per_passed")
+    return float("inf") if v is None else float(v)
+
+
+def _rank_key(entry: dict[str, Any]) -> tuple[float, float, int]:
+    """Highest pass rate first, then the lowest cost per passed run (unknown last), then the earliest."""
+    c = entry.get("candidate") or {}
+    return -float(c.get("pass_rate") or 0), _cost(c), int(entry["id"])
+
+
+def jaccard_distance(a: Any, b: Any) -> float:
+    sa, sb = set(a or ()), set(b or ())
+    union = sa | sb
+    return 1 - len(sa & sb) / len(union) if union else 0.0
+
+
+def best_of(entries: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The best measured candidate without regressions (G-R-11); it need not have beaten its own baseline."""
+    ok = [x for x in entries if not (x.get("comparison") or {}).get("regressions")]
+    return min(ok, key=_rank_key) if ok else None
+
+
+def most_diverse(entries: list[dict[str, Any]], best: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The candidate whose solved tasks are furthest (Jaccard) from the best's; ties: higher pass rate, lower id."""
+    if best is None:
+        return None
+    ref = (best.get("candidate") or {}).get("solved_tasks") or []
+    others = [x for x in entries if x["id"] != best["id"] and "solved_tasks" in (x.get("candidate") or {})]
+    if not others:
+        return None
+    return min(others, key=lambda x: (-jaccard_distance(x["candidate"]["solved_tasks"], ref),
+                                      -float(x["candidate"].get("pass_rate") or 0), int(x["id"])))
+
+
+def pick_parent(target: str, *, role: str = "", agent_id: int | None = None, mode: str = "best") -> int | None:
+    """The parent of the next candidate, sampled from the archive: the `best` one or the most `diverse` one. None
+    when the archive is empty. Reads only."""
+    if mode not in ("best", "diverse"):
+        raise ValueError("mode is best or diverse")
+    with session() as s:
+        entries = archive(s, target, role=role, agent_id=agent_id)
+    if not entries:
+        return None
+    best = best_of(entries)
+    if mode == "best":
+        return best["id"] if best else None
+    ref = best or min(entries, key=_rank_key)  # every entry has a regression: the top-ranked one is the reference
+    far = most_diverse(entries, ref)
+    return (far or ref)["id"]
+
+
+# --- competing candidates (EL-R-07) -----------------------------------------------------------------------------------
+
+def select_best(entries: list[dict[str, Any]]) -> int | None:
+    """The winner of a competition: among the candidates better than the shared baseline and without regressions
+    (G-R-11, checked again here: `orchestration.compare`'s efficiency path must not let one through), the highest
+    pass rate, then the cheapest, then the earliest. None when none is eligible."""
+    ok = [x for x in entries if (x.get("comparison") or {}).get("better") is True
+          and not (x.get("comparison") or {}).get("regressions")]
+    return min(ok, key=_rank_key)["id"] if ok else None
+
+
+def _base_of(e: Experiment) -> Any:
+    return (e.candidate or {}).get("base_version") if e.target == "strategy" else e.baseline_version
+
+
+def compete(exp_ids: list[int], *, actor: str = "system") -> dict[str, Any]:
+    """E3 for 2-3 proposed candidates of one route role or goal kind: one shared baseline run and one run per
+    candidate on the same suite and repeats; only the best (no regressions) goes to review (in the background)."""
+    from agent_company.governance import emergency
+
+    if emergency():
+        raise PermissionError("an emergency stop is active (E5)")
+    ids = [int(i) for i in exp_ids]
+    if len(set(ids)) != len(ids):
+        raise ValueError("a candidate is named twice")
+    if not 2 <= len(ids) <= MAX_COMPETITORS:
+        raise ValueError(f"2 to {MAX_COMPETITORS} candidates compete on one suite")
+    ids = sorted(ids)
+    cid = ids[0]
+    with session() as s:
+        rows = []
+        for i in ids:
+            e = s.get(Experiment, i)
+            if e is None:
+                raise KeyError(i)
+            if e.status != "proposed":
+                raise ValueError(f"experiment #{i} is {e.status}")
+            if e.target not in ("route", "strategy"):
+                raise ValueError(f"{e.target} candidates cannot compete yet")
+            if (e.dataset or {}).get("competition") is not None:
+                raise ValueError(f"experiment #{i} is already in competition #{e.dataset['competition']}")
+            rows.append(e)
+        first = rows[0]
+        for field, value in (("target", lambda e: e.target), ("role", lambda e: e.role),
+                             ("suite", lambda e: (e.dataset or {}).get("suite", "smoke")),
+                             ("repeats", lambda e: int((e.dataset or {}).get("repeats", 1))),
+                             ("baseline", _base_of)):
+            if len({repr(value(e)) for e in rows}) > 1:
+                raise ValueError(f"competing candidates share one {field}: "
+                                 + ", ".join(f"#{e.id} {value(e)}" for e in rows))
+        target, role = first.target, first.role
+        suite, repeats = first.dataset.get("suite", "smoke"), int(first.dataset.get("repeats", 1))
+        for e in rows:
+            others = ", ".join(f"#{i}" for i in ids if i != e.id)
+            e.dataset = {**(e.dataset or {}), "competition": cid, "competitors": ids}
+            update(s, e.id, status="baseline")
+            _log(e, "competition", competition=cid, note=f"competes with {others} on '{suite}', {repeats} repeat(s)")
+        log_event("evolution", f"competition #{cid}: {target} {role}, candidates {', '.join('#' + str(i) for i in ids)} "
+                  f"on '{suite}' (started by {actor})", s=s)
+    with _running_lock:
+        if any(i in _running for i in ids):
+            return get_competition(cid)
+        _running.update(ids)
+    _spawn(lambda: run_competition(ids))
+    return get_competition(cid)
+
+
+def get_competition(cid: int) -> dict[str, Any]:
+    first = get(cid)
+    members = [get(i) for i in (first["dataset"] or {}).get("competitors") or [cid]]
+    winner = next((m for m in members if m["status"] == "review" and m.get("competition") == cid), None)
+    return {"id": cid, "members": members, "winner": winner}
+
+
+def _pct(v: Any) -> str:
+    return f"{float(v or 0):.0%}"
+
+
+def _loser_reason(cmp: dict[str, Any], b: dict[str, Any], c: dict[str, Any], winner: int | None) -> str:
+    if cmp.get("regressions"):
+        return f"breaks {', '.join(cmp['regressions'])} (G-R-11)"
+    if not cmp.get("better"):
+        return (f"is not better than the baseline: {_pct(c.get('pass_rate'))} vs {_pct(b.get('pass_rate'))}, "
+                f"needs {_pct(cmp.get('needed'))}")
+    cost = c.get("cost_per_passed")
+    return f"ranked below #{winner}: {_pct(c.get('pass_rate'))}, " + (f"${cost:.4f}" if cost is not None else "an "
+                                                                     "unknown cost") + " per passed run"
+
+
+def run_competition(ids: list[int]) -> dict[str, Any]:
+    """The shared baseline once, then each candidate in id order, within the members' summed budget (S10-R-02)."""
+    from agent_company import evaluation, orchestration
+    from agent_company.governance import notify
+
+    ids = sorted(ids)
+    cid = ids[0]
+    try:
+        with session() as s:
+            rows = {i: s.get(Experiment, i) for i in ids}
+            first = rows[cid]
+            target, role = first.target, first.role
+            suite, repeats = first.dataset.get("suite", "smoke"), int(first.dataset.get("repeats", 1))
+            budget = sum(float((e.dataset or {}).get("budget_usd") or 0.0) for e in rows.values())
+            models = {i: (e.candidate or {}).get("model") for i, e in rows.items()}
+            if target == "route":
+                base = first.baseline_version
+                trials = {"baseline": {"experiment_id": cid, "side": "baseline"}
+                          | ({"models": {role: base}} if base else {})}
+                trials |= {i: {"experiment_id": i, "side": "candidate", "models": {role: models[i]}} for i in ids}
+            else:
+                trials ={"baseline": {"experiment_id": cid, "side": "baseline",
+                                       "strategy": orchestration.side_trial(first, "baseline")}}
+                trials |= {i: {"experiment_id": i, "side": "candidate",
+                               "strategy": orchestration.side_trial(e, "candidate")} for i, e in rows.items()}
+        spent = 0.0
+
+        def run(key: Any, label: str, what: str) -> dict[str, Any]:
+            nonlocal spent
+            left = budget - spent
+            if budget > 0 and left <= 0:
+                raise OverBudget(f"stopped on its budget: ${spent:.4f} of ${budget:.2f} spent before the {what}")
+            summary = evaluation.run_suite(suite, label, repeats=repeats, trial=trials[key],
+                                           **({"budget_usd": left} if budget > 0 else {}))
+            spent += float(summary.get("total_cost") or 0.0)
+            if summary.get("stopped_on_budget"):
+                raise OverBudget(f"stopped on its budget: ${spent:.4f} of ${budget:.2f} spent during the {what} "
+                                 f"({summary.get('runs', 0)} of {repeats} repeat(s) per task)")
+            return side_metrics(summary) | {"dimensions": summary.get("dimensions") or {}}
+
+        try:
+            b = run("baseline", f"comp{cid}-baseline-{int(time.time() * 1000)}", "baseline")
+            with session() as s:
+                for i in ids:
+                    update(s, i, baseline=b)
+            sides: dict[int, dict[str, Any]] = {}
+            for i in ids:
+                with session() as s:
+                    update(s, i, status="candidate")
+                sides[i] = run(i, f"exp{i}-candidate-{int(time.time() * 1000)}", f"candidate #{i}")
+                with session() as s:
+                    update(s, i, candidate=sides[i])
+        except OverBudget as stop:
+            with session() as s:
+                open_ids = [i for i in ids if s.get(Experiment, i).status not in FINAL]
+            for i in open_ids:
+                _stopped(i, f"competition #{cid} {stop}")
+            return get_competition(cid)
+        cmps = {i: (compare if target == "route" else orchestration.compare)(b, sides[i]) for i in ids}
+        with session() as s:
+            for i in ids:
+                update(s, i, comparison=cmps[i])
+        winner = select_best([{"id": i, "candidate": sides[i], "comparison": cmps[i]} for i in ids])
+        members = list(ids)
+        with session() as s:
+            if winner is not None:
+                c, cmp = sides[winner], cmps[winner]
+                n = f"(n={cmp['samples']['candidate']}/{cmp['samples']['baseline']})"
+                if target == "route":
+                    verdict = (f"recommend {models[winner]} for {role}:{_pct(c.get('pass_rate'))} vs "
+                               f"{_pct(b.get('pass_rate'))} {n}")
+                else:
+                    verdict = (f"recommend the candidate {role} template ({cmp.get('why', 'pass rate')}): "
+                               f"{_pct(c.get('pass_rate'))} vs {_pct(b.get('pass_rate'))} {n}; an administrator "
+                               "applies it")
+                verdict += f" (best of {len(ids)} in competition #{cid})"
+                update(s, winner, status="review", decision=verdict,
+                       competition={"id": cid, "members": members, "winner": winner, "rank": 1})
+            else:
+                verdict = "no candidate proposed"
+            for i in ids:
+                if i == winner:
+                    continue
+                reason = _loser_reason(cmps[i], b, sides[i], winner)
+                decision = (f"competition #{cid}: #{winner} won ({_pct(sides[winner].get('pass_rate'))}); this "
+                            f"candidate {reason}" if winner is not None else
+                            f"competition #{cid}: no candidate beat the baseline without regressions; this "
+                            f"candidate {reason}")
+                s.get(Experiment, i).reviewed_by = "system:competition"
+                update(s, i, status="rejected", decision=decision,
+                       competition={"id": cid, "members": members, "winner": winner, "why": reason})
+            notify(f"Competition #{cid}: {target} {role}", verdict + (". Apply it on Evolution → Experiments."
+                                                                      if winner is not None else "."),
+                   level="info", source="evolution", admin_only=True, s=s)
+            losers = [i for i in ids if i != winner]
+            log_event("evolution", f"competition #{cid}: #{winner} proposed, "
+                      f"{', '.join('#' + str(i) for i in losers)} rejected" if winner is not None else
+                      f"competition #{cid}: no eligible candidate, all rejected", s=s)
+        return get_competition(cid)
+    except Exception as e:  # noqa: BLE001 - a broken suite must not leave the candidates running forever
+        with session() as s:
+            for i in ids:
+                x = s.get(Experiment, i)
+                if x is not None and x.status not in FINAL:
+                    update(s, i, status="failed", decision=f"{type(e).__name__}: {e}")
+        log_event("error", f"competition #{cid} failed: {type(e).__name__}: {e}")
+        return {}
+    finally:
+        with _running_lock:
+            for i in ids:
+                _running.discard(i)
 
 
 def start(exp_id: int) -> dict[str, Any]:
