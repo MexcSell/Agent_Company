@@ -1,6 +1,6 @@
 # ADR 0087: decoupling-mechanism
 
-Status: Accepted
+Status: Superseded by 0088-decoupling-mechanism
 Date: 2026-11-07
 Decision record: #87 · goal #85 (Make `threat_model` depend only on the existence of `browser.py` and the test names it cites, not on the DNS-rebinding t)
 Category: technical
