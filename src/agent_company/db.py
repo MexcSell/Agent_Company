@@ -504,6 +504,8 @@ class Goal(Base):
     # eval goals only (SPEC-13): experiment_id + side, role -> model overrides, trainee_id (the agent staffed for
     # its role), plan_id, hide_checks (a final evaluation: its checks never reach a prompt or the worktree)
     trial: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # cached mission.report labels of a finished goal; empty = not cached (mission.label_counts)
+    label_counts: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 

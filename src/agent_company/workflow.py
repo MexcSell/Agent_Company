@@ -104,6 +104,9 @@ def set_status(s: Session, g: Goal, to: str, reason: str = "", actor: str = "sys
     if to not in TRANSITIONS.get(cur, set()):
         raise IllegalTransition(f"goal #{g.id}: {cur} → {to} is not a workflow transition")
     g.status = to
+    # mission.label_counts: a resumed or reopened goal (to in ACTIVE), or one whose tasks follow a final move
+    # below, is counted again on the next read
+    g.label_counts = {}
     s.add(GoalTransition(goal_id=g.id, from_status=cur, to_status=to, reason=reason[:500], actor=actor[:128]))
     if to in ("approved", "cancelled", "rejected", "paused", "failed"):
         _tasks_follow(s, g, to)

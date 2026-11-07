@@ -89,13 +89,22 @@ def evidence(goal_ids: list[int]) -> dict[str, Any]:
     """The evidence pack: items with references, and its text for the analyst."""
     items: list[tuple[str, str]] = []
     watch: dict[str, int] = {}
+    from agent_company import mission
+
+    labels: dict[int, str] = {}
+    for gid in goal_ids:  # before the session below: the first read of a goal's counts stores them
+        try:
+            c = mission.label_counts(gid)
+            labels[gid] = f" (task labels: verified {c['verified']}, partial {c['partial']}, failed {c['failed']})"
+        except Exception:  # noqa: BLE001 - an active goal or missing counts never break the pack
+            pass
     with session() as s:
         for gid in goal_ids:
             g = s.get(Goal, gid)
             if g is None:
                 continue
             items.append((f"goal:{gid}", f"goal #{gid} '{g.title[:120]}': {g.status} after {g.iteration} of "
-                                         f"{g.max_iterations} iteration(s)"))
+                                         f"{g.max_iterations} iteration(s)" + labels.get(gid, "")))
             for d in s.scalars(select(Defect).where(Defect.goal_id == gid).order_by(Defect.id)):
                 n = d.last_iteration - d.first_iteration + 1
                 items.append((f"check:{d.check}", f"goal #{gid}: '{d.check}' ({d.severity}) failed in iteration(s) "
