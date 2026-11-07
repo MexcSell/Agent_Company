@@ -1,3 +1,7 @@
+# Specification: Pin resolved addresses for all outbound fetches
+
+## Spec: one pinned-resolution helper for httpx and git fetches (architect, done)
+
 I'm writing the spec in my answer below rather than to a file. The goal loop's `specs.write_outputs` (`src/agent_company/specs.py:109-124`) writes an architect task's output with key `spec` into `.claude/specs/0031-pin-resolved-addresses-for-all-outbound/spec.md`, and the task said not to change files.
 
 # Spec: `netpin` — one pinned-resolution helper for httpx and git fetches
