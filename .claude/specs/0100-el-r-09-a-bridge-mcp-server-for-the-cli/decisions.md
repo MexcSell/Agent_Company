@@ -12,3 +12,9 @@ Findings:
 - task qa_review: skipped: every dependency failed or was skipped
 
 Next: fix the findings (loop back to Build).
+
+## Iteration 2: PASS
+- wire_runs (developer): done
+- qa_review (qa): done
+
+Next: approval and merge.
