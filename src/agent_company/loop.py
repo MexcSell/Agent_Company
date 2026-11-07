@@ -1266,7 +1266,23 @@ def run_goal(goal_id: int) -> dict[str, Any]:
         except Exception as e:  # noqa: BLE001
             log_event("error", f"merging clones failed: {e}", goal_id=goal_id)
     _chat_outcome(goal_id, out)
+    _store_label_counts(goal_id)
     return out
+
+
+def _store_label_counts(goal_id: int) -> None:
+    """What the Simple overview and RCA read, stored after the outcome message so that report() never delays it;
+    only for a finished goal (a paused one is stored when it finishes); never changes the goal's outcome."""
+    from agent_company import mission
+
+    try:
+        g = _goal(goal_id)
+        if g.status not in workflow.ACTIVE and g.origin != "eval":
+            mission.store_label_counts(goal_id)  # fail-open itself
+    except Exception as e:  # noqa: BLE001 - the cache never changes a goal's outcome
+        with contextlib.suppress(Exception):
+            log_event("error", f"label counts of goal #{goal_id} not stored: {type(e).__name__}: {e}",
+                      goal_id=goal_id)
 
 
 def _chat_outcome(goal_id: int, out: dict[str, Any]) -> None:
@@ -1870,9 +1886,6 @@ def _notify_goal(goal_id: int, status: str) -> None:
             "failed": ("error", f"Goal #{g.id} failed after {g.iteration} iteration(s)")}[status]
     notify(text[1], g.title, level=text[0], source="goal", goal_id=g.id,
            project_id=getattr(g, "project_id", None))
-    from agent_company import mission
-
-    mission.store_label_counts(goal_id)  # what the Simple overview and RCA read; fail-open
     rca.after_goal(goal_id, status)  # S07-R-02: follow up earlier analyses; analyse a failure when a trigger holds
 
 

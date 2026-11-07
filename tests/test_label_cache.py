@@ -43,6 +43,8 @@ def test_finished_goal_stores_report_labels():  # (a) and (b)
     gid = finished_goal()
     assert stored(gid) == {}
     loop._notify_goal(gid, "approved")
+    assert stored(gid) == {}  # the notification no longer builds report(): run_goal stores after the outcome message
+    loop._store_label_counts(gid)
     want = mission.report(gid)["tasks"]["labels"]
     assert want == {"verified": 1, "partial": 1, "failed": 1}
     assert stored(gid) == want  # (b) read back through a new session
@@ -141,6 +143,58 @@ def test_store_skipped_when_the_goal_resumes_during_the_count(monkeypatch):
     monkeypatch.setattr(mission, "report", resumed_meanwhile)
     assert mission.label_counts(gid) == {"verified": 1, "partial": 1, "failed": 1}
     assert stored(gid) == {}
+
+
+def test_counts_are_stored_after_the_outcome_message(monkeypatch):
+    """run_goal posts 'Goal #N: ...' first; report() for the counts never delays it (the test_projects race)."""
+    p = projects.create("Order", quality_commands=["test -f WORKLOG.md"])
+    gid = loop.create_goal("Build a todo CLI", quality_commands=["test -f WORKLOG.md"], project_id=p["id"])
+    calls = []
+    post, store = projects.post_for_goal, mission.store_label_counts
+
+    def post_spy(goal_id, content, *a, **k):
+        if content.startswith(f"Goal #{goal_id}:"):
+            calls.append("outcome")
+        return post(goal_id, content, *a, **k)
+
+    def store_spy(goal_id):
+        calls.append("store")
+        return store(goal_id)
+
+    monkeypatch.setattr(projects, "post_for_goal", post_spy)
+    monkeypatch.setattr(mission, "store_label_counts", store_spy)
+    assert loop.run_goal(gid)["status"] == "awaiting_approval"
+    assert calls == ["outcome", "store"]
+    assert stored(gid) == mission.report(gid)["tasks"]["labels"]
+    assert any(m["content"].startswith(f"Goal #{gid}:") for m in projects.messages(p["id"]))
+
+
+def test_a_goal_that_stays_active_is_not_stored(monkeypatch):
+    """A paused goal (here: its token budget is used) waits for a resume: no counts, label_counts refuses it."""
+    from agent_company import usage
+
+    calls = []
+    monkeypatch.setattr(mission, "store_label_counts", lambda g: calls.append(g))
+    gid = loop.create_goal("Tokens", quality_commands=["test -f WORKLOG.md"], budget_tokens=100)
+    usage.record(model_name="offline", kind="api", output_tokens=150, goal_id=gid)
+    assert loop.run_goal(gid)["status"] == "paused"
+    assert calls == [] and stored(gid) == {}
+    with pytest.raises(ValueError):
+        mission.label_counts(gid)
+
+
+def test_a_raising_store_does_not_change_the_outcome(monkeypatch):
+    def boom(goal_id):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(mission, "store_label_counts", boom)
+    gid = loop.create_goal("Build a todo CLI", quality_commands=["test -f WORKLOG.md"])
+    out = loop.run_goal(gid)
+    assert out["status"] == "awaiting_approval" == loop._goal(gid).status
+    assert stored(gid) == {}
+    with session() as s:
+        assert s.scalars(select(Event.message).where(Event.goal_id == gid, Event.kind == "error",
+                                                     Event.message.contains("database is locked"))).first()
 
 
 def test_simple_overview_reads_stored_counts(app, monkeypatch):  # (d)
