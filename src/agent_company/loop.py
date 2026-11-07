@@ -527,7 +527,11 @@ Optional task fields: "in_scope"/"out_of_scope" (path globs; changing an out_of_
 acceptance condition may also carry "requirement_keys": the requirements that test checks, and "stage":
 "unit|integration|security|static": the quality gate then runs it again as a check of that stage),
 "decision_topic": "..." (tasks that must each recommend on one question; disagreements are reviewed),
-"weight": 1 (its share of the goal's progress), "estimated_minutes": 20 (how long you expect the task to take).
+"weight": 1 (its share of the goal's progress), "estimated_minutes": 20 (how long you expect the task to take),
+"after": ["key"] (order only: start once those tasks finished, whatever their outcome; never in depends_on too),
+"requires": [{"type": "file_exists", "path": "..."} | {"type": "contains", "value": "...", "path": "..."}]
+(checked in the worktree before the run; unmet → the task is skipped). A QA/security review runs once all its
+depends_on finished and at least one is done, and reviews what was delivered.
 Optionally add "estimated_cost_usd" (the whole goal's expected model cost) and "decisions": [{"topic": "...", "question": "...", "alternatives": ["..."],
   "criteria": ["what the options are compared on"], "recommendation": "...", "reasoning": "...",
   "evidence": [{"ref": "file, source URL, task or K<id>", "class": "FACT|MEASURED|INFERENCE|HYPOTHESIS|PREDICTION"}],
@@ -927,14 +931,22 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             assert t is not None
             contract = contracts.TaskContract.model_validate(t.contract)
             iteration = t.iteration
-            deps = {d.key: d.output for d in s.scalars(select(Task).where(
+            deps = {d.key: (d.status, d.output) for d in s.scalars(select(Task).where(
                 Task.goal_id == t.goal_id, Task.iteration == t.iteration, Task.key.in_(contract.depends_on)))}
         from agent_company.quality import REVIEW_CHECKLIST, REVIEW_ROLES
+        from agent_company.scheduler import set_status
+
+        # K237: preconditions on the worktree decide the task before any agent is staffed
+        unmet = contracts.unmet_requires(contract, Path(goal.worktree)) if contract.requires else []
+        if unmet:
+            set_status(task_id, "skipped", output=REQUIRES_SKIP + "; ".join(unmet))
+            log_event("task", f"'{contract.title}' skipped: precondition not met: {'; '.join(unmet)}"[:500],
+                      goal_id=goal.id)
+            return False
 
         role, note = registry.resolve_role(contract.role, goal.id)
         if note:
             log_event("staff", note, goal_id=goal.id)
-        from agent_company.scheduler import set_status
 
         try:
             agent = registry.staff(role, contract.skills, goal.id, writes=contract.writes,
@@ -966,7 +978,12 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             except BudgetExhausted as e:
                 set_status(task_id, "skipped", stage="blocked", output=f"{BUDGET_SKIP}{e}")
                 return False
-            dep_text = "\n\n".join(f"### Output of '{k}'\n{v[-OUTPUT_CAP:]}" for k, v in deps.items())
+            dep_text = "\n\n".join(f"### Output of '{k}'\n{(v or '')[-OUTPUT_CAP:]}"
+                                   for k, (st, v) in deps.items() if st == "done")
+            missing = [f"{k} ({st})" for k, (st, _) in deps.items() if st != "done"]
+            if role in REVIEW_ROLES and missing:  # a review of partial work (K237)
+                dep_text = (f"Not delivered (failed or skipped): {', '.join(missing)}. Review only what was "
+                            "delivered; the gate already fails this iteration for them.\n\n" + dep_text).strip()
             accept = "\n".join(f"- {json.dumps(c.model_dump(exclude_none=True))}" for c in contract.acceptance)
             prompt = (f"Overall goal: {goal.title}\n{goal.description}\n\n## Your task: {contract.title}\n"
                       f"{contract.description}\n\nInputs: {json.dumps(contract.inputs)}\n\n"
@@ -1680,6 +1697,7 @@ QUOTA_SKIP = "skipped (quota): "
 RECRUIT_SKIP = "skipped (recruitment): "
 INFRA_SKIP = "skipped (infrastructure): "  # the L3 sandbox did not start (`sandbox.startup_failure`)
 BLOCKER_SKIP = "skipped (blocker): "  # a writing task named a `BLOCKER:` and changed no file
+REQUIRES_SKIP = "skipped (precondition): "  # a contract's `requires` was not met in the worktree (K237)
 
 
 def _quota_skipped(goal_id: int, iteration: int) -> str:

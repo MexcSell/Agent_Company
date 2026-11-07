@@ -12,6 +12,11 @@ Acceptance condition types:
   command      {"type": "command", "run": "pytest -q"}     command exits 0 in the worktree
                a command may name its gate stage, "stage": "integration" (unit|integration|security|static|performance|compatibility|accessibility):
                the quality gate then runs it again itself as a check of that stage (S09-R-02)
+
+Ordering and preconditions (K237):
+  after        ["key"]  order only: the task starts once those tasks finished, whatever their outcome
+  requires     [file_exists|contains with a relative "path"]  checked in the worktree before the run
+               (`unmet_requires`; contains is case-sensitive on the file); unmet -> the task is skipped
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
 import jsonschema
@@ -66,6 +71,8 @@ class TaskContract(BaseModel):
     description: str = Field(min_length=1)
     skills: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
+    after: list[str] = Field(default_factory=list)  # order only: wait until these finish, any outcome
+    requires: list[Condition] = Field(default_factory=list)  # worktree preconditions checked before the run
     priority: int = Field(default=5, ge=0, le=9)
     writes: bool = False
     inputs: dict[str, Any] = Field(default_factory=dict)
@@ -109,6 +116,17 @@ def validate(data: dict[str, Any]) -> TaskContract:
             raise ContractError(f"inputs do not match input_schema: {e.message}") from e
     if any(cond.type == "json_schema" for cond in c.acceptance) and c.output_schema is None:
         raise ContractError("json_schema acceptance needs an output_schema")
+    for cond in c.requires:
+        if cond.type not in {"file_exists", "contains"}:
+            raise ContractError(f"{c.key}: requires supports only file_exists and contains, not {cond.type}")
+        p = cond.path or ""
+        if not p.strip():
+            raise ContractError(f"{c.key}: a requires condition needs a path")
+        if (p.startswith(("/", "\\")) or PurePosixPath(p).is_absolute() or PureWindowsPath(p).drive
+                or ".." in PurePosixPath(p.replace("\\", "/")).parts):
+            raise ContractError(f"{c.key}: requires path {p!r} must be relative to the worktree, without '..'")
+        if cond.type == "contains" and not (isinstance(cond.value, str) and cond.value):
+            raise ContractError(f"{c.key}: a requires contains condition needs a text value")
     return c
 
 
@@ -123,10 +141,47 @@ def validate_plan(tasks: list[dict[str, Any]]) -> list[TaskContract]:
         missing = set(c.depends_on) - known
         if missing:
             raise ContractError(f"{c.key} depends on unknown task(s) {sorted(missing)}")
-    order = topo_order({c.key: c.depends_on for c in contracts})
+        missing = set(c.after) - known
+        if missing:
+            raise ContractError(f"{c.key} runs after unknown task(s) {sorted(missing)}")
+        both = sorted(set(c.depends_on) & set(c.after))
+        if both:
+            raise ContractError(f"{c.key}: {both[0]} is in both depends_on and after")
+    order = topo_order({c.key: [*c.depends_on, *c.after] for c in contracts})
     if order is None:
         raise ContractError("task dependencies contain a cycle")
     return contracts
+
+
+def unmet_requires(contract: TaskContract, workdir: Path) -> list[str]:
+    """One line per `requires` condition the worktree does not meet (empty: all met). Never raises."""
+    unmet: list[str] = []
+    for cond in contract.requires:
+        path = cond.path or ""
+        try:
+            root = workdir.resolve()
+            target = (root / path).resolve()
+        except (OSError, RuntimeError):
+            unmet.append(f"{path} cannot be resolved")
+            continue
+        if root not in target.parents:
+            unmet.append(f"{path} is outside the worktree")
+        elif cond.type == "file_exists":
+            if not target.exists():
+                unmet.append(f"file_exists {path}: missing")
+        elif cond.type == "contains":
+            if not target.is_file():
+                unmet.append(f"contains {cond.value!r} in {path}: file missing")
+                continue
+            try:
+                found = str(cond.value) in target.read_text(errors="replace")
+            except OSError:
+                found = False
+            if not found:
+                unmet.append(f"contains {cond.value!r} in {path}: not found")
+        else:
+            unmet.append(f"{cond.type} is not a supported precondition")
+    return unmet
 
 
 def topo_order(deps: dict[str, list[str]]) -> list[str] | None:
