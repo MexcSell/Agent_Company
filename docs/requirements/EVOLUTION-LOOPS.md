@@ -41,7 +41,7 @@ IDs `EL-R-nn`; status words as in [README.md](README.md).
 | A red-team agent (a_8) | adversarial suite (S09-R-05), security review role | done (`evals/adversarial.json`) |
 | An archive of designs with their evaluation logs; the next candidate sampled from it (a_7) | experiments keep their `parent_id` and an `eval_log`; the next candidate starts from the best or a diverse earlier one (`experiments.pick_parent`, `seed`) | **EL-R-07** done (`experiments.lineage`, `pick_parent`) |
 | Several competing candidates per improvement (evolving agents *(summary)*) | up to three route or strategy candidates on one suite against one shared baseline; only the best without regressions goes to review (`experiments.compete`, `select_best`) | **EL-R-07** done |
-| Evaluate the evaluator: mutation testing of the checks (evolving agents *(summary)*) | the eval suites' checks are verified to fail on the seed (`exercises.py`); the gate's own checks are not mutation-tested | **EL-R-08** open |
+| Evaluate the evaluator: mutation testing of the checks (evolving agents *(summary)*) | `evaluation.mutation_test` measures gate checks against assertion and boundary mutations in scratch worktrees | **EL-R-08** implemented |
 | A bridge: an MCP server through which Codex calls the company's tools (get task, update progress, save insight, request review) (Codex and Bridge *(summary)*) | CLI agents get MCP servers an administrator granted (`mcp.py`); the company's own functions are not offered as tools | **EL-R-09** open |
 | GitHub Copilot CLI as a model (owner; a_8) | `copilot` kind behind `enable_copilot` (`executors.CopilotExecutor`); the CLI is not installed on this host | skip (needs the owner's GitHub sign-in: Models → Add model → Install, then `copilot` login) |
 | Research agent layers, source registry, evidence statuses, report (create research agent) | research room, sources with monitoring, claims checked against documents, independent review (ASEAO06) | done (`research.py`) |
@@ -127,7 +127,7 @@ proposed.
 
 ### EL-R-08 Mutation testing of the gate
 
-**Status: open**
+**Status: implemented**
 
 `evaluation` can apply known mutations (remove an assertion, flip a
 boundary) to a passing change and checks that the gate then fails; the share of mutations caught is reported per
