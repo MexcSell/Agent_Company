@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_company import agentdefs, config, marketplace, recruitment
+from agent_company import agentdefs, config, marketplace, netpin, recruitment
 from agent_company.db import Agent, AgentImport, ModelEntry, Recruitment, session
 from agent_company.marketplace import ImportRefused
 
@@ -142,7 +142,7 @@ def resolving(monkeypatch, *addrs: str) -> list:
         asked.append((host, port))
         return [(socket.AF_INET6 if ":" in ip else socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))
                 for ip in addrs]
-    monkeypatch.setattr(socket, "getaddrinfo", fake)
+    monkeypatch.setattr(netpin.socket, "getaddrinfo", fake)
     return asked
 
 
@@ -171,6 +171,22 @@ def test_checked_address_is_pinned_for_the_clone(monkeypatch):
         marketplace.clone_command(url, Path("/tmp/d"), pin)
     with pytest.raises(ImportRefused, match="checked address"):  # https is never cloned unpinned
         marketplace.clone_command("https://example.com/x.git", Path("/tmp/d"))
+
+
+def test_marketplace_pin_comes_from_netpin(monkeypatch):
+    calls = []
+
+    def resolve(host, port):
+        calls.append((host, port))
+        return ["93.184.216.34", "1.1.1.1"]
+
+    monkeypatch.setattr(netpin, "resolve_public", resolve)
+    monkeypatch.setattr(marketplace, "git_version", lambda: (2, 43, 0))
+    url, pin = marketplace.check_url("https://example.com:8443/x.git")
+    assert calls == [("example.com", 8443)]
+    assert pin == ("example.com", 8443, "93.184.216.34")
+    assert "http.curloptResolve=example.com:8443:93.184.216.34" in marketplace.clone_command(
+        url, Path("/tmp/d"), pin)
 
 
 def test_private_or_mixed_address_refused(monkeypatch):
