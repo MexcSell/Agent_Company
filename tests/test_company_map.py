@@ -31,7 +31,34 @@ def test_view_registers_and_escapes():
     js = VIEW.read_text()
     assert 'registerView({ id: "companymap"' in js
     assert "esc(" in js
-    assert "method:" not in js, "the Company map is read-only"
+    for banned in ("method:", "fetch(", "XMLHttpRequest"):
+        assert banned not in js, f"the Company map is read-only: {banned} found"
+
+
+def api_call_args(js):
+    """The argument text of each `api(...)` call, split at its top-level commas."""
+    calls = []
+    for m in re.finditer(r"\bapi\(", js):
+        depth, args, start, i = 1, [], m.end(), m.end()
+        while depth:
+            c = js[i]
+            if c in "([{":
+                depth += 1
+            elif c in ")]}":
+                depth -= 1
+            elif c == "," and depth == 1:
+                args.append(js[start:i])
+                start = i + 1
+            i += 1
+        calls.append([*args, js[start:i - 1]])
+    return calls
+
+
+def test_view_api_calls_take_only_a_path():
+    calls = api_call_args(VIEW.read_text())
+    assert len(calls) >= 2, "the view loads its data through api()"
+    assert all(len(a) == 1 for a in calls), f"an api() call with options (a write?): {calls}"
+    assert api_call_args('api("/x", { method: "POST" })') == [['"/x"', ' { method: "POST" }']]
 
 
 CASES = [
@@ -45,18 +72,34 @@ CASES = [
                  {"role": "qa", "stage": "completed", "status": "done"}], "validate"),
     ("running", [], "plan"),
     ("paused", [{"role": "developer", "stage": "review", "status": "done"}], "critique"),
+    ("recovering", [{"role": "developer", "stage": "in_progress", "status": "running"}], "execute"),
+    ("done", [], "plan"),  # not a live status: the view never lists it, the function stays total
+    ("running", [{"role": "developer", "stage": "created", "status": "pending"}], "execute"),
+    ("running", [{"role": "developer", "stage": "completed", "status": "done"},
+                 {"role": "developer", "stage": "blocked", "status": "pending"}], "execute"),
+    ("running", [{"role": "developer", "stage": "completed", "status": "done"},
+                 {"role": "qa", "stage": "assigned", "status": "assigned"}], "critique"),
+    # the caller keeps only the goal's current iteration: tasks of an earlier one leave nothing, so plan
+    ("running", [{"role": "developer", "stage": "completed", "status": "done", "iteration": 1},
+                 {"role": "qa", "stage": "in_progress", "status": "running", "iteration": 1}], "plan"),
 ]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed: lifecycle mapping not run")
 def test_lifecycle_step_through_node():
+    # The goal is in iteration 2; a task without an iteration belongs to it. The filter is the one
+    # viewCompanyMap applies before cmLifecycleStep (t.iteration === g.iteration).
     script = """
 const vm = require("vm"), fs = require("fs");
 const ctx = { registerView() {}, esc: String, api: async () => ({}), $: () => null, console };
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
 const cases = JSON.parse(process.argv[2]);
-console.log(JSON.stringify(cases.map(([status, tasks]) => ctx.cmLifecycleStep({ status, iteration: 1 }, tasks))));
+console.log(JSON.stringify(cases.map(([status, tasks]) => {
+  const g = { status, iteration: 2 };
+  const current = tasks.map((t) => ({ iteration: 2, ...t })).filter((t) => t.iteration === g.iteration);
+  return ctx.cmLifecycleStep(g, current);
+})));
 """
     p = subprocess.run(["node", "-e", script, str(VIEW), json.dumps(CASES)], capture_output=True, text=True, timeout=60)
     assert p.returncode == 0, p.stderr
