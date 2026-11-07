@@ -45,6 +45,7 @@ class Settings:
     goal_budget_usd: float = 0.0  # 0 = no limit
     goal_time_budget: int = 0  # seconds, 0 = no limit
     goal_token_budget: int = 0  # model tokens per goal, 0 = no limit (S04-R-09)
+    writing_daily_tokens_per_user: int = 0  # writing-assistant tokens per user and UTC day, 0 = no limit (S04-R-09)
     goal_agent_limit: int = 0  # agents working on one goal at once, 0 = no limit (S04-R-09)
     auto_push: bool = False
     allow_preexisting_failures: bool = False
@@ -180,6 +181,7 @@ def load_settings() -> Settings:
         goal_budget_usd=float(os.environ.get("GOAL_BUDGET_USD") or 0),
         goal_time_budget=_int("GOAL_TIME_BUDGET", 0),
         goal_token_budget=_int("GOAL_TOKEN_BUDGET", 0),
+        writing_daily_tokens_per_user=_int("WRITING_DAILY_TOKENS_PER_USER", 0),
         goal_agent_limit=_int("GOAL_AGENT_LIMIT", 0),
         auto_push=_bool("AUTO_PUSH", False),
         allow_preexisting_failures=_bool("ALLOW_PREEXISTING_FAILURES", False),

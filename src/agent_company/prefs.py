@@ -23,6 +23,8 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "goal_budget_usd": (float, "Maximum model spend per goal in USD (0 = no limit)"),
     "goal_time_budget": (int, "Maximum wall-clock seconds per goal (0 = no limit)"),
     "goal_token_budget": (int, "Maximum model tokens per goal (0 = no limit)"),
+    "writing_daily_tokens_per_user": (int, "Model tokens one user may spend per UTC day through the writing "
+                                           "assistant (0 = no limit)"),
     "goal_agent_limit": (int, "Agents working on one goal at once (0 = no limit)"),
     "allow_preexisting_failures": (bool, "Checks that already failed before the agents started do not block the gate"),
     "auto_push": (bool, "Push approved work to the project's GitHub remote"),
@@ -115,6 +117,7 @@ LIMITS: dict[str, tuple[float, float]] = {
     "rotation_interval": (0, 86400), "max_proposal_goals": (0, 20), "goal_budget_usd": (0, 10_000),
     "goal_time_budget": (0, 7 * 86400), "study_interval": (0, 7 * 86400),
     "goal_token_budget": (0, 1_000_000_000), "goal_agent_limit": (0, 16),
+    "writing_daily_tokens_per_user": (0, 1_000_000_000),
     "retry_max_attempts": (1, 10), "retry_base_seconds": (0, 600), "retry_max_seconds": (0, 3600),
     "min_improvement": (0, 100), "max_goal_depth": (1, 10), "escalate_after": (1, 10), "cost_overrun_factor": (1, 20),
     "repo_map_chars": (0, 50_000), "stuck_repeat_limit": (0, 100), "stuck_error_limit": (0, 100),

@@ -766,6 +766,9 @@ class Run(Base):
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True)
     agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
     goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # The signed-in user whose request made the run (S04-R-09); NULL for agent work. No foreign key: a migrated
+    # database gets the column from _add_missing_columns, which adds no constraints.
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     model_name: Mapped[str] = mapped_column(String(128))
     kind: Mapped[str] = mapped_column(String(16))
     purpose: Mapped[str] = mapped_column(String(32), default="task")
