@@ -61,3 +61,38 @@ console.log(JSON.stringify(cases.map(([status, tasks]) => ctx.cmLifecycleStep({ 
     p = subprocess.run(["node", "-e", script, str(VIEW), json.dumps(CASES)], capture_output=True, text=True, timeout=60)
     assert p.returncode == 0, p.stderr
     assert json.loads(p.stdout) == [want for _, _, want in CASES]
+
+
+def test_report_detail_shows_tool_steps():
+    app = (STATIC / "app.js").read_text()
+    assert "function reportToolSteps(" in app
+    assert "reportToolSteps(r.tool_steps)" in app
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed: tool steps not rendered")
+def test_tool_steps_render_escaped_through_node():
+    """The step shape of research_agent.plan_and_collect: a round with tool calls, a round that stopped."""
+    app = (STATIC / "app.js").read_text()
+    m = re.search(r"^function reportToolSteps\(.*?^}\n", app, re.S | re.M)
+    assert m, "reportToolSteps not found in app.js"
+    esc_line = next(line for line in app.splitlines() if line.startswith("const esc = "))
+    steps = [{"round": 1, "model": "codex", "sufficient": False, "reason": "need papers", "refused": [],
+              "results": [{"action": "search_papers", "query": "<b>reflexion</b>", "documents": [4, 5],
+                           "titles": ["Reflexion"], "errors": []},
+                          {"action": "fetch_url", "url": "http://x", "documents": [], "titles": [],
+                           "errors": ["refused <private> address"]}]},
+             {"round": 2, "model": "codex", "results": [], "stopped": "limit <hit>"}]
+    script = f"""{esc_line}
+{m.group(0)}
+const a = process.argv[1] ? reportToolSteps(JSON.parse(process.argv[1])) : null;
+console.log(JSON.stringify({{ html: a, none: reportToolSteps(undefined), empty: reportToolSteps([]) }}));
+"""
+    p = subprocess.run(["node", "-e", script, json.dumps(steps)], capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stderr
+    out = json.loads(p.stdout)
+    assert out["none"] == "" and out["empty"] == ""
+    html = out["html"]
+    assert "Tool steps (4)" in html  # two calls, the reason of round 1, the stop of round 2
+    assert "search_papers" in html and "fetch_url" in html and "2 document(s)" in html
+    assert "&lt;b&gt;reflexion&lt;/b&gt;" in html and "<b>" not in html
+    assert "refused &lt;private&gt; address" in html and "stopped: limit &lt;hit&gt;" in html

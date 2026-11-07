@@ -662,6 +662,28 @@ async function viewResearch(quiet) {
 }
 
 // A research report with its claims and review (ASEAO06 S06-R-03/R-04): the approved text once approved, else the draft.
+// EL-R-02: the research lead's tool loop (research_agent.plan_and_collect): per round its model, each tool call
+// (action, its argument, documents found, errors) or why the round stopped. Older reports have none.
+function reportToolSteps(steps) {
+  steps = Array.isArray(steps) ? steps : [];
+  if (!steps.length) return "";
+  const cut = (s, n = 200) => (s.length > n ? `${s.slice(0, n)}…` : s);
+  const rows = steps.flatMap((s) => {
+    const head = `round ${esc(s.round)}${s.model ? ` · <span class="muted">${esc(s.model)}</span>` : ""}`;
+    const note = s.stopped ? `stopped: ${esc(s.stopped)}` : s.sufficient ? `material sufficient${s.reason ? `: ${esc(s.reason)}` : ""}` : s.reason ? esc(s.reason) : "";
+    const calls = (s.results || []).map((x) => {
+      const { action, documents, titles, errors, ...args } = x || {};
+      const docs = (documents || []).length, errs = (errors || []).filter(Boolean);
+      const outcome = `${docs} document(s)${(titles || []).length ? `: ${esc(cut(titles.join("; "), 160))}` : ""}${errs.length ? ` · <span class="pill failed">error</span> ${esc(cut(errs.join("; ")))}` : ""}`;
+      return `<div class="row" style="flex-wrap:wrap;gap:6px">${head}<strong>${esc(action)}</strong><code>${esc(cut(JSON.stringify(args)))}</code><span class="muted">→ ${outcome}</span></div>`;
+    });
+    const refused = (Array.isArray(s.refused) ? s.refused : s.refused ? [s.refused] : []).map((x) => (typeof x === "string" ? x : JSON.stringify(x)));
+    const extra = [note, refused.length ? `refused: ${esc(cut(refused.join("; ")))}` : ""].filter(Boolean).join(" · ");
+    return [...calls, ...(extra || !calls.length ? [`<div class="row muted" style="flex-wrap:wrap;gap:6px">${head}${extra ? ` · ${extra}` : ""}</div>`] : [])];
+  });
+  return `<details${rows.length <= 6 ? " open" : ""}><summary>Tool steps (${rows.length})</summary><div class="events">${rows.join("")}</div></details>`;
+}
+
 function reportModal(r) {
   const langs = r.languages || [];
   const meta = [r.keywords.length ? `keywords: ${esc(r.keywords.join(", "))}` : "", r.source_preferences !== "any" ? `prefers ${esc(r.source_preferences.replace("_", " "))} sources` : "", r.published_after || r.published_before ? `published ${esc(r.published_after || "…")}..${esc(r.published_before || "…")}` : "", langs.length ? `languages: ${esc(langs.join(", "))}` : "", `priority ${esc(r.priority)}`, r.recurring ? `${esc(r.recurring)}, ${r.runs} run(s)${r.next_run_at ? `, next ${esc(new Date(r.next_run_at).toLocaleString())}` : ""}` : "", r.deadline ? `deadline ${esc(new Date(r.deadline).toLocaleString())}` : "", r.budget_usd ? `${money(r.cost_usd)} of ${money(r.budget_usd)}` : "", r.goal_id ? `for goal #${Number(r.goal_id)}` : ""].filter(Boolean).join(" · ");
@@ -670,7 +692,7 @@ function reportModal(r) {
   const text = r.review === "approved" ? r.approved_report : r.report;
   const label = r.review && r.review !== "approved" ? `<p class="muted">Draft: not used by knowledge, search or goals${r.approved_report ? " (an earlier approved version is)" : ""}.</p>` : "";
   const act = me.is_admin && ["draft", "in_review"].includes(r.review) ? `<div class="row" style="margin:8px 0"><button class="btn primary" id="rr-ok">Approve</button><button class="btn danger" id="rr-no">Reject</button></div>` : "";
-  modal(`<h2>${esc(r.question)}</h2>${pill(r.status)}<p class="muted">${meta}</p>${review}${act}${claims}${label}<div class="md">${typeof renderMarkdown === "function" ? renderMarkdown(text || "(not ready yet)") : `<pre>${esc(text)}</pre>`}</div>`);
+  modal(`<h2>${esc(r.question)}</h2>${pill(r.status)}<p class="muted">${meta}</p>${review}${act}${claims}${reportToolSteps(r.tool_steps)}${label}<div class="md">${typeof renderMarkdown === "function" ? renderMarkdown(text || "(not ready yet)") : `<pre>${esc(text)}</pre>`}</div>`);
   const send = async (approve) => {
     const note = approve ? "" : prompt("Why is this report rejected?");
     if (!approve && !note) return;
