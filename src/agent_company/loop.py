@@ -1028,6 +1028,9 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                                          on_refused=lambda cmd, why: on_command_refused(goal.id, planner_id, cmd, why),
                                          mode=sandbox.mode_for(goal))
             acceptance += contracts.limits(contract, changed or res.files, usage.task_spend(task_id))
+            # a loop-saved answer counts as a change; `changed` only, the executor's `res.files` are not the diff
+            acceptance += contracts.requires_change(contract, None if changed is None
+                                                    else sorted(set(changed) | set(saved)))
             infra = next((c["infra"] for c in acceptance if c.get("infra")), "")
             if infra:  # the sandbox did not start: not this task's failure, no attempt (S14-R-03)
                 set_status(task_id, "skipped", stage="blocked", output=f"{INFRA_SKIP}{infra}", model_name=choice.name,

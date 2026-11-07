@@ -271,6 +271,17 @@ def limits(contract: TaskContract, changed: list[str], cost: float | None) -> li
     return out
 
 
+def requires_change(contract: TaskContract, changed: list[str] | None) -> list[dict[str, Any]]:
+    """A writing task without a `command` condition must change a file in the goal's diff (S09-R-01): checks
+    of files that already exist (file_exists, contains, regex, min_length) would pass on old files, so a
+    blocked build that changed nothing and named no BLOCKER passed. `changed` None (unknown) is not checked."""
+    if not contract.writes or changed is None or any(c.type == "command" for c in contract.acceptance):
+        return []
+    return [{"condition": {"type": "diff"}, "passed": bool(changed),
+             "detail": "" if changed else "a writing task without a command condition changed no file in this "
+                                          "goal's diff; existing files do not count"}]
+
+
 _FINDING_LINE = re.compile(r"(?im)^[\s*-]*FINDING:\s*(.+?)\s*$")
 _NEXT_LINE = re.compile(r"(?im)^[\s*-]*NEXT(?:[ _]ACTION)?:\s*(.+?)\s*$")
 _RECOMMENDATION_LINE = re.compile(r"(?im)^[\s*-]*RECOMMENDATION:\s*(.+?)\s*$")
