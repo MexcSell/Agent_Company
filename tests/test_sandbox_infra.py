@@ -4,7 +4,7 @@ incident is opened per goal and the goal pauses instead of failing its tasks ite
 import pytest
 from sqlalchemy import select
 
-from agent_company import contracts, loop, quality, sandbox, workflow
+from agent_company import contracts, loop, prefs, quality, sandbox, workflow
 from agent_company.contracts import Condition, TaskContract
 from agent_company.db import Incident, Notification, Task, session
 
@@ -152,6 +152,42 @@ def test_a_goal_whose_sandbox_cannot_start_pauses_with_an_incident(goal_loop, fa
         titles = [n.title for n in s.scalars(select(Notification).where(Notification.goal_id == gid,
                                                                          Notification.admin_only.is_(True)))]
     assert f"Goal #{gid} paused: the sandbox could not start" in titles
+
+
+def test_required_and_unavailable_start_up_failure_is_infra(monkeypatch, tmp_path):
+    monkeypatch.setattr(sandbox, "available", lambda: (False, f"bwrap failed: {LINE.replace('/x', '/opt/x')}"))
+    wt = tmp_path / "data" / "worktrees" / "x"
+    wt.mkdir(parents=True)
+    info: dict = {}
+    ok, detail = contracts.run_command("true", wt, 60, mode="required", info=info)
+    assert not ok and info["infra"] == LINE.replace("/x", "/opt/x") and "required and unavailable" in detail
+    rows = contracts.check(_contract("true"), "", wt, mode="required")
+    assert rows[0]["infra"] == LINE.replace("/x", "/opt/x") and rows[0]["passed"] is False
+
+
+@pytest.mark.parametrize("why", ["bubblewrap (bwrap) is not installed", "bwrap not installed",
+                                 "bwrap failed: [Errno 13] Permission denied", "sandbox off"])
+def test_required_and_unavailable_for_another_reason_is_not_infra(monkeypatch, tmp_path, why):
+    monkeypatch.setattr(sandbox, "available", lambda: (False, why))
+    wt = tmp_path / "data" / "worktrees" / "x"
+    wt.mkdir(parents=True)
+    info: dict = {}
+    ok, _ = contracts.run_command("true", wt, 60, mode="required", info=info)
+    assert not ok and not info["infra"]
+    assert "infra" not in contracts.check(_contract("true"), "", wt, mode="required")[0]
+
+
+def test_a_required_goal_whose_sandbox_probe_fails_pauses_with_an_incident(goal_loop, monkeypatch):
+    prefs.set_value("sandbox", "required")
+    monkeypatch.setattr(sandbox, "available", lambda: (False, f"bwrap failed: {LINE}"))
+    gid = loop.create_goal("Add a feature", quality_commands=[])
+    out = loop.run_goal(gid)
+    g = loop._goal(gid)
+    assert out["status"] == "paused" and g.checkpoint["paused_for"] == "infrastructure", out
+    tasks = _tasks(gid)
+    assert tasks["spec"][0] == "skipped" and tasks["spec"][1] == loop.INFRA_SKIP + LINE
+    assert not any(status == "failed" for status, _, _ in tasks.values())
+    assert [i[0] for i in _incidents(gid)] == ["infrastructure"] and not goal_loop
 
 
 def test_command_output_that_mentions_bwrap_is_a_normal_failure(monkeypatch, fake):

@@ -301,7 +301,8 @@ def run(argv: list[str], cwd: Path, timeout: int, *, mode: str | None = None, wr
     ok, why = available() if mode != "off" else (False, "sandbox off")
     if not ok:
         if mode == "required":
-            return Outcome(126, "", "", f"not run: the sandbox is required and unavailable ({why})")
+            return Outcome(126, "", "", f"not run: the sandbox is required and unavailable ({why})",
+                           infra=startup_failure(126, why.removeprefix("bwrap failed: "), False))
         rc, out, timed_out = _execute(argv, cwd, env if env is not None else env_for(), timeout)
         return Outcome(rc, out, "L2", "" if mode == "off" else f"ran on the host: {why}", timed_out)
     env = env if env is not None else env_for({"UV_OFFLINE": "1", "UV_PYTHON_DOWNLOADS": "never"})
