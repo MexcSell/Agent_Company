@@ -18,8 +18,8 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from agent_company.db import (Defect, Event, Goal, GoalTransition, Lesson, Risk, Run, Task, event_iteration, now,
-                               session)
+from agent_company.db import (Defect, Event, Goal, GoalTransition, Lesson, Risk, Run, Task, event_iteration,
+                               log_event, now, session)
 
 REVIEW_ROLES = {"qa", "security", "network_security"}  # quality.REVIEW_ROLES
 
@@ -174,6 +174,47 @@ def report(goal_id: int) -> dict[str, Any]:
                      "active": round(float(worked), 1), "deadline": _iso(deadline),
                      "met": (finished <= deadline) if deadline and finished else None},
             "limitations": limitations, "lessons": lessons, "recommendations": recommendations}
+
+
+LABELS = ("verified", "partial", "failed")
+
+
+def label_counts(goal_id: int) -> dict[str, int]:
+    """report()'s task labels of a finished goal, stored in Goal.label_counts so that the Simple overview and RCA do
+    not rebuild the report; computed and stored on the first read. KeyError/ValueError as report()."""
+    from agent_company import workflow
+
+    with session() as s:
+        g = s.get(Goal, goal_id)
+        if g is None:
+            raise KeyError(f"goal {goal_id}")
+        if g.status in workflow.ACTIVE:
+            raise ValueError(f"goal {goal_id} is not finished")
+        if g.label_counts:
+            return {k: int(g.label_counts.get(k, 0)) for k in LABELS}
+    return _store(goal_id)
+
+
+def _store(goal_id: int) -> dict[str, int]:
+    labels = report(goal_id)["tasks"]["labels"]
+    counts = {k: int(labels.get(k, 0)) for k in LABELS}
+    with session() as s:  # opened after report() closed its own: SQLite allows one writer
+        g = s.get(Goal, goal_id)
+        if g is not None:
+            g.label_counts = counts
+    return counts
+
+
+def store_label_counts(goal_id: int) -> None:
+    """Recompute and overwrite a finished goal's stored label counts; fail-open, never raises."""
+    try:
+        _store(goal_id)
+    except Exception as e:  # noqa: BLE001 - the cache never changes a goal's outcome
+        try:
+            log_event("error", f"label counts of goal #{goal_id} not stored: {type(e).__name__}: {e}",
+                      goal_id=goal_id)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def report_markdown(d: dict[str, Any]) -> str:

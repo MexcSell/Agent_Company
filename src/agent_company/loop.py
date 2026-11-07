@@ -1870,6 +1870,9 @@ def _notify_goal(goal_id: int, status: str) -> None:
             "failed": ("error", f"Goal #{g.id} failed after {g.iteration} iteration(s)")}[status]
     notify(text[1], g.title, level=text[0], source="goal", goal_id=g.id,
            project_id=getattr(g, "project_id", None))
+    from agent_company import mission
+
+    mission.store_label_counts(goal_id)  # what the Simple overview and RCA read; fail-open
     rca.after_goal(goal_id, status)  # S07-R-02: follow up earlier analyses; analyse a failure when a trigger holds
 
 
