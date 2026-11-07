@@ -1307,6 +1307,21 @@ class McpCall(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class BridgeToken(Base):
+    """A per-run bearer token of the bridge MCP server (EL-R-09), bound to (goal, task, agent). Only its SHA-256 is kept."""
+
+    __tablename__ = "bridge_tokens"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    goal_id: Mapped[int] = mapped_column(Integer, index=True)
+    task_id: Mapped[int] = mapped_column(Integer)
+    agent_id: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[float] = mapped_column(Float)  # epoch seconds (SQLite hands datetimes back without a zone)
+    revoked_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    calls: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class CatalogItem(Base):
     """Skills, plugins, rules, commands and hooks the company shares (catalog.py): the management page
     the General Manager and agents take from, and add to when something is missing."""

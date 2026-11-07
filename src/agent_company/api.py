@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import threading
 import time
@@ -25,6 +26,7 @@ from agent_company import (
     agentdefs,
     auth,
     blackboard,
+    bridge,
     budgets,
     catalog,
     containers,
@@ -1248,6 +1250,27 @@ def create_app(start_background: bool = True) -> FastAPI:
             else:
                 threading.Thread(target=_run_quietly, args=(goal,), daemon=True, name=f"goal-{goal}").start()
         headers = {"WWW-Authenticate": 'Bearer realm="a2a"'} if status == 401 else None
+        return JSONResponse(out, status_code=status, headers=headers)
+
+    @app.post("/api/bridge/call")
+    async def bridge_call(request: Request) -> JSONResponse:
+        """EL-R-09: a CLI agent's bridge shim. The per-run bearer token is the only credential, never a cookie."""
+        raw = await request.body()
+        if len(raw) > bridge.MAX_BODY:
+            status, out = await asyncio.to_thread(bridge.refuse, 413, "refused: the request is too large")
+            return JSONResponse(out, status_code=status)
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            status, out = await asyncio.to_thread(bridge.refuse, 400, "refused: the body is not a JSON object")
+            return JSONResponse(out, status_code=status)
+        forwarded = bool(request.headers.get("x-forwarded-for") or request.headers.get("x-forwarded-proto"))
+        status, out = await asyncio.to_thread(bridge.handle, request.headers.get("authorization"), body.get("tool"),
+                                              body.get("arguments"), forwarded,
+                                              request.client.host if request.client else None)
+        headers = {"WWW-Authenticate": 'Bearer realm="bridge"'} if status == 401 else None
         return JSONResponse(out, status_code=status, headers=headers)
 
     @app.get("/api/a2a/clients")

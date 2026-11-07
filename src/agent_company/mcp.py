@@ -277,6 +277,10 @@ CATALOG: list[dict[str, Any]] = [
     {"key": "database", "name": "Database (read-only)", "transport": "stdio", "command": "python", "args": ["database.py"],
      "allow": "all", "about": "Read-only SQL on PostgreSQL or an SQLite file: tables, columns, SELECT queries. Bundled (from AXoR).",
      "fields": [{"part": "env", "key": "DATABASE_URL", "label": "Database URL (postgresql://… or sqlite:////path.db)"}]},
+    {"key": "bridge", "name": "Company bridge", "transport": "stdio", "command": "python", "args": ["bridge.py"],
+     "allow": "all", "fields": [],
+     "about": "The company's own tools for a running agent: its task, progress, insights, review requests. "
+              "Scoped to the run's goal and task by a per-run token. Bundled; grant it per agent (EL-R-09)."},
 ]
 CATALOG_BY_KEY = {c["key"]: c for c in CATALOG}
 
