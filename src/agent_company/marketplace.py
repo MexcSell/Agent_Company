@@ -140,7 +140,10 @@ def check_url(url: str) -> tuple[str, tuple[str, int, str] | None]:
     url = (url or "").strip()
     if not url or len(url) > 512 or any(c.isspace() or ord(c) < 32 for c in url) or url.startswith("-"):
         raise ImportRefused("give a repository URL without spaces")
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        raise ImportRefused("the repository URL cannot be parsed") from None
     if parts.scheme == "file":
         if not ALLOW_FILE_URLS:
             raise ImportRefused("file:// URLs are not allowed")
@@ -187,8 +190,11 @@ def clone_command(url: str, dest: Path, pin: tuple[str, int, str] | None = None)
         allow += ["-c", "protocol.file.allow=always"]
     elif pin is None:
         raise ImportRefused("an https clone needs the checked address (check_url)")
-    else:
-        allow += ["-c", f"http.curloptResolve={netpin.curl_resolve_entry(*pin)}"]
+    elif netpin._literal(pin[0]) is None:  # a literal address is never resolved by curl: nothing to pin
+        try:
+            allow += ["-c", f"http.curloptResolve={netpin.curl_resolve_entry(*pin)}"]
+        except ValueError as e:
+            raise ImportRefused(f"the checked address cannot be pinned: {e}") from None
     return ["git", *_GIT_SAFE, "-c", "http.followRedirects=false", *allow,
             "clone", "--depth", "1", "--single-branch", "--no-recurse-submodules", "--template=", "--quiet",
             "--no-checkout", f"--filter=blob:limit={MAX_FILE_BYTES}", "--", url, str(dest)]

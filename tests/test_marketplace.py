@@ -173,6 +173,40 @@ def test_checked_address_is_pinned_for_the_clone(monkeypatch):
         marketplace.clone_command("https://example.com/x.git", Path("/tmp/d"))
 
 
+def test_ipv6_literal_url_is_checked_and_cloned_without_a_resolve_entry(monkeypatch):
+    monkeypatch.setattr(marketplace, "git_version", lambda: (2, 43, 0))
+    asked = resolving(monkeypatch, "10.0.0.1")  # a literal is never looked up
+    url, pin = marketplace.check_url("https://[2606:2800::1]/x.git")
+    assert pin == ("2606:2800::1", 443, "2606:2800::1") and asked == []
+    cmd = marketplace.clone_command(url, Path("/tmp/d"), pin)
+    assert not any("curloptResolve" in a for a in cmd) and "https://[2606:2800::1]/x.git" in cmd
+    for bad in ("https://[::1]/x.git", "https://[fe80::1]/x.git", "https://[::ffff:127.0.0.1]/x.git",
+                "https://[2606:2800::1/x.git"):
+        with pytest.raises(ImportRefused):
+            marketplace.check_url(bad)
+
+
+def test_a_refused_pin_leaves_the_import_failed(monkeypatch):
+    monkeypatch.setattr(marketplace, "git_version", lambda: (2, 43, 0))
+    resolving(monkeypatch, "93.184.216.34")
+
+    def broken(*a):
+        raise ValueError("host not usable in a resolve entry")
+
+    def no_clone(*a, **k):
+        raise AssertionError("no git command may run")
+    monkeypatch.setattr(netpin, "curl_resolve_entry", broken)
+    monkeypatch.setattr(marketplace.subprocess, "run", no_clone)
+    with pytest.raises(ImportRefused, match="cannot be pinned"):
+        marketplace.fetch_url("https://example.com/x.git", "admin")
+    with pytest.raises(ImportRefused):
+        marketplace.fetch_url("https://[::1]/x.git", "admin")
+    with session() as s:
+        imp = s.query(AgentImport).one()  # the check_url refusal made no record; the clone refusal failed its own
+        assert imp.status == "failed" and "cannot be pinned" in imp.error
+    assert not marketplace.src_dir(imp.id).exists()
+
+
 def test_marketplace_pin_comes_from_netpin(monkeypatch):
     calls = []
 

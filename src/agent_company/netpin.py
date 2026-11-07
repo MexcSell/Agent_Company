@@ -147,7 +147,10 @@ class PinnedTransport(httpx.HTTPTransport):
 
 def pinned_client(*, pins: Pins | None = None, allow_private: bool = False,
                   backend: type[PinnedBackend] = PinnedBackend, **httpx_kwargs: Any) -> httpx.Client:
-    """An httpx client whose connects go only to checked addresses: no proxy, no automatic redirects."""
+    """An httpx client whose connects go only to checked addresses: no proxy, no automatic redirects.
+
+    Pinned clients use trust_env=False, so proxy variables and SSL_CERT_FILE/SSL_CERT_DIR are ignored and the
+    default certifi bundle is used."""
     for k in _BYPASS:
         if k in httpx_kwargs:
             raise TypeError(f"pinned_client does not take {k}=: it would bypass the pinned address")
