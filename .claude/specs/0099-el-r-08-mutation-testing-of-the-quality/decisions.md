@@ -22,3 +22,8 @@ python3: can't open file '/home/luca/Agent_Company/src/agent_company/edit_check.
 python3: can't open file '/home/luca/Agent_Company/src/agent_company/edit_check.py': [Errno 2] No such file or directory
 
 Next: fix the findings (loop back to Build).
+
+## Iteration 3: PASS
+- qa_verify (qa): done
+
+Next: approval and merge.
