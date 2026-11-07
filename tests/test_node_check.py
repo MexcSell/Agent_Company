@@ -98,6 +98,39 @@ def test_no_rule_runs_node_directly():
     assert executors.EDIT_CHECK == Path(executors.__file__).with_name("edit_check.py") and executors.EDIT_CHECK.is_file()
 
 
+def test_git_diff_output_is_denied_to_read_only_runs(claude, wt):
+    run(wt, "qa", ["read", "shell"])
+    run(wt, "developer", ["read", "write", "shell"], writes=True)
+    qa, dev = claude
+    assert qa[qa.index("--disallowedTools") + 1].split(",") == ["Bash(git diff --output:*)"]
+    assert "--disallowedTools" not in dev
+    assert executors.COPILOT_CHECK_DENY == ["shell(git diff --output)"]
+
+
+def test_copilot_read_only_run_gets_only_the_check_shell(monkeypatch, wt):  # design §5 test 5
+    seen = []
+
+    def spawn(self, cmd, req, cwd, env=None, **kw):
+        seen.append(cmd)
+        return type("P", (), {"returncode": 0, "stdout": "done", "stderr": ""})()
+
+    monkeypatch.setattr(executors.Executor, "_spawn", spawn)
+    ex = executors.for_choice(router.Choice(name="GitHub Copilot", kind="copilot", model_id="", reason="t"))
+    req = executors.Request(purpose="review", role="qa", system="s", prompt="p", workdir=wt,
+                            permissions=["read", "shell"], autonomy="G2")
+    req.grant = executors.gate(req, "copilot")
+    assert req.grant.checks and not req.grant.writes and not req.grant.shell
+    assert ex._run(req).ok
+    cmd = seen[-1]
+    pairs = list(zip(cmd, cmd[1:]))
+    allows = [b for a, b in pairs if a == "--allow-tool"]
+    denies = [b for a, b in pairs if a == "--deny-tool"]
+    assert f"shell({executors.CHECK_CMD})" in allows and "write" not in allows and "shell(uv run)" not in allows
+    assert not any(t.startswith("shell(node") for t in allows)
+    assert "shell(git push)" in denies and "shell(git diff --output)" in denies
+    assert executors.CHECK_HINT in cmd[2]
+
+
 def wrapper(cwd, *args, env=None):
     return subprocess.run([sys.executable, "-I", str(executors.EDIT_CHECK), *args], cwd=cwd, capture_output=True,
                           text=True, timeout=60, env=env)

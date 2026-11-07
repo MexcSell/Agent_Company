@@ -44,10 +44,8 @@ def check(path: str) -> str:
 
 def cli(args: list[str]) -> int:
     """The check command of agent runs (`python3 -I edit_check.py <files>`): the platform builds node's command line
-    itself, so no argument can add a flag. 0 all parse, 1 a syntax error or a refused argument, 2 no files, 3 no node."""
-    if not args:
-        print("usage: edit_check.py <files>", file=sys.stderr)
-        return 2
+    itself, so no argument can add a flag. 0 all parse, 1 a syntax error or a refused argument, 3 no node. `main()`
+    calls it only with files; a call without arguments is the stdin hook."""
     root, rc = os.path.realpath(os.getcwd()), 0
     for arg in args:
         full = os.path.realpath(os.path.join(root, arg))

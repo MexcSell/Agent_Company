@@ -611,6 +611,8 @@ CLAUDE_CHECK = ["Bash(pytest:*)", "Bash(python -m pytest:*)", "Bash(uv run pytes
 if CHECK_OK:
     CLAUDE_BASH.append(f"Bash({CHECK_CMD}:*)")
     CLAUDE_CHECK.insert(0, f"Bash({CHECK_CMD}:*)")
+# `git diff --output=<path>` writes a file; a deny rule is a prefix too, so `git diff HEAD --output=x` is a known gap
+CLAUDE_CHECK_DENY = ["Bash(git diff --output:*)"]
 
 
 def claude_env(choice: Choice) -> dict[str, str] | None:
@@ -660,6 +662,8 @@ class ClaudeCodeExecutor(Executor):
         tools = self.tools(grant)
         cmd = ["claude", "-p", req.prompt, "--output-format", "stream-json", "--verbose",
                "--append-system-prompt", with_check_hint(req.system, grant), "--allowedTools", ",".join(tools)]
+        if grant.checks and not grant.shell:
+            cmd += ["--disallowedTools", ",".join(CLAUDE_CHECK_DENY)]
         if req.writes:
             cmd += ["--permission-mode", "acceptEdits", "--settings", json.dumps(EDIT_CHECK_SETTINGS)]
         if self.choice.model_id:
@@ -749,6 +753,7 @@ COPILOT_CHECK = ["shell(pytest)", "shell(python -m pytest)", "shell(uv run pytes
 if CHECK_OK:
     COPILOT_SHELL.append(f"shell({CHECK_CMD})")
     COPILOT_CHECK.insert(0, f"shell({CHECK_CMD})")
+COPILOT_CHECK_DENY = ["shell(git diff --output)"]  # as CLAUDE_CHECK_DENY
 
 
 class CopilotExecutor(Executor):
@@ -764,12 +769,15 @@ class CopilotExecutor(Executor):
         if req.workdir is None:
             raise RuntimeError("Copilot needs a worktree")
         cwd = ensure_sandboxed(req.workdir)
-        tools = self.tools(req.grant or Grant())
-        prompt = with_check_hint(req.system, req.grant or Grant()) + "\n\n" + req.prompt
+        grant = req.grant or Grant()
+        tools = self.tools(grant)
+        prompt = with_check_hint(req.system, grant) + "\n\n" + req.prompt
         cmd = ["copilot", "-p", prompt]
         for t in tools:
             cmd += ["--allow-tool", t]
         cmd += ["--deny-tool", "shell(git push)"]
+        for t in COPILOT_CHECK_DENY if grant.checks and not grant.shell else []:
+            cmd += ["--deny-tool", t]
         if self.choice.model_id:
             cmd += ["--model", self.choice.model_id]
         proc = self._spawn(cmd, req, cwd)
