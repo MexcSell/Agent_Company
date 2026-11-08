@@ -20,7 +20,9 @@ feature came from.
   new writing recruit is first a `candidate` that runs an eval suite, then approved or rejected), `scheduler.py`, `router.py` (models, routes, fallback,
   provider catalogs, classification clearance per model; usage limits a run reports (`LIMIT_RE`: "hit your session
   limit · resets 9:50pm") mark the model `limited_until` its reset and the route's ordered `fallback` models take the
-  work (`gm set-fallback`, Models → Routes); with every real model limited the simulator never stands in, staffing
+  work (`gm set-fallback`, Models → Routes); **Assign models** on Routes (`auto_routes`, `POST /api/routes/auto`)
+  gives every role a model, retry model and fallbacks from the models usable now by `ROLE_TIERS` (lead: strongest;
+  review: another family than the lead's; bulk/light: free or weakest; a limited model only as a last fallback); with every real model limited the simulator never stands in, staffing
   raises `registry.ModelLimitReached` and the goal resumes at the earliest reset; `run` sends a request through the
   chain for agents that call a model directly (the research room); a `claude_code` model's own sign-in `account`:
   `data/claude-accounts/<account>/.credentials.json`, its CLAUDE_CONFIG_DIR; a model's own API key encrypted in

@@ -3059,6 +3059,16 @@ def create_app(start_background: bool = True) -> FastAPI:
         _audit(admin, "model_test", model_id, after={"ok": out["ok"], "error": out["error"][:200]})
         return out
 
+    @app.post("/api/routes/auto")
+    def routes_auto(admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
+        before = {r: {"model": m, "fallback": router.list_fallbacks().get(r, [])} for r, m in router.list_routes().items()}
+        try:
+            plan = router.auto_routes()
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "routes_auto", "routes", before=before, after=plan)
+        return {"routes": plan}
+
     @app.put("/api/routes/{role}")
     def route_set(role: str, body: RouteBody, admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
         before = router.list_routes().get(role)

@@ -683,6 +683,84 @@ def set_route(role: str, model_name: str, escalation: str | None = None) -> None
             r.escalation = escalation
 
 
+# --- automatic routes (Models → Routes, "Assign models") -------------------------------------------
+# lead: plans, designs and writes the core code; review: codes beside it and checks it, best in another model family;
+# bulk: reads and collects a lot; every other role is light work.
+ROLE_TIERS: dict[str, str] = {
+    **dict.fromkeys(("general_manager", "architect", "developer"), "lead"),
+    **dict.fromkeys(("frontend", "devops", "tech_scout", "tech_introducer", "qa", "security", "network_security",
+                     "security_guard", "analyst", "comprehensive_analyst", "instructor"), "review"),
+    **dict.fromkeys(("research", "external_data"), "bulk"),
+}
+_STRENGTH = [(re.compile(r"haiku|mini|nano|flash|lite|free|small"), 1.0), (re.compile(r"opus|fable|gpt-5|\bo3\b|pro\b"), 3.0),
+             (re.compile(r"sonnet|codex|gpt-4"), 2.5)]
+MAX_AUTO_FALLBACKS = 4
+
+
+def strength(m: ModelEntry) -> float:
+    """A rough rank of what a model can do, from its kind and id: no provider publishes one comparable score."""
+    mid = (m.model_id or "").lower()
+    if m.kind == "claude_code" and not mid:
+        return 3.0
+    if m.kind == "codex":
+        return 2.5
+    if m.kind == "copilot":
+        return 2.0
+    for pattern, value in _STRENGTH:
+        if pattern.search(mid):
+            return value
+    return 1.5 if is_local(m) else 2.0
+
+
+def cheap(m: ModelEntry) -> bool:
+    """Free to run: a local model, a free API model, a free plan or tier."""
+    return (is_local(m) or (m.signin or {}).get("plan") == "free"
+            or (m.terms or {}).get("billing") in ("free_tier", "local")
+            or (m.kind == "llm" and not (m.input_cost or m.output_cost)))
+
+
+def _tier_key(tier: str, m: ModelEntry, lead: str) -> tuple:
+    cost = (m.input_cost or 0) + (m.output_cost or 0)
+    if tier == "lead":  # the strongest; a paid plan before a free one's small allowance
+        return (-strength(m), cheap(m), -cost, m.id)
+    if tier == "review":  # another family than the lead's model, a mid model before the strongest
+        return (_choice(m, "").provider == lead, abs(strength(m) - 2.5), cost, cheap(m), m.id)
+    if tier == "bulk":  # free first, then the weakest, keeping the strong models for the lead roles
+        return (not cheap(m), strength(m), cost, m.id)
+    return (strength(m), not cheap(m), cost, m.id)
+
+
+def plan_routes() -> dict[str, dict[str, Any]]:
+    """Each role's model, retry model and fallbacks from the models usable now (ROLE_TIERS). A model at its usage
+    limit is never a role's model; it comes last among the fallbacks, for when it resets."""
+    with session() as s:
+        models = [m for m in s.scalars(select(ModelEntry).order_by(ModelEntry.id)) if m.kind != "offline"]
+        usable = [m for m in models if available(m)[0]]
+        later = [m for m in models if m not in usable and available(m, ignore_limit=True)[0]]
+        if not usable:
+            raise ValueError("no model is usable now: add one, set its key or sign in (Models)")
+        roles = [r.role for r in s.scalars(select(Route).order_by(Route.role))]
+        best = min(usable, key=lambda m: _tier_key("lead", m, ""))
+        lead = _choice(best, "").provider
+        plan: dict[str, dict[str, Any]] = {}
+        for role in roles:
+            tier = ROLE_TIERS.get(role, "light")
+            ranked = sorted(usable, key=lambda m: _tier_key(tier, m, lead))
+            fallback = ranked[1:] + sorted(later, key=lambda m: _tier_key(tier, m, lead))
+            plan[role] = {"model": ranked[0].name, "escalation": "" if best is ranked[0] else best.name,
+                          "fallback": [m.name for m in fallback][:MAX_AUTO_FALLBACKS], "tier": tier}
+        return plan
+
+
+def auto_routes() -> dict[str, dict[str, Any]]:
+    """Apply plan_routes to every route; returns the plan."""
+    plan = plan_routes()
+    for role, p in plan.items():
+        set_route(role, p["model"], p["escalation"])
+        set_fallback(role, p["fallback"])
+    return plan
+
+
 # --- a model's own API key ---------------------------------------------------------------------
 KEY_PURPOSE = b"ac-model-key"
 

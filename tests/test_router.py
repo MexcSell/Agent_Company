@@ -1,4 +1,5 @@
 import httpx
+import pytest
 
 from agent_company import router, usage
 from agent_company.config import reset_settings
@@ -363,3 +364,39 @@ def test_a_refused_key_reads_plainly():
     client = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(401, json={"error": "no"})))
     st = router.provider_status(router.Choice("m", "llm", "openrouter/x/y", ""), "sk-bad", client)
     assert st == {"source": "error", "detail": "usage not available: the key was refused (HTTP 401)"}
+
+
+def test_auto_routes_assign_models_usable_now(monkeypatch):
+    """Assign models: the strongest leads, a mid model reviews, the cheapest collects; a limited model only
+    comes last among the fallbacks, and with no usable model nothing changes."""
+    before = router.list_routes()
+    with pytest.raises(ValueError, match="no model is usable"):
+        router.auto_routes()
+    assert router.list_routes() == before
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    plan = router.auto_routes()
+    assert plan["architect"]["model"] == "Claude Fable 5.1" and plan["architect"]["escalation"] == ""
+    assert plan["qa"]["model"] == "Claude Sonnet 5.5" and plan["qa"]["escalation"] == "Claude Fable 5.1"
+    assert plan["research"]["model"] == plan["sales"]["model"] == "Claude Haiku 5.5"
+    assert router.list_routes()["qa"] == "Claude Sonnet 5.5"
+    assert router.list_fallbacks()["qa"] == plan["qa"]["fallback"] and "Claude Sonnet 5.5" not in plan["qa"]["fallback"]
+    router.mark_limited("Claude Fable 5.1", "You've hit your session limit · resets 9:50pm")
+    plan = router.auto_routes()
+    assert plan["general_manager"]["model"] == "Claude Opus 5.5"
+    assert plan["general_manager"]["fallback"][-1] == "Claude Fable 5.1"
+    assert all(p["model"] != "Claude Fable 5.1" for p in plan.values())
+
+
+def test_auto_routes_review_in_another_family(monkeypatch):
+    from agent_company.db import ModelEntry, session
+
+    monkeypatch.setenv("ENABLE_CLAUDE_CODE", "1")
+    monkeypatch.setenv("ENABLE_CODEX", "1")
+    reset_settings()
+    monkeypatch.setattr(router.shutil, "which", lambda name: f"/usr/bin/{name}")
+    with session() as s:
+        for m in s.query(ModelEntry).filter(ModelEntry.kind == "llm"):
+            m.enabled = False
+    plan = router.plan_routes()
+    assert plan["developer"]["model"] == "Claude Code" and plan["qa"]["model"] == "Codex CLI"
+    assert plan["qa"]["escalation"] == "Claude Code"
