@@ -25,7 +25,10 @@ feature came from.
   chain for agents that call a model directly (the research room); a `claude_code` model's own sign-in `account`:
   `data/claude-accounts/<account>/.credentials.json`, its CLAUDE_CONFIG_DIR; a model's own API key encrypted in
   `api_key_enc` (only `key_hint` leaves the server); `model_type` API|CLI|Local; Test stores the provider's usage in
-  `status`; `model_info`/`/api/models/info` is what the Models page shows per model, as the Claude Code panel shows a
+  `status`; every run's `Run.trace` (stamped by `Executor.run`: assigned `requested` model, the model run, model id,
+  provider, base URL, `route` = why, `served` = the model the provider reported) and `trace_issues` (a model other
+  than the assigned one without a configured fallback, the simulator standing in, a provider answering as another
+  model; docs/verification/); `model_info`/`/api/models/info` is what the Models page shows per model, as the Claude Code panel shows a
   session (status, model, CLI version, account, usage windows: Claude plan via `workspace.claude_limits`, Codex plan
   windows from its session files, OpenRouter key limits, own daily/weekly token limits; `limitCards` in app.js); `copilot` kind (GitHub Copilot CLI, `enable_copilot`), `cli_status`/`install_cli`; G-R-18 `ModelEntry.terms` (billing, context, tool calling, data
   terms, licence page) validated by `check_terms`, `terms_due` after 90 days without a person's check), `contracts.py` (task contracts with scope, risk, budget, deadline; output lines),

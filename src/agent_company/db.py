@@ -795,6 +795,10 @@ class Run(Base):
     tool_calls: Mapped[list[Any]] = mapped_column(default=list)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
+    # which model did the work and why (verification phase 2): requested (the agent's assigned model: its own
+    # model, else its role's route), model_id, provider, base_url, route (why this one: preference, route,
+    # fallback, escalation), served (the model the provider itself reported; "" when it reports none)
+    trace: Mapped[dict[str, Any]] = mapped_column(default=dict)
 
 class Event(Base):
     __tablename__ = "events"

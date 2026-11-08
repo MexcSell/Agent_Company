@@ -2313,7 +2313,8 @@ def trace(goal_id: int) -> dict[str, Any]:
                  "tokens": r.input_tokens + r.output_tokens, "at": r.started_at.isoformat(),
                  "isolation": r.isolation or "", "tools": list(r.tools or []), "permissions": list(r.permissions or []),
                  "withheld": list(r.dropped or []), "denied_tools": list(r.denied_tools or []),
-                 "tool_calls": list(r.tool_calls or [])}
+                 "tool_calls": list(r.tool_calls or []), "trace": dict(r.trace or {}),
+                 "trace_issues": router.trace_issues(r.trace or {})}
                 for r in s.scalars(select(Run).where(Run.goal_id == goal_id).order_by(Run.id))]
         gates = [{"at": e.created_at.isoformat(), "iteration": event_iteration(e),
                   "passed": e.data.get("passed"), "commit": e.data.get("commit"),

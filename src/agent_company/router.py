@@ -93,6 +93,7 @@ class Choice:
     api_key_env: str = ""
     session_id: str = ""
     account: str = ""
+    requested: str = ""  # the model assigned to the work (agent's own, else the route's), set by resolve_chain
 
     @property
     def provider(self) -> str:
@@ -546,7 +547,8 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
             raise NotCleared(f"no model is cleared for {classification} content: {', '.join(blocked)}. Clear a "
                              "local model for it (Models), or lower the classification")
         chain.append(_choice(offline, "fallback (" + "; ".join(skipped) + ")" if skipped else "fallback"))
-        return chain
+        requested = pref or (route.model_name if route else "")
+        return [replace(c, requested=requested) for c in chain]
 
 
 def run(role: str, req: Any, model_pref: str | None = None, *, first: Choice | None = None,
@@ -580,6 +582,24 @@ def run(role: str, req: Any, model_pref: str | None = None, *, first: Choice | N
         if res.ok:
             break
     return res, choice
+
+
+EXPLAINED = ("fallback for ", "escalation for ", "different family from ")
+
+
+def trace_issues(trace: dict[str, Any]) -> list[str]:
+    """Where a run's model disagrees with the one assigned to the work, unless configuration explains it: a route's
+    fallback or escalation, or a reviewer of another family (verification phase 2). Empty: they agree."""
+    out: list[str] = []
+    requested, used, route = trace.get("requested") or "", trace.get("model") or "", trace.get("route") or ""
+    if trace.get("provider") == "offline" and requested and requested != used:
+        out.append(f"the offline simulator stood in for {requested} ({route})")
+    elif requested and used and used != requested and not route.startswith(EXPLAINED):
+        out.append(f"{used} ran instead of the assigned {requested} without a configured fallback ({route})")
+    served, mid = trace.get("served") or "", (trace.get("model_id") or "").rsplit("/", 1)[-1]
+    if served and mid and not (served.startswith(mid) or mid.startswith(served)):
+        out.append(f"the provider answered as {served}, not {mid}")
+    return out
 
 
 def limit_blocked(chain: list[Choice]) -> str:

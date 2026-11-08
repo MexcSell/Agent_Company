@@ -17,10 +17,12 @@ GOOD = "sk-phase1-0123456789abcdefWXYZ"
 
 
 class Stub:
-    """A provider: /v1/models and /v1/chat/completions, key `GOOD`, one model `stub-model`; `mode` ok|429|quota|slow."""
+    """A provider: /v1/models and /v1/chat/completions, key `GOOD`, one model; `mode` ok|429|quota|slow. `reply` is
+    what it says; `served` the model its answers name (default: the model asked for)."""
 
-    def __init__(self):
+    def __init__(self, model="stub-model", reply="OK", served=None):
         stub = self
+        self.model, self.reply, self.served = model, reply, served
         self.mode, self.calls = "ok", []
 
         class H(BaseHTTPRequestHandler):
@@ -46,28 +48,29 @@ class Stub:
 
             def do_GET(self):
                 if not self._refused():
-                    self._send(200, {"object": "list", "data": [{"id": "stub-model", "object": "model"}]})
+                    self._send(200, {"object": "list", "data": [{"id": stub.model, "object": "model"}]})
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
                 stub.calls.append(body)
                 if self._refused():
                     return
-                if body.get("model") != "stub-model":
+                if body.get("model") != stub.model:
                     return self._send(404, {"error": {"message": f"The model `{body.get('model')}` does not exist",
                                                       "code": "model_not_found"}})
                 if stub.mode == "slow":
                     time.sleep(5)
                 if stub.mode == "429":  # OpenAI's per-minute limit: transient
-                    return self._send(429, {"error": {"message": "Rate limit reached for stub-model in organization "
+                    return self._send(429, {"error": {"message": f"Rate limit reached for {stub.model} in organization "
                                                       "org-x on requests per min (RPM): Limit 3. Please try again in "
                                                       "1.2s.", "code": "rate_limit_exceeded"}})
                 if stub.mode == "quota":  # the account's quota: not transient
                     return self._send(429, {"error": {"message": "You exceeded your current quota",
                                                       "type": "insufficient_quota", "code": "insufficient_quota"}})
-                self._send(200, {"id": "c1", "object": "chat.completion", "created": 1, "model": "stub-model",
+                self._send(200, {"id": "c1", "object": "chat.completion", "created": 1,
+                                 "model": stub.served or stub.model,
                                  "choices": [{"index": 0, "finish_reason": "stop",
-                                              "message": {"role": "assistant", "content": "OK"}}],
+                                              "message": {"role": "assistant", "content": stub.reply}}],
                                  "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10}})
 
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), H)

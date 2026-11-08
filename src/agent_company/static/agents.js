@@ -287,6 +287,8 @@ async function runsTab(box, a, offset = 0) {
       <p class="muted">No transcript is stored per run; this is the task's output and the recorded tool calls.</p>
       ${d.task ? `<h3>Task ${esc(d.task.key)} · ${esc(d.task.title)} ${pill(d.task.status)}</h3><pre>${esc(d.task.output || "No output.")}</pre>` : ""}
       ${d.error ? `<h3>Error</h3><pre>${esc(d.error)}</pre>` : ""}
+      ${d.trace && d.trace.model ? `<p class="muted">Model: assigned ${esc(d.trace.requested || "–")} · ran ${esc(d.trace.model)} (${esc(d.trace.model_id || "–")}, ${esc(d.trace.provider || "–")}${d.trace.base_url ? " at " + esc(d.trace.base_url) : ""}) · why: ${esc(d.trace.route || "–")} · provider answered as ${esc(d.trace.served || "not reported")}</p>` : ""}
+      ${(d.trace_issues || []).map((x) => `<p>${pill("failed")} ${esc(x)}</p>`).join("")}
       <p class="muted">Gateway: isolation ${esc(d.isolation || "–")} · tools ${list(d.tools)} · permissions ${list(d.permissions)} · withheld ${list(d.withheld)} · denied ${list(d.denied_tools)} · ${Number(d.duration)} s</p>
       <h3>Tool calls (${d.tool_calls.length})</h3><div class="events">${calls || '<span class="muted">None recorded.</span>'}</div></td></tr>`);
   }));

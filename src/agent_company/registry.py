@@ -1189,7 +1189,8 @@ def agent_runs(agent_id: int, offset: int = 0, limit: int = 50,
 
 
 def agent_run(agent_id: int, run_id: int, visible: set[int] | None = None) -> dict[str, Any]:
-    """One run with what was recorded: its task's output, error and tool calls."""
+    """One run with what was recorded: its task's output, error, tool calls and which model did it and why."""
+    from agent_company import router
     from agent_company.db import Run
 
     with session() as s:
@@ -1208,6 +1209,7 @@ def agent_run(agent_id: int, run_id: int, visible: set[int] | None = None) -> di
         d.update(error=r.error or "", isolation=r.isolation or "", tools=list(r.tools or []),
                  permissions=list(r.permissions or []), withheld=list(r.dropped or []),
                  denied_tools=list(r.denied_tools or []), tool_calls=list(r.tool_calls or []),
+                 trace=dict(r.trace or {}), trace_issues=router.trace_issues(r.trace or {}),
                  task={"id": t.id, "key": t.key, "title": t.title, "status": t.status, "output": t.output,
                        "session_id": t.session_id} if t else None)
         return d

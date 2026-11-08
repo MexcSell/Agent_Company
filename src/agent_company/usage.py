@@ -47,7 +47,8 @@ def record(*, model_name: str, kind: str, input_tokens: int = 0, output_tokens: 
                   permissions=list(getattr(res, "permissions", None) or []),
                   dropped=list(getattr(res, "dropped", None) or []),
                   denied_tools=list(getattr(res, "denied_tools", None) or [])[:100],
-                  tool_calls=list(getattr(res, "tool_calls", None) or [])))
+                  tool_calls=list(getattr(res, "tool_calls", None) or []),
+                  trace=dict(getattr(res, "trace", None) or {})))
     from agent_company import router
 
     if not ok and router.is_limit_error(error):  # a plan or quota limit: the router skips the model until its reset

@@ -148,3 +148,14 @@ See `docs/verification/phase-1-models.md`.
 | V4 | Deleting a model leaves agents whose own model (`model_pref`) named it; they fall back to their role's route ("not in catalog" in the run's reason), and the agent card still names the removed model. | open (low) |
 | V5 | A Test run from the CLI without `prefs.load()` sees none of the DB settings (`enable_claude_code`, `enable_codex`), refuses every CLI model and stores that refusal as the model's status. | open (low; use the Models page or load prefs first) |
 | V6 | Five catalog API models (four Claude, OpenRouter Free router) have no key on this host; they show as unavailable and have never passed a Test. | open (configuration) |
+
+## Added 2026-11-08 (verification phase 2, model routing)
+
+See `docs/verification/phase-2-routing.md`. Each run now records `Run.trace` (assigned model, model run, model ID,
+provider, address, why, the model the provider reported); `router.trace_issues` names disagreements.
+
+| # | Problem | Status |
+|---|---------|--------|
+| V7 | With no fallback and the only assigned model disabled or keyless, the offline simulator does the work. That is the documented design, but phase 2's rule allows only configured fallbacks. The trace records it (`provider: offline`) and `trace_issues` flags it. | open (owner to decide) |
+| V8 | Codex and Copilot runs do not report which model answered (`served` empty; Codex's `model_id` is empty when it uses the account's default). | open (low) |
+| V9 | Every model with a base URL reports provider `local`; the trace's `base_url` tells two such servers apart. | by design |

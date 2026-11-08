@@ -74,6 +74,8 @@ class Result:
     dropped: list[str] = field(default_factory=list)
     denied_tools: list[str] = field(default_factory=list)  # tool calls the CLI refused (Claude Code reports them)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)  # each call the run made: tool, input, ok
+    served_model: str = ""  # the model the provider says answered ("" when it does not say)
+    trace: dict[str, Any] = field(default_factory=dict)  # which model did the work and why (Run.trace)
 
 
 FILE_BLOCK_HELP = (
@@ -159,6 +161,18 @@ def parse_claude_stream(stdout: str) -> tuple[dict[str, Any] | None, list[dict[s
                     if str(block.get("tool_use_id")) in by_id:
                         by_id[str(block.get("tool_use_id"))]["ok"] = False
     return result, _capped(calls)
+
+
+def claude_served(stdout: str) -> str:
+    """The model the API answered with in a stream-json run: its assistant messages' `model` (the session's init
+    event names the requested one, the fallback when no message came)."""
+    served = init = ""
+    for ev in _events(stdout):
+        if ev.get("type") == "assistant":
+            served = str((ev.get("message") or {}).get("model") or "") or served
+        elif ev.get("type") == "system" and ev.get("subtype") == "init":
+            init = str(ev.get("model") or "")
+    return served or init
 
 
 class StuckWatch:
@@ -485,6 +499,9 @@ class Executor:
         res.isolation, res.permissions, res.dropped = grant.isolation, grant.permissions, grant.dropped
         if not res.tools:
             res.tools = self.tools(grant) if not grant.refused else []
+        c = self.choice
+        res.trace = {"requested": c.requested, "model": c.name, "model_id": c.model_id, "provider": c.provider,
+                     "base_url": c.base_url, "route": c.reason[:300], "served": res.served_model}
         return res
 
     def tools(self, grant: Grant) -> list[str]:
@@ -581,7 +598,11 @@ class LLMExecutor(Executor):
             kwargs["api_key"] = key or ("" if self.choice.api_key_env else "local")
         elif key:
             kwargs["api_key"] = key
-        llm = LLM(model=self.choice.model_id, **kwargs)
+        served = _ServedModel()
+        try:
+            llm = LLM(model=self.choice.model_id, interceptor=served, **kwargs)
+        except Exception:  # noqa: BLE001 - a provider class without interceptors: the run matters more than its trace
+            llm = LLM(model=self.choice.model_id, **kwargs)
         system = req.system + ("\n\n" + FILE_BLOCK_HELP if req.writes else "")
         text = llm.call([{"role": "system", "content": system}, {"role": "user", "content": req.prompt}])
         text = text if isinstance(text, str) else str(text)
@@ -592,7 +613,37 @@ class LLMExecutor(Executor):
             if blocks:
                 files = write_files(req.workdir, blocks)
         return Result(text=text, input_tokens=u.prompt_tokens or estimate_tokens(system + req.prompt),
-                      output_tokens=u.completion_tokens or estimate_tokens(text), files=files)
+                      output_tokens=u.completion_tokens or estimate_tokens(text), files=files,
+                      served_model=served.model)
+
+
+def _ServedModel() -> Any:  # noqa: N802 - builds the interceptor class lazily (crewai imports slowly)
+    """A crewai transport interceptor that keeps the `model` of the provider's JSON answers: who actually served."""
+    import httpx
+    from crewai.llms.hooks.base import BaseInterceptor
+
+    class Served(BaseInterceptor[httpx.Request, httpx.Response]):
+        model = ""
+
+        def on_outbound(self, message: httpx.Request) -> httpx.Request:
+            return message
+
+        def on_inbound(self, message: httpx.Response) -> httpx.Response:
+            if message.status_code < 300 and "json" in message.headers.get("content-type", ""):
+                message.read()
+                try:
+                    self.model = str(json.loads(message.content).get("model") or "") or self.model
+                except (ValueError, AttributeError):
+                    pass
+            return message
+
+        async def aon_outbound(self, message: httpx.Request) -> httpx.Request:
+            return message
+
+        async def aon_inbound(self, message: httpx.Response) -> httpx.Response:
+            return message
+
+    return Served()
 
 
 EDIT_CHECK = Path(__file__).with_name("edit_check.py")  # the server's copy, never the worktree's
@@ -693,12 +744,13 @@ class ClaudeCodeExecutor(Executor):
             if mcp_file:
                 Path(mcp_file).unlink(missing_ok=True)
         data, calls = parse_claude_stream(proc.stdout)
+        served = claude_served(proc.stdout)
         if watch.reason:  # FW-R-02: ended because it repeated itself; the retry is told why
             return Result(text=str((data or {}).get("result") or ""), ok=False, error=watch.reason, tools=tools,
-                          tool_calls=calls, session_id=str((data or {}).get("session_id") or ""))
+                          tool_calls=calls, session_id=str((data or {}).get("session_id") or ""), served_model=served)
         if data is None:  # no result event: the CLI failed before it finished
             return Result(text=proc.stdout[-20_000:], ok=False, error=(proc.stderr or proc.stdout)[-2000:],
-                          tools=tools, tool_calls=calls)
+                          tools=tools, tool_calls=calls, served_model=served)
         u = data.get("usage") or {}
         inp = int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0) + int(
             u.get("cache_creation_input_tokens") or 0)
@@ -707,7 +759,7 @@ class ClaudeCodeExecutor(Executor):
                       cost=float(data.get("total_cost_usd") or 0.0),
                       ok=not data.get("is_error") and proc.returncode == 0,
                       error="" if proc.returncode == 0 else (proc.stderr or str(data.get("result")))[-2000:],
-                      session_id=str(data.get("session_id") or ""), tools=tools, tool_calls=calls,
+                      session_id=str(data.get("session_id") or ""), tools=tools, tool_calls=calls, served_model=served,
                       denied_tools=sorted({str(d.get("tool_name") or "?") for d in data.get("permission_denials") or []
                                            if isinstance(d, dict)}))
 
