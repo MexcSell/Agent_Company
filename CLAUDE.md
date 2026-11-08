@@ -121,7 +121,8 @@ feature came from.
   hooks; exports a project's `.claude/`; FW-R-05 `import_skills` of a `<name>/SKILL.md` registry, screened, disabled until chosen); `agentdefs.py` (each agent's versioned definition file in `data/agents/`,
   its own git repo: the loop runs agents from it, learning and the study rotation rewrite it); `gm.py` (the General
   Manager as Claude Code: its instructions and the `python -m agent_company gm …` toolbox); `specs.py`
-  (`.claude/specs/<slug>/` artifacts of every goal, the GM's `.claude/` configure step); `hooks.py` (TaskCreated,
+  (`.claude/specs/<slug>/` artifacts of every goal, the GM's `.claude/` configure step; `check_plan` rejects a plan's
+  `file_exists` acceptance outside `allowed_paths`, dropped from the fallback plan instead); `hooks.py` (TaskCreated,
   TaskCompleted, TeammateIdle → `data/logs/team-hooks.jsonl`, fail-open);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
   (Workspace Claude Code panel: a tab per conversation of this browser session (new ones on the far right; earlier ones

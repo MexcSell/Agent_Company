@@ -615,7 +615,8 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                           goal_id=goal.id, agent_id=gm.id)
                 kind = (tmpl or {}).get("kind", "")
                 plan = contracts.validate_plan(strategies.fallback_plan(goal.title, kind)["tasks"])
-                specs.check_plan(goal, plan)
+                if dropped := specs.check_plan(goal, plan, drop_out_of_scope=True):  # never raises on scope
+                    log_event("plan", "Standard plan corrected: " + "; ".join(dropped), goal_id=goal.id, agent_id=gm.id)
                 try:
                     _in_rooms(plan, rooms)
                 except ValueError as e:  # nothing to fall back to inside the project's rooms

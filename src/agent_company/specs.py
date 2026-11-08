@@ -52,14 +52,29 @@ def planner_note(goal: Any) -> str:
             "conditions.\n")
 
 
-def check_plan(goal: Any, plan: list[Any]) -> list[str]:
+def _out_of_scope(goal: Any, path: str, allowed: list[str]) -> bool:
+    """A file_exists path no task may create: outside the allowed paths, not exempt from the scope gate and not
+    already in the worktree, so the condition can never pass."""
+    from agent_company import adr, checks
+
+    if path.startswith(CONFIG_PATHS) or path.startswith(adr.FOLDER + "/"):  # the scope gate's own exemptions
+        return False
+    if any(checks.in_scope(path, pat) for pat in allowed):
+        return False
+    return not (goal.worktree and (Path(goal.worktree) / path).exists())
+
+
+def check_plan(goal: Any, plan: list[Any], *, drop_out_of_scope: bool = False) -> list[str]:
     """Point every `.claude/specs/<X>/` path of the plan's acceptance conditions at this goal's spec folder (K54).
     Mutates the conditions; returns `<key>: <old> -> <new>` per rewrite. Raises ValueError on a condition about a
-    file the loop writes itself."""
+    file the loop writes itself, and on file_exists conditions outside the goal's allowed paths, which can never pass;
+    with `drop_out_of_scope` (the fallback plan) those are removed and reported instead."""
     own = slug(goal.title, goal.id)
     prefix = str(goal.worktree).rstrip("/") + "/" if goal.worktree else ""
     loop_file = re.compile(rf"\.claude/specs/{re.escape(own)}/({'|'.join(map(re.escape, LOOP_FILES))})(?![\w.-])")
+    allowed = list(getattr(goal, "allowed_paths", None) or [])
     report = []
+    outside: list[tuple[Any, Any, str]] = []
     for c in plan:
         for cond in c.acceptance:
             if cond.type == "file_exists" and cond.path:
@@ -68,14 +83,16 @@ def check_plan(goal: Any, plan: list[Any]) -> list[str]:
                     path = path[len(prefix):]
                 while path.startswith("./"):
                     path = path[2:]
-                if not SPEC_DIR.match(path):
-                    continue
-                new = SPEC_DIR.sub(f".claude/specs/{own}/", path, count=1)
-                if new != cond.path:
-                    report.append(f"{c.key}: {cond.path} -> {new}")
-                    cond.path = new
-                if loop_file.fullmatch(new):
-                    raise ValueError(f"task {c.key}: {new} is written by the loop itself, not by a task")
+                if SPEC_DIR.match(path):
+                    new = SPEC_DIR.sub(f".claude/specs/{own}/", path, count=1)
+                    if new != cond.path:
+                        report.append(f"{c.key}: {cond.path} -> {new}")
+                        cond.path = new
+                    if loop_file.fullmatch(new):
+                        raise ValueError(f"task {c.key}: {new} is written by the loop itself, not by a task")
+                    path = new
+                if allowed and _out_of_scope(goal, path, allowed):
+                    outside.append((c, cond, path))
             elif cond.type == "command" and cond.run:
                 new = SPEC_DIR.sub(f".claude/specs/{own}/", cond.run)
                 if new != cond.run:
@@ -83,6 +100,14 @@ def check_plan(goal: Any, plan: list[Any]) -> list[str]:
                     cond.run = new
                 if m := loop_file.search(new):
                     raise ValueError(f"task {c.key}: {m.group(0)} is written by the loop itself, not by a task")
+    if outside and not drop_out_of_scope:
+        raise ValueError("file_exists acceptance outside the goal's allowed paths can never pass: "
+                         + "; ".join(f"task {c.key}: {path}" for c, _, path in outside)
+                         + f". Allowed paths: {', '.join(allowed)}. Use a path inside them, or a contains, regex or "
+                         "command condition instead.")
+    for c, cond, path in outside:
+        c.acceptance = [a for a in c.acceptance if a is not cond]
+        report.append(f"{c.key}: dropped file_exists {path} (outside the allowed paths)")
     return report
 
 
