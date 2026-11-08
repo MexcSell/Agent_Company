@@ -313,7 +313,8 @@ async function updateBadges() {
     // Audit records after the newest one this browser showed; counting starts on the first visit.
     if (store.get("ac.auditSeen") === null || current === "audit") store.set("ac.auditSeen", String(o.audit_last || 0));
     const audit = Math.max(0, (o.audit_last || 0) - Number(store.get("ac.auditSeen") || 0));
-    badges = { users: o.pending_users || 0, notifications: o.unread || 0, audit, projects: (o.pending_proposals || 0) + (o.goals.awaiting_approval || 0) + (o.goals.running || 0) };
+    // Projects: what blocks or occupies work (merges waiting, goals running); pending proposals are listed on the page.
+    badges = { users: o.pending_users || 0, notifications: o.unread || 0, audit, projects: (o.goals.awaiting_approval || 0) + (o.goals.running || 0) };
     const es = $("#estop");
     if (es) { es.classList.toggle("on", !!o.stopped); es.title = o.stopped ? `A stop is active (${o.stop_level}): open System to see or lift it` : "Emergency stop: stop all autonomous work now"; }
     const sl = $("#stop-level");  // S15-R-01: every user sees that work is stopped, and how widely
