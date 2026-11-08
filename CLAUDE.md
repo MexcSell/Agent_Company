@@ -151,7 +151,7 @@ feature came from.
   TaskCompleted, TeammateIdle → `data/logs/team-hooks.jsonl`, fail-open);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
   (Workspace Claude Code panel: a tab per conversation of this browser session (new ones on the far right; earlier ones
-  only in the sessions window, opened at their beginning), titled by Haiku; a model menu (the CLI's aliases + the Models page's `claude_code`/`codex`
+  only in the sessions window, opened at their end), titled by Haiku; a model menu (the CLI's aliases + the Models page's `claude_code`/`codex`
   models, `router_model`: their id, sign-in and base URL; the transcript follows a conversation to another sign-in and
   back; `/status`, `/tasks`, `/agents` follow a chosen model's own sign-in: `model_home`) and effort, per prompt, also in a project's GM panel (default: the GM's model); each turn's prompt is a one-line
   bar pinned to the top of the log (trimming the event window never drops it), tool calls and thinking fold into one

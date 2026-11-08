@@ -413,7 +413,7 @@ Tabs: Organisation, Agent network, Tools & MCP, Skills & plugins, Marketplace (a
   and the result always show; tabs titled automatically.
 - **WEB-WSP-06 Sessions window** (clock button, `/history`, `/resume`): Running (every live Claude Code session on the
   host: **Open**, **Stop**) and History (every session with a transcript; search title, folder, prompt, id): **Open**
-  shows it in a tab from its beginning, **Continue** resumes it in this panel with `--resume`, **Delete** (confirm).
+  shows it in a tab at its end (the latest prompt and answer), **Continue** resumes it in this panel with `--resume`, **Delete** (confirm).
 - **WEB-WSP-07** The Workspace runs host-wide as the server user with no command filter, by decision of the owner;
   every session and prompt is audited; its WebSockets check the Origin.
 

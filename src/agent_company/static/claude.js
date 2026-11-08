@@ -13,7 +13,7 @@
 // live in its own tab, never shown twice. The drawer answers /status, /tasks and /agents (typed
 // in the prompt box or opened with the header button) for the selected tab: model, context,
 // background commands, todos, subagents and agent types; with a Models-page model that has its own sign-in chosen,
-// its sign-in's account, usage, sessions and agents. An earlier conversation opens at its beginning.
+// its sign-in's account, usage, sessions and agents. A conversation opens at its end (its latest prompt and answer).
 // The sessions window (clock button, /history or /resume) lists the running sessions (open,
 // stop) and every earlier one with a transcript (open, continue in a tab, delete).
 window.WSP = window.WSP || {};
@@ -442,7 +442,7 @@ window.WSP = window.WSP || {};
     } catch (e) {
       if (e.status === 404) {  // the server restarted: the conversation goes on in its transcript
         c.runs = []; saveConvs(); renderTabs(); renderBusy();
-        if (c.session) showTranscript(c, true); else renderLog(undefined, c);
+        if (c.session) showTranscript(c); else renderLog(undefined, c);
         return;
       }
       if (e.status !== 401) { setTimeout(() => poll(run), 2000); return; }
@@ -591,7 +591,15 @@ window.WSP = window.WSP || {};
     }
     return el;
   }
-  function showLog() { logOf(); C.logs.forEach((el, id) => (el.hidden = id !== C.tab)); }
+  // A tab shown again opens at its end, unless the user had scrolled up in it to read (then it stays there).
+  function showLog() {
+    const log = logOf();
+    C.logs.forEach((el, id) => {
+      if (id !== C.tab && !el.hidden) el.dataset.end = el.scrollHeight - el.scrollTop - el.clientHeight < 80 ? "1" : "";
+      el.hidden = id !== C.tab;
+    });
+    if (log.dataset.end !== "") log.scrollTop = log.scrollHeight;
+  }
   function dropLog(id) { C.logs.get(id)?.remove(); C.logs.delete(id); }
   function renderLog(scroll, c = cur()) {
     if (!c || following(c)) { if (c === cur()) renderSession(); return; }
@@ -613,9 +621,8 @@ window.WSP = window.WSP || {};
       return;
     }
     log.innerHTML = c.runs.map((r) => `<div class="cc-run" data-run="${esc(r.id)}">${runHtml(r)}</div>`).join("");
-    // `true`: at the end (a prompt was just sent, or it is working); unset: an opened conversation starts at the top.
-    if (scroll === true) log.scrollTop = log.scrollHeight;
-    else if (scroll !== false) log.scrollTop = 0;
+    // At the end: a conversation opens on its latest prompt and answer; `false` keeps where the user scrolled.
+    if (scroll !== false) log.scrollTop = log.scrollHeight;
   }
   function renderRun(run) {
     const c = C.convs.find((x) => x.runs.includes(run));
@@ -669,7 +676,7 @@ window.WSP = window.WSP || {};
     if (f === C.following) return;
     const was = C.following;
     C.following = f;
-    if (!f && c && was && was === c.session) showTranscript(c, true); else renderLog();
+    if (!f && c && was && was === c.session) showTranscript(c); else renderLog();
     renderInfo(); pollDetail();
   }
 
@@ -796,16 +803,15 @@ window.WSP = window.WSP || {};
     toast(`Continue: ${r.title || r.session_id.slice(0, 8)}`);
     C.el.querySelector("#wc-input").focus();
   }
-  // A conversation that has no prompt of this server process: its conversation from the transcript, from its
-  // beginning (`end`: at its end, where the user was watching it work).
-  async function showTranscript(c, end = false) {
+  // A conversation that has no prompt of this server process: its conversation from the transcript, at its end.
+  async function showTranscript(c) {
     const sid = c.session;
     let d = null;
     try { d = await api(`/api/workspace/claude-sessions/${encodeURIComponent(sid)}?after=0`); } catch { /* deleted or never written */ }
     if (c.session !== sid || c.runs.some((r) => !r.transcript && !r.divider)) return;  // a prompt was sent meanwhile
     if (!c.title && d?.title) { c.title = d.title; saveConvs(); renderTabs(); }
     c.runs = [transcriptRun(sid, d?.events || [], d?.partial_history, c.title)];
-    renderLog(end, c);
+    renderLog(true, c);
   }
   function renderTabs() {
     const box = C.el?.querySelector("#wc-tabs");
@@ -926,9 +932,8 @@ window.WSP = window.WSP || {};
     const events = turnsHtml(run, run.events, results, d.status === "busy");
     const tail = d.status === "busy" ? `<div class="cc-working"><span class="spin"></span> ${activity(d)}</div>` : d.status === "ended" ? '<div class="cc-divider"><span>Session ended</span></div>' : "";
     log.innerHTML = `<div class="cc-run cc-live">${d.partial_history ? '<div class="cc-divider"><span>Earlier history not loaded</span></div>' : ""}${events || '<p class="muted">No conversation yet.</p>'}${tail}</div>`;
-    // An ended session opens at its beginning; a working one, and one followed at its end, stay at the end.
-    if (first) log.scrollTop = d.status === "busy" ? log.scrollHeight : 0;
-    else if (atBottom) log.scrollTop = log.scrollHeight;
+    // It opens at its end, and stays there while the user follows it (not when they scrolled up to read).
+    if (first || atBottom) log.scrollTop = log.scrollHeight;
   }
 
   const ST = { running: ["spin", ""], completed: ["ok", "✓"], failed: ["err", "✗"], killed: ["err", "■"], stopped: ["muted", "■"], ended: ["muted", "·"] };
