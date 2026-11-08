@@ -59,6 +59,7 @@ async function viewModels(quiet) {
   const m = await api("/api/models");
   modelsList = m.models;
   const admin = me.is_admin || me.permissions?.manage_models;
+  const scrolls = [...document.querySelectorAll("#mdl-page .ag-scroll")].map((e) => e.scrollTop);  // a redraw keeps them
   $("#view").classList.add("fit");
   $("#view").innerHTML = `<div class="mdl-page" id="mdl-page"><section class="card ag-scroll"><div class="row nowrap"><h2 class="grow" style="margin:0">Model catalog</h2>${admin ? ib("plus", "Add a model", 'id="m-add"', "primary") : ""}</div>
       <p class="muted">Executor mode: <code>${esc(m.executor)}</code>${m.default_model ? ` · MODEL: <code>${esc(m.default_model)}</code>` : ""}. Unavailable models fall back to MODEL, then to the offline simulator.</p>
@@ -71,6 +72,7 @@ async function viewModels(quiet) {
     <section class="card ag-scroll"><h2>Routes: which role uses which model</h2><p class="muted">Retry model: used after a failed quality gate (escalation). Fallbacks: the models, in order, that take the role's work when its model hits a usage limit or fails. An agent's own model (its card) comes first.</p>
       <datalist id="mdl-names">${m.models.filter((x) => x.kind !== "offline").map((x) => `<option value="${esc(x.name)}">`).join("")}</datalist>
       <table class="mdl-routes"><tr><th>Role</th><th>Model</th><th>Retry model</th><th>Fallbacks</th></tr>${Object.entries(m.routes).map(([role, name]) => `<tr><td>${esc(role.replace(/_/g, " "))}</td><td>${admin ? `<select data-role="${esc(role)}">${m.models.map((x) => `<option ${x.name === name ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : esc(name)}</td><td>${admin ? `<select data-esc="${esc(role)}"><option value="">same model</option>${m.models.map((x) => `<option ${x.name === m.escalations[role] ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : esc(m.escalations[role] || "same model")}</td><td>${admin ? `<input data-fb="${esc(role)}" list="mdl-names" placeholder="e.g. Codex CLI" value="${esc(((m.fallbacks || {})[role] || []).join(", "))}">` : esc(((m.fallbacks || {})[role] || []).join(", ") || "none")}</td></tr>`).join("")}</table></section></div>`;
+  document.querySelectorAll("#mdl-page .ag-scroll").forEach((e, i) => (e.scrollTop = scrolls[i] || 0));
   document.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => { if (!confirm("Delete this model? Routes using it move to another model.")) return; try { await api(`/api/models/${b.dataset.del}`, { method: "DELETE" }); viewModels(); } catch (e) { toast(e.message); } }));
   const saveRoute = async (role) => { try { await api(`/api/routes/${role}`, { method: "PUT", body: { model_name: document.querySelector(`[data-role="${role}"]`).value, escalation: document.querySelector(`[data-esc="${role}"]`).value, fallback: document.querySelector(`[data-fb="${role}"]`).value.split(",").map((x) => x.trim()).filter(Boolean) } }); toast("Route saved"); } catch (e) { toast(e.message); } };
   document.querySelectorAll("[data-role]").forEach((s) => (s.onchange = () => saveRoute(s.dataset.role)));
