@@ -77,7 +77,10 @@ feature came from.
   classes, independent reviews that send a disputed decision to a person); `escalation.py` (S04-R-07 levels 1-5 and their
   recipients: agent, goal GM, room manager, executive GM, a person; delivered as blackboard requests);
   `budgets.py` (S04-R-09 goal budgets: cost, tokens, agents at once; child goals capped by the parent's remainder;
-  daily room budgets over a room's subtree are `Room.daily_budget_usd`, checked with the agent quota in `registry.over_quota`); `projects.py` (projects with a GitHub URL, filled from the repository's remote (`repo_remote`), stack, skills, rooms, budget, deadline, priority and a lifecycle `set_status`; command window
+  daily room budgets over a room's subtree are `Room.daily_budget_usd`, checked with the agent quota in `registry.over_quota`); `ownerpolicy.py` (owner policy, both settings off by default: `auto_approve_proposals`
+  approves pending follow-up proposals through `projects.decide(by_human=False, hold=True)`, while project, rule,
+  restricted and guard- or budget-limited proposals stay pending and duplicates are rejected; `auto_merge` calls
+  `loop.approve` at awaiting_approval; audited as `policy:auto-approve`/`policy:auto-merge`); `projects.py` (projects with a GitHub URL, filled from the repository's remote (`repo_remote`), stack, skills, rooms, budget, deadline, priority and a lifecycle `set_status`; command window
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals (S10-R-01: a
   `PROPOSAL[product]` becomes a project only with its documented case, decided by a person), uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress and goal times;
   blockers and generated items are reconciled from goal state by `sync`; a new project GM gets a handover package); `kgraph.py` (SPEC-11 knowledge graph: `kg_edges` written as side effects, the paged neighbourhood API);
@@ -196,7 +199,9 @@ feature came from.
 - Agents must not get access to production servers. Executors that change files run only inside
   `data/worktrees/` (`worktrees.ensure_sandboxed`); commands pass `governance.check_command` and run through
   `contracts.run_command` (the L3 sandbox, never `subprocess` with the server's environment);
-  merging needs approval; pushing only on `/sync` or AUTO_PUSH.
+  merging needs approval (exception, the owner's order of 2026-11-08: with the owner-policy setting `auto_merge` on,
+  `loop.approve` runs as 'auto-merge (owner policy)' when a goal reaches awaiting_approval, except a2a/eval goals,
+  and every merge-time block still applies); pushing only on `/sync` or AUTO_PUSH.
 - Exception, by decision of the owner: the Workspace terminal and Claude Code panel are the
   administrator's own tools, not goal-loop agents. They run host-wide as the server user (no
   command filter, Claude Code with every tool allowed in the opened folder), are admin-only, and

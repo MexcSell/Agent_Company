@@ -35,7 +35,7 @@ GOVERNANCE_KEYS = ("require_approval", "goal_budget_usd", "goal_token_budget", "
                    "budget_exhausted_action", "cost_overrun_factor", "recruit_requires_approval", "qualify_recruits", "proposal_policy",
                    "max_proposal_goals", "max_goal_depth", "candidate_smoke", "auto_push", "a2a_enabled",
                    "blocked_commands", "sandbox", "sandbox_memory_mb", "sandbox_tasks", "sandbox_cpus", "sandbox_paths",
-                   "sandbox_env", "dependency_audit", "required_test_stages")
+                   "sandbox_env", "dependency_audit", "required_test_stages", "auto_approve_proposals", "auto_merge")
 # A project's own rules and what "stricter" means for each: a lower limit (0 = none), approval switched on, a later
 # step of the recruitment-approval order.
 LIMIT_KEYS = ("goal_budget_usd", "goal_token_budget", "goal_agent_limit")
