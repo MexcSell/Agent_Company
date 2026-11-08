@@ -2,6 +2,7 @@
 from the CLI's own config (never from what it printed), and a CLI model records whose sign-in it was registered with."""
 
 import json
+import os
 import secrets
 import stat
 import time
@@ -11,15 +12,27 @@ from fastapi.testclient import TestClient
 
 from agent_company import router
 
-# what `copilot login --device-code` prints, then it waits until the test confirms or denies on "GitHub"
+# What `copilot login --device-code` (1.0.x) does, then it waits until the test confirms or denies on "GitHub". As the
+# real CLI on a server without a keychain, it asks before keeping the token as plain text, and only in a terminal
+# (without one it gives up: "Login succeeded, but the token was not saved"); its config starts with comment lines.
 FAKE = """#!/bin/sh
 if [ "$1" = "--version" ]; then echo "GitHub Copilot CLI 1.0.107."; exit 0; fi
 echo "To authenticate, visit https://github.com/login/device and enter code ABCD-12EF"
 echo "Waiting for authorization..."
+echo "Failed to copy to clipboard. Please visit https://github.com/login/device and enter the code ABCD-12EF manually."
 while [ ! -f "$HOME/answer" ]; do sleep 0.05; done
 if [ "$(cat "$HOME/answer")" = ok ]; then
+  if [ -t 0 ] && [ -t 1 ]; then
+    printf "System keychain unavailable. Store token in plaintext config file? (y/N) "
+    read reply
+  fi
+  case "$reply" in y|yes) ;; *)
+    echo "Login succeeded, but the token was not saved. Install a system keychain or rerun login and accept plaintext storage." >&2
+    exit 1;;
+  esac
   mkdir -p "$HOME/.copilot"
-  echo '{"logged_in_users":[{"host":"https://github.com","login":"octocat"}],"last_logged_in_user":{"host":"https://github.com","login":"octocat"}}' > "$HOME/.copilot/config.json"
+  printf '// User settings belong in settings.json.\n// This file is managed automatically.\n' > "$HOME/.copilot/config.json"
+  echo '{"logged_in_users":[{"host":"https://github.com","login":"octocat"}],"last_logged_in_user":{"host":"https://github.com","login":"octocat"}}' >> "$HOME/.copilot/config.json"
   exit 0
 fi
 echo "Error: the authorization request was denied"
@@ -38,6 +51,7 @@ def copilot(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("COPILOT_HOME", raising=False)
     for k in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setattr(router, "_logins", {})
@@ -56,13 +70,20 @@ def _until(state, tool="copilot", timeout=10.0):
     raise AssertionError(f"still {router.login_state(tool)['state']}, wanted {state}")
 
 
+def _approve(home, store=True):
+    """The person approves on GitHub, then answers the page's plaintext question."""
+    (home / "answer").write_text("ok")
+    assert _until("consent")["code"] == "ABCD-12EF"
+    return router.answer_login("copilot", store)
+
+
 def test_the_code_reaches_the_page_and_a_confirmed_sign_in_is_reported_with_the_account(copilot):
     assert router.cli_status("copilot")["signed_in"] is False
     out = router.cli_login("copilot", by="admin")
     assert out["state"] == "waiting" and out["url"] == "https://github.com/login/device" and out["code"] == "ABCD-12EF"
     assert 0 < out["seconds_left"] <= router.LOGIN_TIMEOUT and "proc" not in out and "output" not in out
     assert router.cli_login("copilot")["code"] == "ABCD-12EF"  # a second click follows the running sign-in
-    (copilot / "answer").write_text("ok")
+    assert _approve(copilot)["state"] == "finishing"
     done = _until("signed_in")
     assert done["account"]["email"] == "octocat" and done["account"]["method"] == "GitHub account"
     st = router.cli_status("copilot")
@@ -76,12 +97,37 @@ def test_a_denied_sign_in_fails_with_the_reason(copilot):
     assert "denied" in out["error"] and not router.cli_status("copilot")["signed_in"]
 
 
+def test_declining_plain_text_storage_cancels_without_signing_in(copilot):
+    router.cli_login("copilot")
+    _approve(copilot, store=False)
+    out = _until("cancelled")
+    assert "not stored" in out["error"] and not router.cli_status("copilot")["signed_in"]
+    with pytest.raises(ValueError):
+        router.answer_login("copilot", True)  # nothing is waiting for an answer any more
+
+
+def test_without_a_terminal_the_cli_could_not_ask_and_the_error_says_why(copilot, monkeypatch):
+    """What happened before the sign-in ran in a pseudo-terminal: the CLI's message is the error, without the noise."""
+    import pty
+
+    def no_tty():
+        r, w = os.pipe()
+        return r, w
+
+    monkeypatch.setattr(pty, "openpty", no_tty)
+    router.cli_login("copilot")
+    (copilot / "answer").write_text("ok")
+    out = _until("failed")
+    assert out["error"].startswith("Login succeeded, but the token was not saved")
+    assert "clipboard" not in out["error"] and "Waiting" not in out["error"]
+
+
 def test_a_cli_that_exits_cleanly_without_signing_in_is_not_reported_signed_in(copilot):
     script = copilot.parent / "bin" / "copilot"
     script.write_text(FAKE.replace('mkdir -p "$HOME/.copilot"', "true").replace(
         "echo '{\"logged_in_users\"", "true # "))
     router.cli_login("copilot")
-    (copilot / "answer").write_text("ok")
+    _approve(copilot)
     assert _until("failed")["state"] == "failed"  # exit 0, but its config names nobody
 
 
@@ -95,7 +141,7 @@ def test_cancel_ends_the_waiting_cli(copilot):
 
 def test_a_cli_model_records_the_sign_in_it_was_registered_with(copilot):
     router.cli_login("copilot")
-    (copilot / "answer").write_text("ok")
+    _approve(copilot)
     _until("signed_in")
     m = router.add_model({"name": "Copilot of octocat", "kind": "copilot"})
     assert m["signin"]["method"] == "GitHub account" and m["signin"]["email"] == "octocat" and m["signin"]["at"]
@@ -114,7 +160,12 @@ def test_the_api_is_for_administrators_and_audits_start_and_result(copilot):
         assert r.status_code == 200 and r.json()["code"] == "ABCD-12EF"
         assert app.post("/api/models/cli/claude/login").status_code == 404  # no website sign-in for that CLI
         (copilot / "answer").write_text("ok")
+        _until("consent")
+        assert app.post("/api/models/cli/copilot/login/consent", json={"store": "yes"}).status_code == 422
+        assert app.post("/api/models/cli/copilot/login/consent", json={"store": True}).json()["state"] == "finishing"
+        assert app.post("/api/models/cli/copilot/login/consent", json={"store": True}).status_code == 409
         _until("signed_in")
         assert app.get("/api/models/cli/copilot/login").json()["account"]["email"] == "octocat"
         actions = {(a["action"], a["actor"]) for a in app.get("/api/audit").json()["records"]}
-        assert ("cli_login", "user:admin") in actions and ("cli_login_result", "user:admin") in actions
+        assert {("cli_login", "user:admin"), ("cli_login_consent", "user:admin"),
+                ("cli_login_result", "user:admin")} <= actions

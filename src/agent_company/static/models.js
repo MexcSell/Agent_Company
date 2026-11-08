@@ -217,9 +217,15 @@ function addModelDialog() {
               <div class="row nowrap" style="margin:6px 0"><code class="mdl-code">${esc(j.code)}</code><button type="button" class="icon-btn sm" title="Copy the code" aria-label="Copy the code" id="cli-code-copy">${icon("copy", 14)}</button>
               <a class="btn primary" href="${esc(j.url)}" target="_blank" rel="noopener noreferrer">Open GitHub</a><button type="button" class="btn" id="cli-login-x">Cancel</button></div>
               <div class="muted"><span class="spin"></span> Waiting for you to confirm on GitHub · the code expires in ${left}</div></div>`
+          : j.state === "consent" ? `<div class="mdl-login"><div><b>GitHub accepted the sign-in.</b> This server has no system keychain, so the Copilot CLI can keep its token only as plain text in its config file (<code>~/.copilot/config.json</code>, readable by the server's user). Store it there?</div>
+              <div class="row" style="margin-top:8px"><button type="button" class="btn primary" id="cli-store">Store the token</button><button type="button" class="btn" id="cli-nostore">Cancel sign-in</button></div></div>`
+          : j.state === "finishing" ? '<div class="cc-working"><span class="spin"></span> Saving the sign-in…</div>'
           : j.state === "signed_in" ? `<div class="ok-t">✓ Signed in to GitHub${j.account?.email ? ` as <b>${esc(j.account.email)}</b>` : ""}</div>`
           : j.state === "failed" ? `<div class="cc-error">Sign-in failed: ${esc(j.error || "unknown error")}</div>`
-          : j.state === "cancelled" ? '<div class="muted">Sign-in cancelled.</div>' : "";
+          : j.state === "cancelled" ? `<div class="muted">Sign-in cancelled${j.error ? `: ${esc(j.error)}` : "."}</div>` : "";
+        const consent = (store) => async () => { try { followLogin(await api(`/api/models/cli/${tool}/login/consent`, { method: "POST", body: { store } })); } catch (e) { toast(e.message); } };
+        $("#cli-store") && ($("#cli-store").onclick = consent(true));
+        $("#cli-nostore") && ($("#cli-nostore").onclick = consent(false));
         $("#cli-code-copy") && ($("#cli-code-copy").onclick = () => navigator.clipboard?.writeText(j.code).then(() => toast("Code copied"), () => toast("Select the code and copy it")));
         $("#cli-login-x") && ($("#cli-login-x").onclick = async () => { try { showLogin(await api(`/api/models/cli/${tool}/login`, { method: "DELETE" })); } catch (e) { toast(e.message); } });
         return true;
@@ -227,7 +233,7 @@ function addModelDialog() {
       const followLogin = async (j) => {
         clearTimeout(cliChanged.timer);
         if (!showLogin(j) || $("#m-cli").value !== tool) return;
-        if (["starting", "waiting"].includes(j.state)) {
+        if (["starting", "waiting", "consent", "finishing"].includes(j.state)) {
           cliChanged.timer = setTimeout(async () => { try { followLogin(await api(`/api/models/cli/${tool}/login`)); } catch (e) { showLogin({ state: "failed", error: e.message }); } }, 2000);
         } else if (j.state === "signed_in") {
           toast(`Signed in to GitHub${j.account?.email ? ` as ${j.account.email}` : ""}`);
@@ -240,7 +246,7 @@ function addModelDialog() {
         try { followLogin(await api(`/api/models/cli/${tool}/login`, { method: "POST" })); } catch (err) { showLogin({ state: "failed", error: err.message }); }
         b.disabled = false;
       });
-      if (login) api(`/api/models/cli/${tool}/login`).then((j) => ["starting", "waiting"].includes(j.state) && followLogin(j)).catch(() => {});  // one still running
+      if (login) api(`/api/models/cli/${tool}/login`).then((j) => ["starting", "waiting", "consent", "finishing"].includes(j.state) && followLogin(j)).catch(() => {});  // one still running
       $("#cli-inst") && ($("#cli-inst").onclick = async (e) => {
         const b = e.currentTarget; b.disabled = true; b.classList.add("busy");
         try { const r = await api(`/api/models/cli/${tool}/install`, { method: "POST" }); toast(r.ok ? `Installed ${r.version}` : `npm failed: ${r.output.slice(-200)}`); } catch (err) { toast(err.message); }

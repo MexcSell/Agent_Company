@@ -325,7 +325,7 @@ Tabs: Organisation, Agent network, Tools & MCP, Skills & plugins, Marketplace (a
 - **WEB-MOD-05 Add a model**: type **API** (OpenRouter with a searchable list sortable by performance or price, a
   free-only filter, score and context per model; or another provider by LiteLLM id; API key), **CLI** (Codex, GitHub
   Copilot, Claude Code with optional own sign-in account and a session to fork; shows whether the CLI is installed
-  and enabled, with **Install** and **Enable**; for GitHub Copilot **Sign in to GitHub**: the server runs the CLI's device sign-in, the dialog shows the one-time code with **Copy**, **Open GitHub**, **Cancel** and the time left, polls every 2 s, and reports "Signed in to GitHub as <login>" or the reason it failed; the status line then reads "signed in as <login>"), **Local** (OpenAI-compatible URL, **Ask the server which models it
+  and enabled, with **Install** and **Enable**; for GitHub Copilot **Sign in to GitHub**: the server runs the CLI's device sign-in, the dialog shows the one-time code with **Copy**, **Open GitHub**, **Cancel** and the time left, polls every 2 s; when the server has no system keychain it asks whether the CLI may keep the token as plain text in `~/.copilot/config.json` (**Store the token** / **Cancel sign-in**); it then reports "Signed in to GitHub as <login>" or the reason it failed; the status line then reads "signed in as <login>"), **Local** (OpenAI-compatible URL, **Ask the server which models it
   serves**, served model).
 - **WEB-MOD-06 Terms dialog**: name, billing (API per token, subscription, free tier, trial credits, runs here),
   context window, tool calling, provider may retain or train on prompts, commercial use, terms or pricing page.

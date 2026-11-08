@@ -412,6 +412,8 @@ def available(m: ModelEntry, ignore_limit: bool = False) -> tuple[bool, str]:
             return False, "set ENABLE_CODEX=1 to let agents run Codex"
         if not shutil.which("codex"):
             return False, "`codex` CLI not found on PATH"
+        if m.account and not (codex_home(m.account) / "auth.json").is_file():
+            return False, f"no Codex sign-in in data/codex-accounts/{m.account}"
     elif m.kind == "copilot":
         if not settings().enable_copilot:
             return False, "set ENABLE_COPILOT=1 to let agents run GitHub Copilot"
@@ -444,13 +446,21 @@ SESSION_RE = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a
 ACCOUNT_RE = r"[a-z0-9][a-z0-9._-]{0,63}"
 
 
-def claude_config_dir(account: str) -> Path:
-    """A claude_code model's own Claude Code sign-in (its CLAUDE_CONFIG_DIR): data/claude-accounts/<account>/."""
+ACCOUNT_KINDS = {"claude_code": "claude", "codex": "codex"}  # CLI kinds with a sign-in per model: data/<x>-accounts/
+
+
+def account_dir(tool: str, account: str) -> Path:
+    """A CLI model's own sign-in folder: data/claude-accounts/<account>/ or data/codex-accounts/<account>/."""
     import re
 
     if not re.fullmatch(ACCOUNT_RE, account) or ".." in account:
-        raise ValueError(f"invalid Claude Code account {account!r}")
-    return settings().data_dir / "claude-accounts" / account
+        raise ValueError(f"invalid {CLI_TOOLS[tool]['label']} account {account!r}")
+    return settings().data_dir / f"{tool}-accounts" / account
+
+
+def claude_config_dir(account: str) -> Path:
+    """A claude_code model's own Claude Code sign-in (its CLAUDE_CONFIG_DIR): data/claude-accounts/<account>/."""
+    return account_dir("claude", account)
 
 
 def claude_session_file(session_id: str, account: str = "") -> str:
@@ -719,9 +729,9 @@ def add_model(data: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("kind must be llm, claude_code, codex or copilot")
     if data["kind"] == "llm" and not data.get("model_id"):
         raise ValueError("model_id is required (LiteLLM-style provider/model)")
+    if data.get("account") and data["kind"] not in ACCOUNT_KINDS:
+        raise ValueError("account is a Claude Code or Codex sign-in: only for claude_code and codex models")
     _check_endpoint(data)
-    if data.get("account") and data["kind"] != "claude_code":
-        raise ValueError("account is a Claude Code sign-in: only for claude_code models")
     with session() as s:
         if s.scalars(select(ModelEntry).where(ModelEntry.name == data["name"])).first():
             raise ValueError("a model with that name exists")
@@ -753,9 +763,9 @@ def update_model(model_id: int, data: dict[str, Any]) -> dict[str, Any]:
             if data["api_key"] and m.kind != "llm":
                 raise ValueError("an API key is for API and local models; a CLI uses its own sign-in")
             _set_key(m, str(data["api_key"] or ""))
-        _check_endpoint(data)
-        if data.get("account") and data.get("kind", m.kind) != "claude_code":
-            raise ValueError("account is a Claude Code sign-in: only for claude_code models")
+        if data.get("account") and data.get("kind", m.kind) not in ACCOUNT_KINDS:
+            raise ValueError("account is a Claude Code or Codex sign-in: only for claude_code and codex models")
+        _check_endpoint({**data, "kind": data.get("kind", m.kind)})
         renamed = None
         if "name" in data:
             data = {**data, "name": str(data["name"] or "").strip()}
@@ -801,10 +811,11 @@ def _check_endpoint(data: dict[str, Any]) -> None:
     if sid and not re.fullmatch(SESSION_RE, sid):
         raise ValueError("session_id must be a Claude Code session id such as 3067d536-a81c-492b-9302-1b000247bdea")
     if data.get("account"):
+        tool = ACCOUNT_KINDS.get(data.get("kind") or "", "claude")
         try:
-            claude_config_dir(data["account"])
+            account_dir(tool, data["account"])
         except ValueError:
-            raise ValueError("account must be a folder name in data/claude-accounts/ such as claude-2") from None
+            raise ValueError(f"account must be a folder name in data/{tool}-accounts/ such as {tool}-2") from None
 
 
 def test_model(model_id: int) -> dict[str, Any]:
@@ -931,7 +942,10 @@ def window_label(minutes: int, fallback: str = "limit") -> str:
     return f"{minutes}-minute limit" if minutes else fallback.capitalize() + " limit"
 
 
-def codex_home() -> Path:
+def codex_home(account: str = "") -> Path:
+    """Codex's home (CODEX_HOME, else ~/.codex); a codex model's own ChatGPT sign-in: data/codex-accounts/<account>/."""
+    if account:
+        return account_dir("codex", account)
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
 
@@ -1142,8 +1156,6 @@ CLI_TOOLS: dict[str, dict[str, Any]] = {
 
 
 def _signed_in(tool: str) -> bool:
-    import json
-
     if tool == "codex":
         return (codex_home() / "auth.json").is_file()
     if tool == "claude":
@@ -1151,11 +1163,20 @@ def _signed_in(tool: str) -> bool:
         return (home / ".credentials.json").is_file() or bool(os.environ.get("ANTHROPIC_API_KEY"))
     if any(os.environ.get(k) for k in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")):
         return True
-    cfg = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home()) / ".copilot" / "config.json"
+    return bool(copilot_config().get("logged_in_users"))
+
+
+def copilot_config() -> dict[str, Any]:
+    """The Copilot CLI's config.json ($COPILOT_HOME, else ~/.copilot): JSON after `//` comment lines it writes."""
+    import json
+
+    home = os.environ.get("COPILOT_HOME") or Path(os.environ.get("XDG_CONFIG_HOME") or Path.home()) / ".copilot"
     try:
-        return bool(json.loads(cfg.read_text()).get("logged_in_users"))
+        text = (Path(home) / "config.json").read_text()
+        d = json.loads("\n".join(x for x in text.splitlines() if not x.lstrip().startswith("//")))
     except (OSError, ValueError):
-        return False
+        return {}
+    return d if isinstance(d, dict) else {}
 
 
 def cli_status(tool: str) -> dict[str, Any]:
@@ -1198,26 +1219,34 @@ def install_cli(tool: str) -> dict[str, Any]:
 LOGIN_CMDS: dict[str, list[str]] = {"copilot": ["login", "--device-code"]}
 LOGIN_TIMEOUT = 900  # GitHub's device codes expire after 15 minutes
 _DEVICE_RE = re.compile(r"(https://[^\s]+/login/device)\S*.*?\b([A-Z0-9]{4}-[A-Z0-9]{4})\b")
+# Without a system keychain the CLI asks, in a terminal only, whether to keep the token as plain text in its config
+# file; a person answers that on the page (state `consent`), never the server on its own.
+_CONSENT_RE = re.compile(r"Store token in plain ?text config file\?", re.I)
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\r")
+_NOISE_RE = re.compile(r"Waiting for authorization|Failed to copy to clipboard|To authenticate, visit|"
+                       r"Store token in plain ?text|^[yYnN]$")
+_ACTIVE = ("starting", "waiting", "consent", "finishing")
 _logins: dict[str, dict[str, Any]] = {}
 _login_lock = threading.Lock()
 
 
 def login_state(tool: str) -> dict[str, Any]:
-    """The tool's sign-in job (`none` before one ran): state starting|waiting|signed_in|failed|cancelled, the
-    address and code to enter, the seconds left, the account it signed in as and the error. The CLI's own output
-    stays on the server (the error quotes its last lines)."""
+    """The tool's sign-in job (`none` before one ran): state starting|waiting|consent|finishing|signed_in|failed|
+    cancelled, the address and code to enter, the seconds left, the account it signed in as and the error. The CLI's
+    own output stays on the server (the error quotes its last lines)."""
     if tool not in LOGIN_CMDS:
         raise KeyError(tool)
     job = _logins.get(tool)
     if job is None:
         return {"tool": tool, "state": "none"}
-    left = max(0, int(job["started"] + LOGIN_TIMEOUT - time.time())) if job["state"] in ("starting", "waiting") else 0
-    return {k: v for k, v in job.items() if k not in ("proc", "output")} | {"seconds_left": left}
+    left = max(0, int(job["started"] + LOGIN_TIMEOUT - time.time())) if job["state"] in _ACTIVE else 0
+    return {k: v for k, v in job.items() if k not in ("proc", "output", "fd")} | {"seconds_left": left}
 
 
 def cli_login(tool: str, by: str = "system") -> dict[str, Any]:
-    """Start the CLI's device sign-in, or return the one running; waits up to 10 s for the code. Its result is
-    audited in the name of `by` when it ends."""
+    """Start the CLI's device sign-in in a pseudo-terminal (so it can ask about storing the token), or return the
+    one running; waits up to 10 s for the code. Its result is audited in the name of `by` when it ends."""
+    import pty
     import subprocess
 
     if tool not in LOGIN_CMDS:
@@ -1227,11 +1256,19 @@ def cli_login(tool: str, by: str = "system") -> dict[str, Any]:
         raise RuntimeError(f"the {CLI_TOOLS[tool]['label']} CLI is not installed on the server")
     with _login_lock:
         job = _logins.get(tool)
-        if job is None or job["state"] not in ("starting", "waiting"):
-            proc = subprocess.Popen([exe, *LOGIN_CMDS[tool]], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True, cwd=str(Path.home()), start_new_session=True)
+        if job is None or job["state"] not in _ACTIVE:
+            master, slave = pty.openpty()
+            try:
+                proc = subprocess.Popen([exe, *LOGIN_CMDS[tool]], stdin=slave, stdout=slave, stderr=slave,
+                                        cwd=str(Path.home()), start_new_session=True,
+                                        env={**os.environ, "TERM": "dumb", "NO_COLOR": "1"})
+            except OSError:
+                os.close(master)
+                raise
+            finally:
+                os.close(slave)
             job = {"tool": tool, "state": "starting", "url": "", "code": "", "started": time.time(), "account": {},
-                   "error": "", "output": "", "by": by, "proc": proc}
+                   "error": "", "output": "", "by": by, "proc": proc, "fd": master}
             _logins[tool] = job
             threading.Thread(target=_watch_login, args=(job,), daemon=True, name=f"login-{tool}").start()
     end = time.time() + 10
@@ -1240,9 +1277,19 @@ def cli_login(tool: str, by: str = "system") -> dict[str, Any]:
     return login_state(tool)
 
 
+def answer_login(tool: str, store: bool) -> dict[str, Any]:
+    """The person's answer to "store the token as plain text?": yes finishes the sign-in, no cancels it."""
+    job = _logins.get(tool)
+    if job is None or job["state"] != "consent":
+        raise ValueError("the sign-in is not waiting for that answer")
+    job.update(state="finishing", stored=store)
+    os.write(job["fd"], b"y\n" if store else b"n\n")
+    return login_state(tool)
+
+
 def cancel_login(tool: str) -> dict[str, Any]:
     job = _logins.get(tool)
-    if job is not None and job["state"] in ("starting", "waiting"):
+    if job is not None and job["state"] in _ACTIVE:
         job["state"] = "cancelled"
         _end_login(job)
     return login_state(tool)
@@ -1260,31 +1307,43 @@ def _end_login(job: dict[str, Any]) -> None:
 
 
 def _watch_login(job: dict[str, Any]) -> None:
-    proc, tool = job["proc"], job["tool"]
+    proc, tool, fd = job["proc"], job["tool"], job["fd"]
     timer = threading.Timer(LOGIN_TIMEOUT, lambda: (job.update(error="the code expired before it was confirmed"),
                                                      _end_login(job)))
     timer.daemon = True
     timer.start()
     try:
-        for line in proc.stdout:
-            job["output"] = (job["output"] + line)[-4000:]
-            hit = _DEVICE_RE.search(line)
+        while True:
+            try:
+                chunk = os.read(fd, 4096)
+            except OSError:  # EIO: the CLI closed the terminal
+                break
+            if not chunk:
+                break
+            job["output"] = (job["output"] + _ANSI_RE.sub("", chunk.decode("utf-8", "replace")))[-4000:]
+            hit = _DEVICE_RE.search(job["output"])
             if hit and job["state"] == "starting":
                 job.update(url=hit.group(1), code=hit.group(2), state="waiting")
+            if job["state"] == "waiting" and _CONSENT_RE.search(job["output"]):
+                job["state"] = "consent"
         rc = proc.wait()
     finally:
         timer.cancel()
+        os.close(fd)
     if job["state"] == "cancelled":
         return
     if rc == 0 and _signed_in(tool):
         job.update(state="signed_in", account=cli_signin(CLI_TOOLS[tool]["kind"]))
+    elif job.get("stored") is False:
+        job.update(state="cancelled", error="the token was not stored, so the CLI is not signed in; nothing changed")
     else:
-        last = [x for x in job["output"].splitlines() if x.strip()][-3:]
+        last = [x.strip() for x in job["output"].splitlines() if x.strip() and not _NOISE_RE.search(x.strip())][-2:]
         job.update(state="failed", error=job["error"] or " ".join(last)[-500:] or f"the sign-in ended with code {rc}")
     from agent_company import governance
 
     governance.audit(f"user:{job['by']}", "cli_login_result", tool, None,
-                     {"state": job["state"], "account": job["account"].get("email", ""), "error": job["error"][:200]},
+                     {"state": job["state"], "account": job["account"].get("email", ""), "error": job["error"][:200],
+                      "plaintext_token": bool(job.get("stored"))},
                      "info" if job["state"] == "signed_in" else "warning")
 
 
@@ -1350,15 +1409,11 @@ def codex_account(home: Path | None = None) -> dict[str, str]:
 
 
 def copilot_account() -> dict[str, str]:
-    import json
-
     for k in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
         if os.environ.get(k):
             return {"method": f"GitHub token ({k})"}
-    cfg = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home()) / ".copilot" / "config.json"
-    try:
-        d = json.loads(cfg.read_text())
-    except (OSError, ValueError):
+    d = copilot_config()
+    if not d:
         return {"method": "not signed in"}
     user = d.get("last_logged_in_user") or next(iter(d.get("logged_in_users") or []), None) or {}
     return {"method": "GitHub account", "email": str(user.get("login") or "")} if user else {"method": "not signed in"}

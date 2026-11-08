@@ -2998,6 +2998,23 @@ def create_app(start_background: bool = True) -> FastAPI:
         except KeyError as e:
             raise HTTPException(404, f"{tool} has no sign-in from the website") from e
 
+    # Without a system keychain the CLI keeps the token only as plain text in its config: the person decides.
+    @app.post("/api/models/cli/{tool}/login/consent")
+    def model_cli_login_consent(tool: str, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                                ) -> dict[str, Any]:
+        store = body.get("store")
+        if not isinstance(store, bool):
+            raise HTTPException(422, "store must be true or false")
+        try:
+            out = router.answer_login(tool, store)
+        except KeyError as e:
+            raise HTTPException(404, f"{tool} has no sign-in from the website") from e
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+        _audit(admin, "cli_login_consent", tool, after={"store_plaintext_token": store},
+               severity="warning" if store else "info")
+        return out
+
     @app.delete("/api/models/cli/{tool}/login")
     def model_cli_login_cancel(tool: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         try:
