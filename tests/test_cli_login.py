@@ -169,3 +169,123 @@ def test_the_api_is_for_administrators_and_audits_start_and_result(copilot):
         actions = {(a["action"], a["actor"]) for a in app.get("/api/audit").json()["records"]}
         assert {("cli_login", "user:admin"), ("cli_login_consent", "user:admin"),
                 ("cli_login_result", "user:admin")} <= actions
+
+
+# What `codex login --device-auth` (0.162) prints: the address and the code on separate lines, in colour. Once the test
+# confirms on "OpenAI" it writes auth.json into its CODEX_HOME, as the real CLI does.
+CODEX_FAKE = r"""#!/bin/sh
+if [ "$1" = "--version" ]; then echo "codex-cli 0.162.1"; exit 0; fi
+printf '\nWelcome to Codex [v\033[90m0.162.1\033[0m]\n\nFollow these steps to sign in with ChatGPT using device code authorization:\n\n'
+printf '1. Open this link in your browser and sign in to your account\n   \033[94mhttps://auth.openai.com/codex/device\033[0m\n\n'
+printf '2. Enter this one-time code \033[90m(expires in 15 minutes)\033[0m\n   \033[94m792J-YS4QE\033[0m\n\n'
+while [ ! -f "$ANSWER_FILE" ]; do sleep 0.05; done
+if [ "$(cat "$ANSWER_FILE")" = ok ]; then
+  echo "{\"auth_mode\":\"chatgpt\",\"tokens\":{\"id_token\":\"$ID_TOKEN\"}}" > "$CODEX_HOME/auth.json"
+  echo "Successfully logged in"
+  exit 0
+fi
+echo "Error logging in with device code: access denied"
+exit 1
+"""
+
+
+def _id_token(email):
+    import base64
+
+    claims = {"email": email, "https://api.openai.com/auth": {"chatgpt_plan_type": "plus"}}
+    body = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    return f"e30.{body}.sig"
+
+
+@pytest.fixture
+def codex(tmp_path, monkeypatch):
+    """The host is signed in to Codex as first@example.com; a sign-in from the website is second@example.com."""
+    host, bin_dir = tmp_path / "host-codex", tmp_path / "bin"
+    host.mkdir()
+    bin_dir.mkdir()
+    (host / "auth.json").write_text(json.dumps({"tokens": {"id_token": _id_token("first@example.com")}}))
+    exe = bin_dir / "codex"
+    exe.write_text(CODEX_FAKE)
+    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    monkeypatch.setenv("CODEX_HOME", str(host))
+    monkeypatch.setenv("ANSWER_FILE", str(tmp_path / "answer"))
+    monkeypatch.setenv("ID_TOKEN", _id_token("second@example.com"))
+    monkeypatch.setattr(router, "_logins", {})
+    yield tmp_path
+    for job in router._logins.values():
+        router._end_login(job)
+
+
+def test_codex_signs_another_chatgpt_account_in_beside_the_host_and_a_model_uses_it(codex):
+    st = router.cli_status("codex")
+    assert st["signed_in"] and st["account"]["email"] == "first@example.com" and st["can_login"]
+    assert st["site"] == "ChatGPT" and st["next_account"] == "codex-2"
+    out = router.cli_login("codex", by="admin")
+    assert out["state"] == "waiting" and out["url"] == "https://auth.openai.com/codex/device"
+    assert out["code"] == "792J-YS4QE" and out["folder"] == "codex-2" and out["site"] == "ChatGPT"
+    assert "home" not in out and json.dumps(out)  # what the page gets is plain JSON
+    (codex / "answer").write_text("ok")
+    done = _until("signed_in", tool="codex")
+    assert done["account"]["email"] == "second@example.com"
+    assert router.cli_status("codex")["account"]["email"] == "first@example.com"  # the host's sign-in is as it was
+    assert router.cli_status("codex", "codex-2")["account"]["email"] == "second@example.com"
+    assert router.next_account("codex") == "codex-3"
+    m = router.add_model({"name": "Codex of second", "kind": "codex", "account": "codex-2"})
+    assert m["account"] == "codex-2" and m["signin"]["email"] == "second@example.com"
+    from agent_company.db import ModelEntry, session
+
+    with session() as s:
+        info = router.model_info(s.get(ModelEntry, m["id"]))
+    assert info["account"]["email"] == "second@example.com" and "data/codex-accounts/codex-2" in info["scope"]
+
+
+def test_a_failed_codex_sign_in_leaves_no_new_account_folder(codex):
+    out = router.cli_login("codex")
+    home = router.codex_home(out["folder"])
+    assert home.is_dir()
+    (codex / "answer").write_text("no")
+    assert "access denied" in _until("failed", tool="codex")["error"]
+    assert not home.exists() and router.next_account("codex") == out["folder"]
+
+
+def test_codex_accounts_are_folder_names_and_only_for_codex_and_claude_code(codex):
+    with pytest.raises(ValueError):
+        router.cli_login("codex", account="../escape")
+    with pytest.raises(ValueError):
+        router.cli_login("copilot", account="codex-2")
+    with pytest.raises(ValueError):
+        router.add_model({"name": "x", "kind": "copilot", "account": "codex-2"})
+    with pytest.raises(ValueError, match="codex-accounts"):
+        router.add_model({"name": "y", "kind": "codex", "account": "../x"})
+    m = router.add_model({"name": "Codex without its sign-in", "kind": "codex", "account": "codex-9"})
+    with __import__("agent_company.db", fromlist=["session"]).session() as s:
+        from agent_company.db import ModelEntry
+
+        ok, why = router.available(s.get(ModelEntry, m["id"]), ignore_limit=True)
+    assert not ok and ("codex-accounts/codex-9" in why or "ENABLE_CODEX" in why)
+
+
+def test_a_codex_model_with_an_account_runs_with_that_codex_home(codex):
+    from agent_company import executors
+
+    choice = router.Choice(name="c", kind="codex", model_id="", reason="", account="codex-2")
+    assert executors.codex_env(choice)["CODEX_HOME"] == str(router.codex_home("codex-2"))
+    assert router.codex_home("codex-2").parent.name == "codex-accounts"
+    assert executors.codex_env(router.Choice(name="c", kind="codex", model_id="", reason="")) is None
+
+
+def test_the_codex_sign_in_api_takes_an_account_folder(codex):
+    from agent_company.api import create_app
+
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
+        app.post("/api/auth/register", json={"name": "admin", "device_secret": secrets.token_urlsafe(32)})
+        assert app.post("/api/models/cli/codex/login", json={"account": "../x"}).status_code == 400
+        assert app.get("/api/models/cli/copilot?account=x").status_code == 400
+        r = app.post("/api/models/cli/codex/login", json={"account": "work"})
+        assert r.status_code == 200 and r.json()["folder"] == "work" and r.json()["code"] == "792J-YS4QE"
+        (codex / "answer").write_text("ok")
+        _until("signed_in", tool="codex")
+        assert app.get("/api/models/cli/codex?account=work").json()["account"]["email"] == "second@example.com"
+        logins = [a for a in app.get("/api/audit").json()["records"] if a["action"] == "cli_login"]
+        assert logins and "work" in json.dumps(logins[0])

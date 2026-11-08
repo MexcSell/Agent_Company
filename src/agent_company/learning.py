@@ -960,7 +960,7 @@ def link_team(goal_id: int, outcomes: list[tuple[int, str]], passed: bool) -> No
 IMPORT_FORMATS = ("auto", "text", "markdown", "chat", "reports", "folder")
 IMPORT_MAX_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_ITEMS, IMPORT_CHUNK = 2 * 1024 * 1024, 50, 500, 1000
 IMPORT_SUFFIXES = (".md", ".markdown", ".txt")  # what a folder import reads; a single file may also be .json
-IMPORT_REFUSED = ("tls", "git-keys", "claude-accounts")  # data/ folders with keys and sign-ins
+IMPORT_REFUSED = ("tls", "git-keys", "claude-accounts", "codex-accounts")  # data/ folders with keys and sign-ins
 _HEADING = re.compile(r"^#{1,6}\s+\S")
 _TURN = re.compile(r"^## (User|ChatGPT|Assistant|Claude)\s*$")  # only these exact lines start a chat turn
 _TAG = re.compile(r"<[^>\n]{1,200}>")  # <box …>, <AsyncImage …/> in chat exports: removed, never parsed

@@ -101,7 +101,10 @@ def router_models() -> dict[str, list[dict[str, Any]]]:
                          .order_by(ModelEntry.id)).all()
         for m in rows:
             why = ""
-            if m.account and not (router.claude_config_dir(m.account) / ".credentials.json").is_file():
+            if m.account and m.kind == "codex" and not (router.codex_home(m.account) / "auth.json").is_file():
+                why = f"no Codex sign-in in data/codex-accounts/{m.account}"
+            elif m.account and m.kind == "claude_code" and not (router.claude_config_dir(m.account)
+                                                               / ".credentials.json").is_file():
                 why = f"no Claude Code sign-in in data/claude-accounts/{m.account}"
             out[_ROUTER_KIND[m.kind]].append({"name": m.name, "model_id": m.model_id, "account": m.account or "",
                                               "remote": bool(m.base_url), "available": not why, "reason": why})
@@ -480,7 +483,7 @@ def start(prompt: str, cwd: str, owner: str, session_id: str = "", model: str = 
     title = re.sub(r"\s+", " ", title or "").strip()[:80]
     run = Run(prompt, str(folder), owner, session_id, model, images or [], title, provider, system[:20000], effort)
     if choice is not None:
-        from agent_company.executors import claude_env
+        from agent_company.executors import claude_env, codex_env
         from agent_company.router import claude_config_dir
 
         run.router_model = choice.name
@@ -488,6 +491,9 @@ def start(prompt: str, cwd: str, owner: str, session_id: str = "", model: str = 
             extra = claude_env(choice)
             run.env = _env(extra) if extra else None
             run.home = claude_config_dir(choice.account) if choice.account else None
+        elif provider == "codex":  # a Codex model with its own ChatGPT sign-in (its CODEX_HOME)
+            extra = codex_env(choice)
+            run.env = _env(extra) if extra else None
     # A conversation whose first prompt failed before Claude Code wrote anything starts afresh under its id; one
     # that continues under another sign-in takes its transcript there.
     run.resume = bool(session_id) and (provider == "codex" or _carry_transcript(session_id, run.home or claude_home()))

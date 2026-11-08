@@ -1155,11 +1155,12 @@ CLI_TOOLS: dict[str, dict[str, Any]] = {
 }
 
 
-def _signed_in(tool: str) -> bool:
+def _signed_in(tool: str, account: str = "") -> bool:
     if tool == "codex":
-        return (codex_home() / "auth.json").is_file()
+        return (codex_home(account) / "auth.json").is_file()
     if tool == "claude":
-        home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+        home = claude_config_dir(account) if account else Path(os.environ.get("CLAUDE_CONFIG_DIR")
+                                                               or Path.home() / ".claude")
         return (home / ".credentials.json").is_file() or bool(os.environ.get("ANTHROPIC_API_KEY"))
     if any(os.environ.get(k) for k in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")):
         return True
@@ -1179,18 +1180,22 @@ def copilot_config() -> dict[str, Any]:
     return d if isinstance(d, dict) else {}
 
 
-def cli_status(tool: str) -> dict[str, Any]:
-    """Whether the CLI is installed, its version, whether it is signed in and enabled for agents, and the setup."""
+def cli_status(tool: str, account: str = "") -> dict[str, Any]:
+    """Whether the CLI is installed, its version, whether it is signed in (with `account`: that sign-in folder's) and
+    enabled for agents, and the setup."""
     if tool not in CLI_TOOLS:
         raise KeyError(tool)
+    if account and tool not in ACCOUNT_KINDS.values():
+        raise ValueError(f"the {CLI_TOOLS[tool]['label']} CLI has no account folders")
     from agent_company.workspace import _version
 
     t = CLI_TOOLS[tool]
     exe = shutil.which(t["exe"])
     version = _version(exe)
     return {"tool": tool, "label": t["label"], "kind": t["kind"], "installed": bool(exe), "version": version,
-            "signed_in": bool(exe) and _signed_in(tool), "enabled": bool(getattr(settings(), t["enable"])),
-            "account": cli_signin(t["kind"]) if exe else {}, "can_login": tool in LOGIN_CMDS,
+            "signed_in": bool(exe) and _signed_in(tool, account), "enabled": bool(getattr(settings(), t["enable"])),
+            "account": cli_signin(t["kind"], account) if exe else {}, "can_login": tool in LOGIN_CMDS,
+            "site": LOGIN_SITES.get(tool, ""), "next_account": next_account(tool) if tool == "codex" else "",
             "enable_setting": t["enable"], "steps": t["steps"]}
 
 
@@ -1215,10 +1220,15 @@ def install_cli(tool: str) -> dict[str, Any]:
 # The GitHub sign-in of the Copilot CLI: `copilot login --device-code` runs on the server (an administrator's action);
 # the page shows its one-time code and address, the person confirms on github.com, and the job ends signed_in only when
 # the CLI exited cleanly and its own config says it is signed in (never from what it printed).
+# Codex the same with `codex login --device-auth` on auth.openai.com, always into a new or named sign-in folder
+# (data/codex-accounts/<account>/, its CODEX_HOME): another ChatGPT account beside the host's, which stays as it is.
 
-LOGIN_CMDS: dict[str, list[str]] = {"copilot": ["login", "--device-code"]}
-LOGIN_TIMEOUT = 900  # GitHub's device codes expire after 15 minutes
+LOGIN_CMDS: dict[str, list[str]] = {"copilot": ["login", "--device-code"], "codex": ["login", "--device-auth"]}
+LOGIN_SITES = {"copilot": "GitHub", "codex": "ChatGPT"}
+LOGIN_TIMEOUT = 900  # GitHub's and OpenAI's device codes expire after 15 minutes
 _DEVICE_RE = re.compile(r"(https://[^\s]+/login/device)\S*.*?\b([A-Z0-9]{4}-[A-Z0-9]{4})\b")
+# Codex prints the address and the code on separate lines: "https://auth.openai.com/codex/device" … "792J-YS4QE"
+_CODEX_DEVICE_RE = re.compile(r"(https://auth\.openai\.com/\S*device)\b.*?\b([A-Z0-9]{4}-[A-Z0-9]{4,6})\b", re.S)
 # Without a system keychain the CLI asks, in a terminal only, whether to keep the token as plain text in its config
 # file; a person answers that on the page (state `consent`), never the server on its own.
 _CONSENT_RE = re.compile(r"Store token in plain ?text config file\?", re.I)
@@ -1240,35 +1250,54 @@ def login_state(tool: str) -> dict[str, Any]:
     if job is None:
         return {"tool": tool, "state": "none"}
     left = max(0, int(job["started"] + LOGIN_TIMEOUT - time.time())) if job["state"] in _ACTIVE else 0
-    return {k: v for k, v in job.items() if k not in ("proc", "output", "fd")} | {"seconds_left": left}
+    return {k: v for k, v in job.items() if k not in ("proc", "output", "fd", "home", "new_home")} | {
+        "seconds_left": left, "site": LOGIN_SITES[tool]}
 
 
-def cli_login(tool: str, by: str = "system") -> dict[str, Any]:
+def next_account(tool: str) -> str:
+    """The first free sign-in folder name for a new account: codex-2, codex-3, …"""
+    n = 2
+    while account_dir(tool, f"{tool}-{n}").exists():
+        n += 1
+    return f"{tool}-{n}"
+
+
+def cli_login(tool: str, by: str = "system", account: str = "") -> dict[str, Any]:
     """Start the CLI's device sign-in in a pseudo-terminal (so it can ask about storing the token), or return the
-    one running; waits up to 10 s for the code. Its result is audited in the name of `by` when it ends."""
+    one running; waits up to 10 s for the code. Codex signs in into its own folder (`account`, else a new one), never
+    the host's. Its result is audited in the name of `by` when it ends."""
     import pty
     import subprocess
 
     if tool not in LOGIN_CMDS:
         raise KeyError(tool)
+    if account and tool != "codex":
+        raise ValueError(f"the {CLI_TOOLS[tool]['label']} sign-in has no account folders")
     exe = shutil.which(CLI_TOOLS[tool]["exe"])
     if not exe:
         raise RuntimeError(f"the {CLI_TOOLS[tool]['label']} CLI is not installed on the server")
     with _login_lock:
         job = _logins.get(tool)
         if job is None or job["state"] not in _ACTIVE:
+            env, home, new_home = {**os.environ, "TERM": "dumb", "NO_COLOR": "1"}, None, False
+            if tool == "codex":
+                account = account or next_account(tool)
+                home = codex_home(account)
+                new_home = not home.exists()
+                home.mkdir(parents=True, exist_ok=True, mode=0o700)
+                env["CODEX_HOME"] = str(home)
             master, slave = pty.openpty()
             try:
                 proc = subprocess.Popen([exe, *LOGIN_CMDS[tool]], stdin=slave, stdout=slave, stderr=slave,
-                                        cwd=str(Path.home()), start_new_session=True,
-                                        env={**os.environ, "TERM": "dumb", "NO_COLOR": "1"})
+                                        cwd=str(Path.home()), start_new_session=True, env=env)
             except OSError:
                 os.close(master)
                 raise
             finally:
                 os.close(slave)
             job = {"tool": tool, "state": "starting", "url": "", "code": "", "started": time.time(), "account": {},
-                   "error": "", "output": "", "by": by, "proc": proc, "fd": master}
+                   "error": "", "output": "", "by": by, "proc": proc, "fd": master, "folder": account,
+                   "home": home, "new_home": new_home}
             _logins[tool] = job
             threading.Thread(target=_watch_login, args=(job,), daemon=True, name=f"login-{tool}").start()
     end = time.time() + 10
@@ -1321,7 +1350,7 @@ def _watch_login(job: dict[str, Any]) -> None:
             if not chunk:
                 break
             job["output"] = (job["output"] + _ANSI_RE.sub("", chunk.decode("utf-8", "replace")))[-4000:]
-            hit = _DEVICE_RE.search(job["output"])
+            hit = (_CODEX_DEVICE_RE if tool == "codex" else _DEVICE_RE).search(job["output"])
             if hit and job["state"] == "starting":
                 job.update(url=hit.group(1), code=hit.group(2), state="waiting")
             if job["state"] == "waiting" and _CONSENT_RE.search(job["output"]):
@@ -1330,10 +1359,14 @@ def _watch_login(job: dict[str, Any]) -> None:
     finally:
         timer.cancel()
         os.close(fd)
+    home = job.get("home")
+    signed_in = (home / "auth.json").is_file() if home is not None else _signed_in(tool)
+    if job["new_home"] and not (rc == 0 and signed_in and job["state"] != "cancelled"):
+        shutil.rmtree(home, ignore_errors=True)  # a new folder without a sign-in: nothing to keep
     if job["state"] == "cancelled":
         return
-    if rc == 0 and _signed_in(tool):
-        job.update(state="signed_in", account=cli_signin(CLI_TOOLS[tool]["kind"]))
+    if rc == 0 and signed_in:
+        job.update(state="signed_in", account=cli_signin(CLI_TOOLS[tool]["kind"], job["folder"]))
     elif job.get("stored") is False:
         job.update(state="cancelled", error="the token was not stored, so the CLI is not signed in; nothing changed")
     else:
@@ -1342,7 +1375,8 @@ def _watch_login(job: dict[str, Any]) -> None:
     from agent_company import governance
 
     governance.audit(f"user:{job['by']}", "cli_login_result", tool, None,
-                     {"state": job["state"], "account": job["account"].get("email", ""), "error": job["error"][:200],
+                     {"state": job["state"], "account": job["account"].get("email", ""), "folder": job["folder"],
+                      "error": job["error"][:200],
                       "plaintext_token": bool(job.get("stored"))},
                      "info" if job["state"] == "signed_in" else "warning")
 
@@ -1354,7 +1388,7 @@ def cli_signin(kind: str, account: str = "") -> dict[str, Any]:
     if kind == "copilot":
         a = copilot_account()
     elif kind == "codex":
-        a = codex_account()
+        a = codex_account(codex_home(account) if account else None)
     elif kind == "claude_code":
         a = workspace._account(claude_config_dir(account) if account else None)
     else:
@@ -1468,13 +1502,15 @@ def model_info(m: ModelEntry) -> dict[str, Any]:
         info["scope"] = f"the Claude {p['plan']} plan of this sign-in" if p.get("plan") else "the Claude plan of this sign-in"
         info["note"] = "" if p.get("available") else p.get("reason") or ""
     elif m.kind == "codex":
-        info["account"] = codex_account()
-        st = codex_limits()
+        home = codex_home(m.account) if m.account else None
+        info["account"] = codex_account(home)
+        st = codex_limits(home)
         info["limits"] = [{"label": w["label"], "percent": w["used_percent"], "severity": severity(w["used_percent"]),
                            "resets_at": _iso(w.get("resets_at")), "source": "codex"}
                           for w in st.get("limits") or [] if not w.get("resets_at") or w["resets_at"] > time.time()]
         plan = st.get("plan") or info["account"].get("plan") or ""
-        info["scope"] = f"the ChatGPT {plan} plan of the server's Codex sign-in" if plan else "the ChatGPT plan of the server's Codex sign-in"
+        whose = f"the Codex sign-in in data/codex-accounts/{m.account}" if m.account else "the server's Codex sign-in"
+        info["scope"] = f"the ChatGPT {plan} plan of {whose}" if plan else f"the ChatGPT plan of {whose}"
         info["note"] = "" if info["limits"] else "Codex reports its plan limits with each run: press Test to read them"
     elif m.kind == "copilot":
         info["account"] = copilot_account()

@@ -685,6 +685,18 @@ def claude_env(choice: Choice) -> dict[str, str] | None:
     return env
 
 
+def codex_env(choice: Choice) -> dict[str, str] | None:
+    """Codex with its own ChatGPT sign-in: a codex model's `account` is its CODEX_HOME, data/codex-accounts/<account>/
+    (where the CLI also refreshes the token)."""
+    import os
+
+    if not choice.account:
+        return None
+    from agent_company.router import codex_home
+
+    return {**os.environ, "CODEX_HOME": str(codex_home(choice.account))}
+
+
 # EL-R-05: after each edit the file is parsed (never run) and a syntax error goes back to the agent at once
 EDIT_CHECK_SETTINGS = {"hooks": {"PostToolUse": [{"matcher": "Edit|Write|MultiEdit", "hooks": [
     {"type": "command", "timeout": 30,
@@ -780,7 +792,7 @@ class CodexExecutor(Executor):
         if self.choice.model_id:
             cmd += ["--model", self.choice.model_id]
         watch = stuck_watch("codex")
-        proc = self._spawn([*cmd, prompt], req, cwd, watch=watch)
+        proc = self._spawn([*cmd, prompt], req, cwd, env=codex_env(self.choice), watch=watch)
         parsed = parse_codex_stream(proc.stdout)
         if watch.reason:  # FW-R-02
             return Result(text="", input_tokens=estimate_tokens(prompt), ok=False, error=watch.reason,

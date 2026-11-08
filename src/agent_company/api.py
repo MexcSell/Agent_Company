@@ -2967,8 +2967,12 @@ def create_app(start_background: bool = True) -> FastAPI:
         return router.models_info()
 
     @app.get("/api/models/cli/{tool}")
-    def model_cli_status(tool: str, _: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
-        return router.cli_status(tool)
+    def model_cli_status(tool: str, account: str = "", _: dict[str, Any] = Depends(allowed("manage_models"))
+                         ) -> dict[str, Any]:
+        try:
+            return router.cli_status(tool, account)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
 
     @app.post("/api/models/cli/{tool}/install")
     def model_cli_install(tool: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
@@ -2979,16 +2983,21 @@ def create_app(start_background: bool = True) -> FastAPI:
         _audit(admin, "cli_install", tool, after={"ok": out["ok"], "version": out["version"]})
         return out
 
-    # The GitHub sign-in of the Copilot CLI from the website: start it (the page shows the code), follow it, cancel it.
+    # The GitHub sign-in of the Copilot CLI and the ChatGPT sign-in of Codex (into its own account folder) from the
+    # website: start it (the page shows the code), follow it, cancel it.
     @app.post("/api/models/cli/{tool}/login")
-    def model_cli_login(tool: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+    def model_cli_login(tool: str, body: dict[str, Any] | None = None, admin: dict[str, Any] = Depends(admin_user)
+                        ) -> dict[str, Any]:
+        account = (body or {}).get("account") or ""
+        if not isinstance(account, str):
+            raise HTTPException(422, "account must be a folder name")
         try:
-            out = router.cli_login(tool, by=admin["name"])
+            out = router.cli_login(tool, by=admin["name"], account=account.strip())
         except KeyError as e:
             raise HTTPException(404, f"{tool} has no sign-in from the website") from e
-        except (RuntimeError, OSError) as e:
+        except (RuntimeError, OSError, ValueError) as e:
             raise HTTPException(400, str(e)) from e
-        _audit(admin, "cli_login", tool, after={"state": out["state"]})
+        _audit(admin, "cli_login", tool, after={"state": out["state"], "folder": out.get("folder", "")})
         return out
 
     @app.get("/api/models/cli/{tool}/login")

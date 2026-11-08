@@ -431,7 +431,8 @@ class ModelEntry(Base):
     base_url: Mapped[str] = mapped_column(String(512), default="")  # OpenAI-compatible server (llama-server, LM Studio)
     api_key_env: Mapped[str] = mapped_column(String(64), default="")  # env var holding this model's key
     session_id: Mapped[str] = mapped_column(String(64), default="")  # claude_code: every run forks this session
-    # claude_code: its own Claude Code sign-in in data/claude-accounts/<account>/ (CLAUDE_CONFIG_DIR); "" = the host's
+    # claude_code: its own Claude Code sign-in in data/claude-accounts/<account>/ (CLAUDE_CONFIG_DIR), codex: its own
+    # ChatGPT sign-in in data/codex-accounts/<account>/ (CODEX_HOME); "" = the host's
     account: Mapped[str] = mapped_column(String(64), default="")
     # the highest classification it may receive (SPEC-14 S14-R-05); "" = by locality (router.clearance)
     clearance: Mapped[str] = mapped_column(String(16), default="")
