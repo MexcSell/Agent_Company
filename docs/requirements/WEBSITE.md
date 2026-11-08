@@ -311,7 +311,8 @@ Tabs: Organisation, Agent network, Tools & MCP, Skills & plugins, Marketplace (a
   Codex / Copilot, Local, Offline), name (rename in place, Enter saves, Escape cancels), **Active** switch, **Test**,
   **Terms, name and limits**, **Delete** (confirm: routes using it move to another model).
 - **WEB-MOD-02 Card content.** Status (available / unavailable with the reason / inactive), model id, CLI and its
-  version, server URL, account (method, email, plan or organisation, own sign-in), last test (when, OK or the error),
+  version, server URL, account (method, email, plan or organisation, own sign-in), the sign-in it was registered
+  with (a CLI model: method, login or email, date), last test (when, OK or the error),
   usage: the provider's usage windows as rings (5-hour session, weekly, per model family; percent used, reset time),
   a note, and this server's tokens today and this week, price per 1M tokens. Terms line: billing, context window,
   tool calling, training on prompts, commercial use, terms link, and "verify terms" when no person checked them in
@@ -324,7 +325,7 @@ Tabs: Organisation, Agent network, Tools & MCP, Skills & plugins, Marketplace (a
 - **WEB-MOD-05 Add a model**: type **API** (OpenRouter with a searchable list sortable by performance or price, a
   free-only filter, score and context per model; or another provider by LiteLLM id; API key), **CLI** (Codex, GitHub
   Copilot, Claude Code with optional own sign-in account and a session to fork; shows whether the CLI is installed
-  and enabled, with **Install** and **Enable**), **Local** (OpenAI-compatible URL, **Ask the server which models it
+  and enabled, with **Install** and **Enable**; for GitHub Copilot **Sign in to GitHub**: the server runs the CLI's device sign-in, the dialog shows the one-time code with **Copy**, **Open GitHub**, **Cancel** and the time left, polls every 2 s, and reports "Signed in to GitHub as <login>" or the reason it failed; the status line then reads "signed in as <login>"), **Local** (OpenAI-compatible URL, **Ask the server which models it
   serves**, served model).
 - **WEB-MOD-06 Terms dialog**: name, billing (API per token, subscription, free tier, trial credits, runs here),
   context window, tool calling, provider may retain or train on prompts, commercial use, terms or pricing page.

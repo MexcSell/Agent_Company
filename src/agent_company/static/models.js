@@ -34,6 +34,7 @@ function modelInfoHtml(x, info) {
     [info?.cli?.label || "", esc(info?.cli?.version || "")],
     ["Server", x.base_url ? `<span class="mono">${esc(x.base_url)}</span>` : ""],
     ["Account", a.method ? `${esc(a.method)}${a.email ? ` · ${esc(a.email)}` : ""}${a.organization || a.plan || a.note ? ` <span class="muted">(${esc(a.organization || a.note || `${a.plan} plan`)})</span>` : ""}${x.account ? ` <span class="muted">· sign-in ${esc(x.account)}</span>` : ""}` : ""],
+    ["Registered with", x.signin?.method ? `${esc(x.signin.method)}${x.signin.email ? ` · ${esc(x.signin.email)}` : ""}${x.signin.at ? ` <span class="muted">(${esc(x.signin.at.slice(0, 10))})</span>` : ""}` : ""],
     ["Last test", t.checked_at ? `${ago(t.checked_at)}: ${t.ok ? "OK" : `<span class="mdl-why">${esc(t.error || "failed")}</span>`}${t.detail ? ` <span class="muted">· ${esc(t.detail)}</span>` : ""}` : ""],
   ];
   const kv = `<dl class="wc-kv">${rows.filter((r) => r[0] && r[1]).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
@@ -196,13 +197,50 @@ function addModelDialog() {
     try {
       const st = await api(`/api/models/cli/${tool}`);
       const mark = (ok, yes, no) => `<span class="${ok ? "ok-t" : "mdl-why"}">${ok ? "✓" : "✗"} ${esc(ok ? yes : no)}</span>`;
-      $("#cli-st").innerHTML = `<div class="row" style="gap:12px;flex-wrap:wrap">${mark(st.installed, `installed ${st.version}`, "not installed")}${mark(st.signed_in, "signed in", "not signed in")}${mark(st.enabled, "agents may use it", `off for agents (${st.enable_setting})`)}</div>
+      const who = st.account?.email || "";
+      const login = st.can_login && st.installed && me.is_admin;
+      $("#cli-st").innerHTML = `<div class="row" style="gap:12px;flex-wrap:wrap">${mark(st.installed, `installed ${st.version}`, "not installed")}${mark(st.signed_in, who ? `signed in as ${who}` : "signed in", "not signed in")}${mark(st.enabled, "agents may use it", `off for agents (${st.enable_setting})`)}</div>
+        ${login ? `<div class="row" style="margin:8px 0 4px"><button type="button" class="btn ${st.signed_in ? "" : "primary"}" id="cli-login">${icon("git", 14)} ${st.signed_in ? "Sign in again (another GitHub account)" : "Sign in to GitHub"}</button></div><div id="cli-login-box"></div>` : ""}
         <ol class="mdl-steps">${st.steps.map((x) => { const [cmd, note] = x.split(/\s+#\s+/); return `<li><code>${esc(cmd)}</code><button type="button" class="icon-btn sm" title="Copy" aria-label="Copy" data-copy="${esc(cmd)}">${icon("copy", 13)}</button>${note ? `<div class="muted">${esc(note)}</div>` : ""}</li>`; }).join("")}</ol>
-        <p class="muted" style="margin:4px 0">Run these on the server (Workspace → terminal): signing in opens a browser link. The model is added either way and becomes available once the CLI is installed, signed in and on for agents.</p>
+        <p class="muted" style="margin:4px 0">${login ? "Sign in to GitHub above, or run" : "Run"} these on the server (Workspace → terminal): signing in opens a browser link. The model is added either way and becomes available once the CLI is installed, signed in and on for agents.</p>
         <div class="row">${!st.installed && me.is_admin ? `<button type="button" class="btn" id="cli-inst">${icon("plus", 14)} Install on the server</button>` : ""}${!st.enabled && me.is_admin ? `<button type="button" class="btn" id="cli-en">${icon("check", 14)} Let agents use ${esc(st.label)}</button>` : ""}<button type="button" class="btn" id="cli-re">${icon("refresh", 14)} Check again</button></div>`;
       document.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = () => navigator.clipboard?.writeText(b.dataset.copy).then(() => toast("Copied"))));
       $("#cli-re").onclick = cliChanged;
       $("#cli-en") && ($("#cli-en").onclick = async () => { try { await api(`/api/settings/${st.enable_setting}`, { method: "PUT", body: { value: true } }); cliChanged(); } catch (e) { toast(e.message); } });
+      // The sign-in runs on the server; this page shows its code and asks every 2 s how it ended.
+      const showLogin = (j) => {
+        const box = $("#cli-login-box");
+        if (!box) return false;  // the dialog was closed or shows another CLI
+        const left = `${Math.floor((j.seconds_left || 0) / 60)}:${String((j.seconds_left || 0) % 60).padStart(2, "0")}`;
+        box.innerHTML = j.state === "starting" ? '<div class="cc-working"><span class="spin"></span> Asking GitHub for a code…</div>'
+          : j.state === "waiting" ? `<div class="mdl-login"><div>Open <a href="${esc(j.url)}" target="_blank" rel="noopener noreferrer">${esc(j.url.replace(/^https:\/\//, ""))}</a> and enter this code:</div>
+              <div class="row nowrap" style="margin:6px 0"><code class="mdl-code">${esc(j.code)}</code><button type="button" class="icon-btn sm" title="Copy the code" aria-label="Copy the code" id="cli-code-copy">${icon("copy", 14)}</button>
+              <a class="btn primary" href="${esc(j.url)}" target="_blank" rel="noopener noreferrer">Open GitHub</a><button type="button" class="btn" id="cli-login-x">Cancel</button></div>
+              <div class="muted"><span class="spin"></span> Waiting for you to confirm on GitHub · the code expires in ${left}</div></div>`
+          : j.state === "signed_in" ? `<div class="ok-t">✓ Signed in to GitHub${j.account?.email ? ` as <b>${esc(j.account.email)}</b>` : ""}</div>`
+          : j.state === "failed" ? `<div class="cc-error">Sign-in failed: ${esc(j.error || "unknown error")}</div>`
+          : j.state === "cancelled" ? '<div class="muted">Sign-in cancelled.</div>' : "";
+        $("#cli-code-copy") && ($("#cli-code-copy").onclick = () => navigator.clipboard?.writeText(j.code).then(() => toast("Code copied"), () => toast("Select the code and copy it")));
+        $("#cli-login-x") && ($("#cli-login-x").onclick = async () => { try { showLogin(await api(`/api/models/cli/${tool}/login`, { method: "DELETE" })); } catch (e) { toast(e.message); } });
+        return true;
+      };
+      const followLogin = async (j) => {
+        clearTimeout(cliChanged.timer);
+        if (!showLogin(j) || $("#m-cli").value !== tool) return;
+        if (["starting", "waiting"].includes(j.state)) {
+          cliChanged.timer = setTimeout(async () => { try { followLogin(await api(`/api/models/cli/${tool}/login`)); } catch (e) { showLogin({ state: "failed", error: e.message }); } }, 2000);
+        } else if (j.state === "signed_in") {
+          toast(`Signed in to GitHub${j.account?.email ? ` as ${j.account.email}` : ""}`);
+          setTimeout(cliChanged, 1500);  // the status line then says whose sign-in it is
+        }
+      };
+      $("#cli-login") && ($("#cli-login").onclick = async (e) => {
+        const b = e.currentTarget; b.disabled = true;
+        showLogin({ state: "starting" });
+        try { followLogin(await api(`/api/models/cli/${tool}/login`, { method: "POST" })); } catch (err) { showLogin({ state: "failed", error: err.message }); }
+        b.disabled = false;
+      });
+      if (login) api(`/api/models/cli/${tool}/login`).then((j) => ["starting", "waiting"].includes(j.state) && followLogin(j)).catch(() => {});  // one still running
       $("#cli-inst") && ($("#cli-inst").onclick = async (e) => {
         const b = e.currentTarget; b.disabled = true; b.classList.add("busy");
         try { const r = await api(`/api/models/cli/${tool}/install`, { method: "POST" }); toast(r.ok ? `Installed ${r.version}` : `npm failed: ${r.output.slice(-200)}`); } catch (err) { toast(err.message); }

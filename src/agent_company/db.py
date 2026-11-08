@@ -442,6 +442,8 @@ class ModelEntry(Base):
     api_key_enc: Mapped[str] = mapped_column(Text, default="")
     # the last Test: ok, error, checked_at and what the provider reports (plan or key usage, reset time)
     status: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # a CLI model: whose sign-in it was registered with (method, login or email, plan, at); never a token
+    signin: Mapped[dict[str, Any]] = mapped_column(default=dict)
     # a plan or quota limit the provider reported on a run ("You've hit your session limit · resets 9:50pm"): the
     # router skips the model until then and the role's fallbacks take the work (router.mark_limited)
     limited_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

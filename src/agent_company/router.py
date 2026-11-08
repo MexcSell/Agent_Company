@@ -122,7 +122,7 @@ def model_dict(m: ModelEntry) -> dict[str, Any]:
             "daily_token_limit": m.daily_token_limit, "weekly_token_limit": m.weekly_token_limit,
             "enabled": m.enabled, "builtin": m.builtin, "notes": m.notes, "base_url": m.base_url,
             "api_key_env": m.api_key_env, "session_id": m.session_id, "account": m.account, "available": ok, "unavailable_reason": why,
-            "clearance": clearance(m), "clearance_set": bool(m.clearance),
+            "clearance": clearance(m), "clearance_set": bool(m.clearance), "signin": m.signin or {},
             "terms": m.terms or {}, "terms_due": terms_due(m),
             "limited_until": lu.isoformat(timespec="seconds") if (lu := limited_until(m)) else None,
             "limited_reason": m.limited_reason if lu else ""}
@@ -725,7 +725,8 @@ def add_model(data: dict[str, Any]) -> dict[str, Any]:
     with session() as s:
         if s.scalars(select(ModelEntry).where(ModelEntry.name == data["name"])).first():
             raise ValueError("a model with that name exists")
-        m = ModelEntry(**{"model_id": "", **data}, terms=terms)
+        m = ModelEntry(**{"model_id": "", **data}, terms=terms,
+                       signin=cli_signin(data["kind"], data.get("account") or "") if data["kind"] in CLI_KINDS else {})
         if key:
             if m.kind != "llm":
                 raise ValueError("an API key is for API and local models; a CLI uses its own sign-in")
@@ -1168,6 +1169,7 @@ def cli_status(tool: str) -> dict[str, Any]:
     version = _version(exe)
     return {"tool": tool, "label": t["label"], "kind": t["kind"], "installed": bool(exe), "version": version,
             "signed_in": bool(exe) and _signed_in(tool), "enabled": bool(getattr(settings(), t["enable"])),
+            "account": cli_signin(t["kind"]) if exe else {}, "can_login": tool in LOGIN_CMDS,
             "enable_setting": t["enable"], "steps": t["steps"]}
 
 
@@ -1186,6 +1188,118 @@ def install_cli(tool: str) -> dict[str, Any]:
 
     workspace._VERSION.pop(shutil.which(CLI_TOOLS[tool]["exe"]) or "", None)  # a new version
     return {"ok": proc.returncode == 0, "output": (proc.stdout + proc.stderr)[-3000:], **cli_status(tool)}
+
+
+# --- signing a CLI in from the website ---------------------------------------------------------------
+# The GitHub sign-in of the Copilot CLI: `copilot login --device-code` runs on the server (an administrator's action);
+# the page shows its one-time code and address, the person confirms on github.com, and the job ends signed_in only when
+# the CLI exited cleanly and its own config says it is signed in (never from what it printed).
+
+LOGIN_CMDS: dict[str, list[str]] = {"copilot": ["login", "--device-code"]}
+LOGIN_TIMEOUT = 900  # GitHub's device codes expire after 15 minutes
+_DEVICE_RE = re.compile(r"(https://[^\s]+/login/device)\S*.*?\b([A-Z0-9]{4}-[A-Z0-9]{4})\b")
+_logins: dict[str, dict[str, Any]] = {}
+_login_lock = threading.Lock()
+
+
+def login_state(tool: str) -> dict[str, Any]:
+    """The tool's sign-in job (`none` before one ran): state starting|waiting|signed_in|failed|cancelled, the
+    address and code to enter, the seconds left, the account it signed in as, the error and the CLI's output."""
+    if tool not in LOGIN_CMDS:
+        raise KeyError(tool)
+    job = _logins.get(tool)
+    if job is None:
+        return {"tool": tool, "state": "none"}
+    left = max(0, int(job["started"] + LOGIN_TIMEOUT - time.time())) if job["state"] in ("starting", "waiting") else 0
+    return {k: v for k, v in job.items() if k != "proc"} | {"seconds_left": left}
+
+
+def cli_login(tool: str, by: str = "system") -> dict[str, Any]:
+    """Start the CLI's device sign-in, or return the one running; waits up to 10 s for the code. Its result is
+    audited in the name of `by` when it ends."""
+    import subprocess
+
+    if tool not in LOGIN_CMDS:
+        raise KeyError(tool)
+    exe = shutil.which(CLI_TOOLS[tool]["exe"])
+    if not exe:
+        raise RuntimeError(f"the {CLI_TOOLS[tool]['label']} CLI is not installed on the server")
+    with _login_lock:
+        job = _logins.get(tool)
+        if job is None or job["state"] not in ("starting", "waiting"):
+            proc = subprocess.Popen([exe, *LOGIN_CMDS[tool]], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, cwd=str(Path.home()), start_new_session=True)
+            job = {"tool": tool, "state": "starting", "url": "", "code": "", "started": time.time(), "account": {},
+                   "error": "", "output": "", "by": by, "proc": proc}
+            _logins[tool] = job
+            threading.Thread(target=_watch_login, args=(job,), daemon=True, name=f"login-{tool}").start()
+    end = time.time() + 10
+    while job["state"] == "starting" and time.time() < end:
+        time.sleep(0.1)
+    return login_state(tool)
+
+
+def cancel_login(tool: str) -> dict[str, Any]:
+    job = _logins.get(tool)
+    if job is not None and job["state"] in ("starting", "waiting"):
+        job["state"] = "cancelled"
+        _end_login(job)
+    return login_state(tool)
+
+
+def _end_login(job: dict[str, Any]) -> None:
+    import signal
+
+    proc = job["proc"]
+    if proc.poll() is None:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except OSError:
+            proc.terminate()
+
+
+def _watch_login(job: dict[str, Any]) -> None:
+    proc, tool = job["proc"], job["tool"]
+    timer = threading.Timer(LOGIN_TIMEOUT, lambda: (job.update(error="the code expired before it was confirmed"),
+                                                     _end_login(job)))
+    timer.daemon = True
+    timer.start()
+    try:
+        for line in proc.stdout:
+            job["output"] = (job["output"] + line)[-4000:]
+            hit = _DEVICE_RE.search(line)
+            if hit and job["state"] == "starting":
+                job.update(url=hit.group(1), code=hit.group(2), state="waiting")
+        rc = proc.wait()
+    finally:
+        timer.cancel()
+    if job["state"] == "cancelled":
+        return
+    if rc == 0 and _signed_in(tool):
+        job.update(state="signed_in", account=cli_signin(CLI_TOOLS[tool]["kind"]))
+    else:
+        last = [x for x in job["output"].splitlines() if x.strip()][-3:]
+        job.update(state="failed", error=job["error"] or " ".join(last)[-500:] or f"the sign-in ended with code {rc}")
+    from agent_company import governance
+
+    governance.audit(f"user:{job['by']}", "cli_login_result", tool, None,
+                     {"state": job["state"], "account": job["account"].get("email", ""), "error": job["error"][:200]},
+                     "info" if job["state"] == "signed_in" else "warning")
+
+
+def cli_signin(kind: str, account: str = "") -> dict[str, Any]:
+    """Whose sign-in a CLI model uses now (as the Models page shows it), with the time: kept when it is registered."""
+    from agent_company import workspace
+
+    if kind == "copilot":
+        a = copilot_account()
+    elif kind == "codex":
+        a = codex_account()
+    elif kind == "claude_code":
+        a = workspace._account(claude_config_dir(account) if account else None)
+    else:
+        return {}
+    return {k: str(v) for k, v in a.items() if v} | {"at": datetime.now(UTC).isoformat(timespec="seconds")}
 
 
 # --- what the Models page shows for each model (as the Claude Code panel's info) ---------------

@@ -2979,6 +2979,34 @@ def create_app(start_background: bool = True) -> FastAPI:
         _audit(admin, "cli_install", tool, after={"ok": out["ok"], "version": out["version"]})
         return out
 
+    # The GitHub sign-in of the Copilot CLI from the website: start it (the page shows the code), follow it, cancel it.
+    @app.post("/api/models/cli/{tool}/login")
+    def model_cli_login(tool: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = router.cli_login(tool, by=admin["name"])
+        except KeyError as e:
+            raise HTTPException(404, f"{tool} has no sign-in from the website") from e
+        except (RuntimeError, OSError) as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "cli_login", tool, after={"state": out["state"]})
+        return out
+
+    @app.get("/api/models/cli/{tool}/login")
+    def model_cli_login_state(tool: str, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            return router.login_state(tool)
+        except KeyError as e:
+            raise HTTPException(404, f"{tool} has no sign-in from the website") from e
+
+    @app.delete("/api/models/cli/{tool}/login")
+    def model_cli_login_cancel(tool: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = router.cancel_login(tool)
+        except KeyError as e:
+            raise HTTPException(404, f"{tool} has no sign-in from the website") from e
+        _audit(admin, "cli_login_cancel", tool)
+        return out
+
     @app.patch("/api/models/{model_id}")
     def model_update(model_id: int, data: dict[str, Any], admin: dict[str, Any] = Depends(allowed("manage_models"))
                      ) -> dict[str, Any]:
