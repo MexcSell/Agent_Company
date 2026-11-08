@@ -35,7 +35,8 @@
 
 /* shell */
 /* Out of flow, so a long conversation or file can never grow the page: each pane scrolls itself. */
-.view.flush { padding: 0 !important; overflow: hidden; position: relative; }
+/* scrollbar-gutter: the page never scrolls, so no strip is kept free for a scrollbar at the right edge */
+.view.flush { padding: 0 !important; overflow: hidden; position: relative; scrollbar-gutter: auto; }
 .wsp { display: grid; position: absolute; inset: 0; min-height: 0; background: var(--bg); }
 .wsp:not(.narrow) { grid-template-rows: minmax(0, 1fr); }
 .wsp > *, .wm > * { min-width: 0; min-height: 0; }
