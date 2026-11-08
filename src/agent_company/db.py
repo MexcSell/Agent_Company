@@ -765,6 +765,10 @@ class Task(Base):
     # EL-R-06: the critic runs on this task's diff, {attempt, model, provider, verdict, points, reason, run_id};
     # NULL on rows from before the column (readers use `t.critic or []`)
     critic: Mapped[list[Any]] = mapped_column(default=list)
+    # the task as a message (verification phase 4): its sender, the agent whose plan made it (None: the loop's own
+    # review tasks), and when it was made; NULL on rows from before the columns
+    planned_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=now, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

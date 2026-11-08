@@ -58,7 +58,7 @@ feature came from.
   goal fails instead; resume requeues the same iteration), EL-R-06 with setting `task_critic` a writing task's diff is
   reviewed in its worker by a critic of another model family (`_critic`, `avoid_provider` + `other_cli`) before its
   dependants start, a FAIL returns it to the same agent at most `CRITIC_RETRIES` (2) times, runs in `Task.critic`, idempotent merge/push, trace; goals of one project topic
-  run in order, `lane_ahead`; G-R-08 overlapping `allowed_paths` of one repository wait, `paths_ahead`; G-R-09 mission digest `digest` in the result message, with a `report` link once finished) + `mission.py`
+  run in order, `lane_ahead`; G-R-08 overlapping `allowed_paths` of one repository wait, `paths_ahead`; G-R-09 mission digest `digest` in the result message, with a `report` link once finished; `run_goal` takes a goal with one conditional UPDATE (`_claim`), so a goal handed out twice runs once; each task records its sender `planned_by` and `created_at`) + `mission.py`
   (REQ-004 mission report of a finished goal: objective, plan, tasks done/failed/retried, checks and reviews, cost,
   time vs `Goal.deadline`, limitations, lessons, RCA recommendations; each task verified|partial|failed only from
   `Task.gate["acceptance"]` and gate review verdicts, never task output; `GET /api/goals/{id}/report[?format=md]`;
@@ -70,7 +70,7 @@ feature came from.
   bugfix|feature|refactor|research|docs, versioned: roles, writes, checks, iteration limit, execution mode, review
   policy; the order or the planner picks, a plan must fit it) + `teams.py` (a goal's team: joined/added/released
   history, released agents not staffed for that goal) + `orchestration.py` (S04-R-13 self-evaluation per template
-  version, recommended templates as `strategy` experiments under the §20.3 policy, admin rollout, canary rollback); `blackboard.py` (versioned shared goal context, agent messages);
+  version, recommended templates as `strategy` experiments under the §20.3 policy, admin rollout, canary rollback); `blackboard.py` (versioned shared goal context, agent messages; one to no existing role or of no known kind is logged, not stored);
   `network.py` (SPEC-12 relationship kinds with evidence: observed links from finished work,
   complementary specialists and a mentor candidate for new agents, administrator corrections, fair staffing
   inputs in `registry._rank`; `graph`/`overview` for the network view) + `mentoring.py` (a mentor per learning plan: reviews practice results, never certifies);

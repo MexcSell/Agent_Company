@@ -1401,6 +1401,8 @@ def run_goal(goal_id: int) -> dict[str, Any]:
         return {"status": goal.status}
     if emergency():  # E5: the goal stays queued until the stop is lifted
         return {"status": "queued", "held": "emergency stop"}
+    if not _claim(goal_id, goal.status):  # another worker took it between the read and now
+        return {"status": _goal(goal_id).status}
     try:
         out = _run(goal_id)
     finally:
@@ -1425,6 +1427,22 @@ def run_goal(goal_id: int) -> dict[str, Any]:
     _chat_outcome(goal_id, out)
     _store_label_counts(goal_id)
     return out
+
+
+def _claim(goal_id: int, status: str) -> bool:
+    """Take a queued or recovering goal for this worker with one conditional UPDATE, the first statement of its
+    transaction (SQLite's write lock decides): a goal handed out twice, by a submit and the watcher or by two
+    processes, runs once (verification phase 4)."""
+    from sqlalchemy import update
+
+    from agent_company.db import GoalTransition
+
+    with session() as s:
+        if s.execute(update(Goal).where(Goal.id == goal_id, Goal.status == status)
+                     .values(status="planning", label_counts={})).rowcount != 1:
+            return False
+        s.add(GoalTransition(goal_id=goal_id, from_status=status, to_status="planning", reason="started"))
+    return True
 
 
 def _store_label_counts(goal_id: int) -> None:
@@ -1564,7 +1582,7 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                     return _out_of_quota(goal_id, str(e), report)
                 goal = _goal(goal_id)  # the plan may have chosen the workflow template (S04-R-11)
                 _cleared_for(goal_id, plan)
-                ids = _persist(goal_id, iteration, plan)
+                ids = _persist(goal_id, iteration, plan, planned_by=planner_id)
                 _spec_step(specs.write_plan, goal, iteration, plan)
                 _update_goal(goal_id, checkpoint={"iteration": iteration, "planned": True, "notes": notes,
                                                   "feedback": feedback, "planner_id": planner_id,
@@ -2131,7 +2149,9 @@ def _discard_iteration(goal_id: int, iteration: int) -> None:
                 s.delete(t)
 
 
-def _persist(goal_id: int, iteration: int, plan: list[contracts.TaskContract]) -> list[int]:
+def _persist(goal_id: int, iteration: int, plan: list[contracts.TaskContract],
+             planned_by: int | None = None) -> list[int]:
+    """Store the plan's tasks; `planned_by` is the planning agent, each task's sender (None: the loop's own)."""
     with session() as s:
         failed = set(s.scalars(select(Task.key).where(Task.goal_id == goal_id, Task.iteration == iteration - 1,
                                                       Task.status.in_(("failed", "skipped")))))
@@ -2139,7 +2159,7 @@ def _persist(goal_id: int, iteration: int, plan: list[contracts.TaskContract]) -
         for c in plan:
             t = Task(goal_id=goal_id, iteration=iteration, key=c.key, title=c.title, role=c.role,
                      contract=c.model_dump(mode="json"), depends_on=c.depends_on, priority=c.priority,
-                     writes=c.writes)
+                     writes=c.writes, planned_by=planned_by)
             workflow.set_stage(t, "reopened" if c.key in failed else "planned",
                                f"iteration {iteration - 1} did not finish it" if c.key in failed else "")
             s.add(t)
@@ -2302,6 +2322,8 @@ def trace(goal_id: int) -> dict[str, Any]:
             raise KeyError(goal_id)
         names = dict(s.execute(select(Agent.id, Agent.name)).all())
         tasks = [{"id": t.id, "iteration": t.iteration, "key": t.key, "title": t.title, "role": t.role,
+                  "planned_by": names.get(t.planned_by), "planned_by_id": t.planned_by,
+                  "created_at": t.created_at.isoformat() if t.created_at else None,
                   "agent": names.get(t.agent_id), "agent_id": t.agent_id, "model": t.model_name, "status": t.status,
                   "stage": workflow.task_stage(t),
                   "started_at": t.started_at.isoformat() if t.started_at else None,

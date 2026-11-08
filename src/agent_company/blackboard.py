@@ -125,6 +125,7 @@ def context_for(goal_id: int, role: str, exclude: set[str] | None = None) -> str
 
 _MESSAGE = re.compile(r"(?im)^\s*MESSAGE\s+(fact|assumption|recommendation|request|handoff|done)\s+to\s+"
                       r"([a-z_]+)\s*:\s*(.+)$")
+_MESSAGE_LINE = re.compile(r"(?m)^\s*MESSAGE\b.*$")  # what an agent meant as a message, readable or not
 MESSAGE_HELP = ("To tell another role something it needs, add a line: MESSAGE <fact|assumption|recommendation|"
                 "request|handoff|done> to <role>: <one sentence; name files instead of pasting them>")
 
@@ -134,10 +135,23 @@ def extract_messages(goal_id: int, task_id: int, task_key: str, sender_agent_id:
     """Store the MESSAGE lines of a task output (at most MESSAGES_PER_TASK; a repeat of a message already on
     the goal's board is dropped). Returns how many were stored. A request repeated `escalate_after` times without
     an answer from its recipient escalates to the goal's GM (S04-R-08)."""
+    from agent_company.db import Agent
+
     board = read(goal_id, ["messages"])
     have = {(e["meta"].get("to"), e["content"].strip().lower()): e for e in board}
     stored = 0
+    # verification phase 4: a message nobody can receive is reported to the goal's log, never kept undelivered
+    for line in _MESSAGE_LINE.findall(output):
+        if not _MESSAGE.match(line):
+            log_event("message", f"from {sender_role} (task {task_key}) is not a message: {line.strip()[:200]} "
+                      f"(kinds: {', '.join(MESSAGE_KINDS)})", goal_id=goal_id, agent_id=sender_agent_id)
+    with session() as s:
+        roles = set(s.scalars(select(Agent.role).distinct()))
     for kind, to, body in _MESSAGE.findall(output):
+        if to.lower() not in roles:
+            log_event("message", f"from {sender_role} (task {task_key}) to {to.lower()} dropped: no such role: "
+                      f"{body.strip()[:200]}", goal_id=goal_id, agent_id=sender_agent_id)
+            continue
         if stored >= MESSAGES_PER_TASK:
             log_event("message", f"message budget of {MESSAGES_PER_TASK} per task reached; rest dropped",
                       goal_id=goal_id, agent_id=sender_agent_id)

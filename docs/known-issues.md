@@ -174,3 +174,15 @@ were graded by running their code, counting seeded defects and validating plans,
 | V14 | Claude Code's `acceptEdits` (writing runs) auto-approves file commands in the worktree (`rm -r __pycache__`) and read-only commands (`git log`, `cat`) outside the run's allow-list; `Run.tools` understates what the run could do. | open (low; bounded to the worktree) |
 | V15 | The GM's own model `claude_37` is benched until Nov 11; the GM runs on its role route (Claude Code) and `trace_issues` flags every run as a substitution without a configured fallback. | open (owner: clear the GM's `model_pref` or give it fallbacks) |
 | V16 | The research tool loop shows its planner only the first 400 characters of each document (`research_agent._material_text`): navigation text on sqlite.org, so it re-fetched the same pages and judged them "partial headers" (31,624 characters were stored). | open (low) |
+
+## Added 2026-11-09 (verification phase 4, agent communication)
+
+See `docs/verification/phase-4-communication.md`. The GM delegated to the developer through the real loop, offline
+(two stub providers, 19 cases) and live (goal #330: GM → developer → QA, 130 s, a handoff message delivered).
+
+| # | Problem | Status |
+|---|---------|--------|
+| V17 | A task did not record its sender (the planner's id stayed only in the goal's checkpoint, overwritten each iteration) or its creation time. | fixed (`Task.planned_by`, `Task.created_at`; shown in the goal trace) |
+| V18 | An agent message to a role that does not exist was stored and never delivered; a `MESSAGE` line with an unknown kind was ignored. Nobody learnt either went nowhere. | fixed (each is an event in the goal's log naming the sender and the line; the misaddressed one is not stored) |
+| V19 | `run_goal` checked "queued" and changed the status later: a goal handed out twice at once ran twice and the second run failed it (IllegalTransition). | fixed (`loop._claim`: one conditional UPDATE takes the goal) |
+| V20 | The GM's acceptance commands (`python3 -B -m pytest`, `python3 -B -c`) are outside the developer's and QA's allow-lists; both ran plain `pytest`, leaving `__pycache__/` in the worktree. The gate runs the exact commands in L3. | open (low; `executors.CLAUDE_BASH`/`CLAUDE_CHECK` or `PYTHONDONTWRITEBYTECODE=1`) |
