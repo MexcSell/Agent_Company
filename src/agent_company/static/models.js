@@ -41,6 +41,18 @@ async function loadModelsInfo() {
   try { modelsInfo = await api("/api/models/info"); } catch (e) { return; }
   for (const x of modelsList) { const el = document.getElementById(`mi-${x.id}`); if (el) el.innerHTML = modelInfoHtml(x, modelsInfo[x.id]); }
 }
+// After a test or an on/off switch: only that model's card is drawn again, the page and its scroll stay.
+async function refreshModel(id) {
+  const [m, info] = await Promise.all([api("/api/models"), api("/api/models/info").catch(() => null)]);
+  modelsList = m.models;
+  if (info) modelsInfo = info;
+  const x = modelsList.find((y) => String(y.id) === String(id)), el = document.getElementById(`mi-${id}`);
+  if (!x || !el) return viewModels();
+  el.innerHTML = modelInfoHtml(x, modelsInfo[x.id]);
+  el.closest(".mdl-item")?.classList.toggle("off", !x.available);
+  const sw = document.querySelector(`[data-active="${x.id}"]`);
+  if (sw) { sw.checked = x.enabled; sw.closest(".mdl-switch").title = x.enabled ? "Active: routes and agents may use it" : "Inactive: never used"; }
+}
 const TYPE_LABEL = { claude_code: "Claude Code", codex: "Codex", copilot: "Copilot" };
 async function viewModels(quiet) {
   if (quiet && $("#mdl-page")) return;
@@ -64,8 +76,8 @@ async function viewModels(quiet) {
   document.querySelectorAll("[data-role]").forEach((s) => (s.onchange = () => saveRoute(s.dataset.role)));
   document.querySelectorAll("[data-esc]").forEach((s) => (s.onchange = () => saveRoute(s.dataset.esc)));
   document.querySelectorAll("[data-fb]").forEach((s) => (s.onchange = () => saveRoute(s.dataset.fb)));
-  document.querySelectorAll("[data-test]").forEach((b) => (b.onclick = async () => { b.disabled = true; b.classList.add("busy"); try { const r = await api(`/api/models/${b.dataset.test}/test`, { method: "POST" }); toast(r.ok ? `OK in ${r.seconds}s: ${r.reply.slice(0, 60)} (${r.input_tokens}/${r.output_tokens} tokens)` : `Failed: ${r.error}`); viewModels(); } catch (e) { toast(e.message); } b.disabled = false; b.classList.remove("busy"); }));
-  document.querySelectorAll("[data-active]").forEach((c) => (c.onchange = async () => { try { await api(`/api/models/${c.dataset.active}`, { method: "PATCH", body: { enabled: c.checked } }); viewModels(); } catch (e) { toast(e.message); c.checked = !c.checked; } }));
+  document.querySelectorAll("[data-test]").forEach((b) => (b.onclick = async () => { b.disabled = true; b.classList.add("busy"); try { const r = await api(`/api/models/${b.dataset.test}/test`, { method: "POST" }); toast(r.ok ? `OK in ${r.seconds}s: ${r.reply.slice(0, 60)} (${r.input_tokens}/${r.output_tokens} tokens)` : `Failed: ${r.error}`); await refreshModel(b.dataset.test); } catch (e) { toast(e.message); } b.disabled = false; b.classList.remove("busy"); }));
+  document.querySelectorAll("[data-active]").forEach((c) => (c.onchange = async () => { try { await api(`/api/models/${c.dataset.active}`, { method: "PATCH", body: { enabled: c.checked } }); await refreshModel(c.dataset.active); } catch (e) { toast(e.message); c.checked = !c.checked; } }));
   document.querySelectorAll("[data-rename]").forEach((b) => (b.onclick = () => renameInline(b.dataset.rename)));
   $("#m-add") && ($("#m-add").onclick = addModelDialog);
   document.querySelectorAll("[data-terms]").forEach((b) => (b.onclick = () => termsDialog(modelsList.find((x) => String(x.id) === b.dataset.terms))));
