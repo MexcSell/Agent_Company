@@ -125,6 +125,10 @@ def list_suites() -> list[dict[str, Any]]:
     return out
 
 
+# Bytecode and test caches from runs in a seed repo must never show up as untracked changes.
+SEED_IGNORES = ["__pycache__/", "*.pyc", ".pytest_cache/"]
+
+
 def _seed_repo(label: str, task: dict[str, Any], repeat: int) -> Path:
     repo = settings().workspaces_dir / f"eval-{label}-{task['name']}-{repeat}-{int(time.time() * 1000)}"
     repo.mkdir(parents=True)
@@ -136,6 +140,13 @@ def _seed_repo(label: str, task: dict[str, Any], repeat: int) -> Path:
             raise ValueError(f"seed file escapes the repository: {rel}")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text)
+    ignore = repo / ".gitignore"
+    text = ignore.read_text() if ignore.exists() else ""
+    missing = [line for line in SEED_IGNORES if line not in text.splitlines()]
+    if missing:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        ignore.write_text(text + "\n".join(missing) + "\n")
     worktrees.git(repo, "add", "-A")
     worktrees.git(repo, "commit", "-q", "-m", "Eval seed")
     return repo
