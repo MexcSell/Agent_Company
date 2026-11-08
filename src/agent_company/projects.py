@@ -1071,6 +1071,24 @@ def _root(s, goal: Goal) -> Goal:  # noqa: ANN001
     return goal
 
 
+def _eval_source(s, goal: Goal | None) -> Goal | None:  # noqa: ANN001
+    """Find the nearest benchmark ancestor, or recognise a legacy eval workspace."""
+    origin, seen = goal, set()
+    while goal is not None and goal.id not in seen:
+        seen.add(goal.id)
+        if goal.origin == "eval":
+            return goal
+        goal = s.get(Goal, goal.parent_goal_id) if goal.parent_goal_id else None
+    if origin is not None and origin.repo_path:
+        try:
+            relative = Path(origin.repo_path).resolve().relative_to(settings().workspaces_dir.resolve())
+            if relative.parts and relative.parts[0].startswith("eval-"):
+                return origin
+        except (ValueError, OSError):
+            pass
+    return None
+
+
 def _spawned_from(s, root_id: int) -> int:  # noqa: ANN001
     count, frontier = 0, [root_id]
     while frontier:
@@ -1161,17 +1179,21 @@ def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = Tr
             p.status, p.decided_by = ("approved" if approve else "rejected"), decided_by + note
         if kind == "rule":
             pass
-        elif approve and kind != "project" and origin is not None and origin.origin == "eval":
-            # a benchmark run's proposal is about the platform, not the throw-away eval repository it ran in
-            # (2026-11-06: eight such goals worked on eval seed repos): the platform project takes it, without the
-            # eval goal as parent (its budget and chain do not apply)
+        elif approve and kind != "project" and (src := _eval_source(s, origin)) is not None:
+            # Benchmark descendants also belong to the platform (2026-11-08: 21 descendant goals,
+            # e.g. #178, #180, #185, inherited eval seed repos). Keep chain guards above this branch.
             plat = s.scalars(select(Project).where(Project.protected).order_by(Project.id)).first()
             from agent_company.config import REPO_ROOT
 
+            if src is not origin:
+                context = f"goal #{origin.id}, which descends from benchmark goal #{src.id}"
+            elif src.origin == "eval":
+                context = f"benchmark goal #{origin.id}, which ran in a scratch repository"
+            else:
+                context = f"goal #{origin.id}, which ran in the scratch repository {origin.repo_path}"
             spawn = {"title": p.title,
-                     "description": f"{p.description or p.title}\n\n(Raised by an agent during benchmark goal "
-                                    f"#{origin.id}, which ran in a scratch repository; the change belongs to the "
-                                    "Agent Company platform.)",
+                     "description": f"{p.description or p.title}\n\n(Raised by an agent during {context}; "
+                                    "the change belongs to the Agent Company platform.)",
                      "repo": (plat.path if plat and plat.path else str(REPO_ROOT)),
                      "checks": list(plat.quality_commands or []) if plat else [],
                      "project_id": plat.id if plat else None, "parent": None, "created_by": origin.created_by,
