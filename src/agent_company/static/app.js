@@ -219,7 +219,7 @@ async function boot() {
 }
 // --- rail: two groups (top, bottom) in the order an administrator set (Settings → Navigation) -----------
 // Notifications, the audit log, settings and users are buttons at the top right instead (TOPBAR), never on the rail.
-const NAV_DEFAULT = { top: ["dashboard", "projects", "agents", "companymap", "models", "evolution", "research", "knowledge", "performance"],
+const NAV_DEFAULT = { top: ["dashboard", "projects", "goals", "agents", "companymap", "models", "evolution", "research", "knowledge", "performance"],
   bottom: ["workspace", "machines", "security", "system"] };
 const TOPBAR = ["notifications", "audit", "settings", "users"];
 let navLayout = null, railEditing = false;
@@ -434,12 +434,45 @@ function usageTable(u) {
   ${u.models.map((m) => `<tr><td>${esc(m.name)}</td><td class="num">${fmt.format(m.daily.tokens)}${lim(m.daily)}</td><td class="num">${m.daily.runs}</td><td class="num">${fmt.format(m.weekly.tokens)}${lim(m.weekly)}</td><td class="num">${m.weekly.runs}</td><td class="num">${money(m.weekly.cost)}</td></tr>`).join("")}</table></div>`;
 }
 
-// --- goals: no page of their own any more (orders go through the General Manager); a goal opens in a modal
-let selectedGoal = null;
+// --- goals: the Goals page (a new goal, the list by status); a goal opens in a modal
+let selectedGoal = null, goalFilter = "all";
 function goalModal(id) {
   selectedGoal = id;
   modal(`<div id="goal-detail"><div class="cc-working"><span class="spin"></span> Loading goal #${Number(id)}…</div></div>`);
   goalDetail(id).catch((e) => ($("#goal-detail").innerHTML = `<p class="muted">${esc(e.message)}</p>`));
+}
+const GOAL_FILTERS = { all: "All", active: "Active", awaiting_approval: "Awaiting approval", approved: "Merged",
+  failed: "Failed", cancelled: "Cancelled" };
+async function viewGoals(quiet) {
+  const goals = await api("/api/goals");
+  if (!quiet || !$("#goal-list")) {  // a live refresh keeps a half-typed goal
+    $("#view").innerHTML = `<div class="grid two"><div class="card"><h2>New goal</h2><form id="goal-form">
+      <label for="g-title">Goal</label><input id="g-title" required minlength="3" maxlength="256" placeholder="Build a REST API for a todo list">
+      <label for="g-desc">Details</label><textarea id="g-desc" placeholder="Constraints, acceptance criteria, tech choices"></textarea>
+      <label for="g-kind">Kind</label><select id="g-kind"><option value="">the planner picks</option>${["bugfix", "feature", "refactor", "research", "docs"].map((k) => `<option>${k}</option>`).join("")}</select>
+      <label for="g-urls">Research URLs (one per line)</label><textarea id="g-urls" rows="2" placeholder="https://docs.example.com/guide"></textarea>
+      ${me.is_admin ? `<label for="g-repo">Existing git repository (optional; default: new workspace)</label><input id="g-repo" placeholder="/home/you/project">
+      <label for="g-checks">Quality commands (one per line, run in the worktree)</label><textarea id="g-checks" rows="2" placeholder="uv run pytest -q"></textarea>` : ""}
+      <label for="g-allow">Allowed paths (globs, one per line; empty = anywhere)</label><textarea id="g-allow" rows="2" placeholder="src/*"></textarea>
+      <label class="row" style="margin-top:8px"><input type="checkbox" id="g-protect" style="width:auto"> Protect existing tests (agents may add tests, not change them)</label>
+      <label for="g-iter">Max iterations</label><input id="g-iter" type="number" min="1" max="10" value="3">
+      <div class="row" style="margin-top:12px"><button class="btn primary">Start</button></div></form></div>
+      <div class="card"><div class="row"><h2 class="grow" style="margin:0">Goals</h2><select id="goal-filter" style="width:auto">${Object.entries(GOAL_FILTERS).map(([k, l]) => `<option value="${k}"${k === goalFilter ? " selected" : ""}>${l}</option>`).join("")}</select></div>
+      <div class="list" id="goal-list" style="margin-top:8px"></div></div></div>`;
+    $("#goal-form").onsubmit = async (e) => {
+      e.preventDefault();
+      const lines = (id) => ($(id)?.value || "").split("\n").map((x) => x.trim()).filter(Boolean);
+      try {
+        const r = await api("/api/goals", { method: "POST", body: { title: $("#g-title").value.trim(), description: $("#g-desc").value, kind: $("#g-kind").value, urls: lines("#g-urls"), repo_path: $("#g-repo")?.value.trim() || "", quality_commands: lines("#g-checks"), allowed_paths: lines("#g-allow"), protect_tests: $("#g-protect").checked, max_iterations: Number($("#g-iter").value) || null } });
+        e.target.reset(); toast(`Goal #${r.id} started`); viewGoals(true); goalModal(r.id);
+      } catch (err) { toast(err.message); }
+    };
+    $("#goal-filter").onchange = (e) => { goalFilter = e.target.value; viewGoals(true); };
+  }
+  const shown = goals.filter((g) => goalFilter === "all" || (goalFilter === "active" ? GOAL_ACTIVE.includes(g.status) : g.status === goalFilter));
+  $("#goal-list").innerHTML = shown.map((g) => `<div class="list-item" data-id="${Number(g.id)}"><div class="row"><strong class="grow">${esc(g.title)}</strong>${pill(g.status)}</div><div class="muted">#${Number(g.id)}${g.kind ? ` · ${esc(g.kind)}` : ""} · ${esc(g.origin || "user")} · iteration ${Number(g.iteration)}/${Number(g.max_iterations)} · ${ago(g.updated_at)}</div></div>`).join("")
+    || `<p class="muted">${goals.length ? "No goal with this status." : "No goals yet."}</p>`;
+  $("#goal-list").querySelectorAll(".list-item").forEach((el) => (el.onclick = () => goalModal(Number(el.dataset.id))));
 }
 async function goalDetail(id, openIds = new Set()) {
   const g = await api(`/api/goals/${id}`);
@@ -754,6 +787,7 @@ function setFavicon(o) {
 }
 
 registerView({ id: "dashboard", title: "Dashboard", icon: "dashboard" }, viewDashboard);
+registerView({ id: "goals", title: "Goals", icon: "goals" }, viewGoals);
 registerView({ id: "research", title: "Research", icon: "research" }, viewResearch);
 registerView({ id: "users", title: "Users", icon: "users", admin: true }, viewUsers);
 
