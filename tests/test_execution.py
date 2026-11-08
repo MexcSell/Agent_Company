@@ -82,6 +82,7 @@ def test_gate_includes_static_checks(tmp_path):
     assert names["secret scan"]["passed"] and names["syntax"]["passed"]
     # the build task's own WORKLOG.md is exempt from the allowed paths (tests/test_worklog_scope.py)
     assert names["scope"]["passed"], names["scope"]["detail"]
+    assert "WORKLOG.md" not in names["scope"]["detail"]
 
 
 def test_baseline_marks_preexisting_failures(tmp_path):

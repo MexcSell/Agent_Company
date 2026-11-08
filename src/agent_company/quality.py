@@ -219,10 +219,12 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
             (c["stage"], c["run"]): list(c.get("requirement_keys") or [])
             for t in tasks if t.status in ("done", "failed") for c in (t.contract or {}).get("acceptance", [])
             if c.get("type") == "command" and c.get("stage") and c.get("run") and (c["stage"], c["run"]) not in own}
-        # the WORKLOG.md a writing task's own acceptance asks for is not held to the allowed paths (only that name)
+        # the WORKLOG.md a writing task's own acceptance asks for is not held to the allowed paths (only that name);
+        # earlier iterations count too, as the scope check diffs every iteration's commits against the base
         worklogs = sorted({
             c["path"].removeprefix("./")
-            for t in tasks if t.writes for c in (t.contract or {}).get("acceptance", [])
+            for t in s.scalars(select(Task).where(Task.goal_id == goal_id, Task.iteration <= iteration))
+            if t.writes for c in (t.contract or {}).get("acceptance", [])
             if c.get("type") == "file_exists" and c.get("path")
             and PurePosixPath(c["path"].removeprefix("./")).name == "WORKLOG.md"})
         required = [] if strategies.skips_checks(goal) else teststrategy.mandatory(goal)
