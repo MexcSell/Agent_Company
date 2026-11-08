@@ -14,14 +14,22 @@ function termsLine(x) {
 }
 let modelsList = [];
 let modelsInfo = {};  // /api/models/info by model id: kept across re-renders, read again after each
-const STATUS_BADGE = { available: "idle", unavailable: "warning", inactive: "ended" };
+// Available now: green; not available (unavailable, at a limit or switched off): red. Card, name and status badge.
+const modelState = (x, info) => info?.status || (!x.enabled ? "inactive" : x.available ? "available" : "unavailable");
+const upDown = (st) => (st === "available" ? "up" : "down");
+function paintModel(x) {
+  const card = document.getElementById(`mi-${x.id}`)?.closest(".mdl-item");
+  if (!card) return;
+  const st = upDown(modelState(x, modelsInfo[x.id]));
+  card.classList.toggle("up", st === "up"); card.classList.toggle("down", st === "down");
+}
 // One model as the Claude Code panel shows a session: status, model, CLI version, account, then its usage windows.
 function modelInfoHtml(x, info) {
-  const st = info?.status || (!x.enabled ? "inactive" : x.available ? "available" : "unavailable");
+  const st = modelState(x, info);
   const reason = info ? info.reason : x.available ? "" : x.unavailable_reason;
   const a = info?.account || {}, t = x.status || {};
   const rows = [
-    ["Status", `<span class="wc-badge ${STATUS_BADGE[st]}">${esc(st)}</span>${reason ? ` <span class="muted">${esc(reason)}</span>` : ""}`],
+    ["Status", `<span class="wc-badge ${upDown(st)}">${esc(st)}</span>${reason ? ` <span class="muted">${esc(reason)}</span>` : ""}`],
     ["Model", `<span class="mono">${esc(x.model_id || "default model")}</span>${x.session_id ? ` <span class="muted">· forks session ${esc(x.session_id.slice(0, 8))}</span>` : ""}`],
     [info?.cli?.label || "", esc(info?.cli?.version || "")],
     ["Server", x.base_url ? `<span class="mono">${esc(x.base_url)}</span>` : ""],
@@ -39,7 +47,7 @@ function modelInfoHtml(x, info) {
 }
 async function loadModelsInfo() {
   try { modelsInfo = await api("/api/models/info"); } catch (e) { return; }
-  for (const x of modelsList) { const el = document.getElementById(`mi-${x.id}`); if (el) el.innerHTML = modelInfoHtml(x, modelsInfo[x.id]); }
+  for (const x of modelsList) { const el = document.getElementById(`mi-${x.id}`); if (el) { el.innerHTML = modelInfoHtml(x, modelsInfo[x.id]); paintModel(x); } }
 }
 // After a test or an on/off switch: only that model's card is drawn again, the page and its scroll stay.
 async function refreshModel(id) {
@@ -49,7 +57,7 @@ async function refreshModel(id) {
   const x = modelsList.find((y) => String(y.id) === String(id)), el = document.getElementById(`mi-${id}`);
   if (!x || !el) return viewModels();
   el.innerHTML = modelInfoHtml(x, modelsInfo[x.id]);
-  el.closest(".mdl-item")?.classList.toggle("off", !x.available);
+  paintModel(x);
   const sw = document.querySelector(`[data-active="${x.id}"]`);
   if (sw) { sw.checked = x.enabled; sw.closest(".mdl-switch").title = x.enabled ? "Active: routes and agents may use it" : "Inactive: never used"; }
 }
@@ -63,7 +71,7 @@ async function viewModels(quiet) {
   $("#view").classList.add("fit");
   $("#view").innerHTML = `<div class="mdl-page" id="mdl-page"><section class="card ag-scroll"><div class="row nowrap"><h2 class="grow" style="margin:0">Model catalog</h2>${admin ? ib("plus", "Add a model", 'id="m-add"', "primary") : ""}</div>
       <p class="muted">Executor mode: <code>${esc(m.executor)}</code>${m.default_model ? ` · MODEL: <code>${esc(m.default_model)}</code>` : ""}. Unavailable models fall back to MODEL, then to the offline simulator.</p>
-      <div class="mdl-list">${m.models.map((x) => { const real = x.kind !== "offline"; return `<div class="mdl-item ${x.available ? "" : "off"}">
+      <div class="mdl-list">${m.models.map((x) => { const real = x.kind !== "offline"; return `<div class="mdl-item ${upDown(modelState(x, modelsInfo[x.id]))}">
         <div class="row nowrap"><span class="mdl-kind k-${esc(x.kind)}" title="Type">${esc(x.type === "CLI" ? "CLI · " + TYPE_LABEL[x.kind] : x.type)}</span><strong class="ellipsis" data-name-of="${x.id}">${esc(x.name)}</strong>${admin && real && !x.builtin ? `<button type="button" class="icon-btn sm" title="Rename" aria-label="Rename" data-rename="${x.id}">${icon("edit", 14)}</button>` : ""}<span class="grow"></span>
           ${admin && real ? `<label class="mdl-switch" title="${x.enabled ? "Active: routes and agents may use it" : "Inactive: never used"}"><input type="checkbox" data-active="${x.id}" ${x.enabled ? "checked" : ""}><span></span></label>` : ""}${admin && real ? ib("bolt", "Test: send a short prompt and get the current usage and status", `data-test="${x.id}"`, "sm") : ""}${admin && real ? ib("settings", "Terms, name and limits", `data-terms="${x.id}"`, "sm") : ""}${admin && real ? ib("trash", "Delete", `data-del="${x.id}"`, "sm danger") : ""}</div>
         <div class="mdl-info" id="mi-${x.id}">${modelInfoHtml(x, modelsInfo[x.id])}</div>
