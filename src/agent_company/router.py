@@ -1204,14 +1204,15 @@ _login_lock = threading.Lock()
 
 def login_state(tool: str) -> dict[str, Any]:
     """The tool's sign-in job (`none` before one ran): state starting|waiting|signed_in|failed|cancelled, the
-    address and code to enter, the seconds left, the account it signed in as, the error and the CLI's output."""
+    address and code to enter, the seconds left, the account it signed in as and the error. The CLI's own output
+    stays on the server (the error quotes its last lines)."""
     if tool not in LOGIN_CMDS:
         raise KeyError(tool)
     job = _logins.get(tool)
     if job is None:
         return {"tool": tool, "state": "none"}
     left = max(0, int(job["started"] + LOGIN_TIMEOUT - time.time())) if job["state"] in ("starting", "waiting") else 0
-    return {k: v for k, v in job.items() if k != "proc"} | {"seconds_left": left}
+    return {k: v for k, v in job.items() if k not in ("proc", "output")} | {"seconds_left": left}
 
 
 def cli_login(tool: str, by: str = "system") -> dict[str, Any]:

@@ -60,7 +60,7 @@ def test_the_code_reaches_the_page_and_a_confirmed_sign_in_is_reported_with_the_
     assert router.cli_status("copilot")["signed_in"] is False
     out = router.cli_login("copilot", by="admin")
     assert out["state"] == "waiting" and out["url"] == "https://github.com/login/device" and out["code"] == "ABCD-12EF"
-    assert 0 < out["seconds_left"] <= router.LOGIN_TIMEOUT and "proc" not in out
+    assert 0 < out["seconds_left"] <= router.LOGIN_TIMEOUT and "proc" not in out and "output" not in out
     assert router.cli_login("copilot")["code"] == "ABCD-12EF"  # a second click follows the running sign-in
     (copilot / "answer").write_text("ok")
     done = _until("signed_in")
