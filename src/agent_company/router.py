@@ -279,9 +279,10 @@ def provider_of(model_id: str) -> str:
 # --- plan and quota limits a provider reports on a run ------------------------------------------
 # Claude Code: "You've hit your session limit · resets 9:50pm (Europe/Berlin)"; Codex: "You've hit your usage limit
 # ... try again in 2 hours 5 minutes" / usage_limit_reached; API: insufficient_quota, credit balance too low. A
-# plain 429 is transient (loop.TRANSIENT) and retried; these are not, the model waits until its reset.
+# plain 429 is transient (loop.TRANSIENT) and retried; these are not, the model waits until its reset. OpenAI's
+# per-minute "Rate limit reached for <model> ... try again in 1.2s" is such a plain 429, not a plan limit.
 LIMIT_RE = re.compile(r"(?i)hit your (?:\w+ )?limit|usage[ _]limit[ _](?:reached|exceeded)|usage_limit_reached"
-                      r"|rate_limit_reached|limit (?:reached|exceeded) for|quota (?:exceeded|exhausted)"
+                      r"|rate_limit_reached|(?<!rate )limit (?:reached|exceeded) for|quota (?:exceeded|exhausted)"
                       r"|insufficient_quota|credit balance is too low|out of (?:credits|extra usage)")
 LIMIT_DEFAULT_MINUTES = 60  # when the message names no reset time
 LIMIT_MAX_DAYS = 8
@@ -953,6 +954,8 @@ def delete_model(model_id: int) -> None:
             raise ValueError("the offline simulator cannot be deleted")
         for r in s.scalars(select(Route).where(Route.model_name == m.name)):
             r.model_name = DEFAULT_ROUTE_OTHER if m.name != DEFAULT_ROUTE_OTHER else OFFLINE
+        for r in s.scalars(select(Route).where(Route.escalation == m.name)):
+            r.escalation = ""
         for r in s.scalars(select(Route).where(Route.fallback.contains(m.name))):
             r.fallback = ",".join(n for n in r.fallback.split(",") if n != m.name)
         s.delete(m)

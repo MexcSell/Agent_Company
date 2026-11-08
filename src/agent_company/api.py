@@ -3001,7 +3001,9 @@ def create_app(start_background: bool = True) -> FastAPI:
 
     @app.post("/api/models/{model_id}/test")
     def model_test(model_id: int, admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
-        return router.test_model(model_id)
+        out = router.test_model(model_id)  # a Test sends a request, at the provider's cost
+        _audit(admin, "model_test", model_id, after={"ok": out["ok"], "error": out["error"][:200]})
+        return out
 
     @app.put("/api/routes/{role}")
     def route_set(role: str, body: RouteBody, admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:

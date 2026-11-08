@@ -135,3 +135,16 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 | Q2 | Quota days are UTC days. A goal paused for a quota resumes on the goal queue's watcher (every 5 s, server only), not from the CLI. | by design |
 | Q3 | Only the base agent's quota counts; a quota set on a clone is ignored (clones take their base's limits). | by design |
 | Q4 | Costs come from the model catalog's prices; runs on models without a price (Claude Code on a subscription, the simulator) cost $0 and never use a quota. | open (quotas need priced models) |
+
+## Added 2026-11-08 (verification phase 1, model registration)
+
+See `docs/verification/phase-1-models.md`.
+
+| # | Problem | Status |
+|---|---------|--------|
+| V1 | OpenAI's per-minute 429 ("Rate limit reached for <model> ... try again in 1.2s") matched `LIMIT_RE`, so one burst benched the model for 60 minutes as if its quota were used up. | fixed (`(?<!rate )` in `LIMIT_RE`; a used-up quota still benches it) |
+| V2 | Deleting a model left routes escalating to it (`Route.escalation`); resolution skipped the name, but the Routes table still showed a model that no longer exists. | fixed (`delete_model` clears it) |
+| V3 | A model Test was not audited, though it sends a request at the provider's cost. | fixed (`model_test` audit record) |
+| V4 | Deleting a model leaves agents whose own model (`model_pref`) named it; they fall back to their role's route ("not in catalog" in the run's reason), and the agent card still names the removed model. | open (low) |
+| V5 | A Test run from the CLI without `prefs.load()` sees none of the DB settings (`enable_claude_code`, `enable_codex`), refuses every CLI model and stores that refusal as the model's status. | open (low; use the Models page or load prefs first) |
+| V6 | Five catalog API models (four Claude, OpenRouter Free router) have no key on this host; they show as unavailable and have never passed a Test. | open (configuration) |
