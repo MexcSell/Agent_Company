@@ -236,6 +236,7 @@ def test_the_api_registers_tests_and_removes_with_audit(stub):
         assert GOOD not in app.get(path).text
     assert app.delete(f"/api/models/{mid}").json() == {"ok": True}
     assert all(x["name"] != "Stub" for x in app.get("/api/models").json()["models"])
+    assert app.post(f"/api/models/{mid}/test").status_code == 404
     with session() as s:
         actions = [a.action for a in s.query(AuditEvent).order_by(AuditEvent.id)]
         assert GOOD not in json.dumps([[a.before, a.after] for a in s.query(AuditEvent)], default=str)
