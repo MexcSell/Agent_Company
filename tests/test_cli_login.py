@@ -32,7 +32,7 @@ if [ "$(cat "$HOME/answer")" = ok ]; then
   esac
   mkdir -p "$HOME/.copilot"
   printf '// User settings belong in settings.json.\n// This file is managed automatically.\n' > "$HOME/.copilot/config.json"
-  echo '{"logged_in_users":[{"host":"https://github.com","login":"octocat"}],"last_logged_in_user":{"host":"https://github.com","login":"octocat"}}' >> "$HOME/.copilot/config.json"
+  echo '{"authTokens":{"https://github.com:octocat":{"token":"gho_x"}},"loggedInUsers":[{"host":"https://github.com","login":"octocat","kind":"user"}],"lastLoggedInUser":{"host":"https://github.com","login":"octocat"}}' >> "$HOME/.copilot/config.json"
   exit 0
 fi
 echo "Error: the authorization request was denied"
@@ -125,7 +125,7 @@ def test_without_a_terminal_the_cli_could_not_ask_and_the_error_says_why(copilot
 def test_a_cli_that_exits_cleanly_without_signing_in_is_not_reported_signed_in(copilot):
     script = copilot.parent / "bin" / "copilot"
     script.write_text(FAKE.replace('mkdir -p "$HOME/.copilot"', "true").replace(
-        "echo '{\"logged_in_users\"", "true # "))
+        "echo '{\"authTokens\"", "true # "))
     router.cli_login("copilot")
     _approve(copilot)
     assert _until("failed")["state"] == "failed"  # exit 0, but its config names nobody
@@ -289,3 +289,11 @@ def test_the_codex_sign_in_api_takes_an_account_folder(codex):
         assert app.get("/api/models/cli/codex?account=work").json()["account"]["email"] == "second@example.com"
         logins = [a for a in app.get("/api/audit").json()["records"] if a["action"] == "cli_login"]
         assert logins and "work" in json.dumps(logins[0])
+
+
+def test_the_older_snake_case_copilot_config_still_counts_as_signed_in(copilot):
+    (copilot / ".copilot").mkdir()
+    (copilot / ".copilot" / "config.json").write_text(
+        '{"logged_in_users":[{"host":"https://github.com","login":"hubot"}]}')
+    st = router.cli_status("copilot")
+    assert st["signed_in"] and st["account"]["email"] == "hubot"

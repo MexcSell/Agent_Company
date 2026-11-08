@@ -1164,7 +1164,16 @@ def _signed_in(tool: str, account: str = "") -> bool:
         return (home / ".credentials.json").is_file() or bool(os.environ.get("ANTHROPIC_API_KEY"))
     if any(os.environ.get(k) for k in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")):
         return True
-    return bool(copilot_config().get("logged_in_users"))
+    return bool(copilot_users()[0])
+
+
+def copilot_users() -> tuple[list[Any], dict[str, Any]]:
+    """The signed-in users and the last one from the Copilot CLI's config: 1.0.x writes `loggedInUsers` and
+    `lastLoggedInUser`, earlier versions `logged_in_users` and `last_logged_in_user`."""
+    d = copilot_config()
+    users = d.get("loggedInUsers") or d.get("logged_in_users") or []
+    last = d.get("lastLoggedInUser") or d.get("last_logged_in_user") or {}
+    return (users if isinstance(users, list) else []), (last if isinstance(last, dict) else {})
 
 
 def copilot_config() -> dict[str, Any]:
@@ -1446,10 +1455,8 @@ def copilot_account() -> dict[str, str]:
     for k in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
         if os.environ.get(k):
             return {"method": f"GitHub token ({k})"}
-    d = copilot_config()
-    if not d:
-        return {"method": "not signed in"}
-    user = d.get("last_logged_in_user") or next(iter(d.get("logged_in_users") or []), None) or {}
+    users, last = copilot_users()
+    user = last or next((u for u in users if isinstance(u, dict)), None) or {}
     return {"method": "GitHub account", "email": str(user.get("login") or "")} if user else {"method": "not signed in"}
 
 
