@@ -776,6 +776,13 @@ class ClaudeCodeExecutor(Executor):
                                            if isinstance(d, dict)}))
 
 
+# Codex's own ways to the web, outside its sandbox's network block: web search, the ChatGPT apps server
+# (`codex_apps` search_service.web_run), a browser and computer use. Agents get no web tools (`tools_for`); the research
+# room's web goes through the platform's tools (research_agent.py). Verification phase 3, V12.
+CODEX_NO_WEB = ["-c", 'web_search="disabled"', "--disable", "apps", "--disable", "browser_use",
+                "--disable", "computer_use"]
+
+
 class CodexExecutor(Executor):
     kind = "codex"
 
@@ -788,7 +795,7 @@ class CodexExecutor(Executor):
         cwd = ensure_sandboxed(req.workdir)
         prompt = req.system + "\n\n" + req.prompt
         cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "-C", str(cwd),
-               "--sandbox", "workspace-write" if req.writes else "read-only"]
+               "--sandbox", "workspace-write" if req.writes else "read-only", *CODEX_NO_WEB]
         if self.choice.model_id:
             cmd += ["--model", self.choice.model_id]
         watch = stuck_watch("codex")

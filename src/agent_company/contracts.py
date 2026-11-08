@@ -28,7 +28,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
 import jsonschema
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 ConditionType = Literal["contains", "regex", "min_length", "json_schema", "file_exists", "command"]
 
@@ -57,6 +57,13 @@ class Condition(BaseModel):
             except re.error as e:
                 raise ValueError(f"invalid regex: {e}") from e
         return v
+
+    @model_validator(mode="after")
+    def _command_runs_something(self) -> Condition:
+        # without `run` the check would run `true` and always pass, whatever the work (verification phase 3, V11)
+        if self.type == "command" and not (self.run or "").strip():
+            raise ValueError('a "command" condition needs "run": the command to execute')
+        return self
 
 
 class TaskBudget(BaseModel):

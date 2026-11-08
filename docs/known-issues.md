@@ -160,3 +160,17 @@ provider, address, why, the model the provider reported); `router.trace_issues` 
 | V8 | Codex and Copilot runs do not report which model answered (`served` empty; Codex's `model_id` is empty when it uses the account's default). | open (low) |
 | V9 | Every model with a base URL reports provider `local`; the trace's `base_url` tells two such servers apart. | by design |
 | V10 | A routing model (`openrouter/openrouter/free`, `openrouter/auto`) answers as whichever model it picked, so `trace_issues` reports "the provider answered as X, not free" on every run. The flag is kept on purpose (the model that served is still not the one named). | open (decide when such a model gets a key) |
+
+## Added 2026-11-08 (verification phase 3, individual agents)
+
+See `docs/verification/phase-3-agents.md`. Seven agents ran alone on their role tasks (live runs 2101–2114); results
+were graded by running their code, counting seeded defects and validating plans, not by their own claims.
+
+| # | Problem | Status |
+|---|---------|--------|
+| V11 | A `command` acceptance condition without `run` (`{"type": "command", "value": "pytest"}`) ran `true` and passed whatever the work was. | fixed (`contracts.Condition` refuses it; the planner is asked again) |
+| V12 | Codex's own web tools (`web_search`, the ChatGPT apps server's `search_service.web_run`, browser and computer use) were on in every Codex run: the security and UI/UX agents (no `network`) searched the web, and the research lead used them instead of the platform's tools, then cited a document that did not exist. | fixed (`executors.CODEX_NO_WEB` on every `CodexExecutor` run; live rerun: research used `fetch_url`, UI/UX no web) |
+| V13 | Codex's read-only sandbox runs any program for an agent without `shell` (`python3 -c`, as uid 0) and reads outside the worktree; writes and network are blocked. Codex reads files through these commands. | open (threat-model known gap; move a `read`-only agent to Claude Code, or decide how Codex should run it) |
+| V14 | Claude Code's `acceptEdits` (writing runs) auto-approves file commands in the worktree (`rm -r __pycache__`) and read-only commands (`git log`, `cat`) outside the run's allow-list; `Run.tools` understates what the run could do. | open (low; bounded to the worktree) |
+| V15 | The GM's own model `claude_37` is benched until Nov 11; the GM runs on its role route (Claude Code) and `trace_issues` flags every run as a substitution without a configured fallback. | open (owner: clear the GM's `model_pref` or give it fallbacks) |
+| V16 | The research tool loop shows its planner only the first 400 characters of each document (`research_agent._material_text`): navigation text on sqlite.org, so it re-fetched the same pages and judged them "partial headers" (31,624 characters were stored). | open (low) |
