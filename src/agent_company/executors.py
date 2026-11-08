@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_company.router import Choice
+from agent_company.sandbox import no_cache_env
 from agent_company.worktrees import ensure_sandboxed, write_files
 
 
@@ -495,7 +496,7 @@ class Executor:
         import signal
 
         proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, env=env, start_new_session=True)
+                                text=True, env=no_cache_env(env), start_new_session=True)
         _track(proc.pid, cmd[0], self.kind, req)
         try:
             if watch is not None and watch.active:

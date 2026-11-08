@@ -30,7 +30,9 @@ feature came from.
   windows from its session files, OpenRouter key limits, own daily/weekly token limits; `limitCards` in app.js); `copilot` kind (GitHub Copilot CLI, `enable_copilot`), `cli_status`/`install_cli`; G-R-18 `ModelEntry.terms` (billing, context, tool calling, data
   terms, licence page) validated by `check_terms`, `terms_due` after 90 days without a person's check), `contracts.py` (task contracts with scope, risk, budget, deadline; output lines),
   `executors.py` (tracked subprocesses; a writing Claude Code run gets the `edit_check.py` PostToolUse hook (EL-R-05:
-  each edited .py/.js file is parsed, a syntax error goes back to the agent); `terminate` for stops; `gate`, the tool gateway every run passes: permissions and
+  each edited .py/.js file is parsed, a syntax error goes back to the agent); every CLI run and gate command gets
+  `PYTHONDONTWRITEBYTECODE=1` and `-p no:cacheprovider` in `PYTEST_ADDOPTS` (`sandbox.no_cache_env`), so pytest
+  leaves no `__pycache__/`/`.pytest_cache/` in a worktree; `terminate` for stops; `gate`, the tool gateway every run passes: permissions and
   `Agent.autonomy` G0-G4 decide writes, Bash and MCP tools, the isolation level L0-L2 and every tool call (Claude Code
   stream-json, Codex `--json`) are recorded on the `Run`; FW-R-02 `StuckWatch` reads the stream while it runs and ends a run
   that repeats the same call `stuck_repeat_limit` times or fails the same way `stuck_error_limit` times), `dependencies.py` (S08-R-05: dependency changes per goal from git objects, `pip-audit`/`npm audit` at the gate's
