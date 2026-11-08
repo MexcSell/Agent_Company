@@ -587,18 +587,23 @@ window.WSP = window.WSP || {};
     let el = C.logs.get(id);
     if (!el) {
       el = document.createElement("div"); el.className = "wc-log"; el.setAttribute("aria-live", "polite"); el.hidden = id !== C.tab;
+      el.addEventListener("scroll", () => { if (el.clientHeight) { el._end = atEnd(el); el._top = el.scrollTop; } }, { passive: true });
       C.el.querySelector("#wc-logs").append(el); C.logs.set(id, el);
+      placed.observe(el);
     }
     return el;
   }
+  // Each log remembers whether it is at its end or where the user scrolled up to read. A log hidden or taken out
+  // of the page (another page opened and this one again: the browser resets it to its top) comes back there.
+  const atEnd = (el) => (el.clientHeight ? el.scrollHeight - el.scrollTop - el.clientHeight < 80 : el._end !== false);
+  const toEnd = (el) => { el._end = true; el.scrollTop = el.scrollHeight; };
+  const place = (el) => { if (el._end !== false) el.scrollTop = el.scrollHeight; else if (!el.scrollTop) el.scrollTop = el._top || 0; };
+  const placed = new ResizeObserver((es) => es.forEach((e) => e.contentRect.height && place(e.target)));
   // A tab shown again opens at its end, unless the user had scrolled up in it to read (then it stays there).
   function showLog() {
     const log = logOf();
-    C.logs.forEach((el, id) => {
-      if (id !== C.tab && !el.hidden) el.dataset.end = el.scrollHeight - el.scrollTop - el.clientHeight < 80 ? "1" : "";
-      el.hidden = id !== C.tab;
-    });
-    if (log.dataset.end !== "") log.scrollTop = log.scrollHeight;
+    C.logs.forEach((el, id) => (el.hidden = id !== C.tab));
+    place(log);
   }
   function dropLog(id) { C.logs.get(id)?.remove(); C.logs.delete(id); }
   function renderLog(scroll, c = cur()) {
@@ -622,7 +627,7 @@ window.WSP = window.WSP || {};
     }
     log.innerHTML = c.runs.map((r) => `<div class="cc-run" data-run="${esc(r.id)}">${runHtml(r)}</div>`).join("");
     // At the end: a conversation opens on its latest prompt and answer; `false` keeps where the user scrolled.
-    if (scroll !== false) log.scrollTop = log.scrollHeight;
+    if (scroll !== false) toEnd(log);
   }
   function renderRun(run) {
     const c = C.convs.find((x) => x.runs.includes(run));
@@ -630,9 +635,9 @@ window.WSP = window.WSP || {};
     const log = logOf(c.id);
     const el = log.querySelector(`[data-run="${CSS.escape(run.id)}"]`);
     if (!el) return renderLog(true, c);
-    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+    const atBottom = atEnd(log);
     el.innerHTML = runHtml(run);
-    if (atBottom) log.scrollTop = log.scrollHeight;
+    if (atBottom) toEnd(log);
   }
   // --- sessions on the host: tabs, live view, /status /tasks /agents -------------------------
   const fmtK = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n || 0));
@@ -926,14 +931,14 @@ window.WSP = window.WSP || {};
       return;
     }
     const first = !log.querySelector(".cc-run.cc-live");
-    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+    const atBottom = atEnd(log);
     const run = sessionRun();
     const results = new Map(run.events.filter((e) => e.kind === "tool_result").map((e) => [e.tool_use_id, e]));
     const events = turnsHtml(run, run.events, results, d.status === "busy");
     const tail = d.status === "busy" ? `<div class="cc-working"><span class="spin"></span> ${activity(d)}</div>` : d.status === "ended" ? '<div class="cc-divider"><span>Session ended</span></div>' : "";
     log.innerHTML = `<div class="cc-run cc-live">${d.partial_history ? '<div class="cc-divider"><span>Earlier history not loaded</span></div>' : ""}${events || '<p class="muted">No conversation yet.</p>'}${tail}</div>`;
     // It opens at its end, and stays there while the user follows it (not when they scrolled up to read).
-    if (first || atBottom) log.scrollTop = log.scrollHeight;
+    if (first || atBottom) toEnd(log);
   }
 
   const ST = { running: ["spin", ""], completed: ["ok", "✓"], failed: ["err", "✗"], killed: ["err", "■"], stopped: ["muted", "■"], ended: ["muted", "·"] };
