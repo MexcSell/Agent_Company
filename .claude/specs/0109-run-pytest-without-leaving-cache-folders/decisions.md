@@ -19,3 +19,9 @@ Findings:
 - boundaries: tests/test_cache_free_runs.py: disables or skips a test: pytest.skip(f"bubblewrap cannot start a sandbox here: {sandbox.available()[1]}")
 
 Next: fix the findings (loop back to Build).
+
+## Iteration 3: PASS
+- drop_runtime_skip (developer): done
+- qa_review (qa): done
+
+Next: approval and merge.
