@@ -1644,6 +1644,14 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                 _notify_goal(goal_id, status)
                 if status == "approved":
                     _push(goal_id)
+                elif status == "awaiting_approval":  # owner policy auto_merge: approve() decides, never fails it
+                    try:
+                        from agent_company import ownerpolicy
+
+                        if (ownerpolicy.on_awaiting_approval(goal_id) or {}).get("merged"):
+                            status = "approved"
+                    except Exception as e:  # noqa: BLE001
+                        log_event("error", f"owner policy auto-merge: {type(e).__name__}: {e}", goal_id=goal_id)
                 return {"status": status, "iterations": iteration, "report": report}
             feedback = report["feedback"]
         goal = _goal(goal_id)

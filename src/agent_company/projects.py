@@ -1106,10 +1106,24 @@ def restricted(title: str, description: str = "") -> bool:
     return bool(RESTRICTED.search(f"{title}\n{description}"))
 
 
-def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = True) -> dict[str, Any]:
+def chain_block(s, origin: Goal | None) -> str | None:  # noqa: ANN001
+    """Why the goal-chain guards refuse another goal spawned from `origin`'s family, or None."""
+    if origin is None:
+        return None
+    limit = settings().max_proposal_goals
+    if _spawned_from(s, _root(s, origin).id) >= limit:
+        return f"limit of {limit} proposal goals reached"
+    if _depth(s, origin) >= settings().max_goal_depth:
+        return f"goal chain depth {settings().max_goal_depth} reached"  # S04-R-08
+    return None
+
+
+def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = True,
+           hold: bool = False) -> dict[str, Any]:
     """Approve (spawning a goal, within the loop guards) or reject a proposal. An agent (`by_human=False`)
     cannot approve a restricted proposal. A product or project proposal (S10-R-01) is approved only by a person and
-    only with its documented case complete; it becomes a project, not a goal."""
+    only with its documented case complete; it becomes a project, not a goal. `hold` (the owner policy): an approval
+    the chain guards or the parent's budget refuse leaves the proposal pending, with the reason in 'held'."""
     from agent_company import loop
 
     spawn: dict[str, Any] | None = None
@@ -1121,7 +1135,6 @@ def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = Tr
             raise ValueError(f"proposal is already {p.status}")
         origin = s.get(Goal, p.goal_id)
         note = ""
-        limit = settings().max_proposal_goals
         if approve and not by_human and restricted(p.title, p.description):
             raise PermissionError("this proposal touches authority, budgets or safety controls: a person decides it")
         kind = p.kind or "follow_up"
@@ -1140,10 +1153,10 @@ def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = Tr
             raise PermissionError("a project rule changes every agent's instructions: a person decides it")
         if kind in ("project", "rule"):  # the goal-chain guards limit spawned goals; neither spawns one
             pass
-        elif approve and origin is not None and _spawned_from(s, _root(s, origin).id) >= limit:
-            approve, note = False, f" (limit of {limit} proposal goals reached)"
-        elif approve and origin is not None and _depth(s, origin) >= settings().max_goal_depth:
-            approve, note = False, f" (goal chain depth {settings().max_goal_depth} reached)"  # S04-R-08
+        elif approve and (blocked := chain_block(s, origin)):
+            if hold:  # stays pending: no status, no decider, no rejection post
+                return {**proposal_dict(p, dict(s.execute(select(Agent.id, Agent.name)).all())), "held": blocked}
+            approve, note = False, f" ({blocked})"
         if kind != "project" and not (kind == "rule" and approve):
             p.status, p.decided_by = ("approved" if approve else "rejected"), decided_by + note
         if kind == "rule":
@@ -1184,8 +1197,14 @@ def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = Tr
         except ValueError as e:  # e.g. the parent goal's budget is used (S04-R-09): recorded, not turned into a goal
             with session() as s:
                 p = s.get(Proposal, proposal_id)
-                p.status, p.decided_by = "rejected", f"{p.decided_by} ({e})"[:128]
+                if hold:  # the owner policy leaves it for a person
+                    p.status, p.decided_by = "pending", ""  # the column's undecided value (not nullable)
+                else:
+                    p.status, p.decided_by = "rejected", f"{p.decided_by} ({e})"[:128]
                 out = proposal_dict(p, dict(s.execute(select(Agent.id, Agent.name)).all()))
+            if hold:
+                log_event("proposal", f"proposal {proposal_id} stays pending: {e}", goal_id=out["goal_id"])
+                return {**out, "held": str(e)}
             log_event("proposal", f"proposal {proposal_id} not turned into a goal: {e}", goal_id=out["goal_id"])
             return out
         with session() as s:
@@ -1218,6 +1237,11 @@ def settle_proposals(goal_id: int, only: list[int] | None = None) -> None:
         gm = s.scalars(select(Agent).where(Agent.role == "general_manager", Agent.parent_id.is_(None))).first()
         goal_title = g.title if g else ""
     if not pending:
+        return
+    if settings().auto_approve_proposals:  # owner policy: held ones are posted and notified there
+        from agent_company import ownerpolicy
+
+        ownerpolicy.approve_pending(goal_id, ids=[x[0] for x in pending])
         return
     if settings().proposal_policy == "superiors" and gm is not None:  # the GM decides only unrestricted ones
         human = [x for x in pending if restricted(x[1], x[2]) or x[0] in projects_]

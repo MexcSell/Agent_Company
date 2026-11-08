@@ -232,6 +232,16 @@ def analyse(goal_id: int, trigger: str, goal_ids: list[int] | None = None,
                   knowledge_id=item.id, trigger=trigger)
         report["id"] = item.id
         project_id = row.project_id
+    from agent_company.config import settings
+
+    if report["actions"] and settings().auto_approve_proposals:  # owner policy, after the session committed
+        from agent_company import ownerpolicy
+
+        done = ownerpolicy.approve_pending(ids=[a["proposal_id"] for a in report["actions"]])
+        result = {x["id"]: k for k, xs in done.items() for x in xs}
+        for a in report["actions"]:
+            outcome = result.get(a["proposal_id"], "held")
+            a["result"] = "pending" if outcome == "held" else outcome
     try:  # after the session: drafting a rule may run a model (EL-R-04)
         report["rules"] = propose_rules(project_id)
     except Exception as e:  # noqa: BLE001 - a rule proposal never breaks the analysis or the goal's ending
