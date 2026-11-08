@@ -1,25 +1,22 @@
 """Integration: gate commands (contracts.run_command at L2 and L3) and agent CLI runs (Executor._spawn) run a real
 pytest in a fresh directory and leave no __pycache__/ or .pytest_cache/ behind; a control run without the fix does."""
 import os
-import shutil
+import shlex
 import subprocess
 import sys
 import types
 
 import pytest
 
-from agent_company import contracts, executors, sandbox, worktrees
+from agent_company import contracts, executors, prefs, sandbox, worktrees
 
-real = pytest.mark.skipif(not shutil.which("bwrap"), reason="bubblewrap is not installed")
 CACHES = ("__pycache__", ".pytest_cache")
 FIX = ("PYTHONDONTWRITEBYTECODE", "PYTEST_ADDOPTS")
 PYTEST = [sys.executable, "-m", "pytest", "-q", "test_x.py"]
 
 
 @pytest.fixture(autouse=True)
-def _usable(request, monkeypatch):
-    if request.node.get_closest_marker("skipif") and not sandbox.available()[0]:
-        pytest.skip(f"bubblewrap cannot start a sandbox here: {sandbox.available()[1]}")
+def _fix_only(monkeypatch):
     for k in FIX:  # the fix, not the outer environment (a gate run sets both), must keep the caches away
         monkeypatch.delenv(k, raising=False)
 
@@ -56,7 +53,7 @@ def gate(mode):
     wt = project(_worktree())
     assert caches(wt) == []
     info = {}
-    ok, detail = contracts.run_command(" ".join(PYTEST), wt, 120, mode=mode, info=info)
+    ok, detail = contracts.run_command(shlex.join(PYTEST), wt, 120, mode=mode, info=info)
     assert ok, detail
     assert "1 passed" in detail
     return wt, info
@@ -69,11 +66,53 @@ def test_a_gate_command_on_the_host_leaves_no_caches():
     assert caches(wt) == []
 
 
-@real
-def test_a_sandboxed_gate_command_leaves_no_caches():
-    wt, info = gate("required")
-    assert info["isolation"] == "L3"
+def setenv(argv):
+    """The `--setenv NAME VALUE` pairs of a bubblewrap command line."""
+    return {argv[i + 1]: argv[i + 2] for i, a in enumerate(argv) if a == "--setenv"}
+
+
+def test_the_sandbox_command_line_carries_the_fix(tmp_path, monkeypatch):
+    """Runs everywhere: build() only assembles the L3 command line, it does not start bubblewrap."""
+    wt = project(tmp_path / "wt")
+    argv = sandbox.build(PYTEST, wt, writable=[wt], env=sandbox.env_for(), limits=False)
+    pairs = setenv(argv)
+    assert pairs["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert "-p no:cacheprovider" in pairs["PYTEST_ADDOPTS"]
+    assert argv[-len(PYTEST):] == PYTEST
+    # env_for passes an operator's own PYTEST_ADDOPTS on when an admin names it in `sandbox_env`; it is kept
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-x")
+    prefs.set_value("sandbox_env", ["PYTEST_ADDOPTS"])
+    pairs = setenv(sandbox.build(PYTEST, wt, writable=[wt], env=sandbox.env_for(), limits=False))
+    assert pairs["PYTEST_ADDOPTS"] == "-x -p no:cacheprovider"
+    assert pairs["PYTHONDONTWRITEBYTECODE"] == "1"
+
+
+def refused():
+    """A required sandbox that cannot start refuses the command: nothing ran, so nothing was written."""
+    wt = project(_worktree())
+    info = {}
+    ok, detail = contracts.run_command(shlex.join(PYTEST), wt, 120, mode="required", info=info)
+    assert not ok
+    assert "the sandbox is required and unavailable" in detail, detail
+    assert info["isolation"] == ""
     assert caches(wt) == []
+
+
+def test_a_sandboxed_gate_command_leaves_no_caches():
+    usable, _ = sandbox.available()  # decided here, after conftest's env fixture set the temporary DATA_DIR
+    if usable:
+        control(_worktree("control"))
+        wt, info = gate("required")
+        assert info["isolation"] == "L3"
+        assert caches(wt) == []
+    else:  # no bubblewrap, or nested inside the gate's own L3 run
+        refused()
+
+
+def test_a_required_sandbox_that_cannot_start_writes_nothing(monkeypatch):
+    """The refusal branch above, on every host."""
+    monkeypatch.setattr(sandbox, "available", lambda: (False, "bubblewrap is not installed"))
+    refused()
 
 
 @pytest.mark.parametrize("given", ["none", "addopts"])
