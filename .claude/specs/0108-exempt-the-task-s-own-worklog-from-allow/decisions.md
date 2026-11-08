@@ -9,3 +9,9 @@ Findings:
 - boundaries: tests/test_execution.py: 1 assertion(s) removed from tests
 
 Next: fix the findings (loop back to Build).
+
+## Iteration 2: PASS
+- fix_worklog_exemption (developer): done
+- qa_review (qa): done
+
+Next: approval and merge.
