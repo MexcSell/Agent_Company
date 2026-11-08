@@ -1,6 +1,6 @@
 # ADR 0079: missing-writing-assist-endpoint
 
-Status: Proposed (waits for a person)
+Status: Accepted
 Date: 2026-11-07
 Decision record: #79 · goal #65 (Daily per-user cap for the writing assistant)
 Category: technical
