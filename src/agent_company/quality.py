@@ -17,7 +17,7 @@ import platform
 import re
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from sqlalchemy import select
@@ -219,6 +219,12 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
             (c["stage"], c["run"]): list(c.get("requirement_keys") or [])
             for t in tasks if t.status in ("done", "failed") for c in (t.contract or {}).get("acceptance", [])
             if c.get("type") == "command" and c.get("stage") and c.get("run") and (c["stage"], c["run"]) not in own}
+        # the WORKLOG.md a writing task's own acceptance asks for is not held to the allowed paths (only that name)
+        worklogs = sorted({
+            c["path"].removeprefix("./")
+            for t in tasks if t.writes for c in (t.contract or {}).get("acceptance", [])
+            if c.get("type") == "file_exists" and c.get("path")
+            and PurePosixPath(c["path"].removeprefix("./")).name == "WORKLOG.md"})
         required = [] if strategies.skips_checks(goal) else teststrategy.mandatory(goal)
         risk = (goal.test_strategy or {}).get("risk", "")
         from agent_company.recruitment import on_probation
@@ -266,7 +272,7 @@ def evaluate(goal_id: int, iteration: int) -> dict[str, Any]:
     if base:
         from agent_company import adr
 
-        for c in checks_mod.run_static(worktree, base, allowed, protect, permits, exempt=adr.paths(goal_id)):
+        for c in checks_mod.run_static(worktree, base, allowed, protect, permits, exempt=adr.paths(goal_id) + worklogs):
             results.append(c | {"stage": _stage_of(c["check"])})
             if not c["passed"]:
                 feedback.append(f"{c['check'].capitalize()} check failed:\n{c['detail']}")
