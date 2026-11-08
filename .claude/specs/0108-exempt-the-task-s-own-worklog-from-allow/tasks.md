@@ -1,29 +1,40 @@
-# Tasks (iteration 1)
+# Tasks (iteration 2)
 
 
 
-## 1. Exempt a writing task's own WORKLOG.md from the gate's allowed-paths check, with regression tests
-- key: `fix` · role: developer · writes: yes
+## 1. Exempt worklogs from every iteration up to the gate's, restore the lost assertion, add edge-case tests
+- key: `fix_worklog_exemption` · role: developer · writes: yes
 
-Read each file before you change it. Allowed paths are checked in only one place: quality.evaluate -> checks.run_static -> checks.scope_violations.
+The branch already has the exemption from iteration 1. Read `git diff f5af0a5 -- src tests` first. Only change what is listed here.
 
-1. src/agent_company/quality.py, function evaluate (around lines 201-272). Inside the open session that loads `tasks` (lines 205-222), build `worklogs`: a sorted list of every `c["path"]` taken from `(t.contract or {}).get("acceptance", [])` where `t.writes` is true, `c.get("type") == "file_exists"`, and `PurePosixPath(c["path"]).name == "WORKLOG.md"`. Strip a leading './' before you compare. Use the same comprehension style as `staged` at lines 218-221. At line 269, pass `exempt=adr.paths(goal_id) + worklogs` instead of `exempt=adr.paths(goal_id)`.
-2. src/agent_company/checks.py:155, the docstring of scope_violations. It says `exempt` holds files the platform wrote. Change it to say that `exempt` holds the goal's ADR files (adr.paths) plus the WORKLOG.md a writing task's own acceptance asks for, and that a path is exempt only on an exact match. Do not change the function's logic. Exempt files still go through the secret, syntax and boundary checks, which run separately in run_static.
-3. src/agent_company/loop.py:761, _board_plan. When goal.allowed_paths is set, add to the 'Allowed paths: ...' line that a WORKLOG.md your task's acceptance asks for is also allowed. Keep it to one short clause.
-4. Write the new file tests/test_worklog_scope.py. It runs offline, and every test gets its own DATA_DIR from conftest. Copy the repo_with/wt_with_change helpers from tests/test_execution.py:11-28. Cover these cases:
-  (a) checks.scope_violations with allowed=['stats.py'], changes to stats.py and WORKLOG.md, exempt=['WORKLOG.md'] -> [];
-  (b) the same, plus a change to other.py -> exactly one violation, for other.py;
-  (c) the same changes without exempt -> WORKLOG.md is reported as outside the allowed paths;
-  (d) through quality.evaluate: a goal with allowed_paths=['stats.py'] on a scratch repo. Look at how tests/test_knowledge.py:22 and :367 create and run goals with loop.create_goal(..., repo_path=..., quality_commands=['test -f WORKLOG.md']) on the offline simulator. The simulator's build task requires file_exists WORKLOG.md (executors.py:757-759). Run the goal and assert that the gate's 'scope' check passed. If running the whole goal is impractical, create the Goal and a done writing Task whose contract acceptance is [{'type':'file_exists','path':'WORKLOG.md'}], commit the WORKLOG.md and stats.py changes in its worktree, call quality.evaluate(goal_id, iteration), and assert that the 'scope' row passed;
-  (e) the same as (d), but the task's file_exists names 'src/other.py' and the change touches it -> the 'scope' row fails. Other files are not exempt.
-  (f) the same as (d), but the WORKLOG.md condition belongs to a task with writes=False -> the 'scope' row fails.
-5. Run `python3 -I /home/luca/Agent_Company/src/agent_company/edit_check.py <changed .py files>`. Then run, one after the other (there is no xdist): `uv run pytest -q tests/test_worklog_scope.py tests/test_execution.py`, then `uv run pytest -q`. In your answer, report the summary lines and any failure that was there before your change. Do not write a WORKLOG.md for this goal.
+CAUSE (FACT, src/agent_company/quality.py:205-206 and 222-227): `worklogs` comes from `tasks`, which holds only `Task.iteration == iteration`. `checks.scope_violations` diffs `base...HEAD`, and that includes the commits of every earlier iteration. A WORKLOG.md written by iteration 1's build task is therefore reported as 'outside the allowed paths' when the gate runs for iteration 2.
 
-Acceptance: {"type": "file_exists", "path": "tests/test_worklog_scope.py"}; {"type": "command", "run": "uv run pytest -q tests/test_worklog_scope.py tests/test_execution.py", "stage": "unit"}; {"type": "command", "run": "grep -q 'WORKLOG.md' src/agent_company/quality.py"}
+1. src/agent_company/quality.py: inside `evaluate`'s session, build `worklogs` with its own query, `s.scalars(select(Task).where(Task.goal_id == goal_id, Task.iteration <= iteration))`. Keep the rest of the existing rule as it is: only tasks with `t.writes`; only `file_exists` acceptance conditions whose path, after removeprefix('./'), has the basename exactly `WORKLOG.md`; the exempt entry is that exact path, with no globbing and no basename matching against changed files. Do not change `tasks` itself, because rows, staged commands and everything else must stay per iteration. Update the comment so it says earlier iterations count too. The literal text `Task.iteration <= iteration` must appear in quality.py.
 
-## 2. Review the worklog exemption: logic, bypass risk and tests
-- key: `qa_review` · role: qa · writes: no · after: fix
+2. src/agent_company/loop.py:761-762: change the hint to `(and a WORKLOG.md a writing task's acceptance asks for)`. Change nothing else in loop.py, which has failed checks in earlier goals.
 
-Review the diff on this branch against main (`git diff main...HEAD -- src tests`). Check the data flow in src/agent_company/quality.py evaluate -> checks.run_static -> checks.scope_violations for three cases. Normal: a goal limited to one file, whose writing task's file_exists WORKLOG.md makes the 'scope' check pass. Edge: a WORKLOG.md in a subdirectory or written as './WORKLOG.md', a task with writes=False, and a task from an earlier iteration. Error or bypass: a file_exists condition on any other path, such as src/other.py or NOTES.md, must not widen allowed_paths, and a disallowed file must still fail. Confirm that exempt files still go through the secret, syntax and boundary checks. Confirm that the `exempt` docstring in checks.py and the 'Allowed paths' line in loop._board_plan match what the code does, and that tests/test_worklog_scope.py tests the wiring through quality.evaluate and not only scope_violations. Run `uv run pytest -q tests/test_worklog_scope.py tests/test_execution.py` yourself. Write one FINDING line per defect, with file:line, what is wrong and the scenario. Then write an OUTCOME line and end with 'VERDICT: PASS' or 'VERDICT: FAIL'.
+3. tests/test_execution.py::test_gate_includes_static_checks: keep the existing asserts and add one more, `assert "WORKLOG.md" not in names["scope"]["detail"]`. The function must have 3 `assert` statements again, as on main. Do not remove or weaken an assertion anywhere.
+
+4. tests/test_worklog_scope.py: generalise the `gate_scope` helper so it takes a list of tasks (iteration, writes, acceptance path) and the gate iteration (the Goal's iteration matches it). It may also return the whole check list. Add these tests with EXACTLY these names:
+   - `test_gate_exempts_a_worklog_from_an_earlier_iteration`: the iteration-1 writing task asks for WORKLOG.md; the iteration-2 writing task asks only for stats.py; the gate runs `quality.evaluate(gid, 2)`. The scope row passes. This test must fail without fix 1 (verify by temporarily reverting it).
+   - `test_gate_exempts_a_nested_worklog_only_on_an_exact_match`: acceptance `docs/WORKLOG.md` exempts a changed `docs/WORKLOG.md`. In a second case, acceptance `WORKLOG.md` does NOT exempt a changed `docs/WORKLOG.md`, and the detail names `docs/WORKLOG.md: outside the allowed paths`. Use two tmp sub-directories or two separate repos.
+   - `test_gate_does_not_exempt_notes_md`: a writing task with acceptance file_exists `NOTES.md` and a changed NOTES.md. Scope fails, naming NOTES.md.
+   - `test_exempt_worklog_still_fails_the_secret_scan`: an exempt WORKLOG.md that contains an AWS key. The scope row passes and the 'secret scan' row fails. IMPORTANT: build the key at runtime, e.g. `"AKIA" + "Q" * 16`. A literal matching `\b(AKIA|ASIA)[0-9A-Z]{16}\b` or `-----BEGIN ... PRIVATE KEY` in the test file would make this goal's own secret scan fail.
+   Keep all existing tests and their assertions.
+
+5. Run `uv run pytest -q tests/test_worklog_scope.py tests/test_execution.py tests/test_loop.py` serially, without -n (pytest-xdist is not installed). Read the summary line. Do not write a WORKLOG.md or any other file outside the in_scope paths.
+
+Acceptance: {"type": "command", "run": "uv run pytest -q tests/test_worklog_scope.py tests/test_execution.py", "stage": "unit"}; {"type": "command", "run": "uv run pytest -q tests/test_worklog_scope.py::test_gate_exempts_a_worklog_from_an_earlier_iteration tests/test_worklog_scope.py::test_gate_exempts_a_nested_worklog_only_on_an_exact_match tests/test_worklog_scope.py::test_gate_does_not_exempt_notes_md tests/test_worklog_scope.py::test_exempt_worklog_still_fails_the_secret_scan", "stage": "unit"}; {"type": "command", "run": "uv run pytest -q tests/test_loop.py", "stage": "integration"}; {"type": "command", "run": "grep -q \"Task.iteration <= iteration\" src/agent_company/quality.py"}; {"type": "command", "run": "grep -q \"a WORKLOG.md a writing task's acceptance asks for\" src/agent_company/loop.py"}
+
+## 2. Review the worklog exemption: cross-iteration logic, bypass risk, tests and assertion counts
+- key: `qa_review` · role: qa · writes: no · after: fix_worklog_exemption
+
+Review `git diff f5af0a5 -- src tests` on this branch against the four findings of iteration 1.
+Verify the logic by tracing the data flow of three cases through quality.evaluate → checks.run_static → checks.scope_violations:
+(a) normal: the build task's WORKLOG.md in the same iteration;
+(b) edge: WORKLOG.md written in iteration 1 with the gate at iteration 2, and docs/WORKLOG.md against acceptance WORKLOG.md (no basename match);
+(c) error and bypass: NOTES.md, any other file_exists path (e.g. src/other.py), a non-writing task's WORKLOG.md, a path like `../WORKLOG.md` or `x/../WORKLOG.md`, and a credential inside an exempt WORKLOG.md (the secret scan must still fail).
+Also check that `tasks` is still per iteration everywhere else in evaluate; that tests/test_execution.py::test_gate_includes_static_checks has the same number of `assert` statements as on main (3); that no assertion was removed in any test file; that the tests contain no literal credential the secret scan would flag; and that the loop.py hint reads "(and a WORKLOG.md a writing task's acceptance asks for)".
+List each problem as a `FINDING: <file>:<line> | <problem> | <fix>` line. End with an OUTCOME paragraph and then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
 
 Acceptance: {"type": "regex", "pattern": "VERDICT: (PASS|FAIL)"}; {"type": "contains", "value": "OUTCOME"}; {"type": "min_length", "value": 400}
