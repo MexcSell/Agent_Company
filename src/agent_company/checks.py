@@ -152,7 +152,8 @@ def overlapping(a: list[str], b: list[str]) -> list[tuple[str, str]]:
 
 def scope_violations(worktree: Path, base: str, allowed: list[str], protect_tests: bool,
                      exempt: list[str] | None = None) -> list[str]:
-    """`exempt`: files the platform itself wrote for the goal (its ADRs, adr.paths)."""
+    """`exempt`: the goal's ADR files (adr.paths) plus the WORKLOG.md a writing task's own acceptance asks for;
+    a path is exempt only on an exact match. Exempt files still pass the secret, syntax and boundary checks."""
     problems = []
     exempt_set = set(exempt or [])
     for status, path in _changed_with_status(worktree, base):

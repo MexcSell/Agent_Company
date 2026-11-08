@@ -773,7 +773,8 @@ def _board_plan(goal: Goal, iteration: int, plan: list[contracts.TaskContract], 
     """The planner's part of the blackboard: the objective and the breakdown with its dependencies."""
     blackboard.put(goal.id, "objective", "goal", goal.title + (f"\n\n{goal.description}"
                                                                if goal.description.strip() != goal.title.strip() else "")
-                   + (f"\n\nAllowed paths: {', '.join(goal.allowed_paths)}" if goal.allowed_paths else ""),
+                   + (f"\n\nAllowed paths: {', '.join(goal.allowed_paths)}"
+                      " (and a WORKLOG.md a writing task's acceptance asks for)" if goal.allowed_paths else ""),
                    author_agent_id=gm_id)
     lines = [f"Iteration {iteration}: {summary}".strip()]
     lines += [f"- {c.key} ({c.role}): {c.title}" + (f" after {', '.join(c.depends_on)}" if c.depends_on else "")
