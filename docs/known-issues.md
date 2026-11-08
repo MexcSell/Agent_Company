@@ -185,4 +185,14 @@ See `docs/verification/phase-4-communication.md`. The GM delegated to the develo
 | V17 | A task did not record its sender (the planner's id stayed only in the goal's checkpoint, overwritten each iteration) or its creation time. | fixed (`Task.planned_by`, `Task.created_at`; shown in the goal trace) |
 | V18 | An agent message to a role that does not exist was stored and never delivered; a `MESSAGE` line with an unknown kind was ignored. Nobody learnt either went nowhere. | fixed (each is an event in the goal's log naming the sender and the line; the misaddressed one is not stored) |
 | V19 | `run_goal` checked "queued" and changed the status later: a goal handed out twice at once ran twice and the second run failed it (IllegalTransition). | fixed (`loop._claim`: one conditional UPDATE takes the goal) |
-| V20 | The GM's acceptance commands (`python3 -B -m pytest`, `python3 -B -c`) are outside the developer's and QA's allow-lists; both ran plain `pytest`, leaving `__pycache__/` in the worktree. The gate runs the exact commands in L3. | open (low; `executors.CLAUDE_BASH`/`CLAUDE_CHECK` or `PYTHONDONTWRITEBYTECODE=1`) |
+| V20 | The GM's acceptance commands (`python3 -B -m pytest`, `python3 -B -c`) were outside the developer's and QA's allow-lists; both ran plain `pytest`, leaving `__pycache__/` in the worktree. The gate runs the exact commands in L3. | fixed in phase 5 (`executors.PYTEST_FORMS`: `python3 [-B] -m pytest` allowed; `python3 -B -c` stays refused) |
+
+## Added 2026-11-09 (verification phase 5, project registration)
+
+See `docs/verification/phase-5-projects.md`. TEST-PROJECT-001/002 through the API: stored, reopened, updated,
+isolated (users, goals, messages, files); offline only.
+
+| # | Problem | Status |
+|---|---------|--------|
+| V21 | A project's General Manager (`Project.manager_id`) did not plan its goals: the best-ranked GM did. | fixed (`registry.staff(prefer=…)`; `loop._plan`, `_configure` and `rca` pass the project's manager) |
+| V22 | A topic's agent list (the plan's "assigned developer/QA") is shown but staffing ignores it; workers come from the project's rooms, and every core agent is in `development`. | open (owner: should a listed agent constrain staffing?) |

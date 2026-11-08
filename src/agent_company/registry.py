@@ -682,14 +682,17 @@ def resolve_role(role: str, goal_id: int | None = None) -> tuple[str, str | None
 
 
 def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None,
-          writes: bool | None = None, critical: bool = False, task_id: int | None = None) -> Agent:
+          writes: bool | None = None, critical: bool = False, task_id: int | None = None,
+          prefer: int | None = None) -> Agent:
     """Return an agent for the role and mark it busy.
 
     Picks the best idle enabled agent by team utility (`_rank`). With probability `explore_rate`, on a
     non-critical task of a user's goal, the best idle agent without enough evidence is given the chance instead
     (SPEC-12 S12-R-03). If all are busy the best one is cloned; if the role does not exist a new specialist is
     recruited and linked to similar agents so it can draw on their experience. With `task_id` the decision, its
-    candidates and their scores are recorded in the task's contract (`staffing`, AR-018).
+    candidates and their scores are recorded in the task's contract (`staffing`, AR-018). `prefer` (an agent id: a
+    project's own General Manager) takes the work when it is in the pool, healthy and within its quota; busy, a clone
+    of it does (verification phase 5).
     """
     from agent_company.config import settings
 
@@ -721,11 +724,15 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
         trainee = _trainee(s, goal_id, pool, role, writes)  # an exercise or experiment measures one agent (SPEC-13)
         if trainee is not None and trainee.id not in quota:  # a candidate in its qualification run (SPEC-03)
             quota[trainee.id] = over_quota(s, trainee)
+        preferred = next((a for a in pool if a.id == prefer and a.health != "degraded" and not quota[a.id]), None)
         if trainee is not None and (trainee in idle or (trainee not in pool and _free(trainee, goal_id)
                                                          and not quota[trainee.id])):
             agent, action = trainee, "assigned"
         elif trainee is not None and not quota[trainee.id]:  # busy: its clone, which merges back after the goal
             agent, action = _clone(s, trainee, cap=False), "cloned"  # the measured agent itself
+        elif preferred is not None:
+            agent, action = (preferred, "assigned") if preferred in idle else (_clone(s, preferred), "cloned")
+            why = "the project's own manager"
         elif idle:
             ranks = _rank(s, idle, skills, team)
             agent = max(idle, key=lambda a: ranks[a.id]["score"])

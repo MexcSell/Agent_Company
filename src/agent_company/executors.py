@@ -654,10 +654,12 @@ CHECK_HINT = (f"Syntax check: run `{CHECK_CMD} <files>` (node --check for each .
 
 # Claude Code may run tests, the syntax check and inspect git, nothing else, through Bash. `node` only through the
 # platform's wrapper: a `Bash(node --check:*)` prefix rule would also allow -r/--require/--import/--loader.
-CLAUDE_BASH = ["Bash(pytest:*)", "Bash(python -m pytest:*)", "Bash(uv run:*)", "Bash(npm test:*)",
+# pytest as the planner writes it in acceptance commands: `python3 -B -m pytest` leaves no __pycache__ (V20)
+PYTEST_FORMS = ["pytest", "python -m pytest", "python3 -m pytest", "python3 -B -m pytest"]
+CLAUDE_BASH = [*(f"Bash({p}:*)" for p in PYTEST_FORMS), "Bash(uv run:*)", "Bash(npm test:*)",
                "Bash(npm run:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(ls:*)"]
 # a run without writes: no `uv run:*`/`npm run:*`/`npm test:*`, which run any code (and so could write files)
-CLAUDE_CHECK = ["Bash(pytest:*)", "Bash(python -m pytest:*)", "Bash(uv run pytest:*)", "Bash(git status:*)",
+CLAUDE_CHECK = [*(f"Bash({p}:*)" for p in PYTEST_FORMS), "Bash(uv run pytest:*)", "Bash(git status:*)",
                 "Bash(git diff:*)", "Bash(ls:*)"]
 if CHECK_OK:
     CLAUDE_BASH.append(f"Bash({CHECK_CMD}:*)")
@@ -817,9 +819,9 @@ class CodexExecutor(Executor):
 
 
 # Copilot may run tests, the syntax check and inspect git, nothing else, through its shell tool (as CLAUDE_BASH).
-COPILOT_SHELL = ["shell(pytest)", "shell(python -m pytest)", "shell(uv run)", "shell(npm test)", "shell(npm run)",
+COPILOT_SHELL = [*(f"shell({p})" for p in PYTEST_FORMS), "shell(uv run)", "shell(npm test)", "shell(npm run)",
                  "shell(git status)", "shell(git diff)", "shell(ls)"]
-COPILOT_CHECK = ["shell(pytest)", "shell(python -m pytest)", "shell(uv run pytest)", "shell(git status)",
+COPILOT_CHECK = [*(f"shell({p})" for p in PYTEST_FORMS), "shell(uv run pytest)", "shell(git status)",
                  "shell(git diff)", "shell(ls)"]
 if CHECK_OK:
     COPILOT_SHELL.append(f"shell({CHECK_CMD})")

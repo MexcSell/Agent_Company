@@ -421,3 +421,15 @@ def test_7_an_incomplete_result_is_not_completed(pm_dev, reply, failing):
     assert out["status"] == "failed" and t.status == "failed"
     failed = [c for c in t.gate["acceptance"] if not c["passed"]]
     assert all(any(f in json.dumps(c) for c in failed) for f in failing), failed
+
+
+def test_v20_the_planners_pytest_command_is_one_the_developer_and_qa_may_run():
+    """The live GM wrote `python3 -B -m pytest -q test_factorial.py`; both agents were refused it and ran plain
+    `pytest`, which left __pycache__/ in the worktree. Code through `python3 -B -c` stays refused."""
+    from agent_company import executors
+
+    for tools in (executors.CLAUDE_BASH, executors.CLAUDE_CHECK):
+        assert "Bash(python3 -B -m pytest:*)" in tools and "Bash(python3 -m pytest:*)" in tools
+        assert not any(t.startswith("Bash(python3 -B -c") or t == "Bash(python3:*)" for t in tools)
+    for tools in (executors.COPILOT_SHELL, executors.COPILOT_CHECK):
+        assert "shell(python3 -B -m pytest)" in tools

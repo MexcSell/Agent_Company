@@ -109,12 +109,12 @@ Total 130 s.
   `planning` with one conditional UPDATE, the first statement of its transaction, so SQLite's write lock picks one
   worker.
 
-- **V20 (open, low):** the GM's acceptance commands (`python3 -B -m pytest …`, `python3 -B -c …`) are not in the
+- **V20 (fixed in phase 5):** the GM's acceptance commands (`python3 -B -m pytest …`, `python3 -B -c …`) were not in the
   developer's or QA's command allow-lists (`executors.CLAUDE_BASH`/`CLAUDE_CHECK` allow `pytest`). Both agents fell
   back to plain `pytest`, which leaves `__pycache__/` in the worktree, and QA could not remove it. The gate ran the
-  exact commands in L3, so verification is unaffected. Fix in `executors.py` (being changed for phase 3 right now):
-  allow `python3 -B -m pytest`, or set `PYTHONDONTWRITEBYTECODE=1` for worktree runs. QA's proposal #283 said the
-  same.
+  exact commands in L3, so verification is unaffected. `executors.PYTEST_FORMS` now allows `python3 -m pytest` and
+  `python3 -B -m pytest` in every writing and check list; `python3 -B -c` stays refused (it runs any code). QA's
+  proposal #283 said the same (`test_v20_the_planners_pytest_command_is_one_the_developer_and_qa_may_run`).
 
 ## Phase 4 acceptance
 
@@ -127,7 +127,7 @@ Total 130 s.
 | Three agents | PASS live (GM → Developer → QA, a message delivered between them) |
 | Full team | NOT TESTED in phase 4: research, critic and the remaining roles together come with phase 6's project run |
 
-Open: V20 (low). V7 and V15 from earlier phases still apply.
+V20 fixed in phase 5. V7 and V15 from earlier phases still apply.
 
 ## Phase 5 starts from here
 

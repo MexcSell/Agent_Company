@@ -564,7 +564,7 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
     """The task contracts for this iteration, and the id of the agent that planned them."""
     from agent_company.performance import cost_note
 
-    gm = registry.staff("general_manager", ["planning"], goal.id)
+    gm = registry.staff("general_manager", ["planning"], goal.id, prefer=_project_manager(goal))
     try:
         rooms, project_note = _project_context(goal)
         tmpl = dict(goal.strategy or {}) if strategies.enforced(goal) else None  # S04-R-11
@@ -665,6 +665,17 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
         return plan, gm.id
     finally:
         registry.release(gm.id, goal.id)
+
+
+def _project_manager(goal: Goal) -> int | None:
+    """The agent the goal's project names as its General Manager (`Project.manager_id`), who plans its goals."""
+    if goal.project_id is None:
+        return None
+    from agent_company.db import Project
+
+    with session() as s:
+        p = s.get(Project, goal.project_id)
+        return p.manager_id if p is not None else None
 
 
 def _project_context(goal: Goal) -> tuple[list[str], str]:
@@ -801,7 +812,7 @@ def _configure(goal: Goal) -> None:
     in the worktree; changes outside .claude/ and .mcp.json are put back. API models and the simulator skip this."""
     from agent_company.learning import goal_level
 
-    gm = registry.staff("general_manager", ["planning"], goal.id)
+    gm = registry.staff("general_manager", ["planning"], goal.id, prefer=_project_manager(goal))
     try:
         with session() as s:
             level = goal_level(s, s.get(Goal, goal.id))

@@ -178,7 +178,7 @@ def analyse(goal_id: int, trigger: str, goal_ids: list[int] | None = None,
     ids = sorted(set(goal_ids or []) | {goal_id})
     pack = evidence(ids)
     g = loop._goal(goal_id)
-    gm = registry.staff("general_manager", ["analysis"], goal_id)
+    gm = registry.staff("general_manager", ["analysis"], goal_id, prefer=loop._project_manager(g))
     try:
         prompt = (f"Root-cause analysis ({trigger}).\n\nEvidence collected by the platform:\n{pack['text']}\n\n"
                   + INSTRUCTIONS)
