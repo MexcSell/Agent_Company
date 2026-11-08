@@ -561,6 +561,15 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
         return [replace(c, requested=requested) for c in chain]
 
 
+def scratch_dir(role: str) -> Path:
+    """Where an agent CLI answers a request that has no worktree: an agent CLI runs only inside data/worktrees, so
+    an empty scratch folder, read-only for a request that does not write (Claude Code without Edit/Write, Codex
+    --sandbox read-only); the material is in the prompt."""
+    path = settings().worktrees_dir / f"_router-{role}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def run(role: str, req: Any, model_pref: str | None = None, *, first: Choice | None = None,
         avoid_provider: str | None = None, classification: str = "internal", timeout: int | None = None,
         agent_id: int | None = None, goal_id: int | None = None) -> tuple[Any, Choice]:
@@ -579,10 +588,7 @@ def run(role: str, req: Any, model_pref: str | None = None, *, first: Choice | N
     if chain[0].kind != "offline":  # once a real model is tried, the simulator never stands in for it
         chain = [c for c in chain if c.kind != "offline"]
     if req.workdir is None and any(c.kind in CLI_KINDS for c in chain[:3]):
-        # an agent CLI runs only inside data/worktrees: an empty scratch folder, read-only for a request that
-        # does not write (Claude Code without Edit/Write, Codex --sandbox read-only); the material is in the prompt
-        req.workdir = settings().worktrees_dir / f"_router-{role}"
-        req.workdir.mkdir(parents=True, exist_ok=True)
+        req.workdir = scratch_dir(role)
     res, choice = None, chain[0]
     for choice in chain[:3]:
         res = executors.for_choice(choice, timeout or settings().command_timeout).run(req)
@@ -875,8 +881,8 @@ OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
 def provider_status(choice: Choice, key: str = "", client: httpx.Client | None = None) -> dict[str, Any]:
     """Current usage from the provider, best effort: never raises, an unreachable provider is reported."""
     try:
-        if choice.kind == "codex":
-            return codex_limits()
+        if choice.kind == "codex":  # the model's own sign-in (data/codex-accounts/<account>), else the server's
+            return codex_limits(codex_home(choice.account) if choice.account else None)
         if choice.kind == "llm" and choice.model_id.startswith("openrouter/") and not choice.base_url:
             return openrouter_key_status(key or os.environ.get("OPENROUTER_API_KEY", ""), client)
         if choice.kind == "llm" and choice.base_url:

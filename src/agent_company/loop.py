@@ -317,7 +317,12 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
         return (executors.Result(text="", ok=False, error=f"usage limit: {limited[:500]}"),
                 router.Choice(name="(usage limit)", kind="offline", model_id="", reason=limited))
     if req.workdir is None:  # CLI agents only run inside a worktree
-        chain = [c for c in chain if c.kind not in executors.CLI_KINDS]
+        if not req.writes and any(c.kind in executors.CLI_KINDS for c in chain):
+            # a request that changes nothing (a lesson, a study visit) is answered read-only in a scratch folder,
+            # as router.run does: with only CLI models usable the simulator would otherwise stand in for them
+            req.workdir = router.scratch_dir(agent.role)
+        else:
+            chain = [c for c in chain if c.kind not in executors.CLI_KINDS]
     if chain and chain[0].kind != "offline":
         # The simulator stands in only when no real model is usable. Once a real model is tried,
         # its failure must stand: placeholder work must never pass the gate in place of real work.

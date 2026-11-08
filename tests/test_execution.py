@@ -329,6 +329,37 @@ def test_simulator_runs_only_when_nothing_real_is_usable():
     assert res.ok and choice.kind == "offline"
 
 
+def test_a_request_without_a_worktree_runs_read_only_on_a_cli_model(monkeypatch):
+    """A lesson has no worktree: with only agent CLIs usable it is answered read-only in a scratch folder, not by the
+    simulator (2026-11-08: 588 lessons were the simulator's template text). A writing request still needs one."""
+    import json as _json
+
+    from agent_company import registry
+    from agent_company.config import settings
+
+    monkeypatch.setattr(settings(), "enable_claude_code", True)
+    monkeypatch.setattr(router.shutil, "which", lambda name: f"/usr/bin/{name}")
+    cwds = []
+
+    class Proc:
+        returncode, stderr = 0, ""
+        stdout = _json.dumps({"result": "a lesson", "usage": {"input_tokens": 3, "output_tokens": 2}})
+
+    def fake_spawn(self, cmd, req, cwd, env=None, **kw):
+        cwds.append(cwd)
+        return Proc()
+
+    monkeypatch.setattr(executors.Executor, "_spawn", fake_spawn)
+    gm = registry.staff("general_manager")  # its route is Claude Code
+    req = executors.Request(purpose="lesson", role="general_manager", system="s", prompt="p")
+    res, choice = loop._execute(gm, req, "lesson")
+    assert res.ok and res.text == "a lesson" and choice.kind == "claude_code"
+    assert cwds == [settings().worktrees_dir / "_router-general_manager"] and not req.writes
+    res, choice = loop._execute(gm, executors.Request(purpose="task", role="general_manager", system="s", prompt="p",
+                                                      writes=True), "task")
+    assert choice.kind == "offline" and len(cwds) == 1, "a writing request without a worktree never runs a CLI"
+
+
 def test_escalation_and_cross_family(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     assert router.resolve("qa").name == "Claude Sonnet 5.5"

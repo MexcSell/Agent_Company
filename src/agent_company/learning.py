@@ -144,7 +144,7 @@ def judge_contradiction(edge_id: int) -> dict[str, Any]:
     `contradiction_judge`: 'advise' shows it to the person who resolves the pair; 'decide' also lets a COMPATIBLE
     verdict close the pair as *both hold* (no item is ever rejected by a model; CONTRADICTS and UNSURE stay for a
     person); 'off' asks no model. Fail-open: without an instructor, a cleared model or a verdict the pair waits."""
-    from agent_company import executors, router, usage
+    from agent_company import executors, router
 
     mode = settings().contradiction_judge
     if mode == "off":
@@ -164,19 +164,15 @@ def judge_contradiction(edge_id: int) -> dict[str, Any]:
     if judge_id is None:
         reason = "no instructor agent to judge it"
     else:
-        try:
-            choice = router.resolve("instructor", pref, classification=level)
+        req = executors.Request(purpose="contradiction", role="instructor", prompt=prompt, agent_id=judge_id,
+                                goal_id=goal_id, data={"new": e.src_id, "old": e.dst_id},
+                                system=f"You are {judge_name}, the instructor who curates the company's knowledge.")
+        try:  # router.run: a CLI model answers read-only in a scratch folder, the route's fallbacks take a failure
+            res, choice = router.run("instructor", req, pref, classification=level, agent_id=judge_id, goal_id=goal_id)
         except router.NotCleared as err:
-            choice, reason = None, str(err)
-        if choice is not None:
+            res, reason = None, str(err)
+        if res is not None:
             model = choice.name
-            req = executors.Request(purpose="contradiction", role="instructor", prompt=prompt, agent_id=judge_id,
-                                    goal_id=goal_id, data={"new": e.src_id, "old": e.dst_id},
-                                    system=f"You are {judge_name}, the instructor who curates the company's knowledge.")
-            res = executors.for_choice(choice, settings().command_timeout).run(req)
-            usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
-                         output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
-                         error=res.error, agent_id=judge_id, purpose="contradiction", goal_id=goal_id, res=res)
             found = _JUDGE_VERDICT.findall(res.text or "") if res.ok else []
             if found:
                 verdict, reason = found[-1][0].lower(), found[-1][1].strip()[:1000]

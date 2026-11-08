@@ -286,6 +286,28 @@ def test_openrouter_key_status_and_codex_limits(tmp_path):
     assert "no plan limits" in router.codex_limits(tmp_path / "none")["detail"]
 
 
+def test_codex_status_reads_the_models_own_sign_in(monkeypatch, tmp_path):
+    """A Test of a Codex model with its own account stores that account's plan windows, not the server's ~/.codex."""
+    import json
+    import time
+
+    def write(home, plan, pct):
+        day = home / "sessions" / "2026" / "11" / "08"
+        day.mkdir(parents=True)
+        rl = {"primary": {"used_percent": pct, "window_minutes": 300, "resets_at": time.time() + 3600},
+              "secondary": None, "plan_type": plan}
+        (day / "rollout-x.jsonl").write_text(json.dumps({"type": "event_msg", "payload": {"type": "token_count",
+                                                                                           "rate_limits": rl}}) + "\n")
+
+    write(tmp_path / "host", "plus", 40.0)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "host"))
+    write(router.codex_home("acct"), "free", 5.0)
+    own = router.provider_status(router.Choice("Own", "codex", "", "test", account="acct"))
+    host = router.provider_status(router.Choice("Host", "codex", "", "test"))
+    assert own["plan"] == "free" and own["limits"][0]["used_percent"] == 5.0
+    assert host["plan"] == "plus" and host["limits"][0]["used_percent"] == 40.0
+
+
 def test_model_info_shows_status_cli_account_and_usage_windows(monkeypatch, tmp_path):
     import base64
     import json
