@@ -793,12 +793,12 @@ class Run(Base):
     denied_tools: Mapped[list[Any]] = mapped_column(default=list)
     # every call a CLI run made (S04-R-12, S14-R-08): {tool, input (short, redacted), ok}, at most 200
     tool_calls: Mapped[list[Any]] = mapped_column(default=list)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
-
     # which model did the work and why (verification phase 2): requested (the agent's assigned model: its own
     # model, else its role's route), model_id, provider, base_url, route (why this one: preference, route,
     # fallback, escalation), served (the model the provider itself reported; "" when it reports none)
     trace: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
 
 class Event(Base):
     __tablename__ = "events"
