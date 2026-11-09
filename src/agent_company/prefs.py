@@ -404,10 +404,12 @@ VIEW_GROUP["simple"] = "company"
 _NAV_ID = re.compile(r"[a-z][a-z0-9-]{0,31}")
 
 
-def _nav_ids(items: Any, seen: set[str]) -> list[str]:
-    """Valid page ids of a list in order, at most 40; non-strings, top-bar ids and repeats are skipped."""
+def _nav_ids(items: Any, seen: set[str], *, strict: bool = False) -> list[str]:
+    """Return up to 40 valid ids; reject non-strings in groups forms, skip them in legacy values."""
     if not isinstance(items, list):
         raise ValueError("navigation items and hidden must be lists")
+    if strict and any(not isinstance(item, str) for item in items):
+        raise ValueError("navigation ids must be strings")
     out = []
     for item in items:
         if isinstance(item, str) and _NAV_ID.fullmatch(item) and item not in NAV_TOPBAR and item not in seen:
@@ -451,9 +453,9 @@ def normalise_nav(value: Any) -> dict:
         title = group.get("title", "")
         title = "".join(c for c in title if c.isprintable()).strip()[:40] if isinstance(title, str) else ""
         groups.append({"key": key, "title": title or defaults[key]["title"],
-                       "items": _nav_ids(group.get("items", []), seen)})
+                       "items": _nav_ids(group.get("items", []), seen, strict=True)})
     groups.extend({"key": k, "title": g["title"], "items": []} for k, g in defaults.items() if k not in keys)
-    return {"groups": groups, "hidden": _nav_ids(value.get("hidden", []), seen)}
+    return {"groups": groups, "hidden": _nav_ids(value.get("hidden", []), seen, strict=True)}
 
 
 def get_ui(key: str) -> Any:

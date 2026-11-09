@@ -362,6 +362,19 @@ function wireNavDrag(root, changed) {
     grp.insertBefore(dragging, after || null);
   }));
 }
+// Restore unseen pages without consulting the DOM; inputs remain unchanged.
+function placeNav(groups, defaults, registered, hidden = []) {
+  const placed = groups.map(g => ({...g, items: [...g.items]}));
+  const present = new Set([...placed.flatMap(g => g.items), ...hidden]);
+  defaults.forEach(g => g.items.forEach((id, i) => {
+    const to = placed.find(x => x.key === g.key);
+    if (!to || present.has(id) || registered.includes(id)) return;
+    const prev = g.items.slice(0, i).reverse().find(x => to.items.includes(x));
+    to.items.splice(prev ? to.items.indexOf(prev) + 1 : 0, 0, id);
+    present.add(id);
+  }));
+  return placed;
+}
 const readNav = (root) => {
   const ids = el => [...el.querySelectorAll("[data-v]")].map(b => b.dataset.v);
   const groups = [...root.querySelectorAll("[data-group]")].filter(el => el.dataset.group !== "hidden").map(el => {
@@ -370,15 +383,10 @@ const readNav = (root) => {
   });
   // Preserve unregistered and mode/permission-filtered views when editing the visible navigation.
   const present = new Set([...groups.flatMap(g => g.items), ...ids(root.querySelector('[data-group="hidden"]') || document.createElement('div'))]);
-  // Each keeps its place after the item it followed (general-manager after dashboard), so a page registered later shows there.
-  (navLayout || navDefault).groups.forEach(g => g.items.forEach((id, i) => {
-    const to = groups.find(x => x.key === g.key);
-    if (!to || present.has(id) || VIEWS.some(v => v.id === id && (!v.admin || me.is_admin) && (id !== "simple" || me.ui_mode === "simple"))) return;
-    const prev = g.items.slice(0, i).reverse().find(x => to.items.includes(x));
-    to.items.splice(prev ? to.items.indexOf(prev) + 1 : 0, 0, id);
-  }));
+  const placed = placeNav(groups, (navLayout || navDefault).groups,
+    VIEWS.filter(v => (!v.admin || me.is_admin) && (v.id !== "simple" || me.ui_mode === "simple")).map(v => v.id), [...present]);
   const hidden = root.querySelector('[data-group="hidden"]');
-  return {groups, hidden:hidden ? [...new Set([...ids(hidden), ...(navLayout?.hidden || []).filter(id => !VIEWS.some(v => v.id === id))])] : (navLayout?.hidden || [])};
+  return {groups:placed, hidden:hidden ? [...new Set([...ids(hidden), ...(navLayout?.hidden || []).filter(id => !VIEWS.some(v => v.id === id))])] : (navLayout?.hidden || [])};
 };
 async function saveNav(lay) {
   try { navLayout = (await api("/api/ui/nav_layout", { method: "PUT", body: { value: lay } })).value; toast("Navigation saved for every user"); } catch (e) { toast(e.message); }

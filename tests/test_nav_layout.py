@@ -91,12 +91,21 @@ def test_malformed_values_are_400_and_change_nothing(app):
         assert app.get('/api/ui/nav_layout').json()['value'] == saved, value
 
 
-def test_non_string_entries_are_skipped(app):
-    value = {'groups': [{'key': 'company', 'title': ['x'], 'items': [['dashboard'], {'a': 1}, 1, None, 'projects']}],
-             'hidden': [['models'], {'models': 1}, 2, 'models']}
-    result = app.put('/api/ui/nav_layout', json={'value': value}).json()['value']
-    assert result['groups'][0] == {'key': 'company', 'title': 'Company', 'items': ['projects']}
-    assert result['hidden'] == ['models']
+@pytest.mark.parametrize("entry", [[], {}, 1, None, ["dashboard"], {"dashboard": 1}])
+@pytest.mark.parametrize("field", ["items", "hidden"])
+def test_non_string_entries_are_400_and_change_nothing(app, entry, field):
+    saved = prefs.nav_default()
+    assert app.put('/api/ui/nav_layout', json={'value': saved}).status_code == 200
+    value = {'groups': [{'key': 'company', 'items': ['projects']}], 'hidden': ['models']}
+    if field == 'items':
+        value['groups'][0]['items'].append(entry)
+    else:
+        value['hidden'].append(entry)
+    assert app.put('/api/ui/nav_layout', json={'value': value}).status_code == 400
+    assert app.get('/api/ui/nav_layout').json()['value'] == saved
+
+
+def test_legacy_non_string_entries_are_skipped(app):
     legacy = {'top': [['x']], 'bottom': [{}], 'hidden': [['knowledge'], {'k': 1}, None, 3, 'knowledge', 'audit']}
     expected = legacy_expected('knowledge')
     assert app.put('/api/ui/nav_layout', json={'value': legacy}).json()['value'] == expected
