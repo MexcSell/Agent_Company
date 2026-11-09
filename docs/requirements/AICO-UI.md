@@ -171,8 +171,15 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
 - **UI-GM-05 Traceability** (FR-003.7): each instruction gets its id (the message id) and links to the goal(s),
   requirements, tasks, merge and deliverable it produced.
 - **UI-GM-06** For admins, the GM's Claude Code panel (WEB-PROJ-09) is a tab of this page ("Console"), unchanged.
-- Status: partial (command window, topics, uploads, GM panel exist in Projects; the page, cards, plan approval and
-  clarification are open).
+- Status: **partial** (P0-3): `static/gm.js` (route `#/general-manager/:projectId`; the centre reuses
+  `projects.js` `projectMain`, so orders, topics, attachments, classification, commands and the admin console are
+  the Projects page's own), cards in the right panel from the focused goal's stored records; UI-GM-04 plan approval
+  **done** as setting `require_plan_approval` (company, or a project's stricter rule): the goal pauses with
+  `paused_for="plan"` (no new goal state: planning → paused is an existing transition), `POST
+  /api/goals/{id}/plan/approve` resumes the stored plan, `/plan/revise` {note} plans the iteration again with the
+  note as feedback; both `goal_approver`, audited; the queue lists them as kind `plan`
+  (`tests/test_plan_approval.py`). Open: clarification questions (`paused_for="clarification"`), "New project…" as a
+  GM analysis (a message needs a project today), message → requirement/merge links beyond the goal (UI-GM-05).
 
 ## 4. Projects and the project workspace (P0)
 

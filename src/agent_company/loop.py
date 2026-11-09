@@ -1572,6 +1572,8 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
             first, feedback, resume = first + 1, cp.get("feedback", ""), False
         elif cp.get("iteration") == first - 1 and cp.get("evaluated") and not cp.get("passed"):
             feedback = cp.get("feedback", "")  # paused before the next iteration was planned
+        if cp.get("revision") and not resume:  # UI-GM-04: a person asked for another plan of this iteration
+            feedback = (f"{cp.get('feedback', '')}\n\nA person asked for a revised plan: {cp['revision']}").strip()
         for iteration in range(first, goal.max_iterations + 1):
             halted = _halted(goal_id)
             if halted:
@@ -1609,6 +1611,8 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                 _update_goal(goal_id, checkpoint={"iteration": iteration, "planned": True, "notes": notes,
                                                   "feedback": feedback, "planner_id": planner_id,
                                                   "commit": _plan_commit(goal, iteration)})
+                if _plan_needs_approval(_goal(goal_id)):
+                    return _out_for_plan_approval(goal_id, iteration, len(ids), report)
             from agent_company.scheduler import run_dag
 
             _update_goal(goal_id, status="running", reason=f"iteration {iteration}: {len(ids)} task(s)")
@@ -1990,6 +1994,64 @@ def _out_for_infrastructure(goal_id: int, why: str, report: dict[str, Any]) -> d
            f"{g.title}\n{why}\nFix the host (bubblewrap, user namespaces, the bound paths, systemd-run) and resume "
            "the goal.", level="warning", source="goal", goal_id=goal_id, project_id=g.project_id, admin_only=True)
     return {"status": "paused", "iterations": g.iteration, "report": report, "infrastructure": why}
+
+
+def _plan_needs_approval(g: Goal) -> bool:
+    """UI-GM-04: the company's or the project's `require_plan_approval`; benchmark, improvement, A2A and room-trial
+    goals never wait for it (their plan is not the owner's to approve)."""
+    from agent_company import policies
+
+    if g.origin in ("eval", "improvement", "a2a") or g.trial:
+        return False
+    return bool(policies.effective("require_plan_approval", g.project_id))
+
+
+def _out_for_plan_approval(goal_id: int, iteration: int, tasks: int, report: dict[str, Any]) -> dict[str, Any]:
+    """The plan is stored (checkpoint `planned`); the goal pauses until a person approves it (`approve_plan`: resume
+    runs the planned iteration) or asks for a revision (`revise_plan`: the iteration is planned again)."""
+    from agent_company.governance import notify
+
+    g = _goal(goal_id)
+    why = f"plan of iteration {iteration} ({tasks} task(s)) awaits approval"
+    _update_goal(goal_id, status="paused", reason=why)
+    with session() as s:
+        row = s.get(Goal, goal_id)
+        row.checkpoint = {**(row.checkpoint or {}), "paused_for": "plan", "paused_why": why}
+    log_event("goal", f"paused: {why}", goal_id=goal_id, iteration=iteration)
+    notify(f"Goal #{goal_id}: plan awaits your approval"[:256],
+           f"{g.title}\nApprove the plan or request a revision on the General Manager page.", level="info",
+           source="goal", goal_id=goal_id, project_id=g.project_id)
+    if g.project_id:
+        from agent_company import projects
+
+        projects.post_for_goal(goal_id, f"Goal #{goal_id}: the plan of iteration {iteration} ({tasks} task(s)) "
+                               "awaits your approval.", kind="plan", awaiting="plan")
+    return {"status": "paused", "iterations": iteration, "report": report, "awaiting": "plan"}
+
+
+def approve_plan(goal_id: int, actor: str) -> None:
+    """Run the plan that waits for approval (UI-GM-04)."""
+    g = _goal(goal_id)
+    if g.status != "paused" or (g.checkpoint or {}).get("paused_for") != "plan":
+        raise ValueError(f"goal #{goal_id} has no plan waiting for approval")
+    log_event("goal", f"{actor} approved the plan of iteration {g.iteration}", goal_id=goal_id)
+    resume(goal_id, actor)
+
+
+def revise_plan(goal_id: int, actor: str, note: str) -> None:
+    """Send the plan back: the iteration is planned again with the note as feedback (UI-GM-04)."""
+    note = (note or "").strip()
+    if not note:
+        raise ValueError("say what the revised plan should change")
+    g = _goal(goal_id)
+    cp = g.checkpoint or {}
+    if g.status != "paused" or cp.get("paused_for") != "plan":
+        raise ValueError(f"goal #{goal_id} has no plan waiting for approval")
+    with session() as s:
+        row = s.get(Goal, goal_id)
+        row.checkpoint = {**cp, "planned": False, "revision": note[:2000]}
+    log_event("goal", f"{actor} asked for a revised plan: {note[:300]}", goal_id=goal_id)
+    resume(goal_id, actor)
 
 
 def _out_for_blocker(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, Any]:

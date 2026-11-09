@@ -506,7 +506,7 @@ function writeHash(hash, replace = false) {
 }
 function parseHash(hash) {
   const m = /^#\/([a-z][a-z0-9-]*)(?:\/(\d+))?\/?$/.exec(hash);
-  return m ? {view: m[1], id: ["projects", "goals", "agents"].includes(m[1]) && m[2] ? Number(m[2]) : null} : null;
+  return m ? {view: m[1], id: ["projects", "goals", "agents", "general-manager"].includes(m[1]) && m[2] ? Number(m[2]) : null} : null;
 }
 function route(r) {
   if (!me) return;
@@ -515,6 +515,7 @@ function route(r) {
   }
   closeModal(false); closeDrawer({ quiet: true });
   if (r.view === "projects" && r.id) { selectedProject = r.id; store.set("ac.project", r.id); }
+  if (r.view === "general-manager" && r.id) { gmProject = r.id; store.set("ac.gm.project", r.id); }
   show(r.view, {fromHash: true});
   if (r.view === "goals" && r.id) goalModal(r.id);
   if (r.view === "agents" && r.id) agentModal(r.id).catch(e => toast(e.message));

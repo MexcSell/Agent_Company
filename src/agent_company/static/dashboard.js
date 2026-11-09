@@ -5,7 +5,7 @@ const DASH_PERIODS = { "24h": "Last 24 hours", "7d": "Last 7 days", "30d": "Last
 const DASH_PHASE = { draft: ["Draft", "neutral"], planning: ["Planning", "info"], active: ["Active", "ok"], blocked: ["Blocked", "bad"],
   review: ["QA / Review", "warn"], release_ready: ["Release ready", "ok"], paused: ["Paused", "warn"], completed: ["Completed", "ok"],
   archived: ["Archived", "neutral"], cancelled: ["Cancelled", "neutral"] };
-const DASH_KIND = { goal: ["Goal", "goals"], decision: ["Decision", "check"], proposal: ["Proposal", "bolt"], definition: ["Agent evolution", "evolution"],
+const DASH_KIND = { goal: ["Goal", "goals"], plan: ["Plan approval", "goals"], decision: ["Decision", "check"], proposal: ["Proposal", "bolt"], definition: ["Agent evolution", "evolution"],
   recruitment: ["Recruitment", "user_add"], experiment: ["Experiment", "performance"], requirements: ["Requirements", "files"], user: ["Account", "users"] };
 const DASH_TONES = ["--tone-blue", "--tone-green", "--tone-orange", "--tone-purple", "--tone-teal", "--tone-pink", "--tone-grey"];
 const DASH_QUIET = new Set(["retrieval"]);  // ranking runs: thousands, not activity a person follows
@@ -79,7 +79,7 @@ async function viewDashboard(quiet) {
     view.querySelectorAll("[data-act]").forEach((b) => (b.onclick = () => {
       const a = b.dataset.act;
       if (a === "new") { show("projects"); setTimeout(() => typeof projectForm === "function" && projectForm(), 300); }
-      else if (a === "status") show("projects");
+      else if (a === "status") show("general-manager");
       else if (a === "reports") { goalFilter = "approved"; show("goals"); }
       else show("agents");
     }));
@@ -87,7 +87,7 @@ async function viewDashboard(quiet) {
       e.preventDefault();
       const pid = Number($("#dash-gm-project").value), text = $("#dash-gm-text").value.trim();
       if (!pid || !text) return toast(pid ? "Write a message first" : "Choose a project first");
-      try { await api(`/api/projects/${pid}/command`, { method: "POST", body: { content: text } }); $("#dash-gm-text").value = ""; location.hash = `#/projects/${pid}`; }
+      try { await api(`/api/projects/${pid}/command`, { method: "POST", body: { content: text } }); $("#dash-gm-text").value = ""; location.hash = `#/general-manager/${pid}`; }
       catch (err) { toast(err.message); }
     };
   }
@@ -134,6 +134,7 @@ async function viewDashboard(quiet) {
     try {
       if (kind === "decision") await api(`/api/decisions/${id}/decide`, { method: "POST", body: { approve: ok, note: note || "" } });
       else if (kind === "proposal") await api(`/api/proposals/${id}/${ok ? "approve" : "reject"}`, { method: "POST" });
+      else if (kind === "plan") await api(`/api/goals/${id}/plan/approve`, { method: "POST" });
       toast(ok ? "Approved" : "Rejected"); render(true); updateBadges();
     } catch (err) { toast(err.message); }
   }));

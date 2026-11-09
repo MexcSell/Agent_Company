@@ -17,3 +17,14 @@ with the full suite and headless screenshots; later phases are written and check
   candidates, recruitments, experiments, draft requirements and account requests open their page (Review).
 - Ranking (`retrieval`) events stay out of Recent activity: thousands of them, nothing a person follows.
 - The old usage table (WEB-DASH-03) left the Dashboard; the limit windows stay on the Models page.
+
+## P0-3 General Manager page
+- The centre is the Projects page's command window (`projectMain`), not a copy: one code path for orders, topics,
+  uploads and the admin console. The page adds the conversation list and the context cards.
+- Plan approval is a pause, not a new goal state: `paused_for="plan"` after the plan is stored. Approve = resume
+  (the stored iteration runs, nothing is planned again); revision = checkpoint `planned: False` + `revision` note,
+  so the iteration is discarded and planned again with the note in the feedback. `workflow.goal_transitions` needs
+  no change and every existing pause rule (project paused, budget) still applies.
+- Off by default (`require_plan_approval`), as the owner's standing order is to approve plans; a project may switch
+  it on for itself (stricter only).
+- `_goal_dict` gains `topic` (additive) so the context panel can follow the open topic.

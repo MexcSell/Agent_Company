@@ -139,6 +139,24 @@ specification in [WORKSPACE.md](WORKSPACE.md); §15 here summarises it and lists
   Data: `/api/overview`, `/api/dashboard?period=…`, `/api/events`, `/api/approvals`. A live redraw replaces a card
   only when it changed, so the message box keeps its text.
 
+## 4a. General Manager
+
+- **WEB-GM-01** Route `#/general-manager/<project id>`. Left: Conversations — every project the user may see with its
+  live goals, the selected one with its topics; search over project and topic names; *New project*.
+- **WEB-GM-02** Centre: the project's command window, the same one the Projects page shows (orders and reports,
+  topics, search, attachments, classification, `DECISION:` lines and slash commands; Plan tab; for administrators the
+  GM's Claude Code/Codex console). The file pane is left out.
+- **WEB-GM-03** Right: the project (phase, progress, GM model, next milestone); each goal whose plan waits for
+  approval with **Approve plan** and **Request revision** (asks what to change); the focused goal (a click on one of
+  its messages focuses it; by default a plan waiting for approval, else the newest goal of the topic) as cards:
+  Goal (status, iteration, tasks passed, cost, merge state), Requirement analysis (objective, linked requirements,
+  allowed paths, acceptance criteria of the plan), Plan (this iteration's tasks with stage, role, dependencies,
+  model), Team (joined, added, released), Completion report (verified / partial / failed labels, cost, time,
+  limitations, Markdown link) once finished, Decisions for you (approve/reject); then the project's other items in
+  the approvals queue and its agents.
+- **WEB-GM-04** Setting `require_plan_approval` (Settings, or a project's own stricter rule): a goal stops after
+  planning until a person approves; benchmark, improvement, A2A and room-trial goals never wait.
+
 ## 5. Mission (Simple mode)
 
 - **WEB-SIMPLE-01 New mission** form: Project, Goal ("What should be achieved"), Budget (USD), Deadline, Files

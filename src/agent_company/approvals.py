@@ -17,7 +17,7 @@ from agent_company.db import (Agent, Decision, DefinitionCandidate, Experiment, 
                               Requirement, session)
 
 OPEN_DECISION = ("submitted", "under_review", "escalated")
-KINDS = ("goal", "decision", "proposal", "definition", "recruitment", "experiment", "requirements", "user")
+KINDS = ("goal", "plan", "decision", "proposal", "definition", "recruitment", "experiment", "requirements", "user")
 
 
 def _at(t: datetime | None) -> str | None:
@@ -49,6 +49,12 @@ def queue(user: dict[str, Any], visible_projects: set[int] | None = None) -> lis
             if admin or policies.allows(user, "approve_goals", g.project_id):
                 item("goal", g.id, g.title, g.updated_at, f"#/goals/{g.id}", g.project_id,
                      f"goal #{g.id} · {g.origin}" if g.origin else f"goal #{g.id}")
+        for g in s.scalars(select(Goal).where(Goal.status == "paused").order_by(Goal.id.desc())):
+            if (g.checkpoint or {}).get("paused_for") == "plan" and (
+                    admin or policies.allows(user, "approve_goals", g.project_id)):
+                item("plan", g.id, f"Plan: {g.title}", g.updated_at, f"#/general-manager/{g.project_id}"
+                     if g.project_id else f"#/goals/{g.id}", g.project_id, f"goal #{g.id} · iteration {g.iteration}",
+                     ("approve",))
         if not admin:
             return sorted(out, key=lambda x: x["at"] or "", reverse=True)
 

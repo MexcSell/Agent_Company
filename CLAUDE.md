@@ -141,7 +141,9 @@ feature came from.
   `approvals.py` (AICO UI-APPR-01: one queue of what waits for a person, `GET /api/approvals`; the list decides only
   decisions and follow-up proposals, the rest open their page) + `dashboard.py` (UI-DASH: `GET /api/dashboard?period=`
   counted figures with the period before, project phase `phase` derived per UI-D-06, live goals, token share, room
-  accept rates, finished goals; `static/dashboard.js`);
+  accept rates, finished goals; `static/dashboard.js`); `static/gm.js` (UI-GM: the General Manager page, conversations |
+  `projectMain` | context cards from stored records; setting `require_plan_approval` (company or a project's stricter
+  rule) pauses a goal after planning with `paused_for="plan"`: `loop.approve_plan` / `loop.revise_plan`);
   `a2a.py` (G-R-06: the A2A 1.0 agent card and JSON-RPC `SendMessage`/`GetTask`/`ListTasks`/`CancelTask` for
   issued bearer clients (`a2a_clients`, `a2a_tasks`); tasks become `origin="a2a"` goals that always wait for approval);
   `marketplace.py` (REQ-002 agent marketplace: a repository URL or uploaded package fetched as untrusted data into

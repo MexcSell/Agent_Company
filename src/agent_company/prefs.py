@@ -72,6 +72,8 @@ SCHEMA: dict[str, tuple[type, str]] = {
                           "tasks start; a FAIL returns the task to its author, at most twice (EL-R-06; costs model calls)"),
     "auto_approve_proposals": (bool, "Owner policy: pending follow-up proposals are approved automatically within the "
                                      "chain guards; project, rule and restricted proposals still wait for a person"),
+    "require_plan_approval": (bool, "A goal waits after planning until a person approves its plan or asks for a "
+                                    "revision (General Manager page); benchmark and improvement goals never wait"),
     "auto_merge": (bool, "Owner policy: a goal that reaches awaiting approval is merged automatically; decisions, "
                          "critical defects, unverified improvements and conflicts still block, A2A goals always wait"),
     "improvement_min_score": (float, "Percent a code-improvement candidate's weighted benchmark score must beat the baseline by"),

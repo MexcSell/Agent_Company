@@ -2795,6 +2795,28 @@ def create_app(start_background: bool = True) -> FastAPI:
                severity="high" if admin.get("delegated") else "info")
         return out
 
+    @app.post("/api/goals/{goal_id}/plan/approve")
+    def goal_plan_approve(goal_id: int, admin: dict[str, Any] = Depends(goal_approver)) -> dict[str, Any]:
+        """UI-GM-04: run the plan that waits for approval."""
+        try:
+            loop.approve_plan(goal_id, f"user:{admin['name']}")
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+        _audit(admin, "goal_plan_approve", goal_id, after={"delegated": bool(admin.get("delegated"))})
+        return {"ok": True}
+
+    @app.post("/api/goals/{goal_id}/plan/revise")
+    def goal_plan_revise(goal_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(goal_approver)
+                         ) -> dict[str, Any]:
+        """UI-GM-04: send the plan back to the planner with a note ({"note": "..."})."""
+        note = str(body.get("note") or "")[:2000]
+        try:
+            loop.revise_plan(goal_id, f"user:{admin['name']}", note)
+        except ValueError as e:
+            raise HTTPException(409 if note.strip() else 400, str(e)) from e
+        _audit(admin, "goal_plan_revise", goal_id, after={"note": note[:300]})
+        return {"ok": True}
+
     @app.post("/api/goals/{goal_id}/reject")
     def goal_reject(goal_id: int, admin: dict[str, Any] = Depends(goal_approver)) -> dict[str, Any]:
         loop.reject(goal_id, actor=f"user:{admin['name']}")
@@ -4012,7 +4034,7 @@ def _goal_dict(g: Goal) -> dict[str, Any]:
             "estimated_cost_usd": g.estimated_cost_usd or 0.0, "budget_usd": g.budget_usd or 0.0,
             "budget_tokens": g.budget_tokens or 0, "max_active_agents": g.max_active_agents or 0,
             "paused_for": (g.checkpoint or {}).get("paused_for", ""), "requirement_keys": g.requirement_keys or [],
-            "kind": g.kind or "", "strategy": dict(g.strategy or {}), "test_strategy": dict(g.test_strategy or {}),
+            "kind": g.kind or "", "topic": g.topic or "general", "strategy": dict(g.strategy or {}), "test_strategy": dict(g.test_strategy or {}),
             "deadline": g.deadline.isoformat() if g.deadline else None,
             "created_at": g.created_at.isoformat(), "updated_at": g.updated_at.isoformat()}
 

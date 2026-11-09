@@ -101,6 +101,8 @@ class Settings:
     # Owner policy (ownerpolicy.py): follow-up proposals approved and passing goals merged without a person's click
     auto_approve_proposals: bool = False
     auto_merge: bool = False
+    # AICO UI-GM-04: a goal stops after planning until a person approves its plan (or asks for a revision)
+    require_plan_approval: bool = False
     # Verified self-evolution (selfevolve.py): a candidate is accepted when its weighted benchmark score beats the
     # baseline by this many percent and no metric is worse by more than `improvement_max_regression` percent.
     improvement_min_score: float = 2.0
@@ -220,6 +222,7 @@ def load_settings() -> Settings:
         task_critic=_bool("TASK_CRITIC", False),
         auto_approve_proposals=_bool("AUTO_APPROVE_PROPOSALS", False),
         auto_merge=_bool("AUTO_MERGE", False),
+        require_plan_approval=_bool("REQUIRE_PLAN_APPROVAL", False),
         improvement_min_score=float(os.environ.get("IMPROVEMENT_MIN_SCORE") or 2),
         improvement_max_regression=_int("IMPROVEMENT_MAX_REGRESSION", 25),
         improvement_auto_rollback=_bool("IMPROVEMENT_AUTO_ROLLBACK", True),
