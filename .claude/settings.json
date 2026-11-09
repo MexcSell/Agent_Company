@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)"
+    ]
+  },
+  "hooks": {
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p .claude/logs && cat >> .claude/logs/team-hooks.jsonl; echo >> .claude/logs/team-hooks.jsonl; exit 0"
+          }
+        ]
+      }
+    ],
+    "TaskCreated": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p .claude/logs && cat >> .claude/logs/team-hooks.jsonl; echo >> .claude/logs/team-hooks.jsonl; exit 0"
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p .claude/logs && cat >> .claude/logs/team-hooks.jsonl; echo >> .claude/logs/team-hooks.jsonl; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}
