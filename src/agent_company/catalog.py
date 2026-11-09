@@ -396,7 +396,7 @@ def export_claude(root: Path, agent_ids: list[int] | None = None) -> list[str]:
     put(".claude/settings.json", json.dumps(current, indent=2) + "\n")
     servers = {}
     for srv in mcp.list_servers()["servers"]:
-        if srv["enabled"] and srv["status"] == "ok":
+        if srv["enabled"] and srv["status"] == "ok" and srv["slug"] != "bridge":  # the bridge is per run (EL-R-09)
             args = [str(mcp.BUNDLED / a) if (mcp.BUNDLED / a).is_file() else a for a in srv["args"]]
             servers[srv["slug"]] = ({"type": "http", "url": srv["url"]} if srv["transport"] == "http"
                                     else {"type": "stdio", "command": srv["command"], "args": args})

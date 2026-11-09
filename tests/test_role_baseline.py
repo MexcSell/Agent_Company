@@ -104,3 +104,17 @@ def test_a_clone_takes_its_originals_plugins_and_mcp_grants_and_reestablish_fill
     with session() as s:
         assert s.scalars(select(McpGrant).where(McpGrant.agent_id == b.id)).one().server_id == sid
     assert registry.reestablish("test") == []
+
+
+def test_the_per_run_bridge_never_lands_in_an_exported_mcp_json(tmp_path):
+    from agent_company.db import McpServer
+
+    with session() as s:
+        s.add(McpServer(name="Company bridge", slug="bridge", transport="stdio", command="python", args=["bridge.py"],
+                        status="ok", enabled=True))
+        s.add(McpServer(name="Docs", slug="docs", transport="http", url="https://docs.example/mcp", status="ok",
+                        enabled=True))
+    catalog.export_claude(tmp_path)
+    import json
+
+    assert set(json.loads((tmp_path / ".mcp.json").read_text())["mcpServers"]) == {"docs"}
