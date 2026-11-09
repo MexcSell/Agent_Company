@@ -27,8 +27,10 @@ def test_uses_route_when_key_present(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
     assert router.resolve("architect").name == "Claude Opus 5.5"
     assert router.resolve("qa").name == "Claude Sonnet 5.5"
-    # developer routes to Claude Code, which is off by default -> next candidate is offline
-    assert router.resolve("developer").kind == "offline"
+    # developer routes to Claude Code, which is off by default -> the most suitable usable model for a lead role (V7)
+    dev = router.resolve("developer")
+    assert dev.kind == "llm" and dev.reason.startswith(router.SUITABLE + "developer (lead tier;")
+    assert "ENABLE_CLAUDE_CODE" in dev.reason
     assert router.resolve("developer", model_pref="Claude Haiku 5.5").name == "Claude Haiku 5.5"
 
 
@@ -53,7 +55,8 @@ def test_usage_limit_skips_model(monkeypatch):
     m = next(x for x in router.list_models() if x["name"] == "Claude Opus 5.5")
     router.update_model(m["id"], {"daily_token_limit": 100})
     usage.record(model_name="Claude Opus 5.5", kind="llm", input_tokens=80, output_tokens=30)
-    assert router.resolve("general_manager").kind == "offline"
+    gm = router.resolve("general_manager")  # its route (Claude Code) is off: the most suitable model, not Opus (V7)
+    assert gm.kind == "llm" and gm.name != "Claude Opus 5.5" and gm.reason.startswith(router.SUITABLE)
     s = usage.summary()
     opus = next(x for x in s["models"] if x["name"] == "Claude Opus 5.5")
     assert opus["daily"]["tokens"] == 110 and opus["daily"]["limit"] == 100

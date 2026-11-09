@@ -55,8 +55,12 @@ def test_clearance_defaults_by_locality_and_can_be_set(models):
 def test_resolution_skips_models_not_cleared_and_never_falls_back_to_the_simulator(models):
     _route("developer", "Hosted")
     assert router.resolve("developer").name == "Hosted"
+    local = router.resolve("developer", classification="confidential")  # V7: the cleared catalog model takes it
+    assert local.name == "Local" and local.reason.startswith(router.SUITABLE)
+    router.update_model(models[1]["id"], {"enabled": False})
     with pytest.raises(router.NotCleared, match="no model is cleared for confidential"):
         router.resolve("developer", classification="confidential")
+    router.update_model(models[1]["id"], {"enabled": True})
     assert router.resolve("developer", "Local", classification="restricted").name == "Local"
     with pytest.raises(router.NotCleared):
         router.resolve("developer", "Local", classification="secret")
@@ -66,6 +70,7 @@ def test_resolution_skips_models_not_cleared_and_never_falls_back_to_the_simulat
 
 
 def test_a_confidential_project_fails_when_no_model_is_cleared(models):
+    router.update_model(models[1]["id"], {"enabled": False})  # else the cleared local model takes it (V7)
     for role in ("general_manager", "developer", "qa", "architect"):
         _route(role, "Hosted")
     p = projects.create("Vault")
@@ -166,6 +171,7 @@ def test_a_secret_order_keeps_its_topic_summary_away_from_hosted_models(models, 
 
 
 def test_a_planned_role_without_a_cleared_model_fails_the_goal_before_any_task(models):
+    router.update_model(models[1]["id"], {"enabled": False})  # else the cleared local model takes it (V7)
     _route("developer", "Hosted")
     _route("qa", "Hosted")
     p = projects.create("Half cleared")

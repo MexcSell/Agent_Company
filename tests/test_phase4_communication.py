@@ -67,8 +67,11 @@ DEV_REPLY = blocks({"factorial.py": FACTORIAL, "test_factorial.py": TESTS}) + "E
 
 
 @pytest.fixture
-def pm_dev():
-    """The PM (General Manager) on Model PM, the Developer on Model DEV: two providers, two agents."""
+def pm_dev(monkeypatch):
+    """The PM (General Manager) on Model PM, the Developer on Model DEV: two providers, two agents. Only the
+    configured models answer: a role without a usable model of its own does not borrow one of the two stubs (V7's
+    most suitable model is phase 2's subject), so each stub's calls are the messages between PM and Developer."""
+    monkeypatch.setattr(router, "_most_suitable", lambda *a, **k: [])
     pm, dev = Stub("model-pm", plan(TASK)), Stub("model-dev", DEV_REPLY)
     router.add_model({"name": "Model PM", "kind": "llm", "model_id": "openai/model-pm", "base_url": pm.url,
                       "api_key": GOOD})
@@ -228,8 +231,8 @@ def test_1_receiver_offline_its_model_unreachable_the_task_fails_never_completes
 
 
 def test_1_receiver_offline_its_model_at_its_limit_the_task_waits_and_runs_once_on_resume(pm_dev, monkeypatch):
-    """The developer's model is at its usage limit, with no fallback: the task waits, the goal pauses; once the
-    limit is gone the same task runs once, the plan is not made again."""
+    """The developer's model is at its usage limit, with no fallback and no other usable model: the task waits, the goal
+    pauses; once the limit is gone the same task runs once, the plan is not made again."""
     pm, dev = pm_dev
     monkeypatch.setattr(loop, "enqueue", lambda gid: None)  # the test runs the resumed goal itself
     router.mark_limited("Model DEV", "You've hit your session limit · resets 9:50pm")
@@ -250,8 +253,8 @@ def test_1_receiver_offline_its_model_at_its_limit_the_task_waits_and_runs_once_
 
 def test_1_receiver_offline_every_developer_disabled_the_task_is_never_completed(pm_dev):
     """Every developer agent disabled: staffing recruits a replacement (`recruit_requires_approval` is "never"); it has
-    no model of its own and the developer route none, so the offline simulator stands in (phase 2's V7). The task
-    fails honestly and the trace flags the stand-in."""
+    no model of its own, the developer route none and no other model is usable, so the offline simulator stands in
+    (phase 2's V7). The task fails honestly and the trace flags the stand-in."""
     pm, dev = pm_dev
     with session() as s:
         for a in s.scalars(select(Agent).where(Agent.role == "developer")):

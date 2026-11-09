@@ -21,6 +21,9 @@ def _two_models(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
     router.set_route("general_manager", "Claude Opus 5.5")
     registry.update_agent(_gm(), {"model_pref": None})
+    for m in router.list_models():  # Opus and Sonnet the only real models: no other one is most suitable (V7)
+        if m["name"] not in ("Claude Opus 5.5", "Claude Sonnet 5.5", "Claude Code") and m["kind"] != "offline":
+            router.update_model(m["id"], {"enabled": False})
 
 
 def test_limit_messages_and_their_reset_times():
@@ -64,6 +67,10 @@ def test_without_a_fallback_the_simulator_does_not_stand_in_and_staffing_waits(m
     gm = _gm()
     for _ in range(3):
         usage.record(model_name="Claude Opus 5.5", kind="llm", ok=False, error=LIMIT, agent_id=gm)
+    chain = router.resolve_chain("general_manager")
+    assert chain[0].name == "Claude Sonnet 5.5" and chain[0].reason.startswith(router.SUITABLE), \
+        "V7: another usable model takes the work instead of a pause"
+    router.mark_limited("Claude Sonnet 5.5", LIMIT)
     chain = router.resolve_chain("general_manager")
     assert chain[0].kind == "offline" and router.limit_blocked(chain)
     with session() as s:

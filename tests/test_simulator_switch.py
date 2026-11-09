@@ -24,6 +24,9 @@ def _only_opus(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
     router.set_route("general_manager", "Claude Opus 5.5")
     registry.update_agent(_gm(), {"model_pref": None})
+    for m in router.list_models():  # Opus the only real model, else the most suitable other one takes it (V7)
+        if m["name"] not in ("Claude Opus 5.5", "Claude Code") and m["kind"] != "offline":
+            router.update_model(m["id"], {"enabled": False})
 
 
 def test_switched_off_the_simulator_never_stands_in(monkeypatch):

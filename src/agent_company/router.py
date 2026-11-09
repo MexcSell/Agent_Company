@@ -514,7 +514,8 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
     would otherwise have been used, NotCleared is raised: the simulator must not stand in for real work.
 
     Order: the escalation model (on retries), the agent's preference, the role's route, the route's fallbacks,
-    MODEL from .env. A model at its usage limit (`mark_limited`) is skipped until its reset; when that leaves no
+    MODEL from .env; when none of them is usable, the catalog's most suitable usable models for the role (V7,
+    `_most_suitable`). A model at its usage limit (`mark_limited`) is skipped until its reset; when that leaves no
     real model, the simulator's reason names the limit and `limit_blocked` tells the loop not to use it. With `avoid_provider` (a reviewer checking a developer's work), an
     available API model from another provider is tried first, so the reviewer is not
     blind to the same model family's mistakes.
@@ -558,6 +559,10 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
                 chain.append(_choice(m, label))
             else:
                 skipped.append(f"{name}: {why}")
+        if not any(c.kind != "offline" for c in chain):
+            # V7, the owner's decision of 2026-11-09: no configured model is usable (disabled, no key, at its limit),
+            # so the catalog's most suitable usable models for the role take the work before the simulator would
+            chain += _most_suitable(s, role, classification, skipped)
         if avoid_provider and (not chain or chain[0].provider == avoid_provider):
             other = next((c for c in chain if c.provider not in (avoid_provider, "offline")
                           and (other_cli or c.kind not in CLI_KINDS)), None)
@@ -589,6 +594,24 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
             chain.append(_choice(offline, why))
         requested = pref or (route.model_name if route else "")
         return [replace(c, requested=requested) for c in chain]
+
+
+SUITABLE = "most suitable for "
+MAX_SUITABLE = 3
+
+
+def _most_suitable(s, role: str, classification: str, skipped: list[str]) -> list[Choice]:  # noqa: ANN001
+    """V7: the usable catalog models cleared for `classification`, best first for the role's tier as Assign models
+    ranks them (ROLE_TIERS), at most MAX_SUITABLE; the reason names what was skipped."""
+    usable = [m for m in s.scalars(select(ModelEntry).order_by(ModelEntry.id))
+              if m.kind != "offline" and available(m)[0] and cleared(m, classification)]
+    if not usable:
+        return []
+    tier = ROLE_TIERS.get(role, "light")
+    lead = _choice(min(usable, key=lambda m: _tier_key("lead", m, "")), "").provider
+    why = "; ".join(skipped) or "no model configured"
+    return [_choice(m, f"{SUITABLE}{role} ({tier} tier; {why})")
+            for m in sorted(usable, key=lambda m: _tier_key(tier, m, lead))[:MAX_SUITABLE]]
 
 
 def scratch_dir(role: str) -> Path:
@@ -630,7 +653,7 @@ def run(role: str, req: Any, model_pref: str | None = None, *, first: Choice | N
     return res, choice
 
 
-EXPLAINED = ("fallback for ", "escalation for ", "different family from ")
+EXPLAINED = ("fallback for ", "escalation for ", "different family from ", SUITABLE)
 
 
 def trace_issues(trace: dict[str, Any]) -> list[str]:

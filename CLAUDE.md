@@ -24,7 +24,9 @@ feature came from.
   work (`gm set-fallback`, Models → Routes); **Assign models** on Routes (`auto_routes`, `POST /api/routes/auto`)
   gives every role a model, retry model and fallbacks from the models usable now by `ROLE_TIERS` (lead: strongest;
   review: another family than the lead's; bulk/light: free or weakest; a limited model only as a last fallback) and
-  clears each agent's own `model_pref` (a configuration version), so every agent runs its role's model; with every real model limited the simulator never stands in, staffing
+  clears each agent's own `model_pref` (a configuration version), so every agent runs its role's model; when no configured
+  model (preference, route, fallbacks, MODEL) is usable, the catalog's usable models ranked for the role's tier take the
+  work before the simulator, `_most_suitable` (V7, reason "most suitable for <role>"); with every real model limited the simulator never stands in, staffing
   raises `registry.ModelLimitReached` and the goal resumes at the earliest reset; `run` sends a request through the
   chain for agents that call a model directly (the research room); a `claude_code` model's own sign-in `account`:
   `data/claude-accounts/<account>/.credentials.json`, its CLAUDE_CONFIG_DIR; a model's own API key encrypted in

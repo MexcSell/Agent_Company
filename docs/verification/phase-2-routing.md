@@ -44,7 +44,8 @@ The trace and its issues appear in the agent card's run detail (Runs tab) and in
 | Assigned model unavailable | Connection refused, retried `retry_max_attempts` times on B, then fallback A | `test_an_unreachable_model_is_retried_then_the_fallback_takes_it` | PASS |
 | Fallback configured | As the three rows above | | PASS |
 | No fallback, model fails | The work fails on B; no other model, no simulator | `test_without_a_fallback_a_failing_model_fails_the_work` | PASS |
-| No fallback, model disabled | The **offline simulator** produces the output; the trace records `provider: offline, requested: Model B`, and `trace_issues` flags it | `test_without_a_fallback_a_disabled_model_leaves_the_simulator_and_the_trace_says_so` | FINDING V7 |
+| No fallback, model disabled | The catalog's **most suitable usable model** for the role (Model A) produces the output; the trace records `requested: Model B` and `route: most suitable for developer (lead tier; Model B: disabled)` (V7, owner's decision 2026-11-09) | `test_without_a_fallback_a_disabled_model_leaves_the_most_suitable_model_and_the_trace_says_so` | PASS (V7 decided) |
+| No real model usable at all | The offline simulator stands in (while it is switched on); `trace_issues` flags it | `test_with_no_real_model_usable_the_simulator_stands_in_and_the_trace_says_so` | PASS |
 | Two agents, different models, simultaneously | Started together (barrier). Each stub received only its own model; each trace matches its agent | `test_two_agents_on_different_models_at_the_same_time` | PASS |
 | Provider substitutes a model | Stub A answers as `model-z`; the issue "the provider answered as model-z, not model-a" is raised | `test_a_provider_answering_as_another_model_is_flagged` | ADDED |
 
@@ -74,6 +75,10 @@ All four answered 6000, and `trace_issues` is empty for each. Runs 1993–1996 i
   states this as the design ("only stands in when no real model is usable"). The phase 2 rule allows only
   configured fallbacks, so the two conflict. The trace now records the stand-in and `trace_issues` flags it. **The
   owner must decide** whether a real assignment without a usable model should fail instead. Not changed here.
+  **Decided 2026-11-09** (owner: "Choose the most suitable model among the models"): when no configured model is
+  usable (disabled, no key, at its limit), `router.resolve_chain` adds the catalog's usable models cleared for the
+  work, best first for the role's tier as Assign models ranks them (`_most_suitable`, at most 3); the simulator stands
+  in only when no real model is usable. A model chosen this way is not a `trace_issues` finding.
 - **V8: Codex and Copilot runs do not report their model.** `codex exec --json` carries no model, so these runs'
   `served` is empty. Codex's model is its account's default, so `model_id` is empty too. The self-reports were
   "unavailable" and "GPT-6"; Codex's own session files name `gpt-6.1-sol`. Proof stops at "Codex CLI ran".

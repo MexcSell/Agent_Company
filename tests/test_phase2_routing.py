@@ -146,18 +146,43 @@ def test_without_a_fallback_a_failing_model_fails_the_work(stubs):
     assert [(n, ok) for n, ok, _, _ in _runs(dev)] == [("Model B", False)], "no other model, not the simulator"
 
 
-def test_without_a_fallback_a_disabled_model_leaves_the_simulator_and_the_trace_says_so(stubs):
-    """The design (CLAUDE.md): the simulator stands in only when no real model is usable. Phase 2's rule allows only
-    configured fallbacks, so the trace must make the stand-in unmistakable."""
+def test_without_a_fallback_a_disabled_model_leaves_the_most_suitable_model_and_the_trace_says_so(stubs):
+    """V7, the owner's decision of 2026-11-09: with no configured model usable, the catalog's most suitable usable
+    model for the role takes the work, not the simulator; the trace names why."""
+    a, _ = stubs
     router.set_route("developer", "Model B")
     router.set_fallback("developer", [])
     dev = _agent("developer", "")
     router.update_model(_model("Model B")["id"], {"enabled": False})
     res, choice = _ask(dev)
+    assert res.ok and choice.name == "Model A" and [c["model"] for c in a.calls] == ["model-a"]
+    [(name, ok, trace, _)] = _runs(dev)
+    assert (name, ok) == ("Model A", True) and trace["requested"] == "Model B"
+    assert trace["route"].startswith("most suitable for developer (lead tier;") and "Model B: disabled" in trace["route"]
+    assert router.trace_issues(trace) == [], "the owner's rule explains it"
+
+
+def test_with_no_real_model_usable_the_simulator_stands_in_and_the_trace_says_so(stubs):
+    router.set_route("developer", "Model B")
+    router.set_fallback("developer", [])
+    dev = _agent("developer", "")
+    for name in ("Model A", "Model B"):
+        router.update_model(_model(name)["id"], {"enabled": False})
+    res, choice = _ask(dev)
     assert choice.kind == "offline"
     [(_, _, trace, _)] = _runs(dev)
     assert trace["provider"] == "offline" and trace["requested"] == "Model B" and "Model B: disabled" in trace["route"]
     assert router.trace_issues(trace) == [f"the offline simulator stood in for Model B ({trace['route']})"]
+
+
+def test_a_limited_model_without_a_fallback_leaves_the_most_suitable_model_instead_of_a_pause(stubs):
+    router.set_route("developer", "Model B")
+    router.set_fallback("developer", [])
+    router.mark_limited("Model B", "You've hit your session limit · resets 9:50pm")
+    chain = router.resolve_chain("developer")
+    assert chain[0].name == "Model A" and router.limit_blocked(chain) == ""
+    router.mark_limited("Model A", "You've hit your session limit · resets 9:50pm")
+    assert router.limit_blocked(router.resolve_chain("developer")), "every model limited: the goal still pauses"
 
 
 def test_two_agents_on_different_models_at_the_same_time(stubs):

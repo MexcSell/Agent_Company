@@ -156,7 +156,7 @@ provider, address, why, the model the provider reported); `router.trace_issues` 
 
 | # | Problem | Status |
 |---|---------|--------|
-| V7 | With no fallback and the only assigned model disabled or keyless, the offline simulator does the work. That is the documented design, but phase 2's rule allows only configured fallbacks. The trace records it (`provider: offline`) and `trace_issues` flags it. | open (owner to decide) |
+| V7 | With no fallback and the only assigned model disabled or keyless, the offline simulator does the work. That is the documented design, but phase 2's rule allows only configured fallbacks. The trace records it (`provider: offline`) and `trace_issues` flags it. | fixed (2026-11-09, owner's decision "choose the most suitable model among the models": with no configured model usable, `router._most_suitable` takes the catalog's usable models cleared for the work, ranked for the role's tier like Assign models; the simulator only when no real model is usable; a configured model at its limit with another usable no longer pauses the goal) |
 | V8 | Codex and Copilot runs do not report which model answered (`served` empty; Codex's `model_id` is empty when it uses the account's default). | open (low) |
 | V9 | Every model with a base URL reports provider `local`; the trace's `base_url` tells two such servers apart. | by design |
 | V10 | A routing model (`openrouter/openrouter/free`, `openrouter/auto`) answers as whichever model it picked, so `trace_issues` reports "the provider answered as X, not free" on every run. The flag is kept on purpose (the model that served is still not the one named). | open (decide when such a model gets a key) |
