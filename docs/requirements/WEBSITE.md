@@ -46,18 +46,29 @@ specification in [WORKSPACE.md](WORKSPACE.md); §15 here summarises it and lists
 
 ## 3. Application shell (every page)
 
-- **WEB-SHELL-01 Rail.** A vertical icon bar on the left with two groups: top (default order: Dashboard, Projects,
-  Agents, Company map, Models, Evolution, Research, Knowledge, Performance) and bottom (Workspace, Machines,
-  Security, System). Each icon has its page's name as tooltip, may show a red count badge, and loads the page on
-  click. Hovering an icon starts loading that page's data in advance.
-- **WEB-SHELL-02 Navigation order.** The order is the same for every user. An administrator changes it with the
-  rail's **Edit** button (drag icons within and between the groups, then click again to save) or on
-  Settings → Navigation (also a *hidden* list and **Back to the default order**). Saved through
-  `PUT /api/ui/nav_layout` ("Navigation saved for every user"). A page the saved order does not name takes its
-  default place.
-- **WEB-SHELL-03 Top bar.** Page title on the left; on the right: user name ("· admin" for administrators), the
-  Simple/Advanced mode switch, icon buttons for Notifications, Audit log, Settings and Users (never on the rail),
-  **My Git settings**, the emergency stop (admins), **Screen format**, and **Light / dark**.
+- **WEB-SHELL-01 Sidebar.** Grouped, labelled navigation: Company (Dashboard, Projects, Goals, Agents,
+  Company map), Intelligence (Research, Knowledge, Performance, Models), Evolution, and System (Workspace,
+  Machines, Security, System). Registered future pages take their default group positions; unknown ids go to
+  their group's end. The brand reads “Agent Company · Autonomous Engineering Organization”. Active state,
+  icons and badges remain. A bottom status card reports operating, degraded, paused or stopped from
+  `/api/overview`; the user block shows name and role. Admin-only views remain hidden for other users.
+  Collapse is remembered per browser, defaults below 1280px, and becomes a bottom bar below 700px with More.
+  Screen formats retain labels, bottom bar and right-side mirror support.
+- **WEB-SHELL-02 Navigation order.** Admins edit group titles, reorder groups and drag items within or between
+  groups in sidebar Edit mode or Settings → Navigation. `GET/PUT /api/ui/nav_layout` uses
+  `{groups:[{key,title,items:[ids]}],hidden:[ids]}`; an old `{top,bottom,hidden}` setting is read as the default
+  groups with each hidden id removed from its group, plus the hidden list. Admin writes remain audited and shared
+  by all users.
+- **WEB-SHELL-03 Top bar.** Breadcrumbs show the page then project, goal or agent via `window.setCrumbs`.
+  The search entry “Search projects, goals, agents… (Ctrl+K)” supports Ctrl/Command+K, arrow keys and Enter;
+  this phase searches visible pages and open projects client-side using the existing `/api/projects` endpoint
+  (60-second cache). Server-wide search is P1-6. User name, Simple/Advanced, stop pill, Notifications, Audit,
+  Settings, Users, emergency stop, My Git, Screen format and theme remain in the top bar.
+  Hash routes `#/<view>`, `#/projects/<id>`, `#/goals/<id>` and `#/agents/<id>` support direct links and
+  back/forward; `ac.view` remains the fallback without a hash. `show()` writes the hash with `pushState`, so it
+  triggers no second render. Closing a goal or agent window replaces the hash with the page's hash.
+  WEB-SHELL-04…16 behaviour is kept, including quiet redraws and last-picture switching (§3 WEB-SHELL-17 for the
+  tokens and components).
 - **WEB-SHELL-04 Badges.** Every few seconds (and on every live event) `GET /api/overview` gives the counts:
   Users = registrations waiting; Notifications = unread; Audit log = audit records newer than the last one this
   browser showed (counted from the first visit; opening the Audit log resets it); Projects = goals awaiting
@@ -82,7 +93,7 @@ specification in [WORKSPACE.md](WORKSPACE.md); §15 here summarises it and lists
 - **WEB-SHELL-11 Dialogs.** One modal at a time; closes with ×, a click outside it, or Escape.
 - **WEB-SHELL-12 Buttons as icons.** Buttons with a known label are drawn as icons with the label as tooltip and
   accessible name, already when the page appears (no change of shape afterwards).
-- **WEB-SHELL-13 Theme.** Light or dark, following the operating system until the user picks one; kept per browser.
+- **WEB-SHELL-13 Theme.** Dark by default, with light/dark/system choices kept per browser; system follows OS changes.
 - **WEB-SHELL-14 Screen formats.** A picker of 21+ presets kept per browser: Standard, Compact, Comfortable, Focus
   (command window only), Zen (centred), Wide chat, Agent ops, Mirror (rail on the right), Command centre, Stacked,
   Presentation, Large text, Dense data, Ultrawide (labelled rail), Laptop 13", Tablet and Mobile (rail at the
@@ -95,6 +106,13 @@ specification in [WORKSPACE.md](WORKSPACE.md); §15 here summarises it and lists
   commits (`PUT /api/users/{id}/git`); GitHub access by a personal access token (**Save token**, **Remove**, shown
   only as a hint) or by an SSH key the server creates (**Create SSH key**, **Copy** the public key, **Delete key**);
   **Test GitHub access** (`POST /api/users/{id}/git/test`). Pushes use the pushing user's own token or key.
+- **WEB-SHELL-17 Design system.** `style.css` holds the update_5 semantic tokens: dark by default, with a light set
+  under the same names. Spacing is on a 4px unit, cards have a 12px radius and controls 8px, the font is
+  Inter/system-ui and body text is 14px. The old token names (`--bg`, `--panel`, `--accent`, …) are aliases of the new
+  ones, so existing pages keep working. `workspace.css` uses the same tokens and has no palette of its own. Seven
+  accent choices are kept per browser (`ac.accent`). The shared components are page head, KPI, card with "View all",
+  status badge, progress, stepper, timeline, drawer, empty state and tabs. Settings → Appearance → Components shows
+  each of them once.
 
 ## 4. Dashboard
 

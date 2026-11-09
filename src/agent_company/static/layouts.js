@@ -3,7 +3,7 @@
 // labels, width, floating cards) and the Projects page (panel order, sizes, hidden panels,
 // orientation). Chosen per browser; panel widths dragged by hand override the preset's sizes.
 
-const LAYOUT_BASE = { scale: 1, density: "cozy", radius: 8, rail: "left", labels: false, maxWidth: null, floating: false,
+const LAYOUT_BASE = { scale: 1, density: "cozy", radius: 12, rail: "left", maxWidth: null, floating: false,
   project: { orientation: "horizontal", order: ["list", "chat", "agents"], sizes: { list: 20, chat: 55, agents: 25 }, hide: [] } };
 const L = (id, name, hint, over = {}) => ({ ...LAYOUT_BASE, ...over, id, name, hint, project: { ...LAYOUT_BASE.project, ...(over.project || {}) } });
 const LAYOUTS = [
@@ -29,16 +29,23 @@ const LAYOUTS = [
   L("labeled", "Labelled rail", "Rail with names", { labels: true }),
   L("square", "Square", "No rounded corners", { radius: 0, density: "compact" }),
 ];
-const DENSITY = { compact: { pad: "9px", gap: "8px", view: "10px" }, cozy: { pad: "14px", gap: "12px", view: "16px" }, comfortable: { pad: "18px", gap: "16px", view: "22px" } };
+const DENSITY = { compact: { pad: "8px", gap: "8px", view: "12px" }, cozy: { pad: "12px", gap: "12px", view: "20px" }, comfortable: { pad: "16px", gap: "16px", view: "24px" } };
 
 function currentLayout() { return LAYOUTS.find((l) => l.id === store.get("ac.layout")) || LAYOUTS[0]; }
 
+function sidebarState(l = currentLayout()) {
+  if (railEditing) return true;
+  const saved = store.get("ac.sidebar");
+  return saved ? saved === "expanded" : l.labels !== undefined ? l.labels : innerWidth >= 1280;
+}
+matchMedia("(max-width: 1279px)").addEventListener("change", () => applyLayout());
 function applyLayout() {
   const l = currentLayout(), d = DENSITY[l.density], root = document.documentElement.style;
   root.setProperty("--pad", d.pad); root.setProperty("--gap", d.gap); root.setProperty("--view-pad", d.view);
-  root.setProperty("--radius", `${l.radius}px`); root.setProperty("--max-width", l.maxWidth ? `${l.maxWidth}px` : "100%");
+  root.setProperty("--radius", `${l.radius}px`); root.setProperty("--radius-card", `${l.radius}px`);
+  root.setProperty("--radius-control", `${Math.round(l.radius * 2 / 3)}px`); root.setProperty("--max-width", l.maxWidth ? `${l.maxWidth}px` : "100%");
   const shell = $("#app");
-  shell.dataset.rail = l.rail; shell.dataset.labels = l.labels ? "1" : ""; shell.dataset.floating = l.floating ? "1" : "";
+  shell.dataset.rail = l.rail; shell.dataset.labels = sidebarState(l) ? "1" : ""; shell.dataset.floating = l.floating ? "1" : "";
   shell.style.zoom = l.scale === 1 ? "" : String(l.scale);
 }
 
@@ -96,9 +103,12 @@ function startResize(e, grid, left, right) {
 
 function layoutPicker() {
   const cur = currentLayout().id;
+  const acc = accentPref();
   modal(`<h2>Screen format</h2><p class="muted">Kept in this browser. Dragged panel widths are remembered per format; <a href="#" id="lay-reset">reset widths</a>.</p>
-    <div class="grid layouts">${LAYOUTS.map((l) => `<button class="card lay ${l.id === cur ? "selected" : ""}" data-lay="${l.id}"><strong>${esc(l.name)}</strong><span class="muted">${esc(l.hint)}</span>
+    <h3>Accent</h3><div class="accent-row" role="radiogroup" aria-label="Accent colour">${ACCENTS.map((a) => `<button type="button" class="accent-swatch keep-text${a === acc ? " selected" : ""}" data-accent="${a}" role="radio" aria-checked="${a === acc}" title="${a[0].toUpperCase() + a.slice(1)}" aria-label="${a}"></button>`).join("")}</div>
+    <h3>Format</h3><div class="grid layouts">${LAYOUTS.map((l) => `<button class="card lay ${l.id === cur ? "selected" : ""}" data-lay="${l.id}"><strong>${esc(l.name)}</strong><span class="muted">${esc(l.hint)}</span>
       <span class="lay-mini" data-rail="${l.rail}">${l.project.order.filter((k) => !l.project.hide.includes(k)).map((k) => `<i style="flex:${l.project.sizes[k] || 30}"></i>`).join("")}</span></button>`).join("")}</div>`);
-  document.querySelectorAll("[data-lay]").forEach((b) => (b.onclick = () => { store.set("ac.layout", b.dataset.lay); applyLayout(); applyProjectLayout(); layoutPicker(); }));
+  document.querySelectorAll("[data-lay]").forEach((b) => (b.onclick = () => { store.del("ac.sidebar"); store.set("ac.layout", b.dataset.lay); applyLayout(); applyProjectLayout(); layoutPicker(); }));
+  document.querySelectorAll(".accent-swatch[data-accent]").forEach((b) => (b.onclick = () => { setAccent(b.dataset.accent); layoutPicker(); }));
   $("#lay-reset").onclick = (e) => { e.preventDefault(); store.del(`ac.sizes.${currentLayout().id}`); applyProjectLayout(); toast("Widths reset"); };
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -386,22 +387,93 @@ def clear(key: str, actor: str = "system") -> None:
 UI_KEYS = {"nav_layout"}
 
 
+# UI-D-02 order, including pages added in later phases: the dashboard drops ids without a registered view, and a
+# page registered later takes its place here. static/app.js NAV_DEFAULT mirrors this (tests/test_nav_layout.py).
+DEFAULT_NAV_GROUPS = [
+    {"key": "company", "title": "Company", "items": ["dashboard", "general-manager", "projects", "goals", "teams",
+                                                     "agents", "companymap", "workflows", "deliverables"]},
+    {"key": "intelligence", "title": "Intelligence",
+     "items": ["research", "knowledge", "performance", "evaluation", "models"]},
+    {"key": "evolution", "title": "Evolution", "items": ["evolution", "organization", "changes"]},
+    {"key": "system", "title": "System", "items": ["workspace", "machines", "security", "system"]},
+]
+NAV_DEFAULT_GROUPS = DEFAULT_NAV_GROUPS
+NAV_TOPBAR = {"notifications", "audit", "settings", "users"}
+VIEW_GROUP = {item: group["key"] for group in DEFAULT_NAV_GROUPS for item in group["items"]}
+VIEW_GROUP["simple"] = "company"
+_NAV_ID = re.compile(r"[a-z][a-z0-9-]{0,31}")
+
+
+def _nav_ids(items: Any, seen: set[str]) -> list[str]:
+    """Valid page ids of a list in order, at most 40; non-strings, top-bar ids and repeats are skipped."""
+    if not isinstance(items, list):
+        raise ValueError("navigation items and hidden must be lists")
+    out = []
+    for item in items:
+        if isinstance(item, str) and _NAV_ID.fullmatch(item) and item not in NAV_TOPBAR and item not in seen:
+            seen.add(item)
+            out.append(item)
+            if len(out) == 40:
+                break
+    return out
+
+
+def nav_default() -> dict:
+    from copy import deepcopy
+    return {"groups": deepcopy(DEFAULT_NAV_GROUPS), "hidden": []}
+
+
+def normalise_nav(value: Any) -> dict:
+    """The groups form {groups, hidden} of a saved or submitted layout; a malformed one raises ValueError (400).
+
+    Types are checked before any dict or set lookup, so a list or object as a key never becomes a TypeError."""
+    if not isinstance(value, dict):
+        raise ValueError("nav_layout must be an object")
+    if "groups" not in value:
+        if not any(k in value for k in ("top", "bottom", "hidden")):
+            raise ValueError("nav_layout requires groups")
+        # Legacy ordering is discarded, but hidden choices survive migration: a hidden id leaves its default group,
+        # as each id is listed once, so the result reads back unchanged.
+        result = nav_default()
+        result["hidden"] = _nav_ids(value.get("hidden", []), set())
+        for group in result["groups"]:
+            group["items"] = [i for i in group["items"] if i not in result["hidden"]]
+        return result
+    if not isinstance(value["groups"], list):
+        raise ValueError("groups must be a list")
+    defaults = {g["key"]: g for g in DEFAULT_NAV_GROUPS}
+    groups, keys, seen = [], set(), set()
+    for group in value["groups"]:
+        key = group.get("key") if isinstance(group, dict) else None
+        if not isinstance(key, str) or key not in defaults or key in keys:
+            raise ValueError("unknown or duplicate navigation group")
+        keys.add(key)
+        title = group.get("title", "")
+        title = "".join(c for c in title if c.isprintable()).strip()[:40] if isinstance(title, str) else ""
+        groups.append({"key": key, "title": title or defaults[key]["title"],
+                       "items": _nav_ids(group.get("items", []), seen)})
+    groups.extend({"key": k, "title": g["title"], "items": []} for k, g in defaults.items() if k not in keys)
+    return {"groups": groups, "hidden": _nav_ids(value.get("hidden", []), seen)}
+
+
 def get_ui(key: str) -> Any:
     if key not in UI_KEYS:
         raise ValueError(f"unknown layout key {key!r}")
     with session() as s:
         row = s.get(Setting, f"ui:{key}")
-        return (row.value or {}).get("v") if row else None
+        value = (row.value or {}).get("v") if row else None
+    if value is None:
+        return nav_default()
+    try:
+        return normalise_nav(value)
+    except ValueError:
+        return nav_default()
 
 
 def set_ui(key: str, value: Any) -> Any:
     if key not in UI_KEYS:
         raise ValueError(f"unknown layout key {key!r}")
-    if key == "nav_layout":
-        if not isinstance(value, dict) or not all(isinstance(value.get(k, []), list) for k in ("top", "bottom")):
-            raise ValueError("nav_layout is {top: [view ids], bottom: [view ids]}")
-        value = {k: [str(x)[:32] for x in value.get(k, []) if not (k == "hidden" and x == "settings")][:40]
-                 for k in ("top", "bottom", "hidden")}
+    value = normalise_nav(value)
     with session() as s:
         row = s.get(Setting, f"ui:{key}")
         if row is None:

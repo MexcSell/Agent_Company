@@ -1041,6 +1041,7 @@ def create_app(start_background: bool = True) -> FastAPI:
             by_status = dict(s.execute(select(Goal.status, func.count()).group_by(Goal.status)).all())
             agents = dict(s.execute(select(Agent.status, func.count()).where(Agent.enabled)
                                     .group_by(Agent.status)).all())
+            degraded = s.scalar(select(func.count()).select_from(Agent).where(Agent.enabled, Agent.health == "degraded"))
             pending = s.scalar(select(func.count()).select_from(auth.User)
                                .where(auth.User.status == "pending")) if user["is_admin"] else 0
             docs = s.scalar(select(func.count()).select_from(research.Document))
@@ -1048,7 +1049,7 @@ def create_app(start_background: bool = True) -> FastAPI:
                                  .where(projects.Proposal.status == "pending")) if user["is_admin"] else 0
             # The newest audit record: the browser counts the ones after the last it showed (tab icon, top bar).
             audit_last = (s.scalar(select(func.max(AuditEvent.id))) or 0) if user["is_admin"] else 0
-        return {"goals": by_status, "agents": agents, "pending_users": pending, "documents": docs,
+        return {"goals": by_status, "agents": agents, "degraded_agents": degraded, "pending_users": pending, "documents": docs,
                 "usage": usage.summary()["totals"], "unread": governance.unread_count(user),
                 "pending_proposals": proposals, "audit_last": audit_last, "build": static_build(),
                 "stopped": (bool(governance.emergency()) or bool(governance.stops())) if user["is_admin"] else False,
@@ -3863,7 +3864,7 @@ def create_app(start_background: bool = True) -> FastAPI:
     # --- dashboard layout shared by every user (rail order: Settings → Navigation) ---
     @app.get("/api/ui/{key}")
     def ui_get(key: str, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-        return {"key": key, "value": prefs.get_ui(key)}
+        return {"key": key, "value": prefs.get_ui(key), **({"default": prefs.nav_default()} if key == "nav_layout" else {})}
 
     @app.put("/api/ui/{key}")
     def ui_put(key: str, body: UiBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
