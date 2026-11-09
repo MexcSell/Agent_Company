@@ -443,6 +443,17 @@ Tabs: Organisation, Agent network, Tools & MCP, Skills & plugins, Marketplace (a
   benchmark metrics (baseline, candidate, change, weight); **Approve and deploy** (merge and safe restart; confirm),
   **Roll back** (reason; a revert commit), **Cancel**.
 
+## 11a. Agent Evolution and Organization Evolution
+
+- **WEB-EVO-01** `#/evolution` (Agent Evolution), tab **Candidates**: definition rewrites waiting for review (agent,
+  versions, model, reason, sections) with **Review diff** (drawer: the diff, Apply, Discard, a link to the agent's
+  versions), experiments with the stepper Baseline → Candidate → Experiment → Regression / safety → Human approval →
+  Deploy / rollback, baseline vs candidate (pass rate with n, cost per pass, seconds, tool-call accuracy),
+  regressions and the decision; decided rewrites. Tab **Learning & experiments**: the content of §11 below.
+- **WEB-ORG-01** `#/organization` (Organization Evolution): the versions (reason, who, when, rooms, agents), A/B to
+  compare two (rooms and agents added, removed, changed field by field), **Restore** for administrators (rooms'
+  parent, lead, switch and budget; no agent deleted; the result is a new version).
+
 ## 12. Performance
 
 - **WEB-PERF-00** The sidebar's **Evaluation & QA** (`#/evaluation`) holds this page as its tab *Performance &

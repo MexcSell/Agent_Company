@@ -1174,6 +1174,26 @@ def create_app(start_background: bool = True) -> FastAPI:
                       ) -> list[dict[str, Any]]:
         return organization.positions(position, limit)
 
+    # --- organisation versions (AICO UI-ORG-01/03/04) ---
+    @app.get("/api/org/versions")
+    def org_versions(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        return organization.list_versions()
+
+    @app.get("/api/org/versions/{version}")
+    def org_version(version: int, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return organization.get_version(version)
+
+    @app.get("/api/org/compare")
+    def org_compare(a: int, b: int, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return organization.compare_versions(a, b)
+
+    @app.post("/api/org/versions/{version}/restore")
+    def org_restore(version: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        """Rooms' parent, lead, enabled and budget back to the version; no agent is deleted (audited)."""
+        out = organization.restore_version(version, f"user:{admin['name']}")
+        _audit(admin, "org_restore", version, after=out, severity="high")
+        return out
+
     @app.get("/api/org/export")
     def org_export(format: str = "json", table: str = "agents", admin: dict[str, Any] = Depends(admin_user)
                    ) -> Any:  # noqa: A002
@@ -3885,6 +3905,14 @@ def create_app(start_background: bool = True) -> FastAPI:
                               admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> list[dict[str, Any]]:
         out = agentdefs.candidates(agent_id, status)
         _audit(admin, "definition_candidates_read", agent_id, after={"count": len(out)})
+        return out
+
+    @app.get("/api/definition-candidates")
+    def definition_candidates_all(status: str = "", admin: dict[str, Any] = Depends(allowed("manage_agents"))
+                                  ) -> list[dict[str, Any]]:
+        """UI-EVO-01: every agent's definition candidates, newest first (`status` pending|applied|discarded)."""
+        out = agentdefs.candidates(None, status or None)[:200]
+        _audit(admin, "definition_candidates_read", "all", after={"count": len(out)})
         return out
 
     @app.get("/api/definition-candidates/{cid}")

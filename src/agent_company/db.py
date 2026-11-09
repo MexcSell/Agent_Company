@@ -1376,6 +1376,19 @@ class Notification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
 
+class OrgVersion(Base):
+    """AICO UI-ORG-01: a snapshot of the organisation after a structural change (rooms with parent, lead, enabled,
+    budget; agents with room, superior, enabled, lifecycle), with why and who (organization.record_version)."""
+
+    __tablename__ = "org_versions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class Deliverable(Base):
     """AICO UI-DEL-01: the release record of a merged goal, stored at the merge (deliverables.py): commit, branches,
     remote, SBOM path, changed files, acceptance labels, who approved, and the completion report with its SHA-256.

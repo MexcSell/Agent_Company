@@ -152,7 +152,9 @@ feature came from.
   one release record per merged goal with its completion report and SHA-256, stored by `loop._record_release` before
   completion is reported; a newer one supersedes; `static/deliverables.js`); `qa.py` (UI-QA: `GET /api/qa` from gate events, flaky = same commit
   passed and failed; `static/evaluation.js` with the Performance page as a tab, `nav: false` keeps a view off the
-  sidebar);
+  sidebar); `static/evolution.js` (UI-EVO/UI-ORG: Agent Evolution candidates with the six-step stepper,
+  Organization Evolution versions; `organization.record_version` keeps table `org_versions` at each structural change,
+  `compare_versions`, `restore_version` (rooms only));
   `a2a.py` (G-R-06: the A2A 1.0 agent card and JSON-RPC `SendMessage`/`GetTask`/`ListTasks`/`CancelTask` for
   issued bearer clients (`a2a_clients`, `a2a_tasks`); tasks become `origin="a2a"` goals that always wait for approval);
   `marketplace.py` (REQ-002 agent marketplace: a repository URL or uploaded package fetched as untrusted data into

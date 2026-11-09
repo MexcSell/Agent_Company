@@ -161,10 +161,11 @@ async function viewAudit() {
   $("#audit-sec").onclick = () => show("security");  // incidents moved to the Security view (S15-R-03)
 }
 
-async function viewEvolution() {
+// `root`: the Agent Evolution page's "Learning & experiments" tab (evolution.js) or the page itself.
+async function viewEvolution(quiet, root = $("#view")) {
   const [ev, agents] = await Promise.all([api("/api/evolution"), api("/api/agents")]);
   const roles = [...new Set(agents.filter((a) => a.parent_id && a.lifecycle !== "retired").map((a) => a.role))];
-  $("#view").innerHTML = `<div class="grid two"><div class="grid">
+  root.innerHTML = `<div class="grid two"><div class="grid">
     <div class="card"><h2>How agents evolve</h2><p class="muted">Lessons are curated into versioned playbooks. An agent whose recent success rate drops below 50% tries a failure-aware playbook for 3 tasks; it is promoted only if it beats the old success rate by at least <code>min_improvement</code> points (Settings; a tie keeps the old one), otherwise rolled back. An agent failing more than 70% of its last 10 tasks is flagged for review. After a goal, idle clones merge back into their original.</p>
       ${me.is_admin ? `<div class="row"><button class="btn" id="ev-cycle">Diagnose all agents now</button>${roles.length ? `<select id="ev-role" style="width:auto">${roles.map((r) => `<option>${esc(r)}</option>`).join("")}</select><button class="btn" id="ev-cons">Merge idle clones</button>` : ""}</div>` : ""}</div>
     <div class="card"><div class="row nowrap"><h2 class="grow" style="margin:0">Learning rotation</h2>${me.is_admin || me.permissions?.manage_agents ? ib("book", "Study now: the next agent rewrites its definition from new knowledge and its lessons", 'id="ev-study"', "primary") : ""}</div>
@@ -175,10 +176,10 @@ async function viewEvolution() {
     <div class="card"><h2>Running trials (${ev.experiments.length})</h2>${ev.experiments.map((x) => `<div class="row"><a href="#" data-agent="${x.agent_id}" class="grow">${esc(x.agent)}</a><span class="muted">baseline ${Math.round((x.baseline || 0) * 100)}% · ${x.outcomes.map((o) => (o ? "✓" : "✗")).join(" ") || "no tasks yet"}</span></div>`).join("") || '<span class="muted">None.</span>'}</div></div>
     <div class="card"><h2>Evolution events</h2><div class="events">${ev.events.map((e) => `<div><span class="k">${esc(e.stage)}</span>${esc(e.title)} <span class="muted">${ago(e.at)}</span></div>`).join("") || '<span class="muted">Nothing yet: events appear as agents finish tasks.</span>'}</div></div></div>`;
   document.querySelectorAll("[data-agent]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); agentModal(Number(a.dataset.agent)); }));
-  $("#ev-study") && ($("#ev-study").onclick = async (e) => { e.currentTarget.classList.add("busy"); try { const r = await api("/api/learning/study", { method: "POST" }); toast(r.changed ? `${r.studied}: ${r.lines} line(s) rewritten with ${r.model}` : `${r.studied || "No agent"}: no change ${r.detail ? `(${r.detail})` : ""}`); viewEvolution(); } catch (err) { toast(err.message); } });
+  $("#ev-study") && ($("#ev-study").onclick = async (e) => { e.currentTarget.classList.add("busy"); try { const r = await api("/api/learning/study", { method: "POST" }); toast(r.changed ? `${r.studied}: ${r.lines} line(s) rewritten with ${r.model}` : `${r.studied || "No agent"}: no change ${r.detail ? `(${r.detail})` : ""}`); viewEvolution(false, root); } catch (err) { toast(err.message); } });
   api("/api/events").then((evs) => { const box = $("#ev-learning"); if (box) box.innerHTML = evs.filter((x) => x.kind === "learning").slice(-12).reverse().map((x) => `<div><span class="k">learning</span>${esc(x.message)} <span class="muted">${ago(x.at)}</span></div>`).join("") || '<span class="muted">No study visit yet.</span>'; }).catch(() => {});
-  $("#ev-cycle") && ($("#ev-cycle").onclick = async () => { const r = await api("/api/evolution/cycle", { method: "POST" }); toast(`${r.experiments_started} trial(s) started`); viewEvolution(); });
-  $("#ev-cons") && ($("#ev-cons").onclick = async () => { const r = await api("/api/agents/consolidate", { method: "POST", body: { role: $("#ev-role").value } }); toast(`${r.length} clone(s) merged`); viewEvolution(); });
+  $("#ev-cycle") && ($("#ev-cycle").onclick = async () => { const r = await api("/api/evolution/cycle", { method: "POST" }); toast(`${r.experiments_started} trial(s) started`); viewEvolution(false, root); });
+  $("#ev-cons") && ($("#ev-cons").onclick = async () => { const r = await api("/api/agents/consolidate", { method: "POST", body: { role: $("#ev-role").value } }); toast(`${r.length} clone(s) merged`); viewEvolution(false, root); });
   learningPanel();
   recruitmentPanel();
   if (me.is_admin) codeEvolution();
@@ -211,7 +212,7 @@ async function recruitmentPanel() {
 // SPEC-13: experiments (baseline vs candidate on one suite), capability gaps, learning plans.
 async function learningPanel() {
   let box = $("#lp");
-  if (!box) { $("#view").insertAdjacentHTML("beforeend", '<div id="lp" class="grid" style="margin-top:12px"></div>'); box = $("#lp"); }
+  if (!box) { ($("#evo-body") || $("#view")).insertAdjacentHTML("beforeend", '<div id="lp" class="grid" style="margin-top:12px"></div>'); box = $("#lp"); }
   let ex, gaps, plans, orch, suites;
   try { [ex, gaps, plans, orch, suites] = await Promise.all([api("/api/experiments"), api("/api/learning/gaps"), api("/api/learning/plans"), api("/api/strategies/evaluation"), api("/api/learning/suites")]); } catch (e) { box.innerHTML = `<div class="card"><h2>Experiments</h2><span class="muted">${esc(e.message)}</span></div>`; return; }
   const may = me.is_admin || me.permissions?.manage_agents;
@@ -465,7 +466,7 @@ async function cleanupModal() {
 }
 
 registerView({ id: "system", title: "System", icon: "system", admin: true }, viewSystem);
-registerView({ id: "evolution", title: "Evolution", icon: "evolution" }, viewEvolution, 4);
+// The Evolution page itself is evolution.js (Agent Evolution: candidates, then this content as a tab).
 registerView({ id: "notifications", title: "Notifications", icon: "bell" }, viewNotifications);
 registerView({ id: "settings", title: "Settings", icon: "settings", admin: true }, viewSettings);
 registerView({ id: "audit", title: "Audit log", icon: "audit", admin: true }, viewAudit);

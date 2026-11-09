@@ -311,7 +311,12 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   cost, time, tool-call failure rate — only those measured; "not measured" otherwise.
 - **UI-EVO-04** Existing sections (learning rotation, trials, recruitment, experiments, strategies, learning plans,
   code evolution) stay as tabs.
-- Status: partial (all data exists; the comparison view is new).
+- Status: **done** (P1-5): `static/evolution.js` (`#/evolution`, "Agent Evolution": tab Candidates = pending and
+  decided definition rewrites (`GET /api/definition-candidates`, diff drawer with Apply / Discard, Versions & restore
+  on the agent card) and experiments with the six-step stepper, baseline vs candidate figures with sample sizes and
+  regressions; a study rewrite's Experiment and Regression steps show "not run"; tab Learning & experiments = the
+  former Evolution page). EVO-03 per agent version: the experiment comparison and the agent card's Evaluation tab;
+  no per-version time series (open).
 
 ## 10. Organization Evolution (P1)
 
@@ -325,7 +330,12 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
 - **UI-ORG-03 Compare** two versions side by side with the differences highlighted (added, removed, moved).
 - **UI-ORG-04 Restore** a previous version (admin, confirm, audited): rooms' parent, lead and enabled state are set back;
   agents are not deleted.
-- Status: open (room history exists as positions only).
+- Status: **done** but UI-ORG-02 (P1-5): table `org_versions`, `organization.record_version` on room create and
+  structural room changes (parent, lead, enabled, name, budget) and on an agent's superior or enabled change; a
+  baseline is recorded on the first read; `compare_versions`, `restore_version` (rooms only; a room with running goals
+  stays enabled; cycle check); `GET /api/org/versions[/{v}]`, `GET /api/org/compare`, `POST
+  /api/org/versions/{v}/restore` (admin, audited); `#/organization`; `tests/test_org_versions.py`. Open: UI-ORG-02
+  org-change proposals of kind `org` (a proposal row needs a goal today).
 
 ## 11. Change History (P2)
 

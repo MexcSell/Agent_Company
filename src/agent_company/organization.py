@@ -113,6 +113,7 @@ def create_room(key: str, name: str, division: str, description: str = "", paren
         s.add(r)
         s.flush()
         record_position(s, f"room:{key}:lead", None, lead_agent_id, actor, "room created")
+        record_version(s, actor, f"room {key} created")
         return room_dict(r)
 
 
@@ -157,7 +158,115 @@ def update_room(key: str, changes: dict[str, Any], actor: str = "system", reason
         for k, v in changes.items():
             setattr(r, k, v)
         s.flush()
+        if set(changes) & STRUCTURAL:
+            record_version(s, actor, reason or f"room {key}: " + ", ".join(sorted(set(changes) & STRUCTURAL)))
         return room_dict(r, s.scalar(select(func.count()).select_from(Agent).where(Agent.room_key == key)) or 0)
+
+
+# --- organisation versions (AICO UI-ORG-01/03/04) -----------------------------------------------
+
+STRUCTURAL = {"parent_key", "lead_agent_id", "enabled", "name", "daily_budget_usd"}  # a room change that is a version
+
+
+def _snapshot(s: Session) -> dict[str, Any]:
+    rooms = {r.key: {"name": r.name, "parent": r.parent_key, "lead": r.lead_agent_id, "enabled": r.enabled is not False,
+                     "daily_budget_usd": r.daily_budget_usd or 0.0} for r in s.scalars(select(Room).order_by(Room.id))}
+    agents = {str(a.id): {"name": a.name, "role": a.role, "room": a.room_key, "superior": a.superior_id,
+                          "enabled": bool(a.enabled), "lifecycle": a.lifecycle}
+              for a in s.scalars(select(Agent).order_by(Agent.id)) if a.lifecycle != "retired"}
+    return {"rooms": rooms, "agents": agents}
+
+
+def record_version(s: Session, actor: str, reason: str) -> int | None:
+    """Store the organisation as a new version inside the caller's session; nothing when it did not change."""
+    from agent_company.db import OrgVersion
+
+    snap = _snapshot(s)
+    last = s.scalars(select(OrgVersion).order_by(OrgVersion.version.desc())).first()
+    if last is not None and last.snapshot == snap:
+        return None
+    v = (last.version if last else 0) + 1
+    s.add(OrgVersion(version=v, snapshot=snap, reason=(reason or "")[:500], actor=actor[:128]))
+    s.flush()
+    return v
+
+
+def list_versions(limit: int = 200) -> list[dict[str, Any]]:
+    """Newest first. The first call records the current organisation as version 1 (the baseline)."""
+    from agent_company.db import OrgVersion
+
+    with session() as s:
+        if s.scalar(select(func.count()).select_from(OrgVersion)) == 0:
+            record_version(s, "system", "baseline: the organisation when versions began")
+        rows = s.scalars(select(OrgVersion).order_by(OrgVersion.version.desc()).limit(limit)).all()
+        return [{"version": r.version, "reason": r.reason, "actor": r.actor, "at": r.created_at.isoformat(),
+                 "rooms": len(r.snapshot.get("rooms", {})), "agents": len(r.snapshot.get("agents", {}))} for r in rows]
+
+
+def get_version(version: int) -> dict[str, Any]:
+    from agent_company.db import OrgVersion
+
+    with session() as s:
+        r = s.scalars(select(OrgVersion).where(OrgVersion.version == version)).first()
+        if r is None:
+            raise KeyError(f"organisation version {version}")
+        return {"version": r.version, "reason": r.reason, "actor": r.actor, "at": r.created_at.isoformat(),
+                "snapshot": r.snapshot}
+
+
+def compare_versions(a: int, b: int) -> dict[str, Any]:
+    """UI-ORG-03: what changed from version a to b — rooms and agents added, removed, changed (field: old → new)."""
+    sa, sb = get_version(a)["snapshot"], get_version(b)["snapshot"]
+    out: dict[str, Any] = {"a": a, "b": b}
+    for part in ("rooms", "agents"):
+        x, y = sa.get(part, {}), sb.get(part, {})
+        out[part] = {"added": [{"key": k, **y[k]} for k in y if k not in x],
+                     "removed": [{"key": k, **x[k]} for k in x if k not in y],
+                     "changed": [{"key": k, "name": y[k].get("name"),
+                                  "fields": {f: [x[k].get(f), y[k].get(f)] for f in set(x[k]) | set(y[k])
+                                             if x[k].get(f) != y[k].get(f)}}
+                                 for k in x if k in y and x[k] != y[k]]}
+    return out
+
+
+def restore_version(version: int, actor: str) -> dict[str, Any]:
+    """UI-ORG-04: set rooms' parent, lead, enabled and budget back to `version`. Rooms created later stay as they
+    are, no agent is deleted or moved; a room with running goals is not disabled (skipped, named). The result is a
+    new version."""
+    target = get_version(version)["snapshot"]["rooms"]
+    skipped: list[str] = []
+    changed: list[str] = []
+    with session() as s:
+        rooms = {r.key: r for r in s.scalars(select(Room))}
+        agents = set(s.scalars(select(Agent.id)))
+        for key, want in target.items():
+            r = rooms.get(key)
+            if r is None:
+                skipped.append(f"{key}: no longer exists")
+                continue
+            if want["enabled"] is False and r.enabled is not False and running_goals(s, key):
+                skipped.append(f"{key}: has running goals, stays enabled")
+                want = {**want, "enabled": True}
+            lead = want["lead"] if want["lead"] in agents else r.lead_agent_id
+            parent = want["parent"] if (want["parent"] is None or want["parent"] in rooms) else r.parent_key
+            new = {"parent_key": parent, "lead_agent_id": lead, "enabled": want["enabled"],
+                   "daily_budget_usd": want.get("daily_budget_usd", 0.0), "name": want.get("name") or r.name}
+            if any(getattr(r, k) != v for k, v in new.items()):
+                if r.lead_agent_id != lead:
+                    record_position(s, f"room:{key}:lead", r.lead_agent_id, lead, actor, f"restored version {version}")
+                for k, v in new.items():
+                    setattr(r, k, v)
+                changed.append(key)
+        s.flush()
+        for key in rooms:  # the restored tree must still be a tree
+            seen, cur = set(), key
+            while cur is not None:
+                if cur in seen:
+                    raise ValueError(f"restoring version {version} would make a cycle at room {key}")
+                seen.add(cur)
+                cur = rooms[cur].parent_key if cur in rooms else None
+        v = record_version(s, actor, f"restored version {version}")
+    return {"restored": version, "version": v, "changed": changed, "skipped": skipped}
 
 
 def positions(position: str = "", limit: int = 200) -> list[dict[str, Any]]:

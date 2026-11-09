@@ -1070,6 +1070,11 @@ def update_agent(agent_id: int, changes: dict[str, Any], actor: str = "system",
             setattr(a, k, v)
         s.flush()
         record_version(s, a, actor, "changed " + ", ".join(sorted(changes)))
+        if {"superior_id", "enabled"} & set(changes):  # a structural change of the organisation (UI-ORG-01)
+            from agent_company import organization
+
+            moved = ", ".join(sorted({"superior_id", "enabled"} & set(changes)))
+            organization.record_version(s, actor, f"{a.name}: {moved}")
         return agent_dict(a)
 
 
