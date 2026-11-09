@@ -84,3 +84,54 @@ def test_search_papers_stores_each_openalex_result_under_its_landing_page():
         d = s.get(Document, out["documents"][0])
         assert d.url == "https://arxiv.org/abs/2303.11366" and "Large language agents" in d.text
         assert d.published_at.year == 2023
+
+
+def test_the_planner_sees_the_passages_that_answer_and_what_it_fetched(monkeypatch):
+    """V16: the planner saw the first 400 characters of each document (sqlite.org's navigation), so it fetched the
+    same pages again and judged them partial."""
+    nav = "\n".join(f"SQLite Home Menu About Documentation Download License Support {i}" for i in range(40))
+    doc("https://sqlite.org/wal.html", "Write-Ahead Logging",
+        nav + "\n\nIn WAL mode readers do not block writers and a writer does not block readers: concurrent readers "
+              "see the last committed snapshot while the checkpoint copies the WAL back.\n" + nav)
+    fetched: list[int] = []
+
+    def fake_fetch(args, ctx):  # a page whose words the search does not rank
+        with session() as s:
+            d = Document(url=args["url"], title="Changelog", text="Release history 3.45 3.46", source_url=args["url"],
+                         category="docs", flags=[])
+            s.add(d)
+            s.flush()
+            fetched.append(d.id)
+        return {"documents": list(fetched), "titles": ["Changelog"]}
+
+    monkeypatch.setitem(research_agent.TOOLS, "fetch_url", ("url", lambda v: True, fake_fetch))
+    plans = iter([json.dumps({"sufficient": False, "reason": "release notes",
+                              "tasks": [{"action": "fetch_url", "url": "https://sqlite.org/changes.html"}]}),
+                  json.dumps({"sufficient": True, "reason": "enough", "tasks": []})])
+    prompts = []
+
+    def fake_run(role, req, pref=None, **kw):
+        prompts.append(req.prompt)
+        return executors.Result(text=next(plans), ok=True), router.Choice(name="Codex CLI", kind="codex",
+                                                                           model_id="", reason="route")
+
+    monkeypatch.setattr(router, "run", fake_run)
+    monkeypatch.setattr(router, "resolve", lambda *a, **k: router.Choice(name="Codex CLI", kind="codex", model_id="",
+                                                                         reason="route"))
+
+    class A:
+        id, name, model_pref = 5, "Research Lead", None
+
+    research_agent.gather("How does SQLite WAL mode handle concurrent readers?", [], A(), rounds=2)
+    assert "concurrent readers see the last committed snapshot" in prompts[0]
+    assert 'url="https://sqlite.org/wal.html"' in prompts[0] and "characters" in prompts[0]
+    assert f'<document id="{fetched[0]}"' in prompts[1], "a page the loop fetched is shown in the next round"
+    assert "fetch_url https://sqlite.org/changes.html -> 1 document(s)" in prompts[1]
+
+
+def test_passages_keep_document_order_within_the_budget():
+    text = "intro line\nalpha beta here\nnothing\nbeta only\n" + "alpha beta gamma " * 100
+    out = research_agent._passages(text, ["alpha", "beta"], budget=400)
+    assert len(out) <= 400 + 10 and out.index("alpha beta here") < out.index("beta only")
+    assert "intro line" not in out
+    assert research_agent._passages("no match at all", ["zeta"]) == "no match at all"

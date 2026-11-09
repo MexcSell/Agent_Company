@@ -1,6 +1,8 @@
 """Goal workflow states (S04-R-04), pause/resume, restart recovery, execution trace (S04-R-12), goal-chain
 depth (S04-R-08) and human-only proposals (S14-R-02)."""
 
+import subprocess
+
 import pytest
 from sqlalchemy import select
 
@@ -68,6 +70,73 @@ def test_restart_marks_working_goals_recovering_and_they_resume():
         assert s.get(Goal, gid).status == "recovering"
     assert workflow.history(gid)[-1]["reason"] == "server restarted"
     assert loop.run_goal(gid)["status"] == "awaiting_approval"
+
+
+def _process():
+    p = subprocess.Popen(["sleep", "60"])
+    return p, f"{p.pid}:{loop._proc_start(p.pid)}"
+
+
+def _owned(title, status, owner):
+    gid = loop.create_goal(title)
+    workflow.transition(gid, status)
+    with session() as s:
+        s.get(Goal, gid).owner = owner
+    return gid
+
+
+def test_a_goal_records_the_process_that_took_it():
+    gid = loop.create_goal("Owned")
+    loop.run_goal(gid)
+    with session() as s:
+        assert s.get(Goal, gid).owner == loop.process_token()
+    assert loop.owner_alive(loop.process_token())
+
+
+def test_a_goal_whose_process_ended_is_resumed_without_a_restart():
+    """V25: a CLI run or live script that dies leaves its goal planning; the server's watcher takes it back."""
+    p, token = _process()
+    assert loop.owner_alive(token)
+    p.kill()
+    p.wait()
+    assert not loop.owner_alive(token)
+    orphan = _owned("Orphaned", "planning", token)
+    live_p, live_token = _process()
+    try:
+        elsewhere = _owned("Runs elsewhere", "planning", live_token)
+        mine = _owned("Runs here", "planning", loop.process_token())
+        legacy = _owned("No owner", "planning", "")
+        reused = _owned("Reused pid", "planning", f"{live_p.pid}:1")  # the pid of another process now
+        assert sorted(loop.reclaim_orphans()) == sorted([orphan, reused])
+        assert loop.reclaim_orphans() == [], "a reclaimed goal is not taken twice"
+        with session() as s:
+            assert {g.id: g.status for g in s.scalars(select(Goal).where(
+                Goal.id.in_([orphan, elsewhere, mine, legacy, reused])))} == {
+                orphan: "recovering", elsewhere: "planning", mine: "planning", legacy: "planning",
+                reused: "recovering"}
+            assert s.get(Goal, orphan).owner == ""
+        assert workflow.history(orphan)[-1]["reason"] == "the process running it ended"
+        assert loop.run_goal(orphan)["status"] == "awaiting_approval"
+    finally:
+        live_p.kill()
+        live_p.wait()
+
+
+def test_a_restart_leaves_a_goal_another_live_process_runs():
+    live_p, live_token = _process()
+    try:
+        elsewhere = _owned("CLI run", "running", live_token)
+        dead = _owned("Old server", "planning", f"{2**22 + 1}:1")  # above pid_max: never a process
+        q = loop.GoalQueue(workers=0)
+        q.start()
+        loop.set_queue(None)
+        with session() as s:
+            assert s.get(Goal, elsewhere).status == "running"
+            assert s.get(Goal, dead).status == "recovering" and s.get(Goal, dead).owner == ""
+        assert elsewhere not in q.seen and dead in q.seen
+    finally:
+        live_p.kill()
+        live_p.wait()
 
 
 def test_trace_names_the_agent_and_model_of_every_run():

@@ -141,8 +141,53 @@ def parse_plan(text: str) -> dict[str, Any] | None:
             "tasks": tasks, "refused": refused}
 
 
-def _material_text(docs: list[dict[str, Any]]) -> str:
-    return "\n".join(f'<document id="{d["id"]}" title="{d["title"]}">{d["text"][:400]}</document>' for d in docs)
+PER_DOC = 1200  # characters of each document the planner sees
+MAX_MATERIAL = 10  # documents in its prompt: those the loop found first, then the best search results
+
+
+def _terms(question: str, keywords: list[str]) -> list[str]:
+    from agent_company.research import _WORD
+
+    return list(dict.fromkeys(w.lower() for w in _WORD.findall(" ".join([*keywords, question]))))[:16]
+
+
+def _passages(text: str, terms: list[str], budget: int = PER_DOC) -> str:
+    """V16: the parts of a document that bear on the question, not its first characters (a page's navigation): its
+    lines, in 300-character pieces, ranked by how many of the question's words they hold, kept in document order
+    within `budget`. A document none of the words occur in shows its beginning."""
+    pieces = [line[i:i + 300] for raw in text.splitlines() if (line := " ".join(raw.split()))
+              for i in range(0, len(line), 300)]
+
+    def score(p: str) -> tuple[int, int]:
+        low = p.lower()
+        return len({t for t in terms if t in low}), sum(min(low.count(t), 5) for t in terms)
+
+    ranked = [i for i in sorted(range(len(pieces)), key=lambda i: score(pieces[i]), reverse=True)
+              if score(pieces[i])[0]]
+    if not ranked:
+        return " ".join(text.split())[:budget]
+    keep, used = [], 0
+    for i in ranked:
+        if used + len(pieces[i]) <= budget:
+            keep.append(i)
+            used += len(pieces[i])
+    return " … ".join(pieces[i] for i in sorted(keep))
+
+
+def _material_text(ids: list[int], terms: list[str]) -> str:
+    """The documents as the planner sees them: where each came from, how much was stored, and its passages."""
+    from html import escape
+
+    from sqlalchemy import select
+
+    from agent_company.db import Document, session
+
+    with session() as s:
+        docs = {d.id: d for d in s.scalars(select(Document).where(Document.id.in_(ids))) if not d.flags}
+        return "\n".join(
+            f'<document id="{i}" title="{escape(d.title)}" url="{escape(d.url)}" stored="{len(d.text)} characters">'
+            + _passages(d.text, terms).replace("</document", "< /document") + "</document>"
+            for i in ids if (d := docs.get(i)) is not None)
 
 
 def gather(question: str, keywords: list[str], agent: Any, goal_id: int | None = None, rounds: int = 2,
@@ -157,11 +202,14 @@ def gather(question: str, keywords: list[str], agent: Any, goal_id: int | None =
         return out
     ctx = {"agent_id": agent.id, "goal_id": goal_id, "client": client, "allow_private": allow_private}
     found: list[int] = []
+    terms = _terms(question, keywords)
     for rnd in range(1, rounds + 1):
         docs = research.search(" ".join([*keywords, question]), limit=8, goal_id=goal_id)
-        seen = [d for d in docs if not d["flags"]]
-        notes = "\n".join(f"Round {s['round']}: " + "; ".join(f"{r['action']} -> {len(r.get('documents', []))} "
-                                                              "document(s)" for r in s["results"])
+        # what the loop fetched itself first, even when the search ranks it lower (V16)
+        seen = list(dict.fromkeys([*found, *(d["id"] for d in docs if not d["flags"])]))[:MAX_MATERIAL]
+        notes = "\n".join(f"Round {s['round']}: " + "; ".join(
+            f"{r['action']} {r.get('query') or r.get('url')} -> {len(r.get('documents', []))} document(s)"
+            + (f" (error: {r['errors'][0]})" if r.get("errors") else "") for r in s["results"])
                           for s in out["steps"])
         req = executors.Request(
             purpose="research_plan", role="research", agent_id=agent.id, goal_id=goal_id,
@@ -169,7 +217,7 @@ def gather(question: str, keywords: list[str], agent: Any, goal_id: int | None =
             prompt=f"{PLAN_INSTRUCTIONS}\n\nResearch question: {question}\n"
                    + (f"Keywords: {', '.join(keywords)}\n" if keywords else "")
                    + (f"Steps so far:\n{notes}\n" if notes else "")
-                   + f"\nMaterial collected so far:\n{_material_text(seen) or '(none)'}",
+                   + f"\nMaterial collected so far:\n{_material_text(seen, terms) or '(none)'}",
             data={"question": question})
         res, choice = router.run("research", req, agent.model_pref, agent_id=agent.id, goal_id=goal_id)
         plan = parse_plan(res.text) if res.ok else None

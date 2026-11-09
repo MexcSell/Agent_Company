@@ -173,7 +173,7 @@ were graded by running their code, counting seeded defects and validating plans,
 | V13 | Codex's read-only sandbox runs any program for an agent without `shell` (`python3 -c`, as uid 0) and reads outside the worktree; writes and network are blocked. Codex reads files through these commands. | open (threat-model known gap; move a `read`-only agent to Claude Code, or decide how Codex should run it) |
 | V14 | Claude Code's `acceptEdits` (writing runs) auto-approves file commands in the worktree (`rm -r __pycache__`) and read-only commands (`git log`, `cat`) outside the run's allow-list; `Run.tools` understates what the run could do. | open (low; bounded to the worktree) |
 | V15 | The GM's own model `claude_37` is benched until Nov 11; the GM runs on its role route (Claude Code) and `trace_issues` flags every run as a substitution without a configured fallback. | fixed (2026-11-09, owner's approval: Models → Routes → Assign models cleared every agent's own model; the GM runs its role route Claude Code with fallbacks Codex CLI, Copilot, local) |
-| V16 | The research tool loop shows its planner only the first 400 characters of each document (`research_agent._material_text`): navigation text on sqlite.org, so it re-fetched the same pages and judged them "partial headers" (31,624 characters were stored). | open (low) |
+| V16 | The research tool loop shows its planner only the first 400 characters of each document (`research_agent._material_text`): navigation text on sqlite.org, so it re-fetched the same pages and judged them "partial headers" (31,624 characters were stored). | fixed (2026-11-09: `research_agent._passages` shows each document's lines that hold the question's words, up to `PER_DOC` 1,200 characters, with its URL and stored size; the documents the loop fetched come first in the next round, and the step notes name each query/URL; `tests/test_research_agent.py`) |
 
 ## Added 2026-11-09 (verification phase 4, agent communication)
 
@@ -206,7 +206,7 @@ the command window, goal #332 (architect → developer → QA, 682 s), a working
 |---|---------|--------|
 | V23 | A project's description (its registered requirements) reached no agent; the planner got stack, rooms, deadline, priority, budget and formal requirements only. | fixed (`loop._project_context`: "Description (as registered)") |
 | V24 | Task stages had no transition table: a late worker moved a cancelled task on (goal #111, task 691: cancelled → review → failed). | fixed (`workflow.TASK_TRANSITIONS`; `completed`/`cancelled` final; illegal moves refused and logged) |
-| V25 | A goal run in a process that ends while a background thread works on it stays `planning` until the next server restart: the phase 4/6 live scripts left smoke-trial eval goals #331 and #333 (cancelled by hand). | open (low; the live scripts no longer start smoke trials; a fix records the owning process on the goal) |
+| V25 | A goal run in a process that ends while a background thread works on it stays `planning` until the next server restart: the phase 4/6 live scripts left smoke-trial eval goals #331 and #333 (cancelled by hand). | fixed (2026-11-09: `Goal.owner` = the process that took it, `loop.process_token` pid + start time; the server's watcher puts a planning/running goal whose process ended back to recovering and resumes it, `loop.reclaim_orphans`; a restart leaves goals another live process runs; `tests/test_workflow.py`) |
 
 ## Added 2026-11-09 (verification phases 7 and 8, quality and evolution)
 

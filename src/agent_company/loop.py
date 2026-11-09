@@ -14,6 +14,7 @@ import functools
 import itertools
 import json
 import logging
+import os
 import queue
 import random
 import re
@@ -1474,10 +1475,71 @@ def _claim(goal_id: int, status: str) -> bool:
 
     with session() as s:
         if s.execute(update(Goal).where(Goal.id == goal_id, Goal.status == status)
-                     .values(status="planning", label_counts={})).rowcount != 1:
+                     .values(status="planning", label_counts={}, owner=process_token())).rowcount != 1:
             return False
         s.add(GoalTransition(goal_id=goal_id, from_status=status, to_status="planning", reason="started"))
     return True
+
+
+def _proc_start(pid: int) -> str:
+    """A process's start time in clock ticks (/proc/<pid>/stat field 22); "" when it does not exist or there is no
+    /proc. With the pid it names one process: a reused pid has another start time."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[-1].split()
+    except OSError:
+        return ""
+    return fields[19] if len(fields) > 19 else ""
+
+
+@functools.cache
+def process_token() -> str:
+    """This process as a goal's owner (V25): `<pid>:<start time>`."""
+    return f"{os.getpid()}:{_proc_start(os.getpid())}"
+
+
+def owner_alive(owner: str) -> bool:
+    """Whether the process a goal's owner names still runs. Without /proc only the pid is checked."""
+    pid_text, _, start = owner.partition(":")
+    try:
+        pid = int(pid_text)
+    except ValueError:
+        return False
+    if Path("/proc/self/stat").exists():
+        return bool(start) and _proc_start(pid) == start
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def reclaim_orphans() -> list[int]:
+    """V25: a planning/running goal whose owning process ended (a CLI run, a live script, a thread of a process that
+    exited) goes back to recovering, as a restart would; the caller queues it again and the checkpoint resumes its
+    iteration. A goal without an owner (taken before owners were recorded) is left to the next restart."""
+    from sqlalchemy import update
+
+    from agent_company.db import GoalTransition
+
+    me = process_token()
+    with session() as s:
+        rows = [(g.id, g.status, g.owner) for g in s.scalars(
+            select(Goal).where(Goal.status.in_(("planning", "running")), Goal.owner != ""))]
+    ids: list[int] = []
+    for gid, status, owner in rows:
+        if owner == me or owner_alive(owner):
+            continue
+        with session() as s:  # conditional: a goal taken again or moved on meanwhile is left alone
+            if s.execute(update(Goal).where(Goal.id == gid, Goal.status == status, Goal.owner == owner)
+                         .values(status="recovering", label_counts={}, owner="")).rowcount != 1:
+                continue
+            s.add(GoalTransition(goal_id=gid, from_status=status, to_status="recovering",
+                                 reason="the process running it ended"))
+            log_event("goal", f"goal #{gid} was {status} in process {owner}, which ended: resumed", goal_id=gid, s=s)
+        ids.append(gid)
+    return ids
 
 
 def _store_label_counts(goal_id: int) -> None:
@@ -2690,10 +2752,14 @@ class GoalQueue:
         from agent_company import workflow
 
         ids: list[int] = []
+        me = process_token()
         with session() as s:  # resume goals interrupted by a restart
             for g in s.scalars(select(Goal).where(Goal.status.in_(["queued", *workflow.WORKING]))):
+                if g.status in ("planning", "running") and g.owner and g.owner != me and owner_alive(g.owner):
+                    continue  # V25: another process (a CLI run) still runs it; reclaim_orphans takes it if that ends
                 if g.status != "queued":
                     workflow.set_status(s, g, "recovering", "server restarted", "system")
+                    g.owner = ""
                 ids.append(g.id)
         for gid in ids:
             self._put(gid)
@@ -2731,6 +2797,8 @@ class GoalQueue:
                 for gid in ids:
                     if gid not in self.seen:
                         self.submit(gid)
+                for gid in reclaim_orphans():  # V25: goals whose own process ended
+                    self.submit(gid)
                 resume_after_quota()  # S02-R-03: a new UTC day
                 registry.recovery_tick()  # S02-FR-18: probe the models of degraded agents when due
             except Exception:  # noqa: BLE001 - try again on the next tick

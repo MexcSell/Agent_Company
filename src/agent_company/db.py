@@ -512,6 +512,9 @@ class Goal(Base):
     trial: Mapped[dict[str, Any]] = mapped_column(default=dict)
     # cached mission.report labels of a finished goal; empty = not cached (mission.label_counts)
     label_counts: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # V25: the process that took it (`<pid>:<start time>`, loop.process_token); a planning/running goal whose process
+    # ended goes back to recovering (loop.reclaim_orphans). "" = taken before owners were recorded
+    owner: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
