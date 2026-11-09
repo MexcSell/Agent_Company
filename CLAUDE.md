@@ -138,6 +138,10 @@ feature came from.
   `containers.py` (Docker and LXD VMs on the host: install, start, clean up; admin-only);
   `machines.py` (Machines view, from AXoR in /home/thomas/axor-3.0.zip: Linux/Windows KVM VMs as Docker
   containers with a noVNC console relayed over a WebSocket; admin-only; cleanup never prunes them);
+  `approvals.py` (AICO UI-APPR-01: one queue of what waits for a person, `GET /api/approvals`; the list decides only
+  decisions and follow-up proposals, the rest open their page) + `dashboard.py` (UI-DASH: `GET /api/dashboard?period=`
+  counted figures with the period before, project phase `phase` derived per UI-D-06, live goals, token share, room
+  accept rates, finished goals; `static/dashboard.js`);
   `a2a.py` (G-R-06: the A2A 1.0 agent card and JSON-RPC `SendMessage`/`GetTask`/`ListTasks`/`CancelTask` for
   issued bearer clients (`a2a_clients`, `a2a_tasks`); tasks become `origin="a2a"` goals that always wait for approval);
   `marketplace.py` (REQ-002 agent marketplace: a repository URL or uploaded package fetched as untrusted data into

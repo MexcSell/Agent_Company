@@ -145,7 +145,10 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
 - **UI-DASH-09 Team performance**: per room accepted / failed tasks in the period (`performance.py`), as bars.
 - **UI-DASH-10 Recent completion reports and evolution events**: the last finished goals with their mission report
   link; the last definition/experiment/org changes.
-- Status: partial (WEB-DASH-01…03 exist: six figures, activity, usage table).
+- Status: **done** (P0-2): `static/dashboard.js` (moved out of app.js), `dashboard.py` + `GET /api/dashboard`,
+  `approvals.py` + `GET /api/approvals`, `tests/test_dashboard_approvals.py`. UI-DASH-08 shows the token share; the
+  limit windows stay on the Models page. UI-DASH-10 shows finished goals with their mission report; evolution events
+  join it with P1-5 (org versions do not exist yet).
 
 ## 3. General Manager page (P0) — the primary control surface
 
@@ -311,7 +314,8 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
 - **UI-NOTE-01 Notifications page** (update_5 13-1): All / Unread / Action needed; category (completion, approval,
   blocker, failure, quality, evolution, security), severity, source, affected object link, required action, read
   state; the right pane shows the selected item with its actions. Duplicates are grouped ("×n").
-- Status: partial (notifications exist; categories, grouping and the approvals endpoint are open).
+- Status: partial (UI-APPR-01 **done** in P0-2: `approvals.py`, `GET /api/approvals`, used by the Dashboard; the
+  Notifications page with categories and grouping is open).
 
 ## 14. Settings (P2)
 

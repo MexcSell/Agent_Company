@@ -283,7 +283,7 @@ function renderRail() {
   if (!me) return;
   const g = navGroups(), rail = $("#rail");
   rail.classList.add("sidebar");
-  rail.innerHTML = `<div class="sb-brand"><span class="sb-logo">${icon("companymap")}</span><div class="sb-brand-text"><strong>Agent Company</strong><span>Autonomous Engineering Organization</span></div><button class="sb-collapse" id="sb-collapse" aria-label="Toggle sidebar">↔</button></div><div class="sb-groups">${groupedMarkup(g)}${railEditing ? `<section class="sb-group"><h3>Hidden</h3><div class="sb-items" data-group="hidden">${g.hidden.map(railButton).join("")}</div></section>` : ""}</div>
+  rail.innerHTML = `<div class="sb-brand"><span class="sb-logo">${icon("network", 20)}</span><div class="sb-brand-text"><strong>Agent Company</strong><span title="Autonomous Engineering Organization">Autonomous Engineering Org.</span></div><button class="sb-collapse" id="sb-collapse" aria-label="Toggle sidebar" title="Collapse or expand the sidebar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button></div><div class="sb-groups">${groupedMarkup(g)}${railEditing ? `<section class="sb-group"><h3>Hidden</h3><div class="sb-items" data-group="hidden">${g.hidden.map(railButton).join("")}</div></section>` : ""}</div>
     ${me.is_admin ? `<button class="rail-edit" id="rail-edit" title="Edit navigation">${icon(railEditing ? "check" : "grip",18)}</button>` : ""}${sidebarDetails()}
     <div class="sb-bottom">${(g.groups[0]?.items || []).slice(0,4).map(railButton).join("")}<button id="sb-more">More</button></div>`;
   wireSidebar(rail);
@@ -623,25 +623,6 @@ document.addEventListener("keydown", (e) => {
   if (!$("#modal").hidden) closeModal();
   else if ($("#drawer") && !$("#drawer").hidden) closeDrawer();
 });
-
-// --- dashboard ------------------------------------------------------------------
-async function viewDashboard() {
-  const [o, u, ev] = await Promise.all([api("/api/overview"), api("/api/usage"), api("/api/events")]);
-  const k = (label, value) => `<div class="card kpi"><div class="label">${label}</div><div class="value">${value}</div></div>`;
-  $("#view").innerHTML = `<div class="grid kpis">
-    ${k("Running goals", o.goals.running || 0)}${k("Awaiting approval", o.goals.awaiting_approval || 0)}
-    ${k("Busy agents", o.agents.busy || 0)}${k("Idle agents", o.agents.idle || 0)}
-    ${k("Knowledge pages", fmt.format(o.documents))}${k("Spend (all time)", money(o.usage.cost))}</div>
-    <div class="grid two" style="margin-top:12px">
-      <div class="card"><h2>Recent activity</h2><div class="events">${ev.slice(-25).reverse().map((e) => `<div><span class="k">${esc(e.kind)}</span>${esc(e.message)} <span class="muted">${ago(e.at)}</span></div>`).join("") || '<span class="muted">Nothing yet. Create a goal.</span>'}</div></div>
-      <div class="card"><h2>Usage by model</h2><p class="muted">Daily reset in ${dur(u.resets.daily_in_seconds)} · weekly reset in ${dur(u.resets.weekly_in_seconds)} (UTC)</p>${usageTable(u)}</div>
-    </div>`;
-}
-function usageTable(u) {
-  const lim = (w) => (w.limit ? ` / ${fmt.format(w.limit)}` : "");
-  return `<div class="table-wrap"><table><tr><th>Model</th><th class="num">Today tokens</th><th class="num">Today runs</th><th class="num">Week tokens</th><th class="num">Week runs</th><th class="num">Week cost</th></tr>
-  ${u.models.map((m) => `<tr><td>${esc(m.name)}</td><td class="num">${fmt.format(m.daily.tokens)}${lim(m.daily)}</td><td class="num">${m.daily.runs}</td><td class="num">${fmt.format(m.weekly.tokens)}${lim(m.weekly)}</td><td class="num">${m.weekly.runs}</td><td class="num">${money(m.weekly.cost)}</td></tr>`).join("")}</table></div>`;
-}
 
 // --- goals: the Goals page (a new goal, the list by status); a goal opens in a modal
 let selectedGoal = null, goalFilter = "all";
@@ -1001,7 +982,6 @@ function setFavicon(o) {
   document.title = parts.length ? `(${parts.join(" · ")}) Agent Company` : "Agent Company";
 }
 
-registerView({ id: "dashboard", title: "Dashboard", icon: "dashboard" }, viewDashboard);
 registerView({ id: "goals", title: "Goals", icon: "goals" }, viewGoals);
 registerView({ id: "research", title: "Research", icon: "research" }, viewResearch);
 registerView({ id: "users", title: "Users", icon: "users", admin: true }, viewUsers);

@@ -24,12 +24,14 @@ from starlette.background import BackgroundTask
 from agent_company import (
     a2a,
     agentdefs,
+    approvals,
     auth,
     blackboard,
     bridge,
     budgets,
     catalog,
     containers,
+    dashboard,
     decisions,
     evaluation,
     evolution,
@@ -1054,6 +1056,24 @@ def create_app(start_background: bool = True) -> FastAPI:
                 "pending_proposals": proposals, "audit_last": audit_last, "build": static_build(),
                 "stopped": (bool(governance.emergency()) or bool(governance.stops())) if user["is_admin"] else False,
                 "stop_level": governance.stop_level()}  # every user sees the level (S15-R-01), not its scope
+
+    @app.get("/api/approvals")
+    def approvals_queue(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        """UI-APPR-01: one list of what waits for a person (approvals.py), with counts per kind."""
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        items = approvals.queue(user, seen)
+        return {"items": items, "counts": approvals.counts(items), "total": len(items)}
+
+    @app.get("/api/dashboard")
+    def dashboard_report(period: str = "24h", user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        """UI-DASH: the Dashboard's figures for 24h|7d|30d (dashboard.py); the overview, events and approvals
+        come from their own endpoints."""
+        if period not in dashboard.PERIODS:
+            raise HTTPException(400, f"period is one of {', '.join(dashboard.PERIODS)}")
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        return dashboard.report(user, period, seen)
 
     # --- agents ---
     @app.get("/api/rooms")

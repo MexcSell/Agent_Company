@@ -116,13 +116,28 @@ specification in [WORKSPACE.md](WORKSPACE.md); §15 here summarises it and lists
 
 ## 4. Dashboard
 
-- **WEB-DASH-01** Six figures: Running goals, Awaiting approval, Busy agents, Idle agents, Knowledge pages,
-  Spend (all time).
-- **WEB-DASH-02** "Recent activity": the newest 25 events (kind, message, how long ago); empty state "Nothing yet.
-  Create a goal."
-- **WEB-DASH-03** "Usage by model": per model the tokens and runs today, tokens and runs this week, and cost this
-  week, with the limit after the figure when one is set; above it the time until the daily and weekly reset (UTC).
-  Data: `/api/overview`, `/api/usage`, `/api/events`.
+- **WEB-DASH-01** Header "Company Overview" with the date, the company status (Operating, Paused, Degraded, Stopped,
+  from `/api/overview`) and a period menu (Last 24 hours, 7 days, 30 days; kept per browser, `ac.dashPeriod`).
+- **WEB-DASH-02** Six KPI tiles, each a link: Running goals (queued · paused), Awaiting approval (the approvals
+  queue's total), Active projects (blocked), Busy agents / registered, Tasks running · blocked (tasks done against
+  the period before), Spend in the period (against the period before). A trend is shown only when the period
+  before was counted.
+- **WEB-DASH-03** General Manager card: the GM's name, model, state, how many items wait for a person, a message box
+  that sends to a chosen project's command window and opens it, and *Create a project*, *Check project status*,
+  *View reports*, *Manage teams*.
+- **WEB-DASH-04** Active projects: name, phase (Draft, Planning, Active, Blocked, QA / Review, Release ready, Paused;
+  derived, `dashboard.phase`), progress (`management.progress`), live goals, agents, next milestone (overdue badge).
+- **WEB-DASH-05** Pending approvals from `GET /api/approvals`: goals awaiting merge, decisions for a person,
+  follow-up proposals, definition candidates, recruitments, experiments in review, draft requirements per project
+  and account requests; **Review** opens the item, **Approve**/**Reject** only for decisions and follow-up proposals.
+- **WEB-DASH-06** Company lifecycle: the Discover → Plan → Execute → Critique → Validate → Learn stepper of a chosen
+  live goal (the Company map's derivation) and how many live goals are at each step.
+- **WEB-DASH-07** Recent activity (Live): the eight newest events but ranking runs, coloured by outcome, linked to
+  their goal. Model usage: a donut of each model's token share in the period with runs and tokens. Team
+  performance: per room the share of finished tasks accepted, as bars. Recent completions: goals merged or failed
+  in the period with their mission report.
+  Data: `/api/overview`, `/api/dashboard?period=…`, `/api/events`, `/api/approvals`. A live redraw replaces a card
+  only when it changed, so the message box keeps its text.
 
 ## 5. Mission (Simple mode)
 
