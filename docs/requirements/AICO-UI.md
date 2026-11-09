@@ -276,7 +276,13 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
 - **UI-DEL-03 Completion report** sections (PDF p17): overview, requirements and fulfilment, features, architecture
   (ADRs), team summary, development, evaluation, limitations, deployment notes, artifacts, next steps — built from
   `mission.py` plus traceability, team history and ADRs.
-- Status: open (mission report and SBOM exist; the stored record and page are new).
+- Status: **done** (P1-3): `deliverables.py`, table `deliverables` (one row per goal, unique), recorded by
+  `loop._record_release` in `approve` and in the merge without approval; when it cannot be stored the merge stands,
+  an error event and a warning notification are written and completion is not reported (no "approved and merged"
+  message, no "was merged" notification). `GET /api/deliverables[?project_id]`, `/api/deliverables/{id}`,
+  `/download[?what=sbom]`; `static/deliverables.js` (`#/deliverables`); `tests/test_deliverables.py`. No tag is
+  created (the column stays empty). The merge without approval still skips `requirements.on_merged` and
+  `dependencies.on_merged` (existing gap, unchanged).
 
 ## 8. Evaluation & QA (P1)
 

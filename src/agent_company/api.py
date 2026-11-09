@@ -32,6 +32,7 @@ from agent_company import (
     catalog,
     containers,
     dashboard,
+    deliverables,
     decisions,
     evaluation,
     evolution,
@@ -1080,6 +1081,39 @@ def create_app(start_background: bool = True) -> FastAPI:
         with session() as s:
             seen = _visible_project_ids(s, user)
         return dashboard.report(user, period, seen)
+
+    @app.get("/api/deliverables")
+    def deliverables_list(project_id: int | None = None, user: dict[str, Any] = Depends(current_user)
+                          ) -> list[dict[str, Any]]:
+        """UI-DEL-02: release records, newest first, of the projects the user may see."""
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        return deliverables.list_deliverables(seen, project_id)
+
+    def _deliverable(deliverable_id: int, user: dict[str, Any]) -> dict[str, Any]:
+        d = deliverables.get(deliverable_id)
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        if seen is not None and (d["project_id"] is None or d["project_id"] not in seen):
+            raise KeyError(deliverable_id)
+        return d
+
+    @app.get("/api/deliverables/{deliverable_id}")
+    def deliverable_get(deliverable_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return _deliverable(deliverable_id, user)
+
+    @app.get("/api/deliverables/{deliverable_id}/download")
+    def deliverable_download(deliverable_id: int, what: str = "report", user: dict[str, Any] = Depends(current_user)
+                             ) -> Any:
+        """The completion report (Markdown, as stored) or the SBOM (CycloneDX JSON) of a release record."""
+        d = _deliverable(deliverable_id, user)
+        if what == "sbom":
+            if not d["sbom_path"] or not Path(d["sbom_path"]).is_file():
+                raise HTTPException(404, "no SBOM was written for this merge")
+            return Response(Path(d["sbom_path"]).read_bytes(), media_type="application/json", headers={
+                "Content-Disposition": f'attachment; filename="sbom-{d["merge_commit"][:12]}.cdx.json"'})
+        return Response(d["report_md"], media_type="text/markdown; charset=utf-8", headers={
+            "Content-Disposition": f'attachment; filename="completion-goal-{d["goal_id"]}.md"'})
 
     @app.get("/api/projects-portfolio")
     def projects_portfolio(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:

@@ -1376,6 +1376,31 @@ class Notification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
 
+class Deliverable(Base):
+    """AICO UI-DEL-01: the release record of a merged goal, stored at the merge (deliverables.py): commit, branches,
+    remote, SBOM path, changed files, acceptance labels, who approved, and the completion report with its SHA-256.
+    ready | superseded (a newer record of the same project)."""
+
+    __tablename__ = "deliverables"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    goal_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(256), default="")
+    merge_commit: Mapped[str] = mapped_column(String(64), default="")
+    branch: Mapped[str] = mapped_column(String(256), default="")
+    base_branch: Mapped[str] = mapped_column(String(256), default="")
+    tag: Mapped[str] = mapped_column(String(128), default="")
+    remote_url: Mapped[str] = mapped_column(String(512), default="")
+    sbom_path: Mapped[str] = mapped_column(String(512), default="")
+    report_md: Mapped[str] = mapped_column(Text, default="")
+    checksum: Mapped[str] = mapped_column(String(64), default="")
+    acceptance: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"verified": n, "partial": n, "failed": n}
+    changed_files: Mapped[list[Any]] = mapped_column(default=list)
+    approved_by: Mapped[str] = mapped_column(String(128), default="")
+    status: Mapped[str] = mapped_column(String(16), default="ready")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class Decision(Base):
     """A recorded decision with its alternatives and evidence (decisions.py, SPEC-04 S04-R-02)."""
 

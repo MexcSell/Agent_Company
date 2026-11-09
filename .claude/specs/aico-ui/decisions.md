@@ -38,3 +38,10 @@ with the full suite and headless screenshots; later phases are written and check
   column: one place decides, `policies.effective`.
 - The Evaluation tab's action is labelled Reject, because `loop.reject` ends a goal; a reopen ("return to
   development") would be a new goal transition and stays open.
+
+## P1-1…P1-3
+- Teams are rooms plus live goals' teams (UI-D-07); the Agents page keeps its view id `agents` and is titled
+  Teams & Agents, so links and saved layouts keep working.
+- Workflows are read-only: retrying a task inside a running DAG belongs to the loop; the drawer points to the goal.
+- A release record is written after the goal is marked approved (the mission report needs a finished goal) and before
+  any completion message or notification; a failure leaves the merge in place and says so.

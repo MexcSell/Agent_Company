@@ -1691,7 +1691,8 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                         status, note = "awaiting_approval", f"\nThe automatic merge was refused: {e}"
                         log_event("goal", f"automatic merge refused: {e}", goal_id=goal_id)
                 _update_goal(goal_id, status=status, result=_summary(goal_id, iteration, report) + note)
-                _notify_goal(goal_id, status)
+                if status != "approved" or _record_release(goal_id, _merged_sha(goal_id), "auto (no approval required)"):
+                    _notify_goal(goal_id, status)
                 if status == "approved":
                     _push(goal_id)
                 elif status == "awaiting_approval":  # owner policy auto_merge: approve() decides, never fails it
@@ -2282,6 +2283,34 @@ def _merge(goal_id: int) -> str:
     return _once(f"goal:{goal_id}:{g.iteration}:merge", merge)
 
 
+def _merged_sha(goal_id: int) -> str:
+    """The merge commit `_merge` recorded for the goal's iteration (its once-only operation), else ''."""
+    from agent_company.db import Operation
+
+    g = _goal(goal_id)
+    with session() as s:
+        op = s.get(Operation, f"goal:{goal_id}:{g.iteration}:merge")
+        return str(((op.result or {}).get("v") if op is not None and op.status == "done" else "") or "")
+
+
+def _record_release(goal_id: int, sha: str, actor: str) -> bool:
+    """UI-DEL-01: store the release record; False (logged, a warning sent) when it could not be stored, so the
+    caller does not report the goal as complete."""
+    from agent_company import deliverables
+    from agent_company.governance import notify
+
+    try:
+        deliverables.record(goal_id, sha or _merged_sha(goal_id), actor)
+        return True
+    except Exception as e:  # noqa: BLE001 - the merge stands; completion waits for a person
+        log_event("error", f"release record not stored: {type(e).__name__}: {e}", goal_id=goal_id)
+        g = _goal(goal_id)
+        notify(f"Goal #{goal_id} merged, but its release record was not stored"[:256],
+               f"{g.title}\n{type(e).__name__}: {e}\nCompletion is not reported until it is stored.",
+               level="warning", source="goal", goal_id=goal_id, project_id=g.project_id)
+        return False
+
+
 def _push(goal_id: int) -> None:
     from agent_company.gitsync import auto_push
 
@@ -2327,7 +2356,8 @@ def approve(goal_id: int, actor: str = "system") -> dict[str, Any]:
     dependencies.on_merged(goal_id, sha)  # S08-R-05: the dependency changes this merge brought in
     from agent_company.projects import post_for_goal
 
-    post_for_goal(goal_id, f"Goal #{goal_id} approved and merged ({sha[:10]}).", kind="result")
+    if _record_release(goal_id, sha, actor):  # UI-DEL-01: completion is reported only once the record is stored
+        post_for_goal(goal_id, f"Goal #{goal_id} approved and merged ({sha[:10]}).", kind="result")
     _push(goal_id)
     return {"status": "approved", "merge_commit": sha}
 

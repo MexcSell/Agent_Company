@@ -853,3 +853,11 @@ button.wf-node:hover { border-color: var(--accent); border-left-color: var(--c);
 .wf-node.info .wf-dot { animation: wf-pulse 1.6s ease-in-out infinite; }
 @keyframes wf-pulse { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .wf-node.info .wf-dot { animation: none; } }
+
+/* ---------- Deliverables (AICO UI-DEL-02, deliverables.js) ---------- */
+.del-card { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.del-card.old { opacity: .7; }
+.del-card a { color: inherit; } .del-card .gm-kv a { color: var(--accent); }
+.del-actions { gap: var(--space-2); flex-wrap: wrap; }
+.del-actions .btn { flex: 0 0 auto; text-decoration: none; }
+.del-md { max-height: 65vh; overflow: auto; }

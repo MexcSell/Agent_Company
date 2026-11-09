@@ -381,6 +381,14 @@ Tabs: Organisation, Agent network, Tools & MCP, Skills & plugins, Marketplace (a
 - **WEB-WF-02** Tab Templates: each goal kind's workflow template in force (roles, writes, iterations, mode, review,
   checks, versions, goals run under it); read-only.
 
+## 8b. Deliverables
+
+- **WEB-DEL-01** `#/deliverables`: per project the release records, newest first, Ready (the project's newest) or
+  Superseded: title (opens the goal), merge commit (a GitHub commit link when the remote is GitHub), branches, QA
+  labels (verified / partial / failed from the gate and reviews), changed files, SBOM, who approved, the report's
+  SHA-256; **Final report** (the stored completion report: overview, requirements and fulfilment, ADRs, team,
+  deployment notes, artifacts, then the mission report), **Download .md**, **SBOM**, **Changed files**.
+
 ## 9. Company map (read-only)
 
 - **WEB-MAP-01** The room tree as nested boxes: the engine line (General Management → Organization Engine →

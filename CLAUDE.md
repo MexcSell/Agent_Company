@@ -148,7 +148,9 @@ feature came from.
   `dashboard.portfolio`, `dashboard.project_tasks` + `board_column`; project fields `target_outcome`,
   `related_project_id`, `team_strategy`); `static/teams.js` (UI-TEAM/UI-AG: Teams & Agents page's Teams tab (rooms +
   live goals' teams) and Agents grid, the agent card's Evaluation and Memory tabs); `static/workflows.js` (UI-WF: execution graph per goal from
-  `depends_on`, gate and approval nodes, node drawer, agent messages, templates; read-only);
+  `depends_on`, gate and approval nodes, node drawer, agent messages, templates; read-only); `deliverables.py` (UI-DEL:
+  one release record per merged goal with its completion report and SHA-256, stored by `loop._record_release` before
+  completion is reported; a newer one supersedes; `static/deliverables.js`);
   `a2a.py` (G-R-06: the A2A 1.0 agent card and JSON-RPC `SendMessage`/`GetTask`/`ListTasks`/`CancelTask` for
   issued bearer clients (`a2a_clients`, `a2a_tasks`); tasks become `origin="a2a"` goals that always wait for approval);
   `marketplace.py` (REQ-002 agent marketplace: a repository URL or uploaded package fetched as untrusted data into
