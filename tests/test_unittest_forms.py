@@ -8,6 +8,9 @@ from agent_company import checks, executors
 FORMS = ["python3 -m unittest", "python3 -B -m unittest", "python -m unittest"]
 BARE_BASH = ["Bash(python3:*)", "Bash(python:*)", "Bash(python3 -c:*)", "Bash(python -c:*)", "Bash(python3 -B:*)"]
 BARE_SHELL = ["shell(python3)", "shell(python)", "shell(python3 -c)", "shell(python -c)", "shell(python3 -B)"]
+# goal 412: writing runs may run `-c` (test_python_c_forms.py); bare python stays forbidden in every list
+C_BASH = {"Bash(python3 -c:*)", "Bash(python -c:*)"}
+C_SHELL = {"shell(python3 -c)", "shell(python -c)"}
 
 
 @pytest.mark.parametrize("name", ["CLAUDE_BASH", "CLAUDE_CHECK"])
@@ -15,7 +18,8 @@ def test_claude_lists_allow_unittest(name):
     tools = getattr(executors, name)
     for form in FORMS:
         assert f"Bash({form}:*)" in tools, (name, form)
-    assert not set(BARE_BASH) & set(tools)
+    bare = set(BARE_BASH) - C_BASH if name == "CLAUDE_BASH" else set(BARE_BASH)
+    assert not bare & set(tools)
 
 
 @pytest.mark.parametrize("name", ["COPILOT_SHELL", "COPILOT_CHECK"])
@@ -23,7 +27,8 @@ def test_copilot_lists_allow_unittest(name):
     tools = getattr(executors, name)
     for form in FORMS:
         assert f"shell({form})" in tools, (name, form)
-    assert not set(BARE_SHELL) & set(tools)
+    bare = set(BARE_SHELL) - C_SHELL if name == "COPILOT_SHELL" else set(BARE_SHELL)
+    assert not bare & set(tools)
 
 
 def test_read_only_grants_get_the_unittest_forms_and_no_writes():
