@@ -5,10 +5,13 @@
   diagnose  an agent whose recent success rate is low gets a failure-aware candidate
             playbook (warnings first) instead of a direct change
   smoke     with `candidate_smoke` on, the candidate first runs the smoke suite against the current
-            playbook, off the goal loop; it reaches users' goals only if it passes at least as many
-            runs (S13-D-02), else it is rolled back
-  evaluate  the candidate runs for EVAL_WINDOW tasks (the canary); it is promoted to a new version
-            only if its success rate beats the baseline by `min_improvement` points
+            playbook, off the goal loop, `candidate_repeats` times per side, then the held-out
+            `holdout_suite` (hidden checks) the same way; it reaches users' goals only if it passes at
+            least as many runs on each and breaks no solved task (S13-D-02, G-R-11, V28), else it is
+            rolled back
+  evaluate  the candidate runs for `canary_window` tasks (the canary); it is promoted to a new version
+            only if its success rate beats the baseline by `min_improvement` points and reaches
+            `canary_min_pass` (V28)
             (a tie keeps the current version), else rolled back, as soon as the rest of the window
             can no longer reach that
   flag      an agent failing more than 70 % of its last 10 tasks is flagged for review
@@ -39,11 +42,15 @@ _smoking: set[int] = set()  # agents whose smoke trial is queued or running
 _smoking_lock = threading.Lock()
 
 
+def _window(exp: dict[str, Any]) -> int:
+    """The canary length fixed when the trial started; older trials keep the length they started with."""
+    return int(exp.get("window") or 3)
+
+
 def _spawn(fn: Callable[[], Any]) -> None:  # tests replace it
     threading.Thread(target=fn, daemon=True, name="smoke-trial").start()
 
 
-EVAL_WINDOW = 3
 DIAGNOSE_WINDOW = 6
 LOW_SUCCESS = 0.5
 CURATE_EVERY = 3
@@ -119,12 +126,14 @@ def _after_task(agent_id: int, success: bool) -> None:
 
             exp["outcomes"] = [*exp.get("outcomes", []), success]
             outs, n = exp["outcomes"], len(exp["outcomes"])
-            need = min(1.0, exp["baseline"] + settings().min_improvement / 100)
-            canary = {"window": EVAL_WINDOW, "baseline": exp["baseline"], "needed": round(min(need, 1), 3),
+            window = _window(exp)
+            # S13-D-01 plus V28's floor: beat the baseline by min_improvement and pass at least canary_min_pass
+            need = min(1.0, max(exp["baseline"] + settings().min_improvement / 100, settings().canary_min_pass / 100))
+            canary = {"window": window, "baseline": exp["baseline"], "needed": round(min(need, 1), 3),
                       "outcomes": outs}
             # LE-018: the canary ends as soon as the rest of the window cannot reach what promotion needs
-            hopeless = (sum(outs) + EVAL_WINDOW - n) / EVAL_WINDOW < need - 1e-9
-            if n >= EVAL_WINDOW or hopeless:
+            hopeless = (sum(outs) + window - n) / window < need - 1e-9
+            if n >= window or hopeless:
                 rate = sum(outs) / n
                 _event(s, "evaluate", a.id, f"{a.name}: candidate {rate:.0%} vs baseline {exp['baseline']:.0%} "
                        f"(n={n}, needs {min(need, 1):.0%})", candidate=rate, baseline=exp["baseline"], samples=n,
@@ -223,60 +232,80 @@ def _set_side(agent_id: int, side: str) -> bool:
         return True
 
 
-def smoke_trial(agent_id: int, repeats: int = 1) -> dict[str, float]:
+def smoke_trial(agent_id: int, repeats: int | None = None) -> dict[str, float]:
     """Run the smoke suite with the current playbook, then with the candidate (S13-D-02, S13-R-05: same suite, same
-    repeats). The candidate goes on to the live trial if it passes at least as many runs and breaks no task the
-    current playbook solved (G-R-11), else it is rolled back."""
+    repeats), then the held-out suite (`holdout_suite`, V28) the same way. The candidate goes on to the live trial if
+    it passes at least as many runs on each and breaks no task the current playbook solved (G-R-11), else it is
+    rolled back; the held-out suite runs only once the smoke suite passed. Returns the smoke suite's pass rates."""
     from agent_company import evaluation, experiments
 
     results: dict[str, float] = {}
-    metrics: dict[str, dict[str, Any]] = {}
     try:
         with session() as s:
             a = s.get(Agent, agent_id)
             exp = dict(a.experiment or {}) if a else {}
         suite, exp_id = exp.get("suite") or SMOKE_SUITE, exp.get("experiment_id")
-        repeats = int(exp.get("repeats") or repeats)
+        repeats = int(exp.get("repeats") or repeats or settings().candidate_repeats or 1)
+        holdout = (settings().holdout_suite or "").strip()
+        suites = [suite] + ([holdout] if holdout and holdout != suite else [])
+        per_suite: dict[str, dict[str, float]] = {}
+        broken: list[str] = []
+        done: list[str] = []
         with _smoke_lock:
-            for side in ("baseline", "candidate"):
-                if not _set_side(agent_id, side):
-                    return {}
-                with session() as s:
-                    experiments.update(s, exp_id, status=side)
-                label = f"smoke-agent{agent_id}-{side}-{int(time.time() * 1000)}"
-                # the agent under trial does the work (registry: the trial's trainee), both sides the same suite
-                trial = {"trainee_id": agent_id, "side": side} | ({"experiment_id": exp_id} if exp_id else {})
-                summary = evaluation.run_suite(suite, label, repeats=repeats, trial=trial)
-                results[side] = summary["pass_rate"]
-                # with S09-R-05's dimensions (compliance, tokens, tool failures), as route experiments keep them
-                metrics[side] = experiments.side_metrics(summary) | {"dimensions": summary.get("dimensions") or {}}
-                with session() as s:
-                    experiments.update(s, exp_id, **{side: metrics[side]})
+            for name in suites:
+                rates: dict[str, float] = {}
+                metrics: dict[str, dict[str, Any]] = {}
+                for side in ("baseline", "candidate"):
+                    if not _set_side(agent_id, side):
+                        return {}
+                    with session() as s:
+                        experiments.update(s, exp_id, status=side)
+                    label = f"smoke-agent{agent_id}-{side}-{int(time.time() * 1000)}"
+                    # the agent under trial does the work (registry: the trial's trainee), both sides the same suite
+                    trial = {"trainee_id": agent_id, "side": side} | ({"experiment_id": exp_id} if exp_id else {})
+                    summary = evaluation.run_suite(name, label, repeats=repeats, trial=trial)
+                    rates[side] = summary["pass_rate"]
+                    # with S09-R-05's dimensions (compliance, tokens, tool failures), as route experiments keep them
+                    metrics[side] = experiments.side_metrics(summary) | {"dimensions": summary.get("dimensions") or {}}
+                    if name == suite:
+                        with session() as s:
+                            experiments.update(s, exp_id, **{side: metrics[side]})
+                per_suite[name], done = rates, [*done, name]
+                broken += [f"{t} ({name})" if name != suite else t
+                           for t in experiments.regressions(metrics["baseline"], metrics["candidate"]) or []]
+                if rates["candidate"] < rates["baseline"] or broken:
+                    break  # the held-out suite only runs for a candidate that passed the smoke suite
+        results = per_suite[suite]
         with session() as s:
             a = s.get(Agent, agent_id)
             exp = dict(a.experiment or {}) if a else {}
             if not exp or _stage(exp) != "smoke":
                 return {}
-            broken = experiments.regressions(metrics["baseline"], metrics["candidate"]) or []
-            passed = results["candidate"] >= results["baseline"] and not broken  # G-R-11
-            _event(s, "smoke", a.id, f"{a.name}: candidate {results['candidate']:.0%} vs current "
-                   f"{results['baseline']:.0%} on the {suite} suite"
-                   + (f", breaks {', '.join(broken)}" if broken else ""), passed=passed, **results)
+            passed = len(done) == len(suites) and not broken \
+                and all(r["candidate"] >= r["baseline"] for r in per_suite.values())  # G-R-11, V28
+            where = " and ".join(f"{r['candidate']:.0%} vs current {r['baseline']:.0%} on the {n} suite"
+                                 for n, r in per_suite.items())
+            _event(s, "smoke", a.id, f"{a.name}: candidate {where}" + (f", breaks {', '.join(broken)}" if broken else ""),
+                   passed=passed, repeats=repeats, **results,
+                   **({"holdout": per_suite[holdout]} if holdout in per_suite and holdout != suite else {}))
             cmp = {"pass_rate_change": round(results["candidate"] - results["baseline"], 3), "passed": passed,
-                   "regressions": broken}
+                   "regressions": broken, "repeats": repeats,
+                   "suites": {n: {"baseline": r["baseline"], "candidate": r["candidate"]} for n, r in per_suite.items()}}
             if passed:
                 exp.pop("smoke_side", None)
                 a.experiment = {**exp, "stage": "live", "smoke": results}
-                _event(s, "experiment", a.id, f"{a.name}: trying the candidate playbook for {EVAL_WINDOW} tasks")
+                _event(s, "experiment", a.id, f"{a.name}: trying the candidate playbook for {_window(exp)} tasks")
                 experiments.update(s, exp_id, status="canary", comparison=cmp,
-                                   decision=f"passed the {suite} suite; on live work for {EVAL_WINDOW} tasks")
+                                   decision=f"passed the {' and '.join(suites)} suites; on live work for "
+                                            f"{_window(exp)} tasks")
             else:
                 a.experiment = {}
-                _event(s, "rollback", a.id, f"{a.name}: candidate rolled back after the {suite} suite, "
+                lost = next((n for n, r in per_suite.items() if r["candidate"] < r["baseline"]), done[-1])
+                _event(s, "rollback", a.id, f"{a.name}: candidate rolled back after the {lost} suite, "
                        f"v{a.playbook_version} kept")
                 experiments.update(s, exp_id, status="rolled_back", comparison=cmp,
-                                   decision=(f"breaks {', '.join(broken)} on the {suite} suite" if broken else
-                                             f"worse on the {suite} suite") + f"; v{a.playbook_version} kept")
+                                   decision=(f"breaks {', '.join(broken)}" if broken else f"worse on the {lost} suite")
+                                   + f"; v{a.playbook_version} kept")
         return results
     except Exception as e:  # noqa: BLE001 - a broken suite must not leave a candidate waiting forever
         log_event("error", f"smoke trial of agent {agent_id} failed: {type(e).__name__}: {e}", agent_id=agent_id)
@@ -355,11 +384,12 @@ def _diagnose(s: Session, a: Agent) -> bool:
                                  status="baseline" if smoke else "canary")
         if not smoke:
             experiments.update(s, row.id, decision="candidate_smoke is off: straight to the live trial")
+        window = max(3, settings().canary_window)
         a.experiment = {"playbook": candidate, "baseline": rate, "outcomes": [], "stage": "smoke" if smoke else "live",
-                        "experiment_id": row.id}
+                        "experiment_id": row.id, "window": window}
         _event(s, "diagnose", a.id, f"{a.name}: success rate {rate:.0%} over the last {n} tasks")
         _event(s, "experiment", a.id, f"{a.name}: failure-aware playbook first runs the {SMOKE_SUITE} suite" if smoke
-               else f"{a.name}: trying a failure-aware playbook for {EVAL_WINDOW} tasks")
+               else f"{a.name}: trying a failure-aware playbook for {window} tasks")
     return True
 
 

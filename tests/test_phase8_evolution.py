@@ -64,7 +64,9 @@ def test_the_candidate_is_kept_apart_from_v1_and_both_run_the_same_suite(monkeyp
                                 "candidate": [("a", True), ("b", True), ("c", True)]})
     evolution.smoke_trial(aid)
     # 8.4: the same suite, the same repeats, for v1 and the candidate
-    assert [(suite, side) for suite, side, _ in seen] == [("smoke", "baseline"), ("smoke", "candidate")]
+    assert [(suite, side) for suite, side, _ in seen] == [("smoke", "baseline"), ("smoke", "candidate"),
+                                                          ("python-final", "baseline"), ("python-final", "candidate")]
+    # V28: the held-out suite follows the smoke suite
     assert seen[0][2] == seen[1][2]
     # 8.1: what is recorded per side: correct and failed tasks, compliance, time, tokens, cost, tool failures
     with session() as s:
@@ -94,7 +96,7 @@ def test_a_candidate_that_breaks_what_v1_solved_is_rejected_and_v1_stays(monkeyp
         assert "breaks a" in e.decision
 
 
-@pytest.mark.parametrize("live,promoted", [([True, True, True], True), ([False, False, False], False)])
+@pytest.mark.parametrize("live,promoted", [([True] * 5, True), ([False] * 5, False)])  # V28: 5-task canary
 def test_the_live_canary_promotes_or_rolls_back_and_v1_can_be_restored(monkeypatch, live, promoted):
     """8.6: after the suite, the candidate works live for a window; promoted as a new version (v1 kept and restorable)
     or rolled back automatically."""

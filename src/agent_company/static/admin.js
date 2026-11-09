@@ -103,7 +103,7 @@ function componentsPreview() {
 
 // UI-SET-01: Settings sections, in order; a settings key goes to the first section whose pattern matches it.
 const SET_SECTIONS = [["appearance", "Appearance", null], ["navigation", "Navigation", null], ["connection", "Connection", null],
-  ["governance", "Governance & approvals", /approv|auto_merge|proposal|recruit|qualify|goal_depth|a2a|blocked_commands|task_critic|candidate_smoke|auto_push/],
+  ["governance", "Governance & approvals", /approv|auto_merge|proposal|recruit|qualify|goal_depth|a2a|blocked_commands|task_critic|candidate_smoke|candidate_repeats|holdout_suite|canary_|auto_push/],
   ["limits", "Limits & budgets", /budget|limit|cost|max_|timeout|stuck|quota|iteration|parallel/],
   ["security", "Sandbox & security", /sandbox|dependency|test_stages|classification|secret/],
   ["models", "Models & executors", /^enable_|executor|model|router|codex|copilot|claude/],

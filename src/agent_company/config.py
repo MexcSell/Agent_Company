@@ -80,6 +80,12 @@ class Settings:
     stuck_error_limit: int = 3
     # A candidate playbook must pass the smoke suite before it is tried on users' goals (S13-D-02).
     candidate_smoke: bool = True
+    # V28: how much evidence a playbook promotion rests on: repeats per side of the smoke trial, a held-out suite
+    # (hidden checks) the candidate must also not lose on, the live canary's length and its minimum pass rate (%).
+    candidate_repeats: int = 2
+    holdout_suite: str = "python-final"
+    canary_window: int = 5
+    canary_min_pass: int = 50
     # G-R-14 scheduled benchmark review: off|daily|weekly|monthly, the suite, and its budget per run (0 = never runs).
     benchmark_schedule: str = "off"
     benchmark_suite: str = "smoke"
@@ -211,6 +217,10 @@ def load_settings() -> Settings:
         stuck_repeat_limit=_int("STUCK_REPEAT_LIMIT", 5),
         stuck_error_limit=_int("STUCK_ERROR_LIMIT", 3),
         candidate_smoke=_bool("CANDIDATE_SMOKE", True),
+        candidate_repeats=_int("CANDIDATE_REPEATS", 2),
+        holdout_suite=os.environ.get("HOLDOUT_SUITE", "python-final"),
+        canary_window=_int("CANARY_WINDOW", 5),
+        canary_min_pass=_int("CANARY_MIN_PASS", 50),
         benchmark_schedule=(os.environ.get("BENCHMARK_SCHEDULE") or "off").lower(),
         benchmark_suite=os.environ.get("BENCHMARK_SUITE") or "smoke",
         benchmark_budget_usd=float(os.environ.get("BENCHMARK_BUDGET_USD") or 0),

@@ -109,7 +109,8 @@ feature came from.
   resolved by people; REQ-005 `import_knowledge`: an admin imports a text/Markdown file, a folder inside `data_dir`,
   a chat export or experience reports as `outcome="imported"` items under the root GM, screened and `draft` until a
   person approves them, never in a playbook or definition file)
-  + `evolution.py` (playbook candidates are experiments); `experiments.py` (SPEC-13: baseline vs candidate on one eval
+  + `evolution.py` (playbook candidates are experiments; V28: the smoke suite then the held-out `holdout_suite`,
+  `candidate_repeats` per side, a `canary_window`-task live canary that must also reach `canary_min_pass`); `experiments.py` (SPEC-13: baseline vs candidate on one eval
   suite, review by the E0-E6 policy, canary, rollback; routes only applied by an administrator; G-R-11 a candidate that breaks a task the
   baseline solved is never better (`regressions`); S10-R-02 the platform
   commit in `dataset` and a `budget_usd` that stops route/template experiments; `retrieval` target: ranking weights on

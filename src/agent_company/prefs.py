@@ -56,6 +56,12 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "stuck_error_limit": (int, "A Claude Code or Codex run ends when the same tool call fails with the same error this "
                                "many times (0 = never)"),
     "candidate_smoke": (bool, "A candidate playbook must pass the smoke suite before it is tried on users' goals"),
+    "candidate_repeats": (int, "Repeats per side when a candidate playbook runs the smoke and held-out suites (1-10)"),
+    "holdout_suite": (str, "Held-out suite (hidden checks) a candidate playbook must also not lose on after the smoke "
+                           "suite; empty = none"),
+    "canary_window": (int, "Users' tasks a candidate playbook runs on before it is promoted or rolled back (3-50)"),
+    "canary_min_pass": (int, "Minimum share of the canary's tasks (%) a candidate must pass to be promoted, besides "
+                             "beating the baseline by min_improvement"),
     "benchmark_schedule": (str, "Scheduled benchmark review: 'off', 'daily', 'weekly' or 'monthly' runs of the "
                                 "benchmark suite with real models, compared with the previous run; tasks that no "
                                 "longer pass are notified (needs a budget)"),
@@ -128,6 +134,7 @@ LIMITS: dict[str, tuple[float, float]] = {
     "goal_token_budget": (0, 1_000_000_000), "goal_agent_limit": (0, 16),
     "writing_daily_tokens_per_user": (0, 1_000_000_000),
     "retry_max_attempts": (1, 10), "retry_base_seconds": (0, 600), "retry_max_seconds": (0, 3600),
+    "candidate_repeats": (1, 10), "canary_window": (3, 50), "canary_min_pass": (0, 100),
     "min_improvement": (0, 100), "max_goal_depth": (1, 10), "escalate_after": (1, 10), "cost_overrun_factor": (1, 20),
     "repo_map_chars": (0, 50_000), "stuck_repeat_limit": (0, 100), "stuck_error_limit": (0, 100),
     "approval_blocker_hours": (0, 720), "inactive_days": (1, 3650), "explore_rate": (0, 1),
@@ -202,7 +209,9 @@ def _coerce(key: str, value: Any) -> Any:
             raise ValueError(f"{key} must be between {lo:g} and {hi:g}")
     if key in CHOICES and value not in CHOICES[key]:
         raise ValueError(f"{key} must be one of {sorted(CHOICES[key])}")
-    if key == "benchmark_suite":
+    if key == "holdout_suite" and not value.strip():
+        return ""  # no held-out stage
+    if key in ("benchmark_suite", "holdout_suite"):
         from agent_company import evaluation
 
         value = value.strip()
@@ -211,7 +220,7 @@ def _coerce(key: str, value: Any) -> Any:
                 raise ValueError("a suite name, not a path")
             evaluation.load_suite(value)
         except (OSError, ValueError, json.JSONDecodeError) as e:
-            raise ValueError(f"benchmark_suite: {value!r} is not a usable suite ({e})") from e
+            raise ValueError(f"{key}: {value!r} is not a usable suite ({e})") from e
     return value
 
 

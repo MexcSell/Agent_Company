@@ -58,3 +58,6 @@ with the full suite and headless screenshots; later phases are written and check
   all are busy the role's other idle agents take the work, so a topic never waits on one agent or clones it.
 - V15/V26 needed no code: Models → Routes → Assign models (`router.auto_routes`) gives `developer` Claude Code and
   `qa` Codex CLI and cleared the GM's own model.
+- V28 raises the evidence, never lowers it: smoke repeats 1 → 2, a held-out suite (`python-final`, hidden checks)
+  after a passed smoke suite, the canary 3 → 5 tasks, and a 50 % live floor besides beating the baseline. Each is a
+  setting (Settings → Governance). A trial keeps the canary length it started with (`exp["window"]`).

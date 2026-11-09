@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from agent_company import evolution, executors, learning, loop, prefs, registry
 from agent_company.api import create_app
+from agent_company.config import settings
 from agent_company.db import Agent, Lesson, session
 
 
@@ -41,7 +42,7 @@ def test_low_success_starts_an_experiment_then_promotes_or_rolls_back():
         assert exp and exp["playbook"].startswith("AVOID:") and exp["baseline"] < 0.5
     ctx = learning.experience_context(aid)
     assert "(trial version)" in ctx
-    for i in range(evolution.EVAL_WINDOW):  # the trial does better than the baseline
+    for i in range(settings().canary_window):  # the trial does better than the baseline
         learning.learn(aid, None, f"Fixed it {i}.", True, [])
     with session() as s:
         a = s.get(Agent, aid)
@@ -89,7 +90,7 @@ def test_a_candidate_reaches_users_goals_only_after_the_smoke_suite(monkeypatch)
     assert evolution.start_smoke(aid) is False, "one smoke trial per candidate"
     seen = fake_suite(monkeypatch, aid, {"baseline": 0.0, "candidate": 0.67})
     spawned[0]()
-    (b_side, b_eval, b_live), (c_side, c_eval, c_live) = seen
+    (b_side, b_eval, b_live), (c_side, c_eval, c_live) = seen[:2]  # the smoke suite; the held-out one follows
     assert (b_side, b_eval[1], b_live[1]) == ("baseline", False, False)
     assert (c_side, c_eval, c_live[1]) == ("candidate", (exp["playbook"], True), False), \
         "only eval goals see the candidate, and only on its side"
@@ -273,3 +274,61 @@ def test_a_candidate_that_breaks_a_solved_task_is_rolled_back_despite_its_pass_r
         assert s.get(Agent, aid).experiment == {}
     ev = evolution.overview()["events"]
     assert ev[0]["stage"] == "rollback" and "breaks b" in ev[1]["title"]
+
+
+def test_v28_a_candidate_must_also_not_lose_on_the_held_out_suite(monkeypatch):
+    """V28: after the smoke suite, the held-out suite (hidden checks) with the same repeats."""
+    from agent_company import evaluation
+
+    aid = dev_id()
+    assert start_candidate(aid)["stage"] == "smoke"
+    calls = []
+
+    def run_suite(suite, label, repeats=3, only=None, trial=None):
+        side = label.split("-")[2]
+        calls.append((suite, side, repeats))
+        return {"pass_rate": {"smoke": {"baseline": 0.33, "candidate": 0.67},
+                              "python-final": {"baseline": 1.0, "candidate": 0.5}}[suite][side]}
+
+    monkeypatch.setattr(evaluation, "run_suite", run_suite)
+    assert evolution.smoke_trial(aid) == {"baseline": 0.33, "candidate": 0.67}
+    assert calls == [("smoke", "baseline", 2), ("smoke", "candidate", 2),
+                     ("python-final", "baseline", 2), ("python-final", "candidate", 2)]
+    with session() as s:
+        assert s.get(Agent, aid).experiment == {}, "worse on the held-out suite: rolled back"
+    assert "python-final" in evolution.overview()["events"][0]["title"]
+
+
+def test_v28_the_held_out_suite_is_skipped_after_a_failed_smoke_suite_and_can_be_switched_off(monkeypatch):
+    aid = dev_id()
+    start_candidate(aid)
+    seen = fake_suite(monkeypatch, aid, {"baseline": 1.0, "candidate": 0.33})
+    evolution.smoke_trial(aid)
+    assert len(seen) == 2
+    prefs.set_value("holdout_suite", "")
+    aid2 = registry.create_agent("developer", "Second Developer")["id"]
+    start_candidate(aid2)
+    seen = fake_suite(monkeypatch, aid2, {"baseline": 0.0, "candidate": 1.0})
+    evolution.smoke_trial(aid2)
+    assert len(seen) == 2
+    with session() as s:
+        assert s.get(Agent, aid2).experiment["stage"] == "live"
+    with pytest.raises(ValueError):
+        prefs.set_value("holdout_suite", "no-such-suite")
+
+
+def test_v28_a_canary_below_the_minimum_pass_rate_is_not_promoted():
+    """#16 was promoted on 1/3 live: a low baseline plus min_improvement is not enough on its own."""
+    prefs.set_value("candidate_smoke", False)
+    aid = dev_id()
+    exp = start_candidate(aid)  # its last failure is the canary's first outcome
+    assert exp["window"] == 5 and exp["baseline"] == 0.25 and exp["outcomes"] == [False]
+    for ok in (True, True, False):  # 2/4: 3/5 is still reachable
+        learning.learn(aid, None, f"Outcome {ok}.", ok, [])
+    with session() as s:
+        assert len(s.get(Agent, aid).experiment["outcomes"]) == 4
+    learning.learn(aid, None, "Last outcome.", False, [])  # 2/5 = 40 %: beats 25 % + 10 points, not the 50 % floor
+    with session() as s:
+        assert s.get(Agent, aid).experiment == {}
+    stages = [e["stage"] for e in evolution.overview()["events"]]
+    assert "promote" not in stages and "rollback" in stages
