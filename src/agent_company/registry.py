@@ -693,6 +693,16 @@ def resolve_role(role: str, goal_id: int | None = None) -> tuple[str, str | None
     return fallback, (f"{said}; " if said else "") + f"role '{role}' is disabled; using '{fallback}'"
 
 
+def _topic_agents(s, g: Goal | None) -> set[int]:  # noqa: ANN001
+    """The agents an administrator assigned to the goal's topic (its conversation lane); empty for `general`."""
+    if g is None or g.project_id is None or not g.topic or g.topic == "general":
+        return set()
+    from agent_company.db import Topic
+
+    t = s.scalars(select(Topic).where(Topic.project_id == g.project_id, Topic.name == g.topic)).first()
+    return {int(i) for i in (t.agent_ids or [])} if t is not None else set()
+
+
 def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None,
           writes: bool | None = None, critical: bool = False, task_id: int | None = None,
           prefer: int | None = None) -> Agent:
@@ -704,7 +714,8 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
     recruited and linked to similar agents so it can draw on their experience. With `task_id` the decision, its
     candidates and their scores are recorded in the task's contract (`staffing`, AR-018). `prefer` (an agent id: a
     project's own General Manager) takes the work when it is in the pool, healthy and within its quota; busy, a clone
-    of it does (verification phase 5).
+    of it does (verification phase 5). Among idle agents, those an administrator assigned to the goal's topic (or
+    their clones) are ranked first; busy ones are not waited for (V22).
     """
     from agent_company.config import settings
 
@@ -746,6 +757,10 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
             agent, action = (preferred, "assigned") if preferred in idle else (_clone(s, preferred), "cloned")
             why = "the project's own manager"
         elif idle:
+            listed = _topic_agents(s, g)  # V22: a topic's assigned agents take its goals' work when they are free
+            mine = [a for a in idle if a.id in listed or a.parent_id in listed]
+            if mine:
+                idle, why = mine, "assigned to the goal's topic"
             ranks = _rank(s, idle, skills, team)
             agent = max(idle, key=lambda a: ranks[a.id]["score"])
             action = "assigned"

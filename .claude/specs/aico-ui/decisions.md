@@ -54,3 +54,7 @@ with the full suite and headless screenshots; later phases are written and check
 - The records after a merge (`selfevolve`, `requirements`, `dependencies`) live in `loop._on_merged`, used by
   `approve()` and the merge without approval; `_push` stays separate because the two paths push differently. A
   failing record is logged: the merge has already happened.
+- V22: a topic's assigned agents are a preference, not a filter. Idle ones (or their clones) are ranked first; when
+  all are busy the role's other idle agents take the work, so a topic never waits on one agent or clones it.
+- V15/V26 needed no code: Models → Routes → Assign models (`router.auto_routes`) gives `developer` Claude Code and
+  `qa` Codex CLI and cleared the GM's own model.

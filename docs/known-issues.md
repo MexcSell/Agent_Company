@@ -34,7 +34,7 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 |---|---------|--------|
 | A1 | The first account becomes administrator (with a root shell in the Workspace). With the port open to the internet, a stranger could have claimed it. | fixed (first account only from localhost) |
 | A2 | Creating that first account needs a port forward (SSH or VS Code) to `localhost:4900`. | by design |
-| A3 | Settings and the Users page are admin-only. `Luca` is not an administrator, so that browser does not show them. Fix: as `Admin`, Users → *Make admin* on `Luca`. (Earlier notes wrongly said this button was missing.) | open (needs an administrator's click) |
+| A3 | Settings and the Users page are admin-only. `Luca` is not an administrator, so that browser does not show them. Fix: as `Admin`, Users → *Make admin* on `Luca`. (Earlier notes wrongly said this button was missing.) | fixed (checked 2026-11-09: `Luca` is an administrator) |
 | A4 | `localStorage` is per origin (scheme + host + port), so the same browser on `http://`, `https://`, `localhost` and the IP address counts as different computers. The hand-off covers HTTP ↔ HTTPS only. | open (low) |
 
 ## Server (outside this project)
@@ -97,7 +97,7 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 | T2 | Goals of one topic run one after another (G-R-07). A goal stuck in `queued` in a topic (for example one queued by `gm goal` while the server was down, until the watcher picks it up) holds every later goal of that topic; paused goals and goals waiting for approval do not. | by design |
 | T3 | `/stop` cancels the project's goals in every topic, whichever topic it is sent in; `/status` in a topic other than `general` lists only that topic's goals, blockers are project-wide. | by design |
 | T4 | Databases made before topics get the `topic` column (all old messages and goals in `general`) but not its index; filtering is by project first, so this only matters for very long histories. | open (low) |
-| T5 | Assigning agents to a topic changes who reports in its `/standup`, not who is staffed on its goals. | open (staffing by topic is not specified) |
+| T5 | Assigning agents to a topic changes who reports in its `/standup`, not who is staffed on its goals. | fixed (V22: assigned agents are staffed first on the topic's goals) |
 
 ## Added 2026-11-05 (agent versions and health, SPEC-02)
 
@@ -172,7 +172,7 @@ were graded by running their code, counting seeded defects and validating plans,
 | V12 | Codex's own web tools (`web_search`, the ChatGPT apps server's `search_service.web_run`, browser and computer use) were on in every Codex run: the security and UI/UX agents (no `network`) searched the web, and the research lead used them instead of the platform's tools, then cited a document that did not exist. | fixed (`executors.CODEX_NO_WEB` on every `CodexExecutor` run; live rerun: research used `fetch_url`, UI/UX no web) |
 | V13 | Codex's read-only sandbox runs any program for an agent without `shell` (`python3 -c`, as uid 0) and reads outside the worktree; writes and network are blocked. Codex reads files through these commands. | open (threat-model known gap; move a `read`-only agent to Claude Code, or decide how Codex should run it) |
 | V14 | Claude Code's `acceptEdits` (writing runs) auto-approves file commands in the worktree (`rm -r __pycache__`) and read-only commands (`git log`, `cat`) outside the run's allow-list; `Run.tools` understates what the run could do. | open (low; bounded to the worktree) |
-| V15 | The GM's own model `claude_37` is benched until Nov 11; the GM runs on its role route (Claude Code) and `trace_issues` flags every run as a substitution without a configured fallback. | open (owner: clear the GM's `model_pref` or give it fallbacks) |
+| V15 | The GM's own model `claude_37` is benched until Nov 11; the GM runs on its role route (Claude Code) and `trace_issues` flags every run as a substitution without a configured fallback. | fixed (2026-11-09, owner's approval: Models → Routes → Assign models cleared every agent's own model; the GM runs its role route Claude Code with fallbacks Codex CLI, Copilot, local) |
 | V16 | The research tool loop shows its planner only the first 400 characters of each document (`research_agent._material_text`): navigation text on sqlite.org, so it re-fetched the same pages and judged them "partial headers" (31,624 characters were stored). | open (low) |
 
 ## Added 2026-11-09 (verification phase 4, agent communication)
@@ -195,7 +195,7 @@ isolated (users, goals, messages, files); offline only.
 | # | Problem | Status |
 |---|---------|--------|
 | V21 | A project's General Manager (`Project.manager_id`) did not plan its goals: the best-ranked GM did. | fixed (`registry.staff(prefer=…)`; `loop._plan`, `_configure` and `rca` pass the project's manager) |
-| V22 | A topic's agent list (the plan's "assigned developer/QA") is shown but staffing ignores it; workers come from the project's rooms, and every core agent is in `development`. | open (owner: should a listed agent constrain staffing?) |
+| V22 | A topic's agent list (the plan's "assigned developer/QA") is shown but staffing ignores it; workers come from the project's rooms, and every core agent is in `development`. | fixed (2026-11-09, owner's approval: `registry.staff` ranks a topic's idle assigned agents and their clones first; busy ones are not waited for; `tests/test_topic_staffing.py`) |
 
 ## Added 2026-11-09 (verification phase 6, project task execution)
 
@@ -215,6 +215,6 @@ delivery and failed a buggy and an incomplete one (goals #334–#336), naming ea
 
 | # | Problem | Status |
 |---|---------|--------|
-| V26 | A cross-family review depends on the routes: QA's own model and the developer's route are both Claude Code, so developer and QA run on the same family (runs 2125/2126). | open (owner: Models → Routes → Assign models, or a `qa` route of another family) |
+| V26 | A cross-family review depends on the routes: QA's own model and the developer's route are both Claude Code, so developer and QA run on the same family (runs 2125/2126). | fixed (2026-11-09: Assign models gives `developer` Claude Code and `qa` Codex CLI, another family) |
 | V27 | Playbook experiments dropped the suite's S09-R-05 dimensions (compliance, tokens, tool failures) that route and template experiments keep. | fixed (`evolution.smoke_trial` stores `dimensions` per side) |
 | V28 | Playbook promotions rest on a 3-task smoke suite with 1 repeat, no held-out set, and a 3-task live canary; #16 was promoted on 1/3 live. | open (owner: suite size, repeats, a hidden final set; costs model time) |
