@@ -248,7 +248,8 @@ def smoke_trial(agent_id: int, repeats: int = 1) -> dict[str, float]:
                 trial = {"trainee_id": agent_id, "side": side} | ({"experiment_id": exp_id} if exp_id else {})
                 summary = evaluation.run_suite(suite, label, repeats=repeats, trial=trial)
                 results[side] = summary["pass_rate"]
-                metrics[side] = experiments.side_metrics(summary)
+                # with S09-R-05's dimensions (compliance, tokens, tool failures), as route experiments keep them
+                metrics[side] = experiments.side_metrics(summary) | {"dimensions": summary.get("dimensions") or {}}
                 with session() as s:
                     experiments.update(s, exp_id, **{side: metrics[side]})
         with session() as s:

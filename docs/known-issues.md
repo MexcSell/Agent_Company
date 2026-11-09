@@ -207,3 +207,14 @@ the command window, goal #332 (architect → developer → QA, 682 s), a working
 | V23 | A project's description (its registered requirements) reached no agent; the planner got stack, rooms, deadline, priority, budget and formal requirements only. | fixed (`loop._project_context`: "Description (as registered)") |
 | V24 | Task stages had no transition table: a late worker moved a cancelled task on (goal #111, task 691: cancelled → review → failed). | fixed (`workflow.TASK_TRANSITIONS`; `completed`/`cancelled` final; illegal moves refused and logged) |
 | V25 | A goal run in a process that ends while a background thread works on it stays `planning` until the next server restart: the phase 4/6 live scripts left smoke-trial eval goals #331 and #333 (cancelled by hand). | open (low; the live scripts no longer start smoke trials; a fix records the owning process on the goal) |
+
+## Added 2026-11-09 (verification phases 7 and 8, quality and evolution)
+
+See `docs/verification/phase-7-quality.md` and `phase-8-evolution.md`. Live: this server's QA passed a correct
+delivery and failed a buggy and an incomplete one (goals #334–#336), naming each defect; the gate agreed.
+
+| # | Problem | Status |
+|---|---------|--------|
+| V26 | A cross-family review depends on the routes: QA's own model and the developer's route are both Claude Code, so developer and QA run on the same family (runs 2125/2126). | open (owner: Models → Routes → Assign models, or a `qa` route of another family) |
+| V27 | Playbook experiments dropped the suite's S09-R-05 dimensions (compliance, tokens, tool failures) that route and template experiments keep. | fixed (`evolution.smoke_trial` stores `dimensions` per side) |
+| V28 | Playbook promotions rest on a 3-task smoke suite with 1 repeat, no held-out set, and a 3-task live canary; #16 was promoted on 1/3 live. | open (owner: suite size, repeats, a hidden final set; costs model time) |
