@@ -43,7 +43,9 @@ TEST_FILE = re.compile(
 )
 
 CHECK_COMMAND = re.compile(
-    r"^(uv run |poetry run |python3? -m )?(pytest|ruff (check|format --check)|mypy|flake8|tox|manage\.py test)\b"
+    r"^(uv run |poetry run )?(python3? (-B )?-m )?"
+    r"(pytest|ruff (check|format --check)|mypy|flake8|tox|manage\.py test)\b"
+    r"|^(uv run |poetry run )?python3? (-B )?-m unittest\b"  # stdlib unittest only with -m, never python in general
     r"|^(go (test|vet)|npm (test|run (test|lint|build|typecheck))|pnpm (test|run)|yarn (test|lint)|cargo (test|check|clippy)"
     r"|make (test|check|lint)|bundle exec (rspec|rake)|rspec|npx (vitest|jest|playwright test|tsc))\b"
 )

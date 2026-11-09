@@ -104,7 +104,9 @@ path (a listener, a crawler target, an outbound call) is added, and add its row 
   `CLAUDE_BASH` tools (`pytest`, `uv run`, `npm run`) execute agent-written code there. A model that escapes those
   tool restrictions, or a test it runs through them, could read the host as that user. Read-only (L1) runs with
   `Grant.checks` (a QA review with `shell` at G2+) run pytest on the host too, so agent-written tests execute there
-  as well. Run the service in a disposable VM or container without production credentials for untrusted goals.
+  as well. The stdlib `python -m unittest` forms (`python`, `python3`, `python3 -B`; `executors.UNITTEST_FORMS`) are
+  allowed in both lists the same way; they add no new capability, since pytest already runs repository code, and
+  no rule allows `python`/`python3` in general (`test_unittest_forms.py`). Run the service in a disposable VM or container without production credentials for untrusted goals.
   The `git diff --output` deny of those runs is a prefix rule like the allow rules: `git diff HEAD --output=x` (the
   option after a revision) still matches the `git diff` allow and writes the file. Whether the deny also catches
   `git diff --output=x` depends on the CLIs' prefix matching (plain string or word boundary), which was not verified
