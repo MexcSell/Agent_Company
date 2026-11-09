@@ -1034,7 +1034,8 @@ def list_rooms() -> list[dict[str, Any]]:
 
 
 EDITABLE = {"enabled", "model_pref", "skills", "playbook", "superior_id", "goal", "permissions", "autonomy", "plugins",
-            "max_concurrent", "daily_cost_quota_usd"}
+            "max_concurrent", "daily_cost_quota_usd", "room_key"}
+STRUCTURAL = {"superior_id", "enabled", "room_key"}  # changes of the organisation itself (UI-ORG-01)
 PERMISSIONS = {"read", "write", "shell", "network"}
 
 
@@ -1077,6 +1078,24 @@ def update_agent(agent_id: int, changes: dict[str, Any], actor: str = "system",
         if "plugins" in changes and not (isinstance(changes["plugins"], list)
                                          and all(isinstance(x, str) and len(x) <= 64 for x in changes["plugins"])):
             raise ValueError("plugins is a list of catalog names")
+        moved_from = None
+        if "room_key" in changes and changes["room_key"] != a.room_key:  # moved to another room
+            room = s.scalars(select(Room).where(Room.key == str(changes["room_key"] or ""))).first()
+            if room is None:
+                raise ValueError(f"unknown room {changes['room_key']!r}")
+            if room.enabled is False:
+                raise ValueError(f"room {room.key} is disabled; enable it before moving an agent there")
+            if a.lifecycle == "retired":
+                raise ValueError("a retired agent stays where it retired")
+            from agent_company import performance
+
+            # G-R-04: a gated role is enabled only after its room was measured; a move would skip that measurement
+            if performance.gated(a.role) and (a.enabled if "enabled" not in changes else changes["enabled"]):
+                raise ValueError(f"{a.role} is a gated role: disable the agent, move it, then enable it through "
+                                 "its new room's gate")
+            moved_from = a.room_key
+        elif "room_key" in changes:
+            changes.pop("room_key")
         if "model_pref" in changes:
             _check_model(s, changes["model_pref"], agent_id)
             if (changes["model_pref"] or None) != a.model_pref and a.health == "degraded":
@@ -1085,11 +1104,12 @@ def update_agent(agent_id: int, changes: dict[str, Any], actor: str = "system",
             setattr(a, k, v)
         s.flush()
         record_version(s, a, actor, "changed " + ", ".join(sorted(changes)))
-        if {"superior_id", "enabled"} & set(changes):  # a structural change of the organisation (UI-ORG-01)
-            from agent_company import organization
-
-            moved = ", ".join(sorted({"superior_id", "enabled"} & set(changes)))
-            organization.record_version(s, actor, f"{a.name}: {moved}")
+        if moved_from is not None:
+            log_event("agent", f"{a.name} moved from room {moved_from} to {a.room_key} by {actor}", agent_id=a.id, s=s)
+        if STRUCTURAL & set(changes):  # a structural change of the organisation (UI-ORG-01)
+            moved = ", ".join(sorted(STRUCTURAL & set(changes)))
+            organization.record_version(s, actor, f"{a.name}: {moved}"
+                                        + (f" ({moved_from} → {a.room_key})" if moved_from is not None else ""))
         return agent_dict(a)
 
 

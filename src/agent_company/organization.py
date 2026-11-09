@@ -335,7 +335,7 @@ def export_csv(table: str = "agents") -> str:
 
 # --- organisation change proposals (AICO UI-ORG-02) ---------------------------------------------
 
-AGENT_FIELDS = {"superior_id", "enabled"}  # what a proposal may change on an agent (registry.update_agent)
+AGENT_FIELDS = {"superior_id", "enabled", "room_key"}  # what a proposal may change on an agent (registry.update_agent)
 
 
 def _check_changes(s: Session, changes: list[dict[str, Any]]) -> list[dict[str, Any]]:

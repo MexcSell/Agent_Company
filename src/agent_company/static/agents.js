@@ -202,7 +202,7 @@ async function definitionCandidate(id) {
 async function agentModal(id, tab = "profile") {
   writeHash("#/agents/" + id);
   const requestHash = location.hash;
-  const [a, m, versions, all, cat] = await Promise.all([api(`/api/agents/${id}`), api("/api/models"), api(`/api/agents/${id}/versions`), api("/api/agents"), api("/api/catalog")]);
+  const [a, m, versions, all, cat, rooms] = await Promise.all([api(`/api/agents/${id}`), api("/api/models"), api(`/api/agents/${id}/versions`), api("/api/agents"), api("/api/catalog"), api("/api/rooms").catch(() => [])]);
   if (location.hash !== requestHash) return;
   const skills = Object.entries(a.skills || {}).sort((x, y) => y[1] - x[1]).map(([k, v]) => `<span class="pill">${esc(k)} ${v}</span>`).join(" ");
   const admin = me.is_admin || me.permissions?.manage_agents;
@@ -268,6 +268,7 @@ async function agentModal(id, tab = "profile") {
       <h3>Stats</h3><table><tr><td>Level / XP</td><td class="num">${a.level} / ${a.xp}</td></tr><tr><td>Tasks done / failed</td><td class="num">${a.tasks_done} / ${a.tasks_failed}</td></tr><tr><td>Runs</td><td class="num">${a.usage.runs}</td></tr><tr><td>Input / output tokens</td><td class="num">${fmt.format(a.usage.input_tokens)} / ${fmt.format(a.usage.output_tokens)}</td></tr><tr><td>Cost</td><td class="num">${money(a.usage.cost)}</td></tr><tr><td>Spent today (with clones)</td><td class="num">${money(a.spent_today)}${a.daily_cost_quota_usd ? ` of ${money(a.daily_cost_quota_usd)}` : ""}</td></tr><tr><td>Last active</td><td class="num">${ago(a.last_active_at)}</td></tr><tr><td>Open tasks · active in the last 24 h</td><td class="num">${a.workload.open_tasks} · ${a.workload.hours_24h} h</td></tr><tr><td>Last handover</td><td class="num">${a.workload.last_handover ? `${a.workload.last_handover.direction} (${esc(a.workload.last_handover.kind)}, ${esc(a.workload.last_handover.status.replace(/_/g, " "))}) ${ago(a.workload.last_handover.at)}` : "none"}</td></tr></table>
     </div><div>
       ${admin ? `<h3>Settings</h3><label>Model${isGm ? " — the General Manager: Claude Code by default; pick an API model, a Claude Code at another address (Models → Add), or another agent" : " (overrides the role route)"}</label>${modelSelect}
+        ${me.is_admin && a.lifecycle !== "retired" ? `<label for="a-room">Room (administrators only; a move is an organisation version)</label><select id="a-room">${rooms.map((r) => `<option value="${esc(r.key)}" ${r.key === a.room ? "selected" : ""} ${r.enabled || r.key === a.room ? "" : "disabled"}>${esc(r.name)}${r.enabled ? "" : " (disabled)"}</option>`).join("")}</select>` : ""}
         <div class="row"><div class="grow"><label for="a-conc">Goals at once</label><input id="a-conc" type="number" min="1" max="8" value="${a.max_concurrent}"></div>
           <div class="grow"><label for="a-quota">Daily cost quota, $ (0 = none; covers its clones; resets 00:00 UTC)</label><input id="a-quota" type="number" min="0" step="0.01" value="${a.daily_cost_quota_usd}"></div></div>
         ${me.is_admin ? `<label>Permissions and autonomy (administrators only)</label><div class="row">${["read", "write", "shell", "network"].map((p) => `<label class="plug"><input type="checkbox" data-perm="${p}" ${(a.permissions || []).includes(p) ? "checked" : ""}><span>${p}</span></label>`).join("")}
@@ -283,6 +284,10 @@ async function agentModal(id, tab = "profile") {
   $("#a-save").onclick = async () => {
     const plugins2 = [...document.querySelectorAll("[data-plug]:checked")].map((c) => c.dataset.plug);
     const body = { model_pref: $("#a-model").value || null, plugins: plugins2, max_concurrent: +$("#a-conc").value, daily_cost_quota_usd: +$("#a-quota").value, expected_version: a.config_version };
+    if ($("#a-room") && $("#a-room").value !== a.room) {
+      if (!confirm(`Move ${a.name} to ${$("#a-room").selectedOptions[0].textContent}? Its goals, budgets and staffing follow the new room.`)) return;
+      body.room_key = $("#a-room").value;
+    }
     if ($("#a-autonomy")) {
       const perms = [...document.querySelectorAll("[data-perm]:checked")].map((c) => c.dataset.perm);
       if (perms.slice().sort().join() !== (a.permissions || []).slice().sort().join() || $("#a-autonomy").value !== a.autonomy) Object.assign(body, { permissions: perms, autonomy: $("#a-autonomy").value });

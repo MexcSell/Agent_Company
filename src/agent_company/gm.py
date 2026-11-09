@@ -223,7 +223,8 @@ def main(argv: list[str]) -> None:
     sl.add_argument("project_id", type=int, nargs="?")
     op = sub.add_parser("org-propose", help="UI-ORG-02: propose an organisation change; a person approves it")
     op.add_argument("title")
-    op.add_argument("--changes", required=True, help='JSON list: [{"op": "create_room"|"update_room"|"update_agent", ...}]')
+    op.add_argument("--changes", required=True, help='JSON list: [{"op": "create_room"|"update_room"|"update_agent", ...}]; update_agent changes '
+                         'superior_id, enabled or room_key (a move to another room)')
     op.add_argument("--reason", required=True)
     op.add_argument("--impact", default="")
     op.add_argument("--evidence", action="append", default=[])

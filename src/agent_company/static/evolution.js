@@ -114,7 +114,7 @@ function orgProposals(props, names) {
     : c.op === "update_room" ? `room ${c.key}: ${Object.entries(c.changes).map(([k, v]) => `${k} → ${k === "lead_agent_id" ? names[v] || v : v}`).join(", ")}`
     : `${names[c.agent_id] || `agent #${c.agent_id}`}: ${Object.entries(c.changes).map(([k, v]) => `${k} → ${k === "superior_id" ? names[v] || v : v}`).join(", ")}`;
   const now = (p, c) => { const cur = p.current || {}; if (c.op === "update_room") { const r = (cur.rooms || {})[c.key] || {}; return Object.keys(c.changes).map((k) => { const f = { parent_key: "parent", lead_agent_id: "lead" }[k] || k; const v = r[f]; return `${k}: ${v == null ? "–" : f === "lead" ? names[v] || v : v}`; }).join(", "); }
-    if (c.op === "update_agent") { const a = (cur.agents || {})[String(c.agent_id)] || {}; return Object.keys(c.changes).map((k) => `${k}: ${k === "superior_id" ? names[a.superior] || a.superior || "–" : a[k] ?? "–"}`).join(", "); } return "does not exist"; };
+    if (c.op === "update_agent") { const a = (cur.agents || {})[String(c.agent_id)] || {}; return Object.keys(c.changes).map((k) => `${k}: ${k === "superior_id" ? names[a.superior] || a.superior || "–" : k === "room_key" ? a.room || "–" : a[k] ?? "–"}`).join(", "); } return "does not exist"; };
   const tone = { pending: "warn", approved: "ok", rejected: "neutral", failed: "bad" };
   return `<section class="card" style="margin-top:12px"><div class="card-head"><h3>Change proposals</h3><span class="muted">${props.filter((p) => p.status === "pending").length} pending</span></div>
     ${props.length ? props.map((p) => `<div class="gm-card"><div class="row nowrap"><strong class="grow">#${p.id} ${esc(p.title)}</strong><span class="badge ${tone[p.status] || "neutral"}">${esc(p.status)}</span></div>

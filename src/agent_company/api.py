@@ -1320,6 +1320,8 @@ def create_app(start_background: bool = True) -> FastAPI:
         authority = {"permissions", "autonomy"} & set(changes)
         if authority and not admin["is_admin"]:  # SPEC-14 S14-R-02: an agent's authority is a human administrator's call
             raise HTTPException(403, f"only an administrator changes an agent's {' and '.join(sorted(authority))}")
+        if "room_key" in changes and not admin["is_admin"]:  # the organisation's structure, like rooms themselves
+            raise HTTPException(403, "only an administrator moves an agent to another room")
         if changes.get("enabled"):
             _enable_gate(agent_id, admin, override)
         try:

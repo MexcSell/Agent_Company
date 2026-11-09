@@ -12,7 +12,8 @@ feature came from.
   `kpis.py` (SPEC-01 FR-08 department KPIs: formula from `METRICS`, target, interval, values with evidence in
   `kpi_values`, measured by the `KpiThread`; Performance → Department KPIs),
   `organization.py` (SPEC-01: room editing with parent, lead and switch, no cycles; a disabled room's agents are not
-  staffed; position history `room:<key>:lead`/`project:<id>:gm`; organisation export JSON/CSV),
+  staffed; position history `room:<key>:lead`/`project:<id>:gm`; organisation export JSON/CSV; an administrator moves an
+  agent to another enabled room with `registry.update_agent(room_key=…)`, a gated role's agent only while disabled),
   `policies.py` (SPEC-01: delegated `approve_goals` per project with expiry, checked per call; versions of the
   governance settings with restore; a project's own rules may only be stricter, `effective` at the use sites),
   `recruitment.py` (SPEC-03: capability gaps from verified proficiency, recruitment records with job descriptions,
