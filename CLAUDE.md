@@ -156,7 +156,10 @@ feature came from.
   Manager as Claude Code: its instructions and the `python -m agent_company gm …` toolbox); `specs.py`
   (`.claude/specs/<slug>/` artifacts of every goal, the GM's `.claude/` configure step; K54 `check_plan` rejects
   acceptance paths outside the goal's spec folder, conditions on loop-written files and a `file_exists` acceptance
-  outside `allowed_paths` (dropped from the fallback plan instead), the GM re-plans); `hooks.py` (TaskCreated,
+  outside `allowed_paths` (dropped from the fallback plan instead), the GM re-plans; `save_answer` writes a task's
+  answer as the documents its acceptance names (file_exists .md/.txt, own-spec-folder files in a command), a
+  `=== FILE: <path> ===` … `=== END FILE ===` block giving one its own content, never a loop file; `task_note` says so
+  in the task prompt); `hooks.py` (TaskCreated,
   TaskCompleted, TeammateIdle → `data/logs/team-hooks.jsonl`, fail-open);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
   (Workspace Claude Code panel: a tab per conversation of this browser session (new ones on the far right; earlier ones

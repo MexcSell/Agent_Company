@@ -1014,6 +1014,7 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                     f"{contract.description}\n\nInputs: {json.dumps(contract.inputs)}\n\n"
                     f"Acceptance conditions (checked automatically):\n{accept}\n\n"
                     + _contract_note(contract)
+                    + specs.task_note(goal, contract)
                     + (f"{dep_text}\n\n" if dep_text else "")
                     + (f"Research notes:\n{notes}\n\n" if notes else ""))
             tail = (handover
