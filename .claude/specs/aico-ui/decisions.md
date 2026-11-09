@@ -61,3 +61,10 @@ with the full suite and headless screenshots; later phases are written and check
 - V28 raises the evidence, never lowers it: smoke repeats 1 → 2, a held-out suite (`python-final`, hidden checks)
   after a passed smoke suite, the canary 3 → 5 tasks, and a 50 % live floor besides beating the baseline. Each is a
   setting (Settings → Governance). A trial keeps the canary length it started with (`exp["window"]`).
+- UI-WF-03 retry only for a paused goal at the task's planned, unjudged iteration. A running DAG is the scheduler's
+  (adding a task to it from outside races the workers), and a failed goal's worktree may have been rolled back to its
+  best iteration (`_keep_best`), so its tasks no longer match the files. The flow is Pause → Retry → the goal resumes.
+- UI-QA-03 "return to development" is a new transition awaiting_approval → queued: the checkpoint marks the iteration
+  judged and failed with the person's reason as feedback, so the loop's ordinary resume plans the next iteration from
+  it in the same worktree. At the iteration limit the goal gets exactly one more iteration; otherwise the reopen
+  could not run at all.

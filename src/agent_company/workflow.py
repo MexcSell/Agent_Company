@@ -7,7 +7,7 @@ allow and writes one `goal_transitions` row per change, so a goal's history can 
      │          ▲           │  ╲            │      ╲
      │          └─revision──┘   ╲           ▼       ▶ rejected
      │                 │         ▶ approved (no approval needed)
-     │                 ▼
+     │                 ▼                        └─▶ queued (returned to development, UI-QA-03)
      │              paused ─▶ queued (resume)
      ▼
   recovering (after a restart) ─▶ planning | running
@@ -48,7 +48,7 @@ TRANSITIONS: dict[str, set[str]] = {
     "planning": {"running", "recovering", "paused", "cancelled", "failed"},
     "running": {"planning", "awaiting_approval", "approved", "recovering", "paused", "cancelled", "failed"},
     "paused": {"queued", "cancelled"},
-    "awaiting_approval": {"approved", "rejected", "cancelled"},
+    "awaiting_approval": {"approved", "rejected", "cancelled", "queued"},  # queued: returned to development
     "failed": {"recovering"},
     "approved": set(),
     "rejected": set(),

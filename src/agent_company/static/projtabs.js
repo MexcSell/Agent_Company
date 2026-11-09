@@ -99,7 +99,7 @@ async function ptEvaluation(id, d) {
   const judged = d.goals.filter((g) => (g.history || []).length);
   return `<div class="grid pt-grid"><section class="card" style="grid-column:1/-1"><div class="card-head"><h3>Latest evaluation per goal</h3></div>${judged.length ? `<div class="table-wrap"><table><tr><th>Goal</th><th>Iteration</th><th>Gate</th><th>Stages</th><th>Failed checks</th><th>Status</th></tr>
     ${judged.map((g) => { const h = g.history[g.history.length - 1]; return `<tr><td><a href="#/goals/${g.id}">#${g.id} ${esc(g.title)}</a></td><td class="num">${h.iteration}</td><td><span class="badge ${h.passed ? "ok" : "bad"}">${h.passed ? "passed" : "failed"}</span></td>
-      <td>${Object.entries(h.stages || {}).map(([s, st]) => `<span class="badge ${st === "passed" ? "ok" : st === "failed" ? "bad" : "neutral"}" title="${esc(st)}">${esc(s)}</span>`).join(" ") || "–"}</td><td class="dash-meta">${esc((h.failed_checks || []).join(", ") || "–")}</td><td>${pill(g.status)}${g.status === "awaiting_approval" && me.is_admin ? ` <button class="btn sm" data-return="${g.id}" title="Reject the work: the goal ends as rejected and nothing is merged">Reject</button>` : ""}</td></tr>`; }).join("")}</table></div>` : gmEmpty("No goal has been through the gate yet.")}</section>
+      <td>${Object.entries(h.stages || {}).map(([s, st]) => `<span class="badge ${st === "passed" ? "ok" : st === "failed" ? "bad" : "neutral"}" title="${esc(st)}">${esc(s)}</span>`).join(" ") || "–"}</td><td class="dash-meta">${esc((h.failed_checks || []).join(", ") || "–")}</td><td>${pill(g.status)}${g.status === "awaiting_approval" && me.is_admin ? ` <button class="btn sm" data-back="${g.id}" title="Send the work back with what has to change: the next iteration plans from it">Return to development</button> <button class="btn sm" data-return="${g.id}" title="Reject the work: the goal ends as rejected and nothing is merged">Reject</button>` : ""}</td></tr>`; }).join("")}</table></div>` : gmEmpty("No goal has been through the gate yet.")}</section>
     <section class="card" style="grid-column:1/-1"><div class="card-head"><h3>Defects</h3></div>${defects.length ? `<div class="table-wrap"><table><tr><th>Check</th><th>Goal</th><th>Priority</th><th>Severity</th><th>Status</th></tr>${defects.map((x) => `<tr><td>${esc(x.check)}</td><td><a href="#/goals/${x.goal_id}">#${x.goal_id}</a></td><td>${esc(x.priority || "–")}</td><td>${esc(x.severity || "–")}</td><td>${pill(x.status)}</td></tr>`).join("")}</table></div>` : gmEmpty("No defect recorded.")}</section></div>`;
 }
 
@@ -119,6 +119,11 @@ async function projectTab(mode, id, d) {
   box.innerHTML = html; box.dataset.html = html; iconize(box);
   box.querySelectorAll("[data-ptab]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); projectMode = a.dataset.ptab; store.set("ac.project.view", projectMode); projectMain(id); }));
   box.querySelectorAll("[data-bv]").forEach((b) => (b.onclick = () => { boardView = b.dataset.bv; store.set("ac.board.view", boardView); box.dataset.html = ""; projectTab(mode, id, d); }));
+  box.querySelectorAll("[data-back]").forEach((b) => (b.onclick = async () => {
+    const reason = prompt(`Return goal #${b.dataset.back} to development. What has to change?`);
+    if (!reason || !reason.trim()) return;
+    try { await api(`/api/goals/${b.dataset.back}/return`, { method: "POST", body: { reason } }); toast("Returned to development"); box.dataset.html = ""; projectMain(id, true); } catch (e) { toast(e.message); }
+  }));
   box.querySelectorAll("[data-return]").forEach((b) => (b.onclick = async () => {
     if (!confirm(`Reject goal #${b.dataset.return}? Nothing is merged; give the General Manager a new order to redo it.`)) return;
     try { await api(`/api/goals/${b.dataset.return}/reject`, { method: "POST" }); toast("Rejected"); box.dataset.html = ""; projectMain(id, true); } catch (e) { toast(e.message); }

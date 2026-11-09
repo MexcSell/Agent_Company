@@ -62,7 +62,7 @@ feature came from.
   goal fails instead; resume requeues the same iteration), EL-R-06 with setting `task_critic` a writing task's diff is
   reviewed in its worker by a critic of another model family (`_critic`, `avoid_provider` + `other_cli`) before its
   dependants start, a FAIL returns it to the same agent at most `CRITIC_RETRIES` (2) times, runs in `Task.critic`, idempotent merge/push, trace; goals of one project topic
-  run in order, `lane_ahead`; G-R-08 overlapping `allowed_paths` of one repository wait, `paths_ahead`; G-R-09 mission digest `digest` in the result message, with a `report` link once finished; `run_goal` takes a goal with one conditional UPDATE (`_claim`), so a goal handed out twice runs once; each task records its sender `planned_by` and `created_at`) + `mission.py`
+  run in order, `lane_ahead`; G-R-08 overlapping `allowed_paths` of one repository wait, `paths_ahead`; G-R-09 mission digest `digest` in the result message, with a `report` link once finished; `run_goal` takes a goal with one conditional UPDATE (`_claim`), so a goal handed out twice runs once; UI-WF-03 `retry_task` requeues a failed/skipped task of a paused goal (optionally another agent) and resumes it; UI-QA-03 `return_to_development` sends a goal awaiting approval back with a reason (awaiting_approval → queued, next iteration from that feedback); each task records its sender `planned_by` and `created_at`) + `mission.py`
   (REQ-004 mission report of a finished goal: objective, plan, tasks done/failed/retried, checks and reviews, cost,
   time vs `Goal.deadline`, limitations, lessons, RCA recommendations; each task verified|partial|failed only from
   `Task.gate["acceptance"]` and gate review verdicts, never task output; `GET /api/goals/{id}/report[?format=md]`;

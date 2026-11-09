@@ -217,7 +217,7 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   takes `requirements` (a first draft requirement) and `attachments` (posted to the command window). Approval policy
   = the project's stricter rules: plan (`require_plan_approval`), merge (`require_approval`), new agents
   (`recruit_requires_approval`); dependency and org-change approval have no enforcement yet (open).
-  `tests/test_projects_workspace.py`. "Return to development" is a Reject: `loop.reject` ends the goal (no reopen).
+  `tests/test_projects_workspace.py`. "Return to development" reopens the goal with a reason (see UI-QA-03); Reject still ends it.
 
 ## 5. Teams & Agents (P1)
 
@@ -255,14 +255,17 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
 - **UI-WF-04 Agent communication**: the goal's blackboard messages as a thread beside the graph (FR-008.5).
 - **UI-WF-05 Templates**: the workflow templates (`strategies.py`) with versions (read-only list here; changes stay
   in Evolution).
-- Status: **partial** (P1-2): `static/workflows.js` (route `#/workflows`): per goal the current iteration's tasks
+- Status: **done** (P1-2, retry in the follow-ups): `static/workflows.js` (route `#/workflows`): per goal the current iteration's tasks
   in layers by `depends_on` (parallel branches side by side) with role, agent, state colour, duration and retries,
   then Quality gate (from the goal's history) and Approval & merge; filters project, live / recent, blocked only; a
   blocked task or paused goal shows why; node drawer with input, paths, acceptance checks and their results, output,
   changed files, findings, blockers, handoffs (blackboard entries of the task) and the stage log; Agent messages
   (blackboard `messages`) beside the graph; Templates tab (read-only). Goal detail tasks carry `started_at`,
-  `finished_at`, `priority` (additive). Open: **Retry** / **Retry with another agent** (UI-WF-03) — retrying a task
-  inside a running DAG is the loop's; no endpoint yet.
+  `finished_at`, `priority` (additive). **Retry** / **Retry with another agent** (UI-WF-03): `loop.retry_task` +
+  `POST /api/tasks/{id}/retry` (`agent_id` optional; `run` permission on a visible project; audited) for a failed or
+  skipped task of a *paused* goal at that iteration, before its gate: the task is queued again (stage reopened, the
+  chosen agent as `staff(prefer=…)`), the goal resumes, finished tasks keep their result; a running goal's tasks stay
+  the loop's and a finished goal takes a follow-up; `tests/test_task_retry.py`.
 
 ## 7. Deliverables (P1)
 
@@ -294,7 +297,9 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   (= reject with reason, which reopens it, AT-014).
 - **UI-QA-04 Eval runs and benchmarks** (existing `eval` results, suites, dimension summaries, no combined score).
 - The existing Performance page's content moves here (rooms, KPIs, operational metrics stay as tabs).
-- Status: **done** (P1-4) but "return to development" (reject only, see P0-4): `qa.py` + `GET /api/qa?period=` (gate
+- Status: **done** (P1-4); "return to development" since the follow-ups (`loop.return_to_development`,
+  `POST /api/goals/{id}/return` with a reason, the goal approver; awaiting_approval → queued, the iteration counts as
+  failed with the reason as its feedback, one more iteration at the limit; `tests/test_return_to_development.py`): `qa.py` + `GET /api/qa?period=` (gate
   events: executions passed/failed per day and by stage, gate pass rate, blocked tasks, goals pending a gate, flaky =
   the same check passed and failed on one commit, open defects by priority, latest gate per goal by area);
   `static/evaluation.js` (`#/evaluation`: Overview, Latest evaluation, Performance & benchmarks = the former

@@ -250,6 +250,10 @@ class GoalTeamBody(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
+class TaskRetryBody(BaseModel):
+    agent_id: int | None = None  # UI-WF-03 "Retry with another agent"
+
+
 class StrategyBody(BaseModel):
     body: dict[str, Any]  # every template field (strategies.FIELDS)
     note: str = Field(default="", max_length=500)
@@ -2925,6 +2929,18 @@ def create_app(start_background: bool = True) -> FastAPI:
                severity="high" if admin.get("delegated") else "info")
         return {"ok": True}
 
+    @app.post("/api/goals/{goal_id}/return")
+    def goal_return(goal_id: int, body: ReasonBody,
+                    admin: dict[str, Any] = Depends(goal_approver)) -> dict[str, Any]:
+        """UI-QA-03: send a goal awaiting approval back to development with a reason (instead of rejecting it)."""
+        try:
+            out = loop.return_to_development(goal_id, f"user:{admin['name']}", body.reason)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "goal_return", goal_id, after={"reason": body.reason[:500], **out,
+                                                    "delegated": bool(admin.get("delegated"))})
+        return out
+
     @app.post("/api/goals/{goal_id}/cancel")
     def goal_cancel(goal_id: int, user: dict[str, Any] = Depends(allowed("run"))) -> dict[str, Any]:
         with session() as s:
@@ -2934,6 +2950,23 @@ def create_app(start_background: bool = True) -> FastAPI:
                 raise KeyError(goal_id)
         loop.cancel(goal_id, actor=f"user:{user['name']}")
         return {"ok": True}
+
+    @app.post("/api/tasks/{task_id}/retry")
+    def task_retry(task_id: int, body: TaskRetryBody | None = None,
+                   user: dict[str, Any] = Depends(allowed("run"))) -> dict[str, Any]:
+        """UI-WF-03: retry a failed or skipped task of a paused goal (optionally with another agent); audited."""
+        with session() as s:
+            task = s.get(Task, task_id)
+            g = s.get(Goal, task.goal_id) if task is not None else None
+            seen = _visible_project_ids(s, user)
+            if g is None or (seen is not None and g.project_id is not None and g.project_id not in seen):
+                raise HTTPException(404, "task not found")
+        try:
+            out = loop.retry_task(task_id, f"user:{user['name']}", (body or TaskRetryBody()).agent_id)
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+        _audit(user, "task_retry", task_id, after=out)
+        return out
 
     @app.post("/api/goals/{goal_id}/pause")
     def goal_pause(goal_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:

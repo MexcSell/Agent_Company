@@ -973,9 +973,11 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
         if note:
             log_event("staff", note, goal_id=goal.id)
 
+        with session() as s:  # UI-WF-03: a person retried the task with a chosen agent
+            retry_with = ((s.get(Task, task_id).gate or {}).get("retry") or {}).get("agent_id")
         try:
             agent = registry.staff(role, contract.skills, goal.id, writes=contract.writes,
-                                   critical=contract.risk_level == "high", task_id=task_id)
+                                   critical=contract.risk_level == "high", task_id=task_id, prefer=retry_with)
         except registry.QuotaExceeded as e:  # S02-R-03: the task waits; the goal pauses after the iteration
             set_status(task_id, "skipped", stage="blocked", output=f"{QUOTA_SKIP}{e}")
             return False
@@ -2385,6 +2387,38 @@ def reject(goal_id: int, actor: str = "system") -> None:
     log_event("goal", "work rejected by reviewer", goal_id=goal_id)
 
 
+def return_to_development(goal_id: int, actor: str, reason: str) -> dict[str, Any]:
+    """UI-QA-03 (AT-014): a reviewer sends a goal awaiting approval back with a reason instead of rejecting it. The
+    iteration counts as judged and failed with the reason as its feedback, so the next iteration plans from it in
+    the same worktree; a goal at its last iteration gets exactly one more. Nothing is merged."""
+    from agent_company import workflow
+
+    reason = (reason or "").strip()
+    if not reason:
+        raise ValueError("say what has to change")
+    g = _goal(goal_id)
+    if g.status != "awaiting_approval":
+        raise ValueError(f"goal is {g.status}, not awaiting approval")
+    feedback = f"A person returned the work to development: {reason[:2000]}"
+    with session() as s:
+        row = s.get(Goal, goal_id)
+        cp = dict(row.checkpoint or {})
+        row.checkpoint = {**{k: v for k, v in cp.items() if k not in {"paused_for", "paused_why", "revision"}},
+                          "iteration": row.iteration, "planned": True, "evaluated": True, "passed": False,
+                          "feedback": feedback}
+        extra = row.iteration >= row.max_iterations
+        if extra:
+            row.max_iterations = row.iteration + 1
+    workflow.transition(goal_id, "queued", f"returned to development: {reason[:200]}", actor)
+    log_event("goal", f"returned to development by {actor}: {reason[:500]}"
+              + (" (one more iteration)" if extra else ""), goal_id=goal_id)
+    from agent_company.projects import post_for_goal
+
+    post_for_goal(goal_id, f"Goal #{goal_id} was returned to development: {reason[:500]}", kind="result")
+    enqueue(goal_id)
+    return {"status": "queued", "next_iteration": g.iteration + 1, "extra_iteration": extra}
+
+
 def cancel(goal_id: int, actor: str = "system") -> None:
     from agent_company import workflow
 
@@ -2437,6 +2471,49 @@ def resume(goal_id: int, actor: str = "system") -> None:
     workflow.transition(goal_id, "queued", "resumed", actor)
     log_event("goal", f"goal resumed by {actor}", goal_id=goal_id)
     enqueue(goal_id)
+
+
+def retry_task(task_id: int, actor: str = "system", agent_id: int | None = None) -> dict[str, Any]:
+    """UI-WF-03: run a failed or skipped task of a paused goal again, optionally by another agent of its role, then
+    resume the goal. Only a paused goal whose checkpoint is this task's planned, not yet judged iteration: a running
+    DAG belongs to the loop, and a finished goal's worktree may have been rolled back to its best iteration."""
+    from agent_company import workflow
+
+    with session() as s:
+        t = s.get(Task, task_id)
+        if t is None:
+            raise KeyError(task_id)
+        g = s.get(Goal, t.goal_id)
+        cp = dict(g.checkpoint or {})
+        if t.status not in {"failed", "skipped"}:
+            raise ValueError(f"task is {t.status}; only a failed or skipped task can be retried")
+        if g.status != "paused":
+            raise ValueError(f"goal is {g.status}; pause it first (a running goal's tasks belong to the loop, a "
+                             "finished goal takes a follow-up)")
+        if cp.get("iteration") != t.iteration or not cp.get("planned") or cp.get("evaluated"):
+            raise ValueError(f"the task is from iteration {t.iteration}, the goal stands at "
+                             f"{cp.get('iteration')}{' (already judged)' if cp.get('evaluated') else ''}")
+        if agent_id is not None:
+            a = s.get(Agent, agent_id)
+            if a is None or a.lifecycle != "active" or not a.enabled:
+                raise ValueError("unknown or inactive agent")
+            role = registry.resolve_role(t.role, g.id)[0] if t.role else a.role
+            if a.role != role:
+                raise ValueError(f"{a.name} is a {a.role}, the task needs a {role}")
+        previous = t.agent_id
+        t.status, t.started_at, t.finished_at = "queued", None, None
+        t.gate = {**(t.gate or {}), "retry": {"agent_id": agent_id, "previous_agent_id": previous, "by": actor,
+                                              "at": time.time()}}
+        workflow.set_stage(t, "reopened", f"retry by {actor}")
+        goal_id, key = g.id, t.key
+    log_event("goal", f"task {key} retried by {actor}" + (f" with agent #{agent_id}" if agent_id else ""),
+              goal_id=goal_id)
+    resumed, why = True, ""
+    try:
+        resume(goal_id, actor)
+    except ValueError as e:  # e.g. still over budget: the task waits, queued, for the resume
+        resumed, why = False, str(e)
+    return {"task_id": task_id, "goal_id": goal_id, "agent_id": agent_id, "resumed": resumed, "reason": why}
 
 
 def trace(goal_id: int) -> dict[str, Any]:

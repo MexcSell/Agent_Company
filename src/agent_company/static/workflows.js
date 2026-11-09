@@ -104,7 +104,22 @@ function wfNode(g, t, names) {
     ${(gate.files || []).length ? `<h3>Changed files</h3>${list(gate.files)}` : ""}${(gate.findings || []).length ? `<h3>Findings</h3>${list(gate.findings)}` : ""}${(gate.blockers || []).length ? `<h3>Blockers</h3>${list(gate.blockers)}` : ""}
     ${handoffs.length ? `<h3>Handoffs</h3>${handoffs.map((e) => `<div class="gm-card"><div class="muted dash-meta">${esc(e.section)} · ${esc(e.key)} v${e.version}</div><div class="ellipsis-2">${esc(e.content)}</div></div>`).join("")}` : ""}
     <h3>Stage log</h3>${(t.stage_log || []).length ? `<ul class="timeline">${t.stage_log.map((x) => `<li class="${x.to === "failed" ? "bad" : x.to === "blocked" ? "warn" : ["approved", "completed"].includes(x.to) ? "ok" : "info"}">${esc(x.from)} → <strong>${esc(x.to)}</strong> ${esc(x.reason || "")}<time>${x.at ? ago(x.at) : ""}</time></li>`).join("")}</ul>` : '<p class="muted dash-meta">No stage changes recorded.</p>'}
+    ${["failed", "skipped"].includes(t.status) ? `<h3>Retry</h3>${g.status === "paused" && t.iteration === g.iteration
+      ? `<div class="row nowrap"><button class="primary" data-retry="">Retry</button><select id="wf-retry-agent" aria-label="Another agent"><option value="">another agent…</option></select><button data-retry="other">Retry with this agent</button></div><p class="muted dash-meta">The task runs again and the goal resumes; finished tasks keep their result.</p>`
+      : `<p class="muted dash-meta">Pause the goal to retry this task: a running goal's tasks belong to the loop, a finished goal takes a follow-up.</p>`}` : ""}
     <p class="muted dash-meta">Tool calls and logs: the goal window's trace and the agent card's Tasks &amp; logs.</p>`);
+  const sel = $("#wf-retry-agent");
+  if (!sel) return;
+  api("/api/agents").then((all) => { sel.innerHTML += all.filter((a) => a.role === t.role && a.enabled && a.lifecycle === "active" && a.id !== t.agent_id).map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join(""); }).catch(() => {});
+  $("#drawer-body").querySelectorAll("[data-retry]").forEach((b) => (b.onclick = async () => {
+    const agent_id = b.dataset.retry === "other" ? Number(sel.value) || null : null;
+    if (b.dataset.retry === "other" && !agent_id) return toast("Choose the agent first.");
+    try {
+      const r = await api(`/api/tasks/${t.id}/retry`, { method: "POST", body: { agent_id } });
+      toast(r.resumed ? "Task queued again; the goal resumed." : `Task queued again; the goal stays paused: ${r.reason}`);
+      closeDrawer(); viewWorkflows(true);
+    } catch (e) { toast(e.message); }
+  }));
 }
 
 async function wfTemplates() {
