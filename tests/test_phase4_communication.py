@@ -425,11 +425,13 @@ def test_7_an_incomplete_result_is_not_completed(pm_dev, reply, failing):
 
 def test_v20_the_planners_pytest_command_is_one_the_developer_and_qa_may_run():
     """The live GM wrote `python3 -B -m pytest -q test_factorial.py`; both agents were refused it and ran plain
-    `pytest`, which left __pycache__/ in the worktree. Code through `python3 -B -c` stays refused."""
+    `pytest`, which left __pycache__/ in the worktree. Code through `python3 -B -c` stays refused in read-only check
+    runs (writing runs may run it since goal 412), and bare `python3` in both."""
     from agent_company import executors
 
     for tools in (executors.CLAUDE_BASH, executors.CLAUDE_CHECK):
         assert "Bash(python3 -B -m pytest:*)" in tools and "Bash(python3 -m pytest:*)" in tools
-        assert not any(t.startswith("Bash(python3 -B -c") or t == "Bash(python3:*)" for t in tools)
+        assert "Bash(python3:*)" not in tools
+    assert not any(t.startswith("Bash(python3 -B -c") for t in executors.CLAUDE_CHECK)
     for tools in (executors.COPILOT_SHELL, executors.COPILOT_CHECK):
         assert "shell(python3 -B -m pytest)" in tools

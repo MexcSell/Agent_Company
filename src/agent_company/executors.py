@@ -660,8 +660,12 @@ CHECK_HINT = (f"Syntax check: run `{CHECK_CMD} <files>` (node --check for each .
 PYTEST_FORMS = ["pytest", "python -m pytest", "python3 -m pytest", "python3 -B -m pytest"]
 # stdlib unittest as the planner writes it in acceptance commands (goals 122, 318); never python in general
 UNITTEST_FORMS = ["python -m unittest", "python3 -m unittest", "python3 -B -m unittest"]
-CLAUDE_BASH = [*(f"Bash({p}:*)" for p in PYTEST_FORMS + UNITTEST_FORMS), "Bash(uv run:*)", "Bash(npm test:*)",
-               "Bash(npm run:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(ls:*)"]
+# writing runs only, since `uv run:*` already runs any Python there (goal 411); never in a run without writes
+PYTHON_C_FORMS = ["python -c", "python3 -c", "python3 -B -c"]
+DOCTEST_FORMS = ["python -m doctest", "python3 -m doctest", "python3 -B -m doctest"]
+CLAUDE_BASH = [*(f"Bash({p}:*)" for p in PYTEST_FORMS + UNITTEST_FORMS + PYTHON_C_FORMS + DOCTEST_FORMS),
+               "Bash(uv run:*)", "Bash(npm test:*)", "Bash(npm run:*)", "Bash(git status:*)", "Bash(git diff:*)",
+               "Bash(ls:*)"]
 # a run without writes: no `uv run:*`/`npm run:*`/`npm test:*`, which run any code (and so could write files)
 CLAUDE_CHECK = [*(f"Bash({p}:*)" for p in PYTEST_FORMS + UNITTEST_FORMS), "Bash(uv run pytest:*)", "Bash(git status:*)",
                 "Bash(git diff:*)", "Bash(ls:*)"]
@@ -823,8 +827,9 @@ class CodexExecutor(Executor):
 
 
 # Copilot may run tests, the syntax check and inspect git, nothing else, through its shell tool (as CLAUDE_BASH).
-COPILOT_SHELL = [*(f"shell({p})" for p in PYTEST_FORMS + UNITTEST_FORMS), "shell(uv run)", "shell(npm test)",
-                 "shell(npm run)", "shell(git status)", "shell(git diff)", "shell(ls)"]
+COPILOT_SHELL = [*(f"shell({p})" for p in PYTEST_FORMS + UNITTEST_FORMS + PYTHON_C_FORMS + DOCTEST_FORMS),
+                 "shell(uv run)", "shell(npm test)", "shell(npm run)", "shell(git status)", "shell(git diff)",
+                 "shell(ls)"]
 COPILOT_CHECK = [*(f"shell({p})" for p in PYTEST_FORMS + UNITTEST_FORMS), "shell(uv run pytest)", "shell(git status)",
                  "shell(git diff)", "shell(ls)"]
 if CHECK_OK:
