@@ -198,7 +198,11 @@ def test_each_agent_gets_exactly_the_tools_of_its_permissions(tmp_path, monkeypa
     res, argv, allowed = _claude_run(agent, tmp_path, monkeypatch, writes)
     assert res.ok and allowed == expected and res.tools == expected
     assert "--dangerously-skip-permissions" not in argv
-    assert ("--permission-mode" in argv) == writes
+    # V14: no acceptEdits (it approves `rm -r` in the worktree); writers get Edit/Write by name and the syntax hook
+    assert "--permission-mode" not in argv and ("--settings" in argv) == writes
+    denied = argv[argv.index("--disallowedTools") + 1].split(",") if "--disallowedTools" in argv else []
+    assert ("Bash" in denied) == (not any(t.startswith("Bash") for t in expected)), \
+        "no Bash pattern allowed: no Bash at all, not even Claude Code's own read-only commands"
     assert res.isolation == ("L2" if writes else "L1")
 
 
@@ -338,3 +342,16 @@ def test_a_codex_run_has_none_of_codexs_own_web_tools(tmp_path, monkeypatch, rol
     assert argv[argv.index("-c") + 1] == 'web_search="disabled"'
     disabled = [argv[i + 1] for i, a in enumerate(argv) if a == "--disable"]
     assert {"apps", "browser_use", "computer_use"} <= set(disabled)
+
+
+@pytest.mark.parametrize("role", AGENTS)
+def test_writers_delete_and_rename_only_through_git(tmp_path, monkeypatch, role):
+    """V14: without acceptEdits a writing run has no `rm`/`mv`; it gets `git rm`/`git mv` (refused outside the
+    repository) and is told so; no other run gets them."""
+    agent = _agent(role, None)
+    writes, expected = EXPECTED_TOOLS[role]
+    res, argv, allowed = _claude_run(agent, tmp_path, monkeypatch, writes)
+    system = argv[argv.index("--append-system-prompt") + 1]
+    shell = any(t == "Bash(uv run:*)" for t in allowed)
+    assert (set(executors.CLAUDE_FILES) <= set(allowed)) == shell and (executors.FILES_HINT in system) == shell
+    assert not any(t in allowed for t in ("Bash(rm:*)", "Bash(mv:*)"))

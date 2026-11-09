@@ -663,9 +663,13 @@ UNITTEST_FORMS = ["python -m unittest", "python3 -m unittest", "python3 -B -m un
 # writing runs only, since `uv run:*` already runs any Python there (goal 411); never in a run without writes
 PYTHON_C_FORMS = ["python -c", "python3 -c", "python3 -B -c"]
 DOCTEST_FORMS = ["python -m doctest", "python3 -m doctest", "python3 -B -m doctest"]
+# V14: a writing run deletes and renames files with git, which refuses paths outside the repository; `rm`/`mv` stay
+# refused (Claude Code has no delete tool, and acceptEdits, which approved them, is not used)
+CLAUDE_FILES = ["Bash(git rm:*)", "Bash(git mv:*)"]
+FILES_HINT = "Delete or rename files with `git rm` / `git mv`; `rm`, `mv` and other file commands are refused."
 CLAUDE_BASH = [*(f"Bash({p}:*)" for p in PYTEST_FORMS + UNITTEST_FORMS + PYTHON_C_FORMS + DOCTEST_FORMS),
                "Bash(uv run:*)", "Bash(npm test:*)", "Bash(npm run:*)", "Bash(git status:*)", "Bash(git diff:*)",
-               "Bash(ls:*)"]
+               "Bash(ls:*)", *CLAUDE_FILES]
 # a run without writes: no `uv run:*`/`npm run:*`/`npm test:*`, which run any code (and so could write files)
 CLAUDE_CHECK = [*(f"Bash({p}:*)" for p in PYTEST_FORMS + UNITTEST_FORMS), "Bash(uv run pytest:*)", "Bash(git status:*)",
                 "Bash(git diff:*)", "Bash(ls:*)"]
@@ -733,12 +737,18 @@ class ClaudeCodeExecutor(Executor):
         cwd = ensure_sandboxed(req.workdir)
         grant = req.grant or Grant()
         tools = self.tools(grant)
+        system = with_check_hint(req.system, grant) + (f"\n{FILES_HINT}" if grant.shell else "")
         cmd = ["claude", "-p", req.prompt, "--output-format", "stream-json", "--verbose",
-               "--append-system-prompt", with_check_hint(req.system, grant), "--allowedTools", ",".join(tools)]
-        if grant.checks and not grant.shell:
-            cmd += ["--disallowedTools", ",".join(CLAUDE_CHECK_DENY)]
-        if req.writes:
-            cmd += ["--permission-mode", "acceptEdits", "--settings", json.dumps(EDIT_CHECK_SETTINGS)]
+               "--append-system-prompt", system, "--allowedTools", ",".join(tools)]
+        # V14: a run whose allow-list holds no Bash pattern gets no Bash at all; otherwise Claude Code runs its own
+        # read-only commands (`git log`, `cat`, `ls` inside the worktree) without asking
+        deny = (CLAUDE_CHECK_DENY if grant.checks and not grant.shell else []) + (
+            [] if any(t.startswith("Bash") for t in tools) else ["Bash"])
+        if deny:
+            cmd += ["--disallowedTools", ",".join(deny)]
+        if req.writes:  # V14: no `--permission-mode acceptEdits`: Edit/Write are allowed by name, and that mode would
+            # also approve file commands (`rm -r`, `mv`) in the worktree the allow-list does not hold
+            cmd += ["--settings", json.dumps(EDIT_CHECK_SETTINGS)]
         if self.choice.model_id:
             cmd += ["--model", self.choice.model_id]
         if int(req.data.get("max_turns") or 0) > 0:  # the task contract's turn budget (G-R-01)
