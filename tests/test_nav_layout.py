@@ -105,6 +105,16 @@ def test_non_string_entries_are_400_and_change_nothing(app, entry, field):
     assert app.get('/api/ui/nav_layout').json()['value'] == saved
 
 
+@pytest.mark.parametrize("title", [[], {}, 1, None, ["Work"], {"Work": 1}])
+def test_non_string_title_falls_back_to_the_default(app, title):
+    value = prefs.nav_default()
+    value['groups'][0]['title'] = title
+    response = app.put('/api/ui/nav_layout', json={'value': value})
+    assert response.status_code == 200
+    assert response.json()['value'] == prefs.nav_default()
+    assert app.get('/api/ui/nav_layout').json()['value'] == prefs.nav_default()
+
+
 def test_legacy_non_string_entries_are_skipped(app):
     legacy = {'top': [['x']], 'bottom': [{}], 'hidden': [['knowledge'], {'k': 1}, None, 3, 'knowledge', 'audit']}
     expected = legacy_expected('knowledge')

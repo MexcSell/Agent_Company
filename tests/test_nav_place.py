@@ -61,3 +61,53 @@ def test_hidden_and_registered_pages_are_not_restored():
     defaults = prefs.nav_default()['groups'][2:3]
     groups = [{'key': 'evolution', 'title': 'Custom', 'items': ['changes']}]
     assert place(groups, defaults, ['evolution'], ['organization']) == groups
+
+
+def sidebar(layout, views):
+    """The sidebar's own navGroups (with placeNav) on a saved layout, for an admin; returns ids per group."""
+    source = SOURCE.read_text()
+    funcs = [re.search(rf'^function {name}\(.*?^}}', source, re.M | re.S) for name in ('placeNav', 'navGroups')]
+    assert all(funcs), 'placeNav or navGroups missing'
+    defaults = prefs.nav_default()
+    script = '\n'.join(m.group() for m in funcs) + f'''
+const TOPBAR = ["notifications", "audit", "settings", "users"];
+const navDefault = {json.dumps(defaults)};
+const VIEW_GROUP = Object.fromEntries(navDefault.groups.flatMap(g => g.items.map(id => [id, g.key])));
+const navLayout = {json.dumps(layout)};
+const me = {{is_admin: true, ui_mode: "advanced"}};
+const VIEWS = {json.dumps([{'id': v, 'title': v} for v in views])};
+const g = navGroups();
+console.log(JSON.stringify(g.groups.map(x => x.items.map(v => v.id))));
+'''
+    result = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_sidebar_places_new_pages_like_the_editor():
+    """navGroups (rendering) and placeNav (saving) agree, also in a group the administrator reordered."""
+    layout = prefs.nav_default()
+    layout['groups'][0]['items'] = ['projects', 'dashboard', 'goals', 'agents', 'companymap']
+    layout['groups'][1]['items'] = ['research', 'knowledge', 'performance', 'models']
+    layout['groups'][2]['items'] = ['evolution']
+    views = [i for g in prefs.DEFAULT_NAV_GROUPS for i in g['items']] + ['custom-page']
+    groups = sidebar(layout, views)
+    # general-manager follows dashboard (its predecessor), not "before projects" at the top
+    assert groups[0] == ['projects', 'dashboard', 'general-manager', 'goals', 'teams', 'agents', 'companymap',
+                         'workflows', 'deliverables']
+    assert groups[1] == ['research', 'knowledge', 'performance', 'evaluation', 'models']
+    assert groups[2] == ['evolution', 'organization', 'changes']
+    assert groups[3][-1] == 'custom-page'  # an unknown id goes to its group's end (system by default)
+    editor = place(layout['groups'], prefs.nav_default()['groups'], [])
+    assert groups[:3] == [g['items'] for g in editor[:3]]
+
+
+def test_sidebar_without_any_predecessor_starts_at_zero():
+    layout = prefs.nav_default()
+    layout['groups'][1]['items'] = ['dashboard']  # every intelligence page moved away, dashboard moved in
+    for group in (layout['groups'][0], layout['groups'][3]):
+        group['items'] = [i for i in group['items'] if i not in ('dashboard',)]
+    layout['groups'][3]['items'] += ['research', 'knowledge', 'performance', 'models']
+    groups = sidebar(layout, ['dashboard', 'evaluation', 'research', 'knowledge', 'performance', 'models', 'system'])
+    assert groups[1] == ['evaluation', 'dashboard']
+    assert 'evaluation' not in groups[3]

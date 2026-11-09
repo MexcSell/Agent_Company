@@ -254,14 +254,13 @@ let navLayout = null, navDefault = NAV_DEFAULT, railEditing = false, lastOvervie
 function navGroups() {
   const lay = navLayout?.groups ? navLayout : navDefault;
   const vis = VIEWS.filter(v => (!v.admin || me.is_admin) && !TOPBAR.includes(v.id) && (v.id !== "simple" || me.ui_mode === "simple"));
-  const by = Object.fromEntries(vis.map(v => [v.id,v])), saved = new Set([...lay.groups.flatMap(g => g.items), ...lay.hidden]);
-  const groups = lay.groups.map(g => ({...g, items:[...g.items]}));
+  const by = Object.fromEntries(vis.map(v => [v.id,v]));
+  // The editor's rule (placeNav): a default page the layout lacks goes after its predecessor; an unknown id goes last.
+  const groups = placeNav(lay.groups, navDefault.groups, [], lay.hidden);
+  const saved = new Set([...groups.flatMap(g => g.items), ...lay.hidden]);
   vis.forEach(v => {
     if (saved.has(v.id)) return;
-    const g = groups.find(g => g.key === (v.group || VIEW_GROUP[v.id] || "system")) || groups.at(-1);
-    const defaults = navDefault.groups.find(x => x.key === g.key)?.items || [], i = defaults.indexOf(v.id);
-    const next = i < 0 ? null : defaults.slice(i+1).find(id => g.items.includes(id));
-    g.items.splice(next ? g.items.indexOf(next) : g.items.length,0,v.id);
+    (groups.find(g => g.key === (v.group || VIEW_GROUP[v.id] || "system")) || groups.at(-1)).items.push(v.id);
   });
   return {groups:groups.map(g => ({...g,items:g.items.filter(id => by[id] && !lay.hidden.includes(id)).map(id => by[id])})), hidden:lay.hidden.filter(id => by[id]).map(id => by[id])};
 }
