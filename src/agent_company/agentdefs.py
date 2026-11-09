@@ -4,14 +4,20 @@ An agent is defined by a Markdown file in `data/agents/<slug>.md` (its own git r
 a commit that can be read, diffed and reverted): front matter (name, role, model, tools, skills, plugins) and
 the body the executors run it with (mission, backstory, working method, playbook, knowledge notes). The loop
 builds an agent's system prompt from this file (`system_prompt`), so changing the file changes how the agent
-works: that is what learning updates (`learn_into`, `study`), not only experience data in the database.
+works: that is what learning updates (`learn_into`, applied study candidates), not only experience data in the
+database.
 
 `claude_subagent()` renders the same agent as a Claude Code subagent (`.claude/agents/<slug>.md`), which
 catalog.export_claude writes into a project's configuration.
 
 The study rotation (`StudyThread`, setting `study_interval`) visits one agent at a time: it reads the newest
 knowledge the research rooms collected and the agent's recent lessons, has the agent's own model (the offline
-simulator when none) rewrite the "Working method" section, and commits the new definition.
+simulator when none) rewrite the "Working method" section (and "Knowledge notes" from the documents it read).
+The rewrite is not committed (G-R-19): it is stored as a pending definition candidate (`definition_candidates`),
+administrators are notified, and a person applies it (`apply_candidate`, one commit naming the candidate and the
+actor) or discards it after seeing the diff against the current file (`candidate`). A newer candidate of the same
+agent supersedes the older pending one; until a candidate is applied the file, its history, `definition_version`
+and `system_prompt()` stay as they are.
 """
 
 from __future__ import annotations
@@ -150,23 +156,49 @@ def write_text(agent_id: int, text: str, actor: str) -> dict[str, Any]:
     return read(agent_id)
 
 
-def system_prompt(a: Agent) -> str:
-    """The body of the agent's definition (what it runs with), without the front matter."""
+def system_prompt(a: Agent, write: bool = True) -> str:
+    """The body of the agent's definition (what it runs with), without the front matter. A missing file is written
+    first, unless `write` is False (a study visit, G-R-19: nothing changes before a person applies a candidate);
+    then the text it would have is used."""
     p = path_for(a)
-    if not p.exists():
+    if not p.exists() and write:
         sync(a.id, "first definition")
     try:
-        text = p.read_text(encoding="utf-8")
+        text = p.read_text(encoding="utf-8") if p.exists() else render(a)
     except OSError:
         return ""
     return text.split("\n---\n", 1)[1].strip() if text.startswith("---\n") else text.strip()
 
 
+LEARNED = ("Working method", "Knowledge notes")
+
+
+def _write(a: Agent, new: dict[str, str], reason: str) -> None:
+    """Replace learned sections of an agent's file, render once, one version and one commit (lock and session held)."""
+    if not new or set(new) - set(LEARNED):
+        raise ValueError("learning writes the Working method or Knowledge notes section")
+    p = path_for(a)
+    keep = sections(p.read_text(encoding="utf-8")) if p.exists() else {}
+    keep.update({k: v.strip()[:6000] for k, v in new.items()})
+    p.write_text(render(a, keep), encoding="utf-8")
+    a.definition_version = (a.definition_version or 0) + 1
+    _commit(p, f"{a.name} v{a.definition_version}: {reason}"[:200])
+
+
+def _write_sections(agent_id: int, new: dict[str, str], reason: str) -> bool:
+    with _lock, session() as s:
+        a = s.get(Agent, agent_id)
+        if a is None:
+            return False
+        _write(a, new, reason)
+        return True
+
+
 def learn_into(agent_id: int, section: str, text: str, reason: str) -> None:
     """Replace one learned section ("Working method" or "Knowledge notes") and commit."""
-    if section not in {"Working method", "Knowledge notes"}:
+    if section not in LEARNED:
         raise ValueError("learning writes the Working method or Knowledge notes section")
-    write_section(agent_id, section, text, reason)
+    _write_sections(agent_id, {section: text}, reason)
 
 
 def demote(text: str) -> str:
@@ -236,7 +268,8 @@ def claude_subagent(agent_id: int) -> tuple[str, str]:
 # --- study rotation: learning that changes the definition ------------------------------------
 
 def study(agent_id: int | None = None) -> dict[str, Any]:
-    """One study visit: the next agent (round robin) turns new knowledge and lessons into its working method."""
+    """One study visit: the next agent (round robin) turns new knowledge and lessons into a candidate working method
+    that waits for a person (G-R-19)."""
     from agent_company import executors, loop, research
     from agent_company.db import Lesson, Setting
     from agent_company.learning import SHAREABLE
@@ -274,19 +307,121 @@ def study(agent_id: int | None = None) -> dict[str, Any]:
                  + "\n".join(f"- {d['title'] or d['url']}: {d['text'][:400]}" for d in docs) + "\n\n" if docs else "")
               + "Write the improved 'Working method': at most 10 short imperative bullet lines (start each with '- '), "
                 "keeping what works and adding what the lessons and material teach. Answer with the bullets only.")
-    req = executors.Request(purpose="study", role=nxt.role, system=system_prompt(nxt), prompt=prompt,
+    req = executors.Request(purpose="study", role=nxt.role, system=system_prompt(nxt, write=False), prompt=prompt,
                             data={"lessons": lessons, "documents": docs, "current": current})
     res, choice = loop._execute(nxt, req, "study")
     bullets = [ln.strip() for ln in res.text.splitlines() if ln.strip().startswith("- ")][:10] if res.ok else []
     if not bullets:
         return {"studied": nxt.name, "changed": False, "model": choice.name, "detail": res.error or "no bullet lines"}
-    learn_into(nxt.id, "Working method", "\n".join(bullets),
-               f"studied {len(lessons)} lesson(s) and {len(docs)} document(s) with {choice.name}")
+    new = {"Working method": "\n".join(bullets)}
     if docs:
-        learn_into(nxt.id, "Knowledge notes", "\n".join(f"- {d['title'] or d['url']} ({d['url']})" for d in docs),
-                   "knowledge notes from the research rooms")
-    log_event("learning", f"{nxt.name} rewrote its working method ({len(bullets)} lines) with {choice.name}", agent_id=nxt.id)
-    return {"studied": nxt.name, "agent_id": nxt.id, "changed": True, "model": choice.name, "lines": len(bullets)}
+        new["Knowledge notes"] = "\n".join(f"- {d['title'] or d['url']} ({d['url']})" for d in docs)
+    cid = _propose(nxt.id, new, choice.name, f"studied {len(lessons)} lesson(s) and {len(docs)} document(s) with {choice.name}")
+    return {"studied": nxt.name, "agent_id": nxt.id, "changed": True, "candidate_id": cid, "model": choice.name,
+            "lines": len(bullets)}
+
+
+# --- definition candidates: a study rewrite waits for a person (G-R-19) -------------------------
+
+def _propose(agent_id: int, new: dict[str, str], model: str, reason: str) -> int:
+    """Store a pending candidate; an older pending one of the same agent is superseded. The file stays as it is."""
+    from agent_company.db import DefinitionCandidate, now
+    from agent_company.governance import notify
+
+    with session() as s:
+        a = s.get(Agent, agent_id)
+        for old in s.scalars(select(DefinitionCandidate).where(DefinitionCandidate.agent_id == agent_id,
+                                                                DefinitionCandidate.status == "pending")):
+            old.status, old.decided_by, old.decided_at = "superseded", "system", now()
+        c = DefinitionCandidate(agent_id=agent_id, sections={k: v.strip()[:6000] for k, v in new.items()},
+                                base_version=a.definition_version or 0, model=model[:128], reason=reason)
+        s.add(c)
+        s.flush()
+        lines = len(new.get("Working method", "").splitlines())
+        notify(f"Definition candidate #{c.id} for {a.name}",
+               f"A study visit rewrote {', '.join(new)} ({lines} lines) with {model}. Review the diff on the agent's "
+               "Definition tab, then apply or discard it.", source="learning", admin_only=True, s=s)
+        log_event("learning", f"{a.name}: definition candidate #{c.id} ({lines} lines) with {model} waits for review",
+                  agent_id=agent_id, s=s, candidate_id=c.id)
+        return c.id
+
+
+def _cand_dict(c: Any) -> dict[str, Any]:
+    return {"id": c.id, "agent_id": c.agent_id, "sections": c.sections or {}, "base_version": c.base_version,
+            "model": c.model, "reason": c.reason, "status": c.status,
+            "created_at": c.created_at.isoformat() if c.created_at else None, "decided_by": c.decided_by,
+            "decided_at": c.decided_at.isoformat() if c.decided_at else None, "note": c.note}
+
+
+def candidates(agent_id: int | None = None, status: str | None = None) -> list[dict[str, Any]]:
+    from agent_company.db import DefinitionCandidate
+
+    q = select(DefinitionCandidate).order_by(DefinitionCandidate.id.desc())
+    if agent_id is not None:
+        q = q.where(DefinitionCandidate.agent_id == agent_id)
+    if status:
+        q = q.where(DefinitionCandidate.status == status)
+    with session() as s:
+        return [_cand_dict(c) for c in s.scalars(q)]
+
+
+def candidate(cid: int) -> dict[str, Any]:
+    """A candidate with the unified diff of the current definition file against the file it would produce."""
+    import difflib
+
+    from agent_company.db import DefinitionCandidate
+
+    with session() as s:
+        c = s.get(DefinitionCandidate, cid)
+        if c is None:
+            raise KeyError(cid)
+        a = s.get(Agent, c.agent_id)
+        p = path_for(a)
+        # a preview writes nothing: without a file the diff is against the file the agent's settings would give
+        old = p.read_text(encoding="utf-8") if p.exists() else render(a)
+        new = render(a, {**sections(old), **(c.sections or {})})
+        out = _cand_dict(c) | {"agent_name": a.name, "current_version": a.definition_version or 0}
+    out["stale"] = out["base_version"] < out["current_version"]
+    out["stale_note"] = (f"made from v{out['base_version']}; the definition is now v{out['current_version']}: the diff "
+                         "is against the current file, applying replaces only the candidate's sections"
+                         if out["stale"] else "")
+    out["diff"] = "".join(difflib.unified_diff(old.splitlines(keepends=True), new.splitlines(keepends=True),
+                                               fromfile=f"{p.name} (v{out['current_version']})",
+                                               tofile=f"{p.name} (candidate #{cid})"))
+    return out
+
+
+def apply_candidate(cid: int, actor: str) -> dict[str, Any]:
+    """A person applies a pending candidate: its sections are written in one commit naming it and the actor."""
+    from agent_company.db import DefinitionCandidate, now
+
+    with _lock, session() as s:
+        c = s.get(DefinitionCandidate, cid)
+        if c is None:
+            raise KeyError(cid)
+        if c.status != "pending":
+            raise ValueError(f"definition candidate #{cid} is {c.status}, not pending")
+        a = s.get(Agent, c.agent_id)
+        _write(a, dict(c.sections or {}), f"definition candidate #{cid} applied by {actor}")
+        c.status, c.decided_by, c.decided_at = "applied", actor, now()
+        log_event("learning", f"{a.name}: definition candidate #{cid} applied by {actor} (v{a.definition_version})",
+                  agent_id=a.id, s=s, candidate_id=cid)
+        return _cand_dict(c)
+
+
+def discard_candidate(cid: int, actor: str, note: str = "") -> dict[str, Any]:
+    from agent_company.db import DefinitionCandidate, now
+
+    with session() as s:
+        c = s.get(DefinitionCandidate, cid)
+        if c is None:
+            raise KeyError(cid)
+        if c.status != "pending":
+            raise ValueError(f"definition candidate #{cid} is {c.status}, not pending")
+        c.status, c.decided_by, c.decided_at, c.note = "discarded", actor, now(), (note or "")[:2000]
+        log_event("learning", f"definition candidate #{cid} discarded by {actor}", agent_id=c.agent_id, s=s,
+                  candidate_id=cid)
+        return _cand_dict(c)
 
 
 class StudyThread(threading.Thread):

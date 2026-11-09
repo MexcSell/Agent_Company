@@ -219,7 +219,7 @@ async function boot() {
 }
 // --- rail: two groups (top, bottom) in the order an administrator set (Settings → Navigation) -----------
 // Notifications, the audit log, settings and users are buttons at the top right instead (TOPBAR), never on the rail.
-const NAV_DEFAULT = { top: ["dashboard", "projects", "agents", "models", "evolution", "research", "knowledge", "performance"],
+const NAV_DEFAULT = { top: ["dashboard", "projects", "goals", "agents", "companymap", "models", "evolution", "research", "knowledge", "performance"],
   bottom: ["workspace", "machines", "security", "system"] };
 const TOPBAR = ["notifications", "audit", "settings", "users"];
 let navLayout = null, railEditing = false;
@@ -313,7 +313,8 @@ async function updateBadges() {
     // Audit records after the newest one this browser showed; counting starts on the first visit.
     if (store.get("ac.auditSeen") === null || current === "audit") store.set("ac.auditSeen", String(o.audit_last || 0));
     const audit = Math.max(0, (o.audit_last || 0) - Number(store.get("ac.auditSeen") || 0));
-    badges = { users: o.pending_users || 0, notifications: o.unread || 0, audit, projects: (o.pending_proposals || 0) + (o.goals.awaiting_approval || 0) + (o.goals.running || 0) };
+    // Projects: what blocks or occupies work (merges waiting, goals running); pending proposals are listed on the page.
+    badges = { users: o.pending_users || 0, notifications: o.unread || 0, audit, projects: (o.goals.awaiting_approval || 0) + (o.goals.running || 0) };
     const es = $("#estop");
     if (es) { es.classList.toggle("on", !!o.stopped); es.title = o.stopped ? `A stop is active (${o.stop_level}): open System to see or lift it` : "Emergency stop: stop all autonomous work now"; }
     const sl = $("#stop-level");  // S15-R-01: every user sees that work is stopped, and how widely
@@ -433,12 +434,45 @@ function usageTable(u) {
   ${u.models.map((m) => `<tr><td>${esc(m.name)}</td><td class="num">${fmt.format(m.daily.tokens)}${lim(m.daily)}</td><td class="num">${m.daily.runs}</td><td class="num">${fmt.format(m.weekly.tokens)}${lim(m.weekly)}</td><td class="num">${m.weekly.runs}</td><td class="num">${money(m.weekly.cost)}</td></tr>`).join("")}</table></div>`;
 }
 
-// --- goals: no page of their own any more (orders go through the General Manager); a goal opens in a modal
-let selectedGoal = null;
+// --- goals: the Goals page (a new goal, the list by status); a goal opens in a modal
+let selectedGoal = null, goalFilter = "all";
 function goalModal(id) {
   selectedGoal = id;
   modal(`<div id="goal-detail"><div class="cc-working"><span class="spin"></span> Loading goal #${Number(id)}…</div></div>`);
   goalDetail(id).catch((e) => ($("#goal-detail").innerHTML = `<p class="muted">${esc(e.message)}</p>`));
+}
+const GOAL_FILTERS = { all: "All", active: "Active", awaiting_approval: "Awaiting approval", approved: "Merged",
+  failed: "Failed", cancelled: "Cancelled" };
+async function viewGoals(quiet) {
+  const goals = await api("/api/goals");
+  if (!quiet || !$("#goal-list")) {  // a live refresh keeps a half-typed goal
+    $("#view").innerHTML = `<div class="grid two"><div class="card"><h2>New goal</h2><form id="goal-form">
+      <label for="g-title">Goal</label><input id="g-title" required minlength="3" maxlength="256" placeholder="Build a REST API for a todo list">
+      <label for="g-desc">Details</label><textarea id="g-desc" placeholder="Constraints, acceptance criteria, tech choices"></textarea>
+      <label for="g-kind">Kind</label><select id="g-kind"><option value="">the planner picks</option>${["bugfix", "feature", "refactor", "research", "docs"].map((k) => `<option>${k}</option>`).join("")}</select>
+      <label for="g-urls">Research URLs (one per line)</label><textarea id="g-urls" rows="2" placeholder="https://docs.example.com/guide"></textarea>
+      ${me.is_admin ? `<label for="g-repo">Existing git repository (optional; default: new workspace)</label><input id="g-repo" placeholder="/home/you/project">
+      <label for="g-checks">Quality commands (one per line, run in the worktree)</label><textarea id="g-checks" rows="2" placeholder="uv run pytest -q"></textarea>` : ""}
+      <label for="g-allow">Allowed paths (globs, one per line; empty = anywhere)</label><textarea id="g-allow" rows="2" placeholder="src/*"></textarea>
+      <label class="row" style="margin-top:8px"><input type="checkbox" id="g-protect" style="width:auto"> Protect existing tests (agents may add tests, not change them)</label>
+      <label for="g-iter">Max iterations</label><input id="g-iter" type="number" min="1" max="10" value="3">
+      <div class="row" style="margin-top:12px"><button class="btn primary">Start</button></div></form></div>
+      <div class="card"><div class="row"><h2 class="grow" style="margin:0">Goals</h2><select id="goal-filter" style="width:auto">${Object.entries(GOAL_FILTERS).map(([k, l]) => `<option value="${k}"${k === goalFilter ? " selected" : ""}>${l}</option>`).join("")}</select></div>
+      <div class="list" id="goal-list" style="margin-top:8px"></div></div></div>`;
+    $("#goal-form").onsubmit = async (e) => {
+      e.preventDefault();
+      const lines = (id) => ($(id)?.value || "").split("\n").map((x) => x.trim()).filter(Boolean);
+      try {
+        const r = await api("/api/goals", { method: "POST", body: { title: $("#g-title").value.trim(), description: $("#g-desc").value, kind: $("#g-kind").value, urls: lines("#g-urls"), repo_path: $("#g-repo")?.value.trim() || "", quality_commands: lines("#g-checks"), allowed_paths: lines("#g-allow"), protect_tests: $("#g-protect").checked, max_iterations: Number($("#g-iter").value) || null } });
+        e.target.reset(); toast(`Goal #${r.id} started`); viewGoals(true); goalModal(r.id);
+      } catch (err) { toast(err.message); }
+    };
+    $("#goal-filter").onchange = (e) => { goalFilter = e.target.value; viewGoals(true); };
+  }
+  const shown = goals.filter((g) => goalFilter === "all" || (goalFilter === "active" ? GOAL_ACTIVE.includes(g.status) : g.status === goalFilter));
+  $("#goal-list").innerHTML = shown.map((g) => `<div class="list-item" data-id="${Number(g.id)}"><div class="row"><strong class="grow">${esc(g.title)}</strong>${pill(g.status)}</div><div class="muted">#${Number(g.id)}${g.kind ? ` · ${esc(g.kind)}` : ""} · ${esc(g.origin || "user")} · iteration ${Number(g.iteration)}/${Number(g.max_iterations)} · ${ago(g.updated_at)}</div></div>`).join("")
+    || `<p class="muted">${goals.length ? "No goal with this status." : "No goals yet."}</p>`;
+  $("#goal-list").querySelectorAll(".list-item").forEach((el) => (el.onclick = () => goalModal(Number(el.dataset.id))));
 }
 async function goalDetail(id, openIds = new Set()) {
   const g = await api(`/api/goals/${id}`);
@@ -662,6 +696,28 @@ async function viewResearch(quiet) {
 }
 
 // A research report with its claims and review (ASEAO06 S06-R-03/R-04): the approved text once approved, else the draft.
+// EL-R-02: the research lead's tool loop (research_agent.plan_and_collect): per round its model, each tool call
+// (action, its argument, documents found, errors) or why the round stopped. Older reports have none.
+function reportToolSteps(steps) {
+  steps = Array.isArray(steps) ? steps : [];
+  if (!steps.length) return "";
+  const cut = (s, n = 200) => (s.length > n ? `${s.slice(0, n)}…` : s);
+  const rows = steps.flatMap((s) => {
+    const head = `round ${esc(s.round)}${s.model ? ` · <span class="muted">${esc(s.model)}</span>` : ""}`;
+    const note = s.stopped ? `stopped: ${esc(s.stopped)}` : s.sufficient ? `material sufficient${s.reason ? `: ${esc(s.reason)}` : ""}` : s.reason ? esc(s.reason) : "";
+    const calls = (s.results || []).map((x) => {
+      const { action, documents, titles, errors, ...args } = x || {};
+      const docs = (documents || []).length, errs = (errors || []).filter(Boolean);
+      const outcome = `${docs} document(s)${(titles || []).length ? `: ${esc(cut(titles.join("; "), 160))}` : ""}${errs.length ? ` · <span class="pill failed">error</span> ${esc(cut(errs.join("; ")))}` : ""}`;
+      return `<div class="row" style="flex-wrap:wrap;gap:6px">${head}<strong>${esc(action)}</strong><code>${esc(cut(JSON.stringify(args)))}</code><span class="muted">→ ${outcome}</span></div>`;
+    });
+    const refused = (Array.isArray(s.refused) ? s.refused : s.refused ? [s.refused] : []).map((x) => (typeof x === "string" ? x : JSON.stringify(x)));
+    const extra = [note, refused.length ? `refused: ${esc(cut(refused.join("; ")))}` : ""].filter(Boolean).join(" · ");
+    return [...calls, ...(extra || !calls.length ? [`<div class="row muted" style="flex-wrap:wrap;gap:6px">${head}${extra ? ` · ${extra}` : ""}</div>`] : [])];
+  });
+  return `<details${rows.length <= 6 ? " open" : ""}><summary>Tool steps (${rows.length})</summary><div class="events">${rows.join("")}</div></details>`;
+}
+
 function reportModal(r) {
   const langs = r.languages || [];
   const meta = [r.keywords.length ? `keywords: ${esc(r.keywords.join(", "))}` : "", r.source_preferences !== "any" ? `prefers ${esc(r.source_preferences.replace("_", " "))} sources` : "", r.published_after || r.published_before ? `published ${esc(r.published_after || "…")}..${esc(r.published_before || "…")}` : "", langs.length ? `languages: ${esc(langs.join(", "))}` : "", `priority ${esc(r.priority)}`, r.recurring ? `${esc(r.recurring)}, ${r.runs} run(s)${r.next_run_at ? `, next ${esc(new Date(r.next_run_at).toLocaleString())}` : ""}` : "", r.deadline ? `deadline ${esc(new Date(r.deadline).toLocaleString())}` : "", r.budget_usd ? `${money(r.cost_usd)} of ${money(r.budget_usd)}` : "", r.goal_id ? `for goal #${Number(r.goal_id)}` : ""].filter(Boolean).join(" · ");
@@ -670,7 +726,7 @@ function reportModal(r) {
   const text = r.review === "approved" ? r.approved_report : r.report;
   const label = r.review && r.review !== "approved" ? `<p class="muted">Draft: not used by knowledge, search or goals${r.approved_report ? " (an earlier approved version is)" : ""}.</p>` : "";
   const act = me.is_admin && ["draft", "in_review"].includes(r.review) ? `<div class="row" style="margin:8px 0"><button class="btn primary" id="rr-ok">Approve</button><button class="btn danger" id="rr-no">Reject</button></div>` : "";
-  modal(`<h2>${esc(r.question)}</h2>${pill(r.status)}<p class="muted">${meta}</p>${review}${act}${claims}${label}<div class="md">${typeof renderMarkdown === "function" ? renderMarkdown(text || "(not ready yet)") : `<pre>${esc(text)}</pre>`}</div>`);
+  modal(`<h2>${esc(r.question)}</h2>${pill(r.status)}<p class="muted">${meta}</p>${review}${act}${claims}${reportToolSteps(r.tool_steps)}${label}<div class="md">${typeof renderMarkdown === "function" ? renderMarkdown(text || "(not ready yet)") : `<pre>${esc(text)}</pre>`}</div>`);
   const send = async (approve) => {
     const note = approve ? "" : prompt("Why is this report rejected?");
     if (!approve && !note) return;
@@ -731,6 +787,7 @@ function setFavicon(o) {
 }
 
 registerView({ id: "dashboard", title: "Dashboard", icon: "dashboard" }, viewDashboard);
+registerView({ id: "goals", title: "Goals", icon: "goals" }, viewGoals);
 registerView({ id: "research", title: "Research", icon: "research" }, viewResearch);
 registerView({ id: "users", title: "Users", icon: "users", admin: true }, viewUsers);
 

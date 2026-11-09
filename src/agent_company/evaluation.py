@@ -29,7 +29,14 @@ before and after a routing change) can be compared. Eval goals never wait for ap
 
 from __future__ import annotations
 
+import ast
+import fnmatch
+import io
 import json
+import re
+import shutil
+import tokenize
+from uuid import uuid4
 import threading
 import time
 from datetime import datetime, timezone
@@ -38,7 +45,7 @@ from typing import Any
 
 from sqlalchemy import case, func, select
 
-from agent_company import loop, worktrees
+from agent_company import contracts, loop, sandbox, worktrees
 from agent_company.config import REPO_ROOT, settings
 from agent_company.db import EvalRun, Goal, Run, log_event, session
 
@@ -118,6 +125,10 @@ def list_suites() -> list[dict[str, Any]]:
     return out
 
 
+# Bytecode and test caches from runs in a seed repo must never show up as untracked changes.
+SEED_IGNORES = ["__pycache__/", "*.pyc", ".pytest_cache/"]
+
+
 def _seed_repo(label: str, task: dict[str, Any], repeat: int) -> Path:
     repo = settings().workspaces_dir / f"eval-{label}-{task['name']}-{repeat}-{int(time.time() * 1000)}"
     repo.mkdir(parents=True)
@@ -129,6 +140,13 @@ def _seed_repo(label: str, task: dict[str, Any], repeat: int) -> Path:
             raise ValueError(f"seed file escapes the repository: {rel}")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text)
+    ignore = repo / ".gitignore"
+    text = ignore.read_text() if ignore.exists() else ""
+    missing = [line for line in SEED_IGNORES if line not in text.splitlines()]
+    if missing:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        ignore.write_text(text + "\n".join(missing) + "\n")
     worktrees.git(repo, "add", "-A")
     worktrees.git(repo, "commit", "-q", "-m", "Eval seed")
     return repo
@@ -438,3 +456,189 @@ class BenchmarkThread(threading.Thread):
                 scheduled_review()
             except Exception as e:  # noqa: BLE001 - a broken suite must not stop the schedule
                 log_event("error", f"scheduled benchmark review failed: {type(e).__name__}: {e}")
+
+
+MUTATION_KINDS = ("remove_assert", "flip_boundary")
+TEST_FILE = ("tests/*", "*/tests/*", "test_*.py", "*/test_*.py", "*_test.py",
+             "conftest.py", "*/conftest.py")
+_LINE_END = re.compile(r"(?<=\n)|(?<=\r)(?!\n)")
+
+
+def _lines(text: str) -> list[str]:
+    """The lines with their ends, split only at \\n, \\r\\n and \\r as ast and tokenize count them
+    (str.splitlines also splits at \\x0c, \\x1c, \\u2028 …, which would shift every later site)."""
+    lines = _LINE_END.split(text)
+    return lines[:-1] if lines and not lines[-1] else lines
+
+
+def _end(line: str) -> str:
+    return line[len(line.rstrip("\r\n")):] or "\n"
+
+
+def _mutate(text: str, site: dict[str, Any]) -> str | None:
+    lines = _lines(text)
+    i = site["line"] - 1
+    if site["kind"] == "remove_assert":
+        lines[i] = lines[i][:site["col"]] + "pass" + _end(lines[i])
+        for j in range(i + 1, site["end_line"]):
+            lines[j] = _end(lines[j])
+    else:
+        col, old = site["col"], site["token"]
+        replacement = {"<": "<=", "<=": "<", ">": ">=", ">=": ">"}[old]
+        lines[i] = lines[i][:col] + replacement + lines[i][col + len(old):]
+    changed = "".join(lines)
+    try:
+        ast.parse(changed)
+    except SyntaxError:
+        return None
+    return changed if changed != text else None
+
+
+def _sites(root: Path, files: list[str], kinds: tuple[str, ...], skipped: list) -> list[dict[str, Any]]:
+    sites = []
+    for rel in sorted(files):
+        if any(fnmatch.fnmatchcase(rel, pattern) for pattern in TEST_FILE):
+            continue
+        target = root / rel
+        if target.is_symlink() or root.resolve() not in target.resolve().parents:
+            skipped.append({"path": rel, "line": 0, "kind": "", "reason": "unsafe path"})
+            continue
+        try:
+            text = target.read_text(encoding="utf-8")
+            tree = ast.parse(text)
+        except (SyntaxError, UnicodeError) as exc:
+            skipped.append({"path": rel, "line": 0, "kind": "", "reason": str(exc)})
+            continue
+        lines = _lines(text)
+        spans = []
+        for node in ast.walk(tree):
+            if "remove_assert" in kinds and isinstance(node, ast.Assert):
+                prefix = lines[node.lineno - 1].encode()[:node.col_offset].decode()
+                suffix = lines[node.end_lineno - 1].encode()[node.end_col_offset:].decode().strip()
+                if not prefix.strip() and (not suffix or suffix.startswith("#")):
+                    sites.append({"path": rel, "line": node.lineno, "col": len(prefix),
+                                  "kind": "remove_assert", "end_line": node.end_lineno})
+            if "flip_boundary" in kinds and isinstance(node, ast.Compare):
+                if any(isinstance(op, (ast.Lt, ast.LtE, ast.Gt, ast.GtE)) for op in node.ops):
+                    spans.append(((node.lineno, node.col_offset), (node.end_lineno, node.end_col_offset)))
+        for token in tokenize.generate_tokens(io.StringIO(text, newline=None).readline):
+            if token.type != tokenize.OP or token.string not in ("<", "<=", ">", ">="):
+                continue
+            start = (token.start[0], len(lines[token.start[0] - 1][:token.start[1]].encode()))
+            end = (token.end[0], len(lines[token.end[0] - 1][:token.end[1]].encode()))
+            if any(a <= start and end <= b for a, b in spans):
+                sites.append({"path": rel, "line": token.start[0], "col": token.start[1],
+                              "kind": "flip_boundary", "token": token.string})
+    return sorted(sites, key=lambda s: (s["path"], s["line"], s["col"], kinds.index(s["kind"])))
+
+
+def _run_checks(root: Path, checks: list[str], timeout: int, mode: str | None) -> list[dict[str, Any]]:
+    """Each check as the gate runs it: `contracts.run_command` (command policy, `/bin/sh -c` in the L3 sandbox).
+    A check that did not run (refused by the policy, sandbox unavailable or not started) carries its reason
+    in `infra` and is never counted as caught."""
+    results = []
+    for check in checks:
+        info: dict[str, Any] = {}
+        refusals: list[str] = []
+        ok, out = contracts.run_command(check, root, timeout, lambda _cmd, why: refusals.append(why),
+                                        mode=mode, info=info)
+        level = info.get("isolation") or ""
+        refused = bool(refusals)
+        infra = info.get("infra") or ("" if level else out or "check did not run")
+        results.append({"check": check, "ok": ok and not infra, "exit_code": info.get("exit_code"),
+                        "timed_out": bool(info.get("timed_out")), "infra": infra, "refused": refused,
+                        "level": level, "duration_s": info.get("duration_s"),
+                        "tail": (info.get("output_tail") or "")[-300:]})
+    return results
+
+
+def _mutation_level(runs: list[dict[str, Any]]) -> str:
+    levels = [r["level"] for r in runs if r["level"]]
+    return "L2" if "L2" in levels else ("L3" if levels else "")
+
+
+def mutation_test(repo: str | Path, base: str, head: str = "HEAD", checks: list[str] | None = None,
+                  kinds: tuple[str, ...] = MUTATION_KINDS, max_mutations: int = 20, timeout: int = 120,
+                  mode: str | None = None) -> dict[str, Any]:
+    """Measure EL-R-08 check sensitivity in a disposable worktree, without changing the source repo."""
+    if not checks or any(not check.strip() for check in checks):
+        raise ValueError("mutation testing needs non-empty checks")
+    if any(kind not in MUTATION_KINDS for kind in kinds):
+        raise ValueError("unknown mutation kind")
+    if max_mutations < 0:
+        raise ValueError("max_mutations must be non-negative")
+    repo = Path(repo).resolve()
+    result = {"repo": str(repo), "base": base, "head": head, "baseline": [], "sites": 0,
+              "truncated": False, "skipped": [], "mutations": [], "per_check": {},
+              "overall": {"mutations": 0, "caught": 0, "share": None, "infra": 0}, "level": ""}
+    try:
+        for key, ref in (("base", base), ("head", head)):
+            result[key] = worktrees.git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    except worktrees.WorktreeError as exc:
+        result["error"] = str(exc)
+        return result
+    path = settings().worktrees_dir / f"mutation-{uuid4().hex[:12]}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    all_runs = []
+    created = False
+    try:
+        worktrees.git(repo, "worktree", "add", "--detach", "-q", str(path), result["head"])
+        created = True
+        worktrees.ensure_sandboxed(path)
+        mode = mode or sandbox.mode_for()
+        baseline = _run_checks(path, checks, timeout, mode)
+        result["baseline"] = baseline
+        all_runs.extend(baseline)
+        result["level"] = _mutation_level(all_runs)
+        for run in baseline:
+            if not run["ok"]:
+                reason = ("refused by the command policy" if run["refused"]
+                          else "did not start (infra)" if run["infra"] else "failed")
+                result["error"] = f"baseline: {run['check']} {reason}"
+                return result
+        files = worktrees.git(path, "diff", "--name-only", "-z", "--diff-filter=AM",
+                              result["base"], result["head"], "--", "*.py").split("\0")
+        sites = _sites(path, [f for f in files if f], kinds, result["skipped"])
+        result["sites"] = len(sites)
+        result["truncated"] = len(sites) > max_mutations
+        table = {check: {"mutations": 0, "caught": 0, "share": None} for check in checks}
+        result["per_check"] = table
+        for site in sites[:max_mutations]:
+            target = path / site["path"]
+            changed = _mutate(target.read_text(encoding="utf-8"), site)
+            if changed is None:
+                result["skipped"].append({k: site[k] for k in ("path", "line", "kind")} |
+                                         {"reason": "invalid or unchanged mutation"})
+                continue
+            try:
+                target.write_text(changed, encoding="utf-8")
+                runs = _run_checks(path, checks, timeout, mode)
+            finally:
+                worktrees.git(path, "checkout", "--", site["path"])
+            all_runs.extend(runs)
+            caught = [r["check"] for r in runs if not r["infra"] and not r["ok"]]
+            ran = [r for r in runs if not r["infra"]]
+            mutation = {k: site[k] for k in ("kind", "path", "line", "col")}
+            mutation.update(caught_by=caught, survived=bool(ran) and not caught,
+                            timed_out=[r["check"] for r in runs if r["timed_out"]],
+                            infra=[r["check"] for r in runs if r["infra"]], level=_mutation_level(runs))
+            result["mutations"].append(mutation)
+            for run in ran:
+                row = table[run["check"]]
+                row["mutations"] += 1
+                row["caught"] += int(not run["ok"])
+                row["share"] = _rate(row["caught"], row["mutations"])
+            overall = result["overall"]
+            overall["mutations"] += int(bool(ran))
+            overall["caught"] += int(bool(caught))
+            overall["infra"] += int(bool(mutation["infra"]))
+            overall["share"] = _rate(overall["caught"], overall["mutations"])
+        result["level"] = _mutation_level(all_runs)
+        return result
+    finally:
+        try:
+            if created:  # never remove a worktree that was not added: a second error would hide the first
+                worktrees.remove(repo, path)
+        finally:
+            shutil.rmtree(path, ignore_errors=True)
+            worktrees.git(repo, "worktree", "prune", check=False)

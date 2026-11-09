@@ -415,7 +415,13 @@ body:has(.view.loading) { cursor: progress; }
 .mdl-page { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: var(--gap, 12px); height: 100%; min-height: 0; }
 .mdl-page > .card { min-height: 0; }
 .mdl-list { display: flex; flex-direction: column; gap: 6px; }
-.mdl-item { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; } .mdl-item.off { opacity: .7; }
+.mdl-item { padding: 8px 10px; border: 1px solid var(--border); border-left-width: 4px; border-radius: 8px; }
+.mdl-item.up { border-left-color: var(--ok); } .mdl-item.up [data-name-of] { color: var(--ok); }
+.mdl-item.down { border-left-color: var(--bad); } .mdl-item.down [data-name-of] { color: var(--bad); }
+.mdl-info .wc-badge.up { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); font-weight: 700; }
+.mdl-info .wc-badge.down { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); font-weight: 700; }
+.mdl-login { padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); }
+.mdl-code { font: 700 20px/1.2 var(--mono); letter-spacing: .12em; padding: 4px 10px; border-radius: 6px; background: var(--panel); border: 1px solid var(--border); }
 .mdl-item .muted { font-size: 12px; } .mdl-why { color: var(--warn); }
 .mdl-kind { font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 4px; background: var(--panel-2); color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
 .mdl-kind.k-claude_code { color: #d97757; } .mdl-kind.k-codex { color: #10a37f; } .mdl-kind.k-llm { color: var(--accent); }
@@ -507,3 +513,9 @@ svg .link:hover .net-edge { stroke-width: 4 !important; }
 .tool-calls { margin: 2px 0 4px 24px; font-size: 12px; }
 .tool-calls ol { margin: 4px 0; padding-left: 20px; max-height: 260px; overflow: auto; }
 .tool-calls li.failed { color: var(--bad); }
+/* definition candidates (agents.js, G-R-19): the unified diff of a study rewrite */
+pre.diff { max-height: 360px; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; white-space: pre-wrap; }
+pre.diff .diff-add { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); display: inline-block; width: 100%; }
+pre.diff .diff-del { color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); display: inline-block; width: 100%; }
+pre.diff .diff-hunk { color: var(--info); }
+.diff-stale { color: var(--warn); }

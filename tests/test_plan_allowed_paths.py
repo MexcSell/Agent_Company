@@ -60,9 +60,12 @@ def test_scope_gate_exemptions_pass(tmp_path):
     assert len(c.acceptance) == 4
 
 
-def test_foreign_spec_folder_rewritten_then_exempt(tmp_path):
-    c = contract(exists(".claude/specs/other/notes.md"))
-    assert specs.check_plan(goal(tmp_path), [c]) == [f"implement: .claude/specs/other/notes.md -> {OWN}/notes.md"]
+def test_foreign_spec_folder_rejected_not_scope_checked(tmp_path):
+    """K54 rejects another goal's spec folder in either mode; it is never reported as out of scope."""
+    for drop in (False, True):
+        with pytest.raises(ValueError) as e:
+            specs.check_plan(goal(tmp_path), [contract(exists(".claude/specs/other/notes.md"))], drop_out_of_scope=drop)
+        assert "outside this goal's spec folder" in str(e.value) and "allowed paths" not in str(e.value)
 
 
 def test_no_allowed_paths_passes(tmp_path):
@@ -98,9 +101,9 @@ def test_drop_mode_removes_and_reports(tmp_path):
 
 
 def test_drop_mode_keeps_rewrite_report(tmp_path):
-    c = contract(exists(".claude/specs/other/notes.md"), exists("docs/x.md"))
+    c = contract(exists(f"./{OWN}/notes.md"), exists("docs/x.md"))
     report = specs.check_plan(goal(tmp_path), [c], drop_out_of_scope=True)
-    assert report == [f"implement: .claude/specs/other/notes.md -> {OWN}/notes.md",
+    assert report == [f"implement: ./{OWN}/notes.md -> {OWN}/notes.md",
                       "implement: dropped file_exists docs/x.md (outside the allowed paths)"]
     assert [a.path for a in c.acceptance] == [f"{OWN}/notes.md"]
 

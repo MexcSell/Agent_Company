@@ -162,10 +162,13 @@ window.WSP = window.WSP || {};
     const midMin = !max && !narrow && min.has("editor") && (min.has("terminal") || termOff);
     const grow = midMin ? (!S.noClaude && !min.has("claude") ? "claude" : !min.has("explorer") ? "explorer" : "") : "";
     S.el.classList.toggle("mid-min", midMin);
-    const left = max === "explorer" || grow === "explorer" ? "minmax(0, 1fr)" : max ? "0px" : min.has("explorer") ? "34px" : `${S.sizes.left}px`;
-    const right = S.noClaude ? "0px" : max === "claude" || grow === "claude" ? "minmax(0, 1fr)" : max ? "0px" : min.has("claude") ? "34px" : `${S.sizes.right}px`;
-    const mid = max === "explorer" || max === "claude" ? "0px" : grow ? "34px" : midMin ? "minmax(34px, 1fr)" : "minmax(240px, 1fr)";
-    S.el.style.gridTemplateColumns = narrow ? "1fr" : `${left} ${max ? "0px" : "5px"} ${mid} ${max || S.noClaude ? "0px" : "5px"} ${right}`;
+    const left = grow === "explorer" ? "minmax(0, 1fr)" : min.has("explorer") ? "34px" : `${S.sizes.left}px`;
+    const right = S.noClaude ? "0px" : grow === "claude" ? "minmax(0, 1fr)" : min.has("claude") ? "34px" : `${S.sizes.right}px`;
+    const mid = grow ? "34px" : midMin ? "minmax(34px, 1fr)" : "minmax(240px, 1fr)";
+    // Maximised: the other windows are display:none and leave the grid, so the one left fills a single column
+    // (with five columns it would land in the first, 0px wide one).
+    S.el.style.gridTemplateColumns = narrow ? "1fr" : max ? "minmax(0, 1fr)"
+      : `${left} 5px ${mid} ${S.noClaude ? "0px" : "5px"} ${right}`;
     const rows = max === "terminal" ? "34px 0 minmax(0, 1fr)" : midMin ? (termOff ? "minmax(0, 1fr) 0 0" : "minmax(0, 1fr) 0 minmax(0, 1fr)")
       : min.has("editor") && termOff ? "24px 0 0" : termOff ? "minmax(0, 1fr) 0 0"
       : min.has("terminal") && min.has("editor") ? "24px 0 24px" : min.has("terminal") ? "minmax(0, 1fr) 0 24px"

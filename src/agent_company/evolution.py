@@ -248,7 +248,8 @@ def smoke_trial(agent_id: int, repeats: int = 1) -> dict[str, float]:
                 trial = {"trainee_id": agent_id, "side": side} | ({"experiment_id": exp_id} if exp_id else {})
                 summary = evaluation.run_suite(suite, label, repeats=repeats, trial=trial)
                 results[side] = summary["pass_rate"]
-                metrics[side] = experiments.side_metrics(summary)
+                # with S09-R-05's dimensions (compliance, tokens, tool failures), as route experiments keep them
+                metrics[side] = experiments.side_metrics(summary) | {"dimensions": summary.get("dimensions") or {}}
                 with session() as s:
                     experiments.update(s, exp_id, **{side: metrics[side]})
         with session() as s:
@@ -402,8 +403,9 @@ def merge_clone(clone_id: int) -> dict[str, Any] | None:
         if c is None or c.parent_id is None or c.lifecycle == "retired" or c.status == "busy":
             return None
         o = s.get(Agent, c.parent_id)
-        o.xp += c.xp
-        o.level = 1 + o.xp // 50
+        from agent_company.learning import add_xp
+
+        add_xp(o, c.xp or 0)
         o.tasks_done += c.tasks_done
         o.tasks_failed += c.tasks_failed
         skills = dict(o.skills or {})

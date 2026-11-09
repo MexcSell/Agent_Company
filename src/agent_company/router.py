@@ -54,9 +54,16 @@ DEFAULT_ROUTES: dict[str, str] = {
     "qa": "Claude Sonnet 5.5",
     "security": "Claude Sonnet 5.5",
     "network_security": "Claude Sonnet 5.5",
+    "security_guard": "Claude Sonnet 5.5",
     "analyst": "Claude Sonnet 5.5",
     "comprehensive_analyst": "Claude Sonnet 5.5",
+    "tech_introducer": "Claude Sonnet 5.5",
+    "instructor": "Claude Sonnet 5.5",
     "research": "Claude Haiku 5.5",
+    "administrator": "Claude Haiku 5.5",
+    "agent_manager": "Claude Haiku 5.5",
+    "product": "Claude Haiku 5.5",
+    "sales": "Claude Haiku 5.5",
     "external_data": "OpenRouter Free router",
     "student": "OpenRouter Free router",
 }
@@ -93,6 +100,7 @@ class Choice:
     api_key_env: str = ""
     session_id: str = ""
     account: str = ""
+    requested: str = ""  # the model assigned to the work (agent's own, else the route's), set by resolve_chain
 
     @property
     def provider(self) -> str:
@@ -121,7 +129,7 @@ def model_dict(m: ModelEntry) -> dict[str, Any]:
             "daily_token_limit": m.daily_token_limit, "weekly_token_limit": m.weekly_token_limit,
             "enabled": m.enabled, "builtin": m.builtin, "notes": m.notes, "base_url": m.base_url,
             "api_key_env": m.api_key_env, "session_id": m.session_id, "account": m.account, "available": ok, "unavailable_reason": why,
-            "clearance": clearance(m), "clearance_set": bool(m.clearance),
+            "clearance": clearance(m), "clearance_set": bool(m.clearance), "signin": m.signin or {},
             "terms": m.terms or {}, "terms_due": terms_due(m),
             "limited_until": lu.isoformat(timespec="seconds") if (lu := limited_until(m)) else None,
             "limited_reason": m.limited_reason if lu else ""}
@@ -279,9 +287,10 @@ def provider_of(model_id: str) -> str:
 # --- plan and quota limits a provider reports on a run ------------------------------------------
 # Claude Code: "You've hit your session limit · resets 9:50pm (Europe/Berlin)"; Codex: "You've hit your usage limit
 # ... try again in 2 hours 5 minutes" / usage_limit_reached; API: insufficient_quota, credit balance too low. A
-# plain 429 is transient (loop.TRANSIENT) and retried; these are not, the model waits until its reset.
+# plain 429 is transient (loop.TRANSIENT) and retried; these are not, the model waits until its reset. OpenAI's
+# per-minute "Rate limit reached for <model> ... try again in 1.2s" is such a plain 429, not a plan limit.
 LIMIT_RE = re.compile(r"(?i)hit your (?:\w+ )?limit|usage[ _]limit[ _](?:reached|exceeded)|usage_limit_reached"
-                      r"|rate_limit_reached|limit (?:reached|exceeded) for|quota (?:exceeded|exhausted)"
+                      r"|rate_limit_reached|(?<!rate )limit (?:reached|exceeded) for|quota (?:exceeded|exhausted)"
                       r"|insufficient_quota|credit balance is too low|out of (?:credits|extra usage)")
 LIMIT_DEFAULT_MINUTES = 60  # when the message names no reset time
 LIMIT_MAX_DAYS = 8
@@ -410,6 +419,8 @@ def available(m: ModelEntry, ignore_limit: bool = False) -> tuple[bool, str]:
             return False, "set ENABLE_CODEX=1 to let agents run Codex"
         if not shutil.which("codex"):
             return False, "`codex` CLI not found on PATH"
+        if m.account and not (codex_home(m.account) / "auth.json").is_file():
+            return False, f"no Codex sign-in in data/codex-accounts/{m.account}"
     elif m.kind == "copilot":
         if not settings().enable_copilot:
             return False, "set ENABLE_COPILOT=1 to let agents run GitHub Copilot"
@@ -442,13 +453,21 @@ SESSION_RE = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a
 ACCOUNT_RE = r"[a-z0-9][a-z0-9._-]{0,63}"
 
 
-def claude_config_dir(account: str) -> Path:
-    """A claude_code model's own Claude Code sign-in (its CLAUDE_CONFIG_DIR): data/claude-accounts/<account>/."""
+ACCOUNT_KINDS = {"claude_code": "claude", "codex": "codex"}  # CLI kinds with a sign-in per model: data/<x>-accounts/
+
+
+def account_dir(tool: str, account: str) -> Path:
+    """A CLI model's own sign-in folder: data/claude-accounts/<account>/ or data/codex-accounts/<account>/."""
     import re
 
     if not re.fullmatch(ACCOUNT_RE, account) or ".." in account:
-        raise ValueError(f"invalid Claude Code account {account!r}")
-    return settings().data_dir / "claude-accounts" / account
+        raise ValueError(f"invalid {CLI_TOOLS[tool]['label']} account {account!r}")
+    return settings().data_dir / f"{tool}-accounts" / account
+
+
+def claude_config_dir(account: str) -> Path:
+    """A claude_code model's own Claude Code sign-in (its CLAUDE_CONFIG_DIR): data/claude-accounts/<account>/."""
+    return account_dir("claude", account)
 
 
 def claude_session_file(session_id: str, account: str = "") -> str:
@@ -545,7 +564,17 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
             raise NotCleared(f"no model is cleared for {classification} content: {', '.join(blocked)}. Clear a "
                              "local model for it (Models), or lower the classification")
         chain.append(_choice(offline, "fallback (" + "; ".join(skipped) + ")" if skipped else "fallback"))
-        return chain
+        requested = pref or (route.model_name if route else "")
+        return [replace(c, requested=requested) for c in chain]
+
+
+def scratch_dir(role: str) -> Path:
+    """Where an agent CLI answers a request that has no worktree: an agent CLI runs only inside data/worktrees, so
+    an empty scratch folder, read-only for a request that does not write (Claude Code without Edit/Write, Codex
+    --sandbox read-only); the material is in the prompt."""
+    path = settings().worktrees_dir / f"_router-{role}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def run(role: str, req: Any, model_pref: str | None = None, *, first: Choice | None = None,
@@ -566,10 +595,7 @@ def run(role: str, req: Any, model_pref: str | None = None, *, first: Choice | N
     if chain[0].kind != "offline":  # once a real model is tried, the simulator never stands in for it
         chain = [c for c in chain if c.kind != "offline"]
     if req.workdir is None and any(c.kind in CLI_KINDS for c in chain[:3]):
-        # an agent CLI runs only inside data/worktrees: an empty scratch folder, read-only for a request that
-        # does not write (Claude Code without Edit/Write, Codex --sandbox read-only); the material is in the prompt
-        req.workdir = settings().worktrees_dir / f"_router-{role}"
-        req.workdir.mkdir(parents=True, exist_ok=True)
+        req.workdir = scratch_dir(role)
     res, choice = None, chain[0]
     for choice in chain[:3]:
         res = executors.for_choice(choice, timeout or settings().command_timeout).run(req)
@@ -579,6 +605,24 @@ def run(role: str, req: Any, model_pref: str | None = None, *, first: Choice | N
         if res.ok:
             break
     return res, choice
+
+
+EXPLAINED = ("fallback for ", "escalation for ", "different family from ")
+
+
+def trace_issues(trace: dict[str, Any]) -> list[str]:
+    """Where a run's model disagrees with the one assigned to the work, unless configuration explains it: a route's
+    fallback or escalation, or a reviewer of another family (verification phase 2). Empty: they agree."""
+    out: list[str] = []
+    requested, used, route = trace.get("requested") or "", trace.get("model") or "", trace.get("route") or ""
+    if trace.get("provider") == "offline" and requested and requested != used:
+        out.append(f"the offline simulator stood in for {requested} ({route})")
+    elif requested and used and used != requested and not route.startswith(EXPLAINED):
+        out.append(f"{used} ran instead of the assigned {requested} without a configured fallback ({route})")
+    served, mid = trace.get("served") or "", (trace.get("model_id") or "").rsplit("/", 1)[-1]
+    if served and mid and not (served.startswith(mid) or mid.startswith(served)):
+        out.append(f"the provider answered as {served}, not {mid}")
+    return out
 
 
 def limit_blocked(chain: list[Choice]) -> str:
@@ -646,6 +690,85 @@ def set_route(role: str, model_name: str, escalation: str | None = None) -> None
             r.escalation = escalation
 
 
+# --- automatic routes (Models → Routes, "Assign models") -------------------------------------------
+# lead: plans, designs and writes the core code; review: codes beside it and checks it, best in another model family;
+# bulk: reads and collects a lot; every other role is light work.
+ROLE_TIERS: dict[str, str] = {
+    **dict.fromkeys(("general_manager", "architect", "developer"), "lead"),
+    **dict.fromkeys(("frontend", "devops", "tech_scout", "tech_introducer", "qa", "security", "network_security",
+                     "security_guard", "analyst", "comprehensive_analyst", "instructor"), "review"),
+    **dict.fromkeys(("research", "external_data"), "bulk"),
+    **dict.fromkeys(("administrator", "agent_manager", "product", "sales", "student"), "light"),
+}
+_STRENGTH = [(re.compile(r"haiku|mini|nano|flash|lite|free|small"), 1.0), (re.compile(r"opus|fable|gpt-5|\bo3\b|pro\b"), 3.0),
+             (re.compile(r"sonnet|codex|gpt-4"), 2.5)]
+MAX_AUTO_FALLBACKS = 4
+
+
+def strength(m: ModelEntry) -> float:
+    """A rough rank of what a model can do, from its kind and id: no provider publishes one comparable score."""
+    mid = (m.model_id or "").lower()
+    if m.kind == "claude_code" and not mid:
+        return 3.0
+    if m.kind == "codex":
+        return 2.5
+    if m.kind == "copilot":
+        return 2.0
+    for pattern, value in _STRENGTH:
+        if pattern.search(mid):
+            return value
+    return 1.5 if is_local(m) else 2.0
+
+
+def cheap(m: ModelEntry) -> bool:
+    """Free to run: a local model, a free API model, a free plan or tier."""
+    return (is_local(m) or (m.signin or {}).get("plan") == "free"
+            or (m.terms or {}).get("billing") in ("free_tier", "local")
+            or (m.kind == "llm" and not (m.input_cost or m.output_cost)))
+
+
+def _tier_key(tier: str, m: ModelEntry, lead: str) -> tuple:
+    cost = (m.input_cost or 0) + (m.output_cost or 0)
+    if tier == "lead":  # the strongest; a paid plan before a free one's small allowance
+        return (-strength(m), cheap(m), -cost, m.id)
+    if tier == "review":  # another family than the lead's model, a mid model before the strongest
+        return (_choice(m, "").provider == lead, abs(strength(m) - 2.5), cost, cheap(m), m.id)
+    if tier == "bulk":  # free first, then the weakest, keeping the strong models for the lead roles
+        return (not cheap(m), strength(m), cost, m.id)
+    return (strength(m), not cheap(m), cost, m.id)
+
+
+def plan_routes() -> dict[str, dict[str, Any]]:
+    """Each role's model, retry model and fallbacks from the models usable now (ROLE_TIERS). A model at its usage
+    limit is never a role's model; it comes last among the fallbacks, for when it resets."""
+    with session() as s:
+        models = [m for m in s.scalars(select(ModelEntry).order_by(ModelEntry.id)) if m.kind != "offline"]
+        usable = [m for m in models if available(m)[0]]
+        later = [m for m in models if m not in usable and available(m, ignore_limit=True)[0]]
+        if not usable:
+            raise ValueError("no model is usable now: add one, set its key or sign in (Models)")
+        roles = [r.role for r in s.scalars(select(Route).order_by(Route.role))]
+        best = min(usable, key=lambda m: _tier_key("lead", m, ""))
+        lead = _choice(best, "").provider
+        plan: dict[str, dict[str, Any]] = {}
+        for role in roles:
+            tier = ROLE_TIERS.get(role, "light")
+            ranked = sorted(usable, key=lambda m: _tier_key(tier, m, lead))
+            fallback = ranked[1:] + sorted(later, key=lambda m: _tier_key(tier, m, lead))
+            plan[role] = {"model": ranked[0].name, "escalation": "" if best is ranked[0] else best.name,
+                          "fallback": [m.name for m in fallback][:MAX_AUTO_FALLBACKS], "tier": tier}
+        return plan
+
+
+def auto_routes() -> dict[str, dict[str, Any]]:
+    """Apply plan_routes to every route; returns the plan."""
+    plan = plan_routes()
+    for role, p in plan.items():
+        set_route(role, p["model"], p["escalation"])
+        set_fallback(role, p["fallback"])
+    return plan
+
+
 # --- a model's own API key ---------------------------------------------------------------------
 KEY_PURPOSE = b"ac-model-key"
 
@@ -698,13 +821,14 @@ def add_model(data: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("kind must be llm, claude_code, codex or copilot")
     if data["kind"] == "llm" and not data.get("model_id"):
         raise ValueError("model_id is required (LiteLLM-style provider/model)")
+    if data.get("account") and data["kind"] not in ACCOUNT_KINDS:
+        raise ValueError("account is a Claude Code or Codex sign-in: only for claude_code and codex models")
     _check_endpoint(data)
-    if data.get("account") and data["kind"] != "claude_code":
-        raise ValueError("account is a Claude Code sign-in: only for claude_code models")
     with session() as s:
         if s.scalars(select(ModelEntry).where(ModelEntry.name == data["name"])).first():
             raise ValueError("a model with that name exists")
-        m = ModelEntry(**{"model_id": "", **data}, terms=terms)
+        m = ModelEntry(**{"model_id": "", **data}, terms=terms,
+                       signin=cli_signin(data["kind"], data.get("account") or "") if data["kind"] in CLI_KINDS else {})
         if key:
             if m.kind != "llm":
                 raise ValueError("an API key is for API and local models; a CLI uses its own sign-in")
@@ -731,9 +855,9 @@ def update_model(model_id: int, data: dict[str, Any]) -> dict[str, Any]:
             if data["api_key"] and m.kind != "llm":
                 raise ValueError("an API key is for API and local models; a CLI uses its own sign-in")
             _set_key(m, str(data["api_key"] or ""))
-        _check_endpoint(data)
-        if data.get("account") and data.get("kind", m.kind) != "claude_code":
-            raise ValueError("account is a Claude Code sign-in: only for claude_code models")
+        if data.get("account") and data.get("kind", m.kind) not in ACCOUNT_KINDS:
+            raise ValueError("account is a Claude Code or Codex sign-in: only for claude_code and codex models")
+        _check_endpoint({**data, "kind": data.get("kind", m.kind)})
         renamed = None
         if "name" in data:
             data = {**data, "name": str(data["name"] or "").strip()}
@@ -779,10 +903,11 @@ def _check_endpoint(data: dict[str, Any]) -> None:
     if sid and not re.fullmatch(SESSION_RE, sid):
         raise ValueError("session_id must be a Claude Code session id such as 3067d536-a81c-492b-9302-1b000247bdea")
     if data.get("account"):
+        tool = ACCOUNT_KINDS.get(data.get("kind") or "", "claude")
         try:
-            claude_config_dir(data["account"])
+            account_dir(tool, data["account"])
         except ValueError:
-            raise ValueError("account must be a folder name in data/claude-accounts/ such as claude-2") from None
+            raise ValueError(f"account must be a folder name in data/{tool}-accounts/ such as {tool}-2") from None
 
 
 def test_model(model_id: int) -> dict[str, Any]:
@@ -842,8 +967,8 @@ OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
 def provider_status(choice: Choice, key: str = "", client: httpx.Client | None = None) -> dict[str, Any]:
     """Current usage from the provider, best effort: never raises, an unreachable provider is reported."""
     try:
-        if choice.kind == "codex":
-            return codex_limits()
+        if choice.kind == "codex":  # the model's own sign-in (data/codex-accounts/<account>), else the server's
+            return codex_limits(codex_home(choice.account) if choice.account else None)
         if choice.kind == "llm" and choice.model_id.startswith("openrouter/") and not choice.base_url:
             return openrouter_key_status(key or os.environ.get("OPENROUTER_API_KEY", ""), client)
         if choice.kind == "llm" and choice.base_url:
@@ -909,7 +1034,10 @@ def window_label(minutes: int, fallback: str = "limit") -> str:
     return f"{minutes}-minute limit" if minutes else fallback.capitalize() + " limit"
 
 
-def codex_home() -> Path:
+def codex_home(account: str = "") -> Path:
+    """Codex's home (CODEX_HOME, else ~/.codex); a codex model's own ChatGPT sign-in: data/codex-accounts/<account>/."""
+    if account:
+        return account_dir("codex", account)
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
 
@@ -953,6 +1081,8 @@ def delete_model(model_id: int) -> None:
             raise ValueError("the offline simulator cannot be deleted")
         for r in s.scalars(select(Route).where(Route.model_name == m.name)):
             r.model_name = DEFAULT_ROUTE_OTHER if m.name != DEFAULT_ROUTE_OTHER else OFFLINE
+        for r in s.scalars(select(Route).where(Route.escalation == m.name)):
+            r.escalation = ""
         for r in s.scalars(select(Route).where(Route.fallback.contains(m.name))):
             r.fallback = ",".join(n for n in r.fallback.split(",") if n != m.name)
         s.delete(m)
@@ -1117,34 +1247,56 @@ CLI_TOOLS: dict[str, dict[str, Any]] = {
 }
 
 
-def _signed_in(tool: str) -> bool:
-    import json
-
+def _signed_in(tool: str, account: str = "") -> bool:
     if tool == "codex":
-        return (codex_home() / "auth.json").is_file()
+        return (codex_home(account) / "auth.json").is_file()
     if tool == "claude":
-        home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+        home = claude_config_dir(account) if account else Path(os.environ.get("CLAUDE_CONFIG_DIR")
+                                                               or Path.home() / ".claude")
         return (home / ".credentials.json").is_file() or bool(os.environ.get("ANTHROPIC_API_KEY"))
     if any(os.environ.get(k) for k in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")):
         return True
-    cfg = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home()) / ".copilot" / "config.json"
+    return bool(copilot_users()[0])
+
+
+def copilot_users() -> tuple[list[Any], dict[str, Any]]:
+    """The signed-in users and the last one from the Copilot CLI's config: 1.0.x writes `loggedInUsers` and
+    `lastLoggedInUser`, earlier versions `logged_in_users` and `last_logged_in_user`."""
+    d = copilot_config()
+    users = d.get("loggedInUsers") or d.get("logged_in_users") or []
+    last = d.get("lastLoggedInUser") or d.get("last_logged_in_user") or {}
+    return (users if isinstance(users, list) else []), (last if isinstance(last, dict) else {})
+
+
+def copilot_config() -> dict[str, Any]:
+    """The Copilot CLI's config.json ($COPILOT_HOME, else ~/.copilot): JSON after `//` comment lines it writes."""
+    import json
+
+    home = os.environ.get("COPILOT_HOME") or Path(os.environ.get("XDG_CONFIG_HOME") or Path.home()) / ".copilot"
     try:
-        return bool(json.loads(cfg.read_text()).get("logged_in_users"))
+        text = (Path(home) / "config.json").read_text()
+        d = json.loads("\n".join(x for x in text.splitlines() if not x.lstrip().startswith("//")))
     except (OSError, ValueError):
-        return False
+        return {}
+    return d if isinstance(d, dict) else {}
 
 
-def cli_status(tool: str) -> dict[str, Any]:
-    """Whether the CLI is installed, its version, whether it is signed in and enabled for agents, and the setup."""
+def cli_status(tool: str, account: str = "") -> dict[str, Any]:
+    """Whether the CLI is installed, its version, whether it is signed in (with `account`: that sign-in folder's) and
+    enabled for agents, and the setup."""
     if tool not in CLI_TOOLS:
         raise KeyError(tool)
+    if account and tool not in ACCOUNT_KINDS.values():
+        raise ValueError(f"the {CLI_TOOLS[tool]['label']} CLI has no account folders")
     from agent_company.workspace import _version
 
     t = CLI_TOOLS[tool]
     exe = shutil.which(t["exe"])
     version = _version(exe)
     return {"tool": tool, "label": t["label"], "kind": t["kind"], "installed": bool(exe), "version": version,
-            "signed_in": bool(exe) and _signed_in(tool), "enabled": bool(getattr(settings(), t["enable"])),
+            "signed_in": bool(exe) and _signed_in(tool, account), "enabled": bool(getattr(settings(), t["enable"])),
+            "account": cli_signin(t["kind"], account) if exe else {}, "can_login": tool in LOGIN_CMDS,
+            "site": LOGIN_SITES.get(tool, ""), "next_account": next_account(tool) if tool == "codex" else "",
             "enable_setting": t["enable"], "steps": t["steps"]}
 
 
@@ -1163,6 +1315,186 @@ def install_cli(tool: str) -> dict[str, Any]:
 
     workspace._VERSION.pop(shutil.which(CLI_TOOLS[tool]["exe"]) or "", None)  # a new version
     return {"ok": proc.returncode == 0, "output": (proc.stdout + proc.stderr)[-3000:], **cli_status(tool)}
+
+
+# --- signing a CLI in from the website ---------------------------------------------------------------
+# The GitHub sign-in of the Copilot CLI: `copilot login --device-code` runs on the server (an administrator's action);
+# the page shows its one-time code and address, the person confirms on github.com, and the job ends signed_in only when
+# the CLI exited cleanly and its own config says it is signed in (never from what it printed).
+# Codex the same with `codex login --device-auth` on auth.openai.com, always into a new or named sign-in folder
+# (data/codex-accounts/<account>/, its CODEX_HOME): another ChatGPT account beside the host's, which stays as it is.
+
+LOGIN_CMDS: dict[str, list[str]] = {"copilot": ["login", "--device-code"], "codex": ["login", "--device-auth"]}
+LOGIN_SITES = {"copilot": "GitHub", "codex": "ChatGPT"}
+LOGIN_TIMEOUT = 900  # GitHub's and OpenAI's device codes expire after 15 minutes
+_DEVICE_RE = re.compile(r"(https://[^\s]+/login/device)\S*.*?\b([A-Z0-9]{4}-[A-Z0-9]{4})\b")
+# Codex prints the address and the code on separate lines: "https://auth.openai.com/codex/device" … "792J-YS4QE"
+_CODEX_DEVICE_RE = re.compile(r"(https://auth\.openai\.com/\S*device)\b.*?\b([A-Z0-9]{4}-[A-Z0-9]{4,6})\b", re.S)
+# Without a system keychain the CLI asks, in a terminal only, whether to keep the token as plain text in its config
+# file; a person answers that on the page (state `consent`), never the server on its own.
+_CONSENT_RE = re.compile(r"Store token in plain ?text config file\?", re.I)
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\r")
+_NOISE_RE = re.compile(r"Waiting for authorization|Failed to copy to clipboard|To authenticate, visit|"
+                       r"Store token in plain ?text|^[yYnN]$")
+_ACTIVE = ("starting", "waiting", "consent", "finishing")
+_logins: dict[str, dict[str, Any]] = {}
+_login_lock = threading.Lock()
+
+
+def login_state(tool: str) -> dict[str, Any]:
+    """The tool's sign-in job (`none` before one ran): state starting|waiting|consent|finishing|signed_in|failed|
+    cancelled, the address and code to enter, the seconds left, the account it signed in as and the error. The CLI's
+    own output stays on the server (the error quotes its last lines)."""
+    if tool not in LOGIN_CMDS:
+        raise KeyError(tool)
+    job = _logins.get(tool)
+    if job is None:
+        return {"tool": tool, "state": "none"}
+    left = max(0, int(job["started"] + LOGIN_TIMEOUT - time.time())) if job["state"] in _ACTIVE else 0
+    return {k: v for k, v in job.items() if k not in ("proc", "output", "fd", "home", "new_home")} | {
+        "seconds_left": left, "site": LOGIN_SITES[tool]}
+
+
+def next_account(tool: str) -> str:
+    """The first free sign-in folder name for a new account: codex-2, codex-3, …"""
+    n = 2
+    while account_dir(tool, f"{tool}-{n}").exists():
+        n += 1
+    return f"{tool}-{n}"
+
+
+def cli_login(tool: str, by: str = "system", account: str = "") -> dict[str, Any]:
+    """Start the CLI's device sign-in in a pseudo-terminal (so it can ask about storing the token), or return the
+    one running; waits up to 10 s for the code. Codex signs in into its own folder (`account`, else a new one), never
+    the host's. Its result is audited in the name of `by` when it ends."""
+    import pty
+    import subprocess
+
+    if tool not in LOGIN_CMDS:
+        raise KeyError(tool)
+    if account and tool != "codex":
+        raise ValueError(f"the {CLI_TOOLS[tool]['label']} sign-in has no account folders")
+    exe = shutil.which(CLI_TOOLS[tool]["exe"])
+    if not exe:
+        raise RuntimeError(f"the {CLI_TOOLS[tool]['label']} CLI is not installed on the server")
+    with _login_lock:
+        job = _logins.get(tool)
+        if job is None or job["state"] not in _ACTIVE:
+            env, home, new_home = {**os.environ, "TERM": "dumb", "NO_COLOR": "1"}, None, False
+            if tool == "codex":
+                account = account or next_account(tool)
+                home = codex_home(account)
+                new_home = not home.exists()
+                home.mkdir(parents=True, exist_ok=True, mode=0o700)
+                env["CODEX_HOME"] = str(home)
+            master, slave = pty.openpty()
+            try:
+                proc = subprocess.Popen([exe, *LOGIN_CMDS[tool]], stdin=slave, stdout=slave, stderr=slave,
+                                        cwd=str(Path.home()), start_new_session=True, env=env)
+            except OSError:
+                os.close(master)
+                raise
+            finally:
+                os.close(slave)
+            job = {"tool": tool, "state": "starting", "url": "", "code": "", "started": time.time(), "account": {},
+                   "error": "", "output": "", "by": by, "proc": proc, "fd": master, "folder": account,
+                   "home": home, "new_home": new_home}
+            _logins[tool] = job
+            threading.Thread(target=_watch_login, args=(job,), daemon=True, name=f"login-{tool}").start()
+    end = time.time() + 10
+    while job["state"] == "starting" and time.time() < end:
+        time.sleep(0.1)
+    return login_state(tool)
+
+
+def answer_login(tool: str, store: bool) -> dict[str, Any]:
+    """The person's answer to "store the token as plain text?": yes finishes the sign-in, no cancels it."""
+    job = _logins.get(tool)
+    if job is None or job["state"] != "consent":
+        raise ValueError("the sign-in is not waiting for that answer")
+    job.update(state="finishing", stored=store)
+    os.write(job["fd"], b"y\n" if store else b"n\n")
+    return login_state(tool)
+
+
+def cancel_login(tool: str) -> dict[str, Any]:
+    job = _logins.get(tool)
+    if job is not None and job["state"] in _ACTIVE:
+        job["state"] = "cancelled"
+        _end_login(job)
+    return login_state(tool)
+
+
+def _end_login(job: dict[str, Any]) -> None:
+    import signal
+
+    proc = job["proc"]
+    if proc.poll() is None:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except OSError:
+            proc.terminate()
+
+
+def _watch_login(job: dict[str, Any]) -> None:
+    proc, tool, fd = job["proc"], job["tool"], job["fd"]
+    timer = threading.Timer(LOGIN_TIMEOUT, lambda: (job.update(error="the code expired before it was confirmed"),
+                                                     _end_login(job)))
+    timer.daemon = True
+    timer.start()
+    try:
+        while True:
+            try:
+                chunk = os.read(fd, 4096)
+            except OSError:  # EIO: the CLI closed the terminal
+                break
+            if not chunk:
+                break
+            job["output"] = (job["output"] + _ANSI_RE.sub("", chunk.decode("utf-8", "replace")))[-4000:]
+            hit = (_CODEX_DEVICE_RE if tool == "codex" else _DEVICE_RE).search(job["output"])
+            if hit and job["state"] == "starting":
+                job.update(url=hit.group(1), code=hit.group(2), state="waiting")
+            if job["state"] == "waiting" and _CONSENT_RE.search(job["output"]):
+                job["state"] = "consent"
+        rc = proc.wait()
+    finally:
+        timer.cancel()
+        os.close(fd)
+    home = job.get("home")
+    signed_in = (home / "auth.json").is_file() if home is not None else _signed_in(tool)
+    if job["new_home"] and not (rc == 0 and signed_in and job["state"] != "cancelled"):
+        shutil.rmtree(home, ignore_errors=True)  # a new folder without a sign-in: nothing to keep
+    if job["state"] == "cancelled":
+        return
+    if rc == 0 and signed_in:
+        job.update(state="signed_in", account=cli_signin(CLI_TOOLS[tool]["kind"], job["folder"]))
+    elif job.get("stored") is False:
+        job.update(state="cancelled", error="the token was not stored, so the CLI is not signed in; nothing changed")
+    else:
+        last = [x.strip() for x in job["output"].splitlines() if x.strip() and not _NOISE_RE.search(x.strip())][-2:]
+        job.update(state="failed", error=job["error"] or " ".join(last)[-500:] or f"the sign-in ended with code {rc}")
+    from agent_company import governance
+
+    governance.audit(f"user:{job['by']}", "cli_login_result", tool, None,
+                     {"state": job["state"], "account": job["account"].get("email", ""), "folder": job["folder"],
+                      "error": job["error"][:200],
+                      "plaintext_token": bool(job.get("stored"))},
+                     "info" if job["state"] == "signed_in" else "warning")
+
+
+def cli_signin(kind: str, account: str = "") -> dict[str, Any]:
+    """Whose sign-in a CLI model uses now (as the Models page shows it), with the time: kept when it is registered."""
+    from agent_company import workspace
+
+    if kind == "copilot":
+        a = copilot_account()
+    elif kind == "codex":
+        a = codex_account(codex_home(account) if account else None)
+    elif kind == "claude_code":
+        a = workspace._account(claude_config_dir(account) if account else None)
+    else:
+        return {}
+    return {k: str(v) for k, v in a.items() if v} | {"at": datetime.now(UTC).isoformat(timespec="seconds")}
 
 
 # --- what the Models page shows for each model (as the Claude Code panel's info) ---------------
@@ -1212,17 +1544,11 @@ def codex_account(home: Path | None = None) -> dict[str, str]:
 
 
 def copilot_account() -> dict[str, str]:
-    import json
-
     for k in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
         if os.environ.get(k):
             return {"method": f"GitHub token ({k})"}
-    cfg = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home()) / ".copilot" / "config.json"
-    try:
-        d = json.loads(cfg.read_text())
-    except (OSError, ValueError):
-        return {"method": "not signed in"}
-    user = d.get("last_logged_in_user") or next(iter(d.get("logged_in_users") or []), None) or {}
+    users, last = copilot_users()
+    user = last or next((u for u in users if isinstance(u, dict)), None) or {}
     return {"method": "GitHub account", "email": str(user.get("login") or "")} if user else {"method": "not signed in"}
 
 
@@ -1275,13 +1601,15 @@ def model_info(m: ModelEntry) -> dict[str, Any]:
         info["scope"] = f"the Claude {p['plan']} plan of this sign-in" if p.get("plan") else "the Claude plan of this sign-in"
         info["note"] = "" if p.get("available") else p.get("reason") or ""
     elif m.kind == "codex":
-        info["account"] = codex_account()
-        st = codex_limits()
+        home = codex_home(m.account) if m.account else None
+        info["account"] = codex_account(home)
+        st = codex_limits(home)
         info["limits"] = [{"label": w["label"], "percent": w["used_percent"], "severity": severity(w["used_percent"]),
                            "resets_at": _iso(w.get("resets_at")), "source": "codex"}
                           for w in st.get("limits") or [] if not w.get("resets_at") or w["resets_at"] > time.time()]
         plan = st.get("plan") or info["account"].get("plan") or ""
-        info["scope"] = f"the ChatGPT {plan} plan of the server's Codex sign-in" if plan else "the ChatGPT plan of the server's Codex sign-in"
+        whose = f"the Codex sign-in in data/codex-accounts/{m.account}" if m.account else "the server's Codex sign-in"
+        info["scope"] = f"the ChatGPT {plan} plan of {whose}" if plan else f"the ChatGPT plan of {whose}"
         info["note"] = "" if info["limits"] else "Codex reports its plan limits with each run: press Test to read them"
     elif m.kind == "copilot":
         info["account"] = copilot_account()

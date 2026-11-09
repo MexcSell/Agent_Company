@@ -12,6 +12,11 @@ Acceptance condition types:
   command      {"type": "command", "run": "pytest -q"}     command exits 0 in the worktree
                a command may name its gate stage, "stage": "integration" (unit|integration|security|static|performance|compatibility|accessibility):
                the quality gate then runs it again itself as a check of that stage (S09-R-02)
+
+Ordering and preconditions (K237):
+  after        ["key"]  order only: the task starts once those tasks finished, whatever their outcome
+  requires     [file_exists|contains with a relative "path"]  checked in the worktree before the run
+               (`unmet_requires`; contains is case-sensitive on the file); unmet -> the task is skipped
 """
 
 from __future__ import annotations
@@ -19,11 +24,11 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
 import jsonschema
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 ConditionType = Literal["contains", "regex", "min_length", "json_schema", "file_exists", "command"]
 
@@ -53,6 +58,13 @@ class Condition(BaseModel):
                 raise ValueError(f"invalid regex: {e}") from e
         return v
 
+    @model_validator(mode="after")
+    def _command_runs_something(self) -> Condition:
+        # without `run` the check would run `true` and always pass, whatever the work (verification phase 3, V11)
+        if self.type == "command" and not (self.run or "").strip():
+            raise ValueError('a "command" condition needs "run": the command to execute')
+        return self
+
 
 class TaskBudget(BaseModel):
     cost_usd: float = Field(default=0.0, ge=0)  # 0 = no limit; a run that costs more fails the task
@@ -66,6 +78,8 @@ class TaskContract(BaseModel):
     description: str = Field(min_length=1)
     skills: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
+    after: list[str] = Field(default_factory=list)  # order only: wait until these finish, any outcome
+    requires: list[Condition] = Field(default_factory=list)  # worktree preconditions checked before the run
     priority: int = Field(default=5, ge=0, le=9)
     writes: bool = False
     inputs: dict[str, Any] = Field(default_factory=dict)
@@ -109,6 +123,17 @@ def validate(data: dict[str, Any]) -> TaskContract:
             raise ContractError(f"inputs do not match input_schema: {e.message}") from e
     if any(cond.type == "json_schema" for cond in c.acceptance) and c.output_schema is None:
         raise ContractError("json_schema acceptance needs an output_schema")
+    for cond in c.requires:
+        if cond.type not in {"file_exists", "contains"}:
+            raise ContractError(f"{c.key}: requires supports only file_exists and contains, not {cond.type}")
+        p = cond.path or ""
+        if not p.strip():
+            raise ContractError(f"{c.key}: a requires condition needs a path")
+        if (p.startswith(("/", "\\")) or PurePosixPath(p).is_absolute() or PureWindowsPath(p).drive
+                or ".." in PurePosixPath(p.replace("\\", "/")).parts):
+            raise ContractError(f"{c.key}: requires path {p!r} must be relative to the worktree, without '..'")
+        if cond.type == "contains" and not (isinstance(cond.value, str) and cond.value):
+            raise ContractError(f"{c.key}: a requires contains condition needs a text value")
     return c
 
 
@@ -123,10 +148,47 @@ def validate_plan(tasks: list[dict[str, Any]]) -> list[TaskContract]:
         missing = set(c.depends_on) - known
         if missing:
             raise ContractError(f"{c.key} depends on unknown task(s) {sorted(missing)}")
-    order = topo_order({c.key: c.depends_on for c in contracts})
+        missing = set(c.after) - known
+        if missing:
+            raise ContractError(f"{c.key} runs after unknown task(s) {sorted(missing)}")
+        both = sorted(set(c.depends_on) & set(c.after))
+        if both:
+            raise ContractError(f"{c.key}: {both[0]} is in both depends_on and after")
+    order = topo_order({c.key: [*c.depends_on, *c.after] for c in contracts})
     if order is None:
         raise ContractError("task dependencies contain a cycle")
     return contracts
+
+
+def unmet_requires(contract: TaskContract, workdir: Path) -> list[str]:
+    """One line per `requires` condition the worktree does not meet (empty: all met). Never raises."""
+    unmet: list[str] = []
+    for cond in contract.requires:
+        path = cond.path or ""
+        try:
+            root = workdir.resolve()
+            target = (root / path).resolve()
+        except (OSError, RuntimeError):
+            unmet.append(f"{path} cannot be resolved")
+            continue
+        if root not in target.parents:
+            unmet.append(f"{path} is outside the worktree")
+        elif cond.type == "file_exists":
+            if not target.exists():
+                unmet.append(f"file_exists {path}: missing")
+        elif cond.type == "contains":
+            if not target.is_file():
+                unmet.append(f"contains {cond.value!r} in {path}: file missing")
+                continue
+            try:
+                found = str(cond.value) in target.read_text(errors="replace")
+            except OSError:
+                found = False
+            if not found:
+                unmet.append(f"contains {cond.value!r} in {path}: not found")
+        else:
+            unmet.append(f"{cond.type} is not a supported precondition")
+    return unmet
 
 
 def topo_order(deps: dict[str, list[str]]) -> list[str] | None:
@@ -177,7 +239,8 @@ def check(contract: TaskContract, output: str, workdir: Path | None, timeout: in
         info: dict[str, Any] = {}
         ok, detail = _check_one(cond, contract, output, workdir, timeout, on_refused, mode, info)
         results.append({"condition": cond.model_dump(exclude_none=True), "passed": ok, "detail": detail}
-                       | ({"isolation": info["isolation"]} if info.get("isolation") else {}))
+                       | ({"isolation": info["isolation"]} if info.get("isolation") else {})
+                       | ({"infra": info["infra"]} if info.get("infra") else {}))
     return results
 
 
@@ -215,7 +278,8 @@ def run_command(cmd: str, workdir: Path, timeout: int,
                 info: dict[str, Any] | None = None) -> tuple[bool, str]:
     """Run a check command in the worktree: in the L3 sandbox as `mode` (sandbox.MODES, default the company
     setting) allows, with a filtered environment either way. `info` receives the isolation level and its note,
-    the exit code (None when it did not run), whether it timed out, the duration and the output tail (S09-R-04)."""
+    the exit code (None when it did not run), whether it timed out, the duration, the output tail (S09-R-04) and
+    `infra`, the start-up line when the sandbox itself did not start (`sandbox.startup_failure`)."""
     import time
 
     from agent_company import sandbox
@@ -236,11 +300,13 @@ def run_command(cmd: str, workdir: Path, timeout: int,
     if info is not None:
         info.update(isolation=res.isolation, isolation_note=res.note, timed_out=res.timed_out,
                     exit_code=res.returncode if res.isolation else None,
-                    duration_s=round(time.monotonic() - started, 2), output_tail=res.output[-800:])
+                    duration_s=round(time.monotonic() - started, 2), output_tail=res.output[-800:], infra=res.infra)
     level = f" ({res.isolation})" if res.isolation else ""
     note = f"\n[{res.note}]" if res.note else ""
     if not res.isolation:
         return False, f"`{cmd}` {res.note}"
+    if res.infra:  # bwrap did not start: the command never ran, never a pass (S14-R-03)
+        return False, f"`{cmd}` infrastructure: the sandbox did not start{level}: {res.infra}{note}"
     if res.timed_out:
         return False, f"`{cmd}` timed out after {timeout}s{level}{note}"
     return res.returncode == 0, f"`{cmd}` exit {res.returncode}{level}{note}\n{res.output[-1500:]}".strip()
@@ -265,6 +331,17 @@ def limits(contract: TaskContract, changed: list[str], cost: float | None) -> li
         out.append({"condition": {"type": "budget", "cost_usd": contract.budget.cost_usd}, "passed": not over,
                     "detail": f"the run cost ${cost:.4f} (task budget ${contract.budget.cost_usd:.4f})" if over else ""})
     return out
+
+
+def requires_change(contract: TaskContract, changed: list[str] | None) -> list[dict[str, Any]]:
+    """A writing task without a `command` condition must change a file in the goal's diff (S09-R-01): checks
+    of files that already exist (file_exists, contains, regex, min_length) would pass on old files, so a
+    blocked build that changed nothing and named no BLOCKER passed. `changed` None (unknown) is not checked."""
+    if not contract.writes or changed is None or any(c.type == "command" for c in contract.acceptance):
+        return []
+    return [{"condition": {"type": "diff"}, "passed": bool(changed),
+             "detail": "" if changed else "a writing task without a command condition changed no file in this "
+                                          "goal's diff; existing files do not count"}]
 
 
 _FINDING_LINE = re.compile(r"(?im)^[\s*-]*FINDING:\s*(.+?)\s*$")

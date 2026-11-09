@@ -20,9 +20,12 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "rotation_interval": (int, "Seconds between rotation visits of the external-data room (0 = manual); restart to apply"),
     "proposal_policy": (str, "Who decides agent proposals: 'user' (administrator) or 'superiors' (the GM)"),
     "max_proposal_goals": (int, "Goals a single goal may spawn through approved proposals"),
+    "rule_proposal_min_goals": (int, "Failed goals with one RCA cause before a project rule is proposed (EL-R-04)"),
     "goal_budget_usd": (float, "Maximum model spend per goal in USD (0 = no limit)"),
     "goal_time_budget": (int, "Maximum wall-clock seconds per goal (0 = no limit)"),
     "goal_token_budget": (int, "Maximum model tokens per goal (0 = no limit)"),
+    "writing_daily_tokens_per_user": (int, "Model tokens one user may spend per UTC day through the writing "
+                                           "assistant (0 = no limit)"),
     "goal_agent_limit": (int, "Agents working on one goal at once (0 = no limit)"),
     "allow_preexisting_failures": (bool, "Checks that already failed before the agents started do not block the gate"),
     "auto_push": (bool, "Push approved work to the project's GitHub remote"),
@@ -34,7 +37,7 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "enable_claude_code": (bool, "Let agents (and the General Manager) run the Claude Code CLI on the server's Claude login"),
     "enable_codex": (bool, "Let agents run the Codex CLI on the server's ChatGPT login"),
     "enable_copilot": (bool, "Let agents run the GitHub Copilot CLI on the server's GitHub login"),
-    "study_interval": (int, "Seconds between visits of the learning rotation, which rewrites one agent's definition (0 = manual)"),
+    "study_interval": (int, "Seconds between visits of the learning rotation; each visit produces a definition candidate for one agent that an administrator applies after seeing the diff (0 = manual)"),
     "retry_max_attempts": (int, "Attempts per model when a run fails with a transient error (429, 5xx, timeout)"),
     "retry_base_seconds": (float, "First retry delay in seconds; it doubles on each retry"),
     "retry_max_seconds": (float, "Longest delay between two retries, in seconds"),
@@ -63,6 +66,12 @@ SCHEMA: dict[str, tuple[type, str]] = {
                                        "agent) or 'always' (also a clone made for a role nobody holds)"),
     "qualify_recruits": (bool, "A new recruit of a writing role first passes an eval suite as a candidate before it is "
                                "used (costs model calls; the offline simulator always fails it)"),
+    "task_critic": (bool, "After each writing task, a critic of another model family reviews its diff before dependent "
+                          "tasks start; a FAIL returns the task to its author, at most twice (EL-R-06; costs model calls)"),
+    "auto_approve_proposals": (bool, "Owner policy: pending follow-up proposals are approved automatically within the "
+                                     "chain guards; project, rule and restricted proposals still wait for a person"),
+    "auto_merge": (bool, "Owner policy: a goal that reaches awaiting approval is merged automatically; decisions, "
+                         "critical defects, unverified improvements and conflicts still block, A2A goals always wait"),
     "improvement_min_score": (float, "Percent a code-improvement candidate's weighted benchmark score must beat the baseline by"),
     "improvement_max_regression": (int, "Percent any single benchmark metric of a candidate may get worse before it is rejected"),
     "improvement_auto_rollback": (bool, "Revert a deployed code improvement automatically when the safe restart refuses it"),
@@ -112,9 +121,10 @@ SCHEMA: dict[str, tuple[type, str]] = {
 RETRIEVAL_KEYS = {k for k in SCHEMA if k.startswith("retrieval_w_")}
 LIMITS: dict[str, tuple[float, float]] = {
     "max_iterations": (1, 10), "max_parallel": (1, 16), "command_timeout": (10, 7200),
-    "rotation_interval": (0, 86400), "max_proposal_goals": (0, 20), "goal_budget_usd": (0, 10_000),
+    "rotation_interval": (0, 86400), "max_proposal_goals": (0, 20), "rule_proposal_min_goals": (2, 20), "goal_budget_usd": (0, 10_000),
     "goal_time_budget": (0, 7 * 86400), "study_interval": (0, 7 * 86400),
     "goal_token_budget": (0, 1_000_000_000), "goal_agent_limit": (0, 16),
+    "writing_daily_tokens_per_user": (0, 1_000_000_000),
     "retry_max_attempts": (1, 10), "retry_base_seconds": (0, 600), "retry_max_seconds": (0, 3600),
     "min_improvement": (0, 100), "max_goal_depth": (1, 10), "escalate_after": (1, 10), "cost_overrun_factor": (1, 20),
     "repo_map_chars": (0, 50_000), "stuck_repeat_limit": (0, 100), "stuck_error_limit": (0, 100),

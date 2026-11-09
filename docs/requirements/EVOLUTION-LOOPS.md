@@ -33,16 +33,16 @@ IDs `EL-R-nn`; status words as in [README.md](README.md).
 | Codex cooperates with the research agent (owner); an independent evaluator of another family (evolving agents) | the review of a research report used another family only among API models | **EL-R-03** done |
 | Execute → evaluate → evolve; evaluation-driven evolution with a baseline, hard constraints, no combined score, regressions reject (a_1, a_6, evolving agents) | experiments with baseline vs candidate, regressions, canary and rollback (`experiments.py`, SPEC-13, G-R-11); verified self-evolution of the platform's code (`selfevolve.py`) | done (`experiments.py`, `selfevolve.py`) |
 | Failure log collected automatically (a_1 `failures.jsonl`) | every failed run, check and gate result is in the DB; RCA of failed goals with failure layers (`rca.py`, G-R-17) | done, adapted (`rca.py`, `performance.operations`) |
-| A recurring failure becomes a rule proposal (a_1 "CI → LLM analysis → AGENTS.md rule as a PR"; a_3 lessons update the rules) | RCA actions become proposals; playbooks are curated from lessons (`evolution.py`); nothing proposes a project *rule* | **EL-R-04** open |
+| A recurring failure becomes a rule proposal (a_1 "CI → LLM analysis → AGENTS.md rule as a PR"; a_3 lessons update the rules) | RCA actions become proposals; playbooks are curated from lessons (`evolution.py`); `rca.propose_rules`: a cause in `rule_proposal_min_goals` failed goals is one pending `kind="rule"` proposal; approved by a person, `projects._to_rule` adds a catalog rule | **EL-R-04** done |
 | Hooks check quality after each edit and the agent corrects itself (a_1 PreToolUse/PostToolUse) | the team hooks only log (`hooks.py`); syntax was checked at the gate, after the run | **EL-R-05** done |
 | Reflexion: evaluator, self-reflection, experience memory (a_2); memories distilled and recalled by new agents (a_5) | lessons after every task, success and failure, screened and retrieved into the next task package; clones and recruits inherit experience (`learning.py`, SPEC-11, S12-R-02) | done (`learning.learn`, `learning.retrieve`) |
 | Orchestrator, event bus, state store, observability, specialised agents (a_4); runtime with teacher, critique and evaluation agents and metrics (a_9) | goal loop, blackboard, SQLite state, `/metrics`, roles; instructor, QA, evaluation harness | done (`loop.py`, `blackboard.py`, `metrics.py`, `training.py`, `evaluation.py`) |
-| A critic loop per specialist inside the iteration (a_8 purple loops) | review tasks check a whole iteration's change (`quality.REVIEW_ROLES`), not one task before it is handed on | **EL-R-06** open |
+| A critic loop per specialist inside the iteration (a_8 purple loops) | review tasks check a whole iteration's change (`quality.REVIEW_ROLES`), not one task before it is handed on | **EL-R-06** done (`loop._critic`, setting `task_critic`) |
 | A red-team agent (a_8) | adversarial suite (S09-R-05), security review role | done (`evals/adversarial.json`) |
-| An archive of designs with their evaluation logs; the next candidate sampled from it (a_7) | experiments keep baseline and candidate, no lineage between candidates | **EL-R-07** open |
-| Several competing candidates per improvement (evolving agents *(summary)*) | one candidate per experiment | part of EL-R-07 |
-| Evaluate the evaluator: mutation testing of the checks (evolving agents *(summary)*) | the eval suites' checks are verified to fail on the seed (`exercises.py`); the gate's own checks are not mutation-tested | **EL-R-08** open |
-| A bridge: an MCP server through which Codex calls the company's tools (get task, update progress, save insight, request review) (Codex and Bridge *(summary)*) | CLI agents get MCP servers an administrator granted (`mcp.py`); the company's own functions are not offered as tools | **EL-R-09** open |
+| An archive of designs with their evaluation logs; the next candidate sampled from it (a_7) | experiments keep their `parent_id` and an `eval_log`; the next candidate starts from the best or a diverse earlier one (`experiments.pick_parent`, `seed`) | **EL-R-07** done (`experiments.lineage`, `pick_parent`) |
+| Several competing candidates per improvement (evolving agents *(summary)*) | up to three route or strategy candidates on one suite against one shared baseline; only the best without regressions goes to review (`experiments.compete`, `select_best`) | **EL-R-07** done |
+| Evaluate the evaluator: mutation testing of the checks (evolving agents *(summary)*) | `evaluation.mutation_test` measures gate checks against assertion and boundary mutations in scratch worktrees | **EL-R-08** implemented |
+| A bridge: an MCP server through which Codex calls the company's tools (get task, update progress, save insight, request review) (Codex and Bridge *(summary)*) | the bundled `bridge` MCP server (`mcp_servers/bridge.py` → `POST /api/bridge/call` → `bridge.py`), scoped by a per-run token, granted per agent in Tools & MCP | **EL-R-09** done for Claude Code (`bridge.py`, tests/test_mcp_bridge.py); Codex wiring open (decision #94) |
 | GitHub Copilot CLI as a model (owner; a_8) | `copilot` kind behind `enable_copilot` (`executors.CopilotExecutor`); the CLI is not installed on this host | skip (needs the owner's GitHub sign-in: Models → Add model → Install, then `copilot` login) |
 | Research agent layers, source registry, evidence statuses, report (create research agent) | research room, sources with monitoring, claims checked against documents, independent review (ASEAO06) | done (`research.py`) |
 | Control Hub, mission form, marketplace (AXoR chats) | Simple mode and mission report (REQ-003/004), marketplace (REQ-002), merged 2026-11-06 | done (`mission.py`, `marketplace.py`) |
@@ -83,13 +83,13 @@ Acceptance: `tests/test_research_agent.py`.
 When another family is asked for (the review of a research report, a reviewer of a developer's work), an agent CLI of
 another sign-in counts as well as an API model: Codex reviews what Claude wrote and the other way round. For now only
 outside the goal loop (the research room's reviews): a code review there must run the tests, which Codex's read-only
-sandbox cannot (no writes, not even uv's cache), so `loop._execute` passes `other_cli=False` until goal 93 hands QA
+sandbox cannot (no writes, not even uv's cache), so `loop._execute` passes `other_cli=False` until goal 112 hands QA
 the gate's own output. Codex needed an ACL `u:root:x` on `/home/luca` (0750) to enter the worktrees at all.
 Acceptance: `tests/test_model_limits.py::test_another_family_can_be_an_agent_cli`.
 
 ### EL-R-04 A recurring failure becomes a proposed rule
 
-**Status: open**
+**Status: done (`rca.propose_rules`, `rca._draft_rule`, `projects._to_rule`; `tests/test_rule_proposals.py`)**
 
 When the RCA finds the same cause (layer and check)
 in N goals, the instructor drafts a one-line rule for `.claude/rules/` with the evidence; it is a proposal decided like
@@ -108,7 +108,7 @@ received the error at once. Acceptance: `tests/test_edit_check.py`.
 
 ### EL-R-06 A critic per writing task
 
-**Status: open**
+**Status: done (`loop._critic`, `loop.CRITIC_RETRIES`, `Task.critic`, setting `task_critic`; `tests/test_task_critic.py`)**
 
 With the setting `task_critic` on, a writing task's diff is reviewed
 by a critic of another model family (EL-R-03) before its dependants start; a FAIL returns it to the same agent with
@@ -117,7 +117,8 @@ and passes the second, and the dependent task starts only after that.
 
 ### EL-R-07 An archive of candidates
 
-**Status: open**
+**Status: done (`Experiment.parent_id`, `Experiment.eval_log`, `experiments.lineage`, `seed`, `archive`,
+`pick_parent` best|diverse, `select_best`, `compete`, `run_competition`; tests/test_experiment_archive.py)**
 
 Experiments record their parent experiment and evaluation log; a new
 candidate for the same target may start from the best or a diverse earlier candidate, and up to three candidates may
@@ -126,7 +127,7 @@ proposed.
 
 ### EL-R-08 Mutation testing of the gate
 
-**Status: open**
+**Status: implemented**
 
 `evaluation` can apply known mutations (remove an assertion, flip a
 boundary) to a passing change and checks that the gate then fails; the share of mutations caught is reported per
@@ -134,7 +135,9 @@ check. Acceptance: a test where a removed assertion is caught by the quality com
 
 ### EL-R-09 A bridge for the CLI agents
 
-**Status: open (needs the owner's decision: a new MCP tool surface)**
+**Status: done for Claude Code (`bridge.py`: per-run tokens, `attach`/`revoke` around each attempt in
+`loop._execute`, `POST /api/bridge/call`; the stdlib shim `mcp_servers/bridge.py`; catalog entry `bridge`, granted to
+nobody by default; tests/test_mcp_bridge.py). Open: Codex wiring (`CodexExecutor` gets no MCP config yet, decision #94)**
 
 A bundled MCP
 server offering `get_task`, `post_progress`, `save_insight` and `request_review` for the running goal only, granted per

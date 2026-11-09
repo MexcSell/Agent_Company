@@ -7,6 +7,7 @@ to use PostgreSQL; the schema is the same.
 
 from __future__ import annotations
 
+import re
 import threading
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
@@ -144,6 +145,24 @@ class PlaybookVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class DefinitionCandidate(Base):
+    """A study visit's rewrite of an agent's learned sections, applied to its definition file only by a person
+    who saw the diff (agentdefs.py, G-R-19)."""
+
+    __tablename__ = "definition_candidates"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
+    sections: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"Working method": ..., "Knowledge notes": ...}
+    base_version: Mapped[int] = mapped_column(Integer, default=0)  # the agent's definition_version when made
+    model: Mapped[str] = mapped_column(String(128), default="")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|applied|discarded|superseded
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    decided_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class EvolutionEvent(Base):
     """Observe -> diagnose -> generate -> experiment -> evaluate -> promote/rollback."""
 
@@ -242,8 +261,11 @@ class Experiment(Base):
     hypothesis: Mapped[str] = mapped_column(Text, default="")
     dataset: Mapped[dict[str, Any]] = mapped_column(default=dict)  # suite, repeats
     results: Mapped[dict[str, Any]] = mapped_column(default=dict)  # baseline, candidate, comparison, canary
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # EL-R-07: started from
+    eval_log: Mapped[list[Any]] = mapped_column(default=list)  # EL-R-07: append-only evaluation log, experiments._log
     status: Mapped[str] = mapped_column(String(16), default="proposed")
-    # proposed|baseline|candidate|review|canary|rolled_out|rolled_back|rejected|failed
+    # proposed|baseline|candidate|review|canary|rolled_out|rolled_back|rejected|failed;
+    # a competition's losers end rejected (EL-R-07)
     origin: Mapped[str] = mapped_column(String(16), default="evolution")  # evolution|user
     decision: Mapped[str] = mapped_column(Text, default="")
     reviewed_by: Mapped[str] = mapped_column(String(128), default="")
@@ -409,7 +431,8 @@ class ModelEntry(Base):
     base_url: Mapped[str] = mapped_column(String(512), default="")  # OpenAI-compatible server (llama-server, LM Studio)
     api_key_env: Mapped[str] = mapped_column(String(64), default="")  # env var holding this model's key
     session_id: Mapped[str] = mapped_column(String(64), default="")  # claude_code: every run forks this session
-    # claude_code: its own Claude Code sign-in in data/claude-accounts/<account>/ (CLAUDE_CONFIG_DIR); "" = the host's
+    # claude_code: its own Claude Code sign-in in data/claude-accounts/<account>/ (CLAUDE_CONFIG_DIR), codex: its own
+    # ChatGPT sign-in in data/codex-accounts/<account>/ (CODEX_HOME); "" = the host's
     account: Mapped[str] = mapped_column(String(64), default="")
     # the highest classification it may receive (SPEC-14 S14-R-05); "" = by locality (router.clearance)
     clearance: Mapped[str] = mapped_column(String(16), default="")
@@ -420,6 +443,8 @@ class ModelEntry(Base):
     api_key_enc: Mapped[str] = mapped_column(Text, default="")
     # the last Test: ok, error, checked_at and what the provider reports (plan or key usage, reset time)
     status: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # a CLI model: whose sign-in it was registered with (method, login or email, plan, at); never a token
+    signin: Mapped[dict[str, Any]] = mapped_column(default=dict)
     # a plan or quota limit the provider reported on a run ("You've hit your session limit · resets 9:50pm"): the
     # router skips the model until then and the role's fallbacks take the work (router.mark_limited)
     limited_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -485,6 +510,8 @@ class Goal(Base):
     # eval goals only (SPEC-13): experiment_id + side, role -> model overrides, trainee_id (the agent staffed for
     # its role), plan_id, hide_checks (a final evaluation: its checks never reach a prompt or the worktree)
     trial: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # cached mission.report labels of a finished goal; empty = not cached (mission.label_counts)
+    label_counts: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
@@ -735,6 +762,13 @@ class Task(Base):
     gate: Mapped[dict[str, Any]] = mapped_column(default=dict)
     model_name: Mapped[str] = mapped_column(String(128), default="")
     session_id: Mapped[str] = mapped_column(String(64), default="")  # Claude Code session, for resuming
+    # EL-R-06: the critic runs on this task's diff, {attempt, model, provider, verdict, points, reason, run_id};
+    # NULL on rows from before the column (readers use `t.critic or []`)
+    critic: Mapped[list[Any]] = mapped_column(default=list)
+    # the task as a message (verification phase 4): its sender, the agent whose plan made it (None: the loop's own
+    # review tasks), and when it was made; NULL on rows from before the columns
+    planned_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=now, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -745,6 +779,9 @@ class Run(Base):
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True)
     agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True)
     goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # The signed-in user whose request made the run (S04-R-09); NULL for agent work. No foreign key: a migrated
+    # database gets the column from _add_missing_columns, which adds no constraints.
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     model_name: Mapped[str] = mapped_column(String(128))
     kind: Mapped[str] = mapped_column(String(16))
     purpose: Mapped[str] = mapped_column(String(32), default="task")
@@ -763,6 +800,10 @@ class Run(Base):
     denied_tools: Mapped[list[Any]] = mapped_column(default=list)
     # every call a CLI run made (S04-R-12, S14-R-08): {tool, input (short, redacted), ok}, at most 200
     tool_calls: Mapped[list[Any]] = mapped_column(default=list)
+    # which model did the work and why (verification phase 2): requested (the agent's assigned model: its own
+    # model, else its role's route), model_id, provider, base_url, route (why this one: preference, route,
+    # fallback, escalation), served (the model the provider itself reported; "" when it reports none)
+    trace: Mapped[dict[str, Any]] = mapped_column(default=dict)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
 
@@ -774,7 +815,33 @@ class Event(Base):
     kind: Mapped[str] = mapped_column(String(32))
     message: Mapped[str] = mapped_column(Text)
     data: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # the goal iteration the event belongs to (gate events, S04-R-12); NULL on rows written before the column existed
+    iteration: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+_ITER = re.compile(r"iteration (\d+):")
+
+
+def _as_int(v: Any) -> int | None:
+    """An int-like value as int (7, "7"), else None; a bool is not an iteration."""
+    if isinstance(v, bool):
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def event_iteration(e: Event) -> int | None:
+    """An event's iteration: its column, else `data["iteration"]`, else the one in its message (older rows)."""
+    if e.iteration is not None:
+        return e.iteration
+    it = _as_int((e.data or {}).get("iteration"))
+    if it is not None:
+        return it
+    m = _ITER.search(e.message or "")
+    return int(m.group(1)) if m else None
 
 
 class Document(Base):
@@ -1220,7 +1287,7 @@ class McpServer(Base):
     secrets: Mapped[str] = mapped_column(Text, default="")  # encrypted {"env": {...}, "headers": {...}}
     secret_names: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"env": [names], "headers": [names]}
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    everyone: Mapped[bool] = mapped_column(Boolean, default=True)  # every agent may use it (else only granted ones)
+    everyone: Mapped[bool] = mapped_column(Boolean, default=False)  # every agent may use it (else only granted ones; a new server: none)
     tools: Mapped[list[Any]] = mapped_column(default=list)  # [{name, description, read_only, allowed}]
     status: Mapped[str] = mapped_column(String(16), default="untested")  # untested|ok|error
     last_error: Mapped[str] = mapped_column(Text, default="")
@@ -1251,6 +1318,21 @@ class McpCall(Base):
     ok: Mapped[bool] = mapped_column(Boolean, default=True)
     duration: Mapped[float] = mapped_column(Float, default=0.0)
     error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class BridgeToken(Base):
+    """A per-run bearer token of the bridge MCP server (EL-R-09), bound to (goal, task, agent). Only its SHA-256 is kept."""
+
+    __tablename__ = "bridge_tokens"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    goal_id: Mapped[int] = mapped_column(Integer, index=True)
+    task_id: Mapped[int] = mapped_column(Integer)
+    agent_id: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[float] = mapped_column(Float)  # epoch seconds (SQLite hands datetimes back without a zone)
+    revoked_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    calls: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -1460,6 +1542,7 @@ def _add_missing_columns(eng: Engine) -> None:
             if not insp.has_table(table.name):
                 continue
             have = {c["name"] for c in insp.get_columns(table.name)}
+            added = set()
             for col in table.columns:
                 if col.name in have:
                     continue
@@ -1469,6 +1552,11 @@ def _add_missing_columns(eng: Engine) -> None:
                     v = col.default.arg
                     default = f" DEFAULT {int(v) if isinstance(v, bool) else repr(v) if isinstance(v, str) else v}"
                 conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl}{default}'))
+                added.add(col.name)
+            # An added column's indexes (index=True: ix_<table>_<column>, the name create_all gives them).
+            for idx in table.indexes:
+                if added & {c.name for c in idx.columns}:
+                    idx.create(conn, checkfirst=True)
         # A column whose default is computed (list, dict) cannot be a DDL default: rows that existed when it was added
         # got NULL although the model says it never is (2026-11-06: projects.stack broke the first real goal). They
         # get the default, also in databases migrated before this.
@@ -1540,7 +1628,8 @@ def log_event(
     **data: Any,
 ) -> None:
     """Record an event. Pass `s` when called inside an open session (SQLite allows one writer)."""
-    ev = Event(kind=kind, message=message, goal_id=goal_id, agent_id=agent_id, data=data)
+    ev = Event(kind=kind, message=message, goal_id=goal_id, agent_id=agent_id, data=data,
+               iteration=_as_int(data.get("iteration")))
     if s is not None:
         s.add(ev)
         return

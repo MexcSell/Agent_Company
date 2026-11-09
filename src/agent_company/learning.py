@@ -41,7 +41,7 @@ from sqlalchemy.exc import OperationalError
 
 from agent_company import kgraph, registry
 from agent_company.config import REPO_ROOT, settings
-from agent_company.db import Agent, Goal, KgEdge, Lesson, Project, log_event, now, session
+from agent_company.db import Agent, Goal, KgEdge, Lesson, Project, Task, log_event, now, session
 
 XP_SUCCESS, XP_FAILURE, XP_PER_LEVEL = 10, 3, 50
 CLASSIFICATIONS = ["public", "internal", "confidential", "restricted", "secret"]
@@ -144,7 +144,7 @@ def judge_contradiction(edge_id: int) -> dict[str, Any]:
     `contradiction_judge`: 'advise' shows it to the person who resolves the pair; 'decide' also lets a COMPATIBLE
     verdict close the pair as *both hold* (no item is ever rejected by a model; CONTRADICTS and UNSURE stay for a
     person); 'off' asks no model. Fail-open: without an instructor, a cleared model or a verdict the pair waits."""
-    from agent_company import executors, router, usage
+    from agent_company import executors, router
 
     mode = settings().contradiction_judge
     if mode == "off":
@@ -164,19 +164,15 @@ def judge_contradiction(edge_id: int) -> dict[str, Any]:
     if judge_id is None:
         reason = "no instructor agent to judge it"
     else:
-        try:
-            choice = router.resolve("instructor", pref, classification=level)
+        req = executors.Request(purpose="contradiction", role="instructor", prompt=prompt, agent_id=judge_id,
+                                goal_id=goal_id, data={"new": e.src_id, "old": e.dst_id},
+                                system=f"You are {judge_name}, the instructor who curates the company's knowledge.")
+        try:  # router.run: a CLI model answers read-only in a scratch folder, the route's fallbacks take a failure
+            res, choice = router.run("instructor", req, pref, classification=level, agent_id=judge_id, goal_id=goal_id)
         except router.NotCleared as err:
-            choice, reason = None, str(err)
-        if choice is not None:
+            res, reason = None, str(err)
+        if res is not None:
             model = choice.name
-            req = executors.Request(purpose="contradiction", role="instructor", prompt=prompt, agent_id=judge_id,
-                                    goal_id=goal_id, data={"new": e.src_id, "old": e.dst_id},
-                                    system=f"You are {judge_name}, the instructor who curates the company's knowledge.")
-            res = executors.for_choice(choice, settings().command_timeout).run(req)
-            usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
-                         output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
-                         error=res.error, agent_id=judge_id, purpose="contradiction", goal_id=goal_id, res=res)
             found = _JUDGE_VERDICT.findall(res.text or "") if res.ok else []
             if found:
                 verdict, reason = found[-1][0].lower(), found[-1][1].strip()[:1000]
@@ -660,6 +656,38 @@ def _report_text(report: dict[str, Any]) -> str:
     return "\n".join(x for v in report.values() for x in (v if isinstance(v, list) else [v]) if x)
 
 
+def add_xp(a: Agent, points: int) -> None:
+    """Experience and the level that follows from it, always together."""
+    a.xp = (a.xp or 0) + points
+    a.level = 1 + a.xp // XP_PER_LEVEL
+
+
+def credit(a: Agent, success: bool, skills: list[str]) -> None:
+    """XP for a verified outcome of the agent's work; a success also grows the skills it used (at most 10)."""
+    add_xp(a, XP_SUCCESS if success else XP_FAILURE)
+    if success:
+        grown = dict(a.skills or {})
+        for sk in skills:
+            key = sk.strip().lower().replace(" ", "_")
+            if key:
+                grown[key] = min(10, int(grown.get(key, 3)) + 1)
+        a.skills = grown
+
+
+def credit_planners(s: Any, g: Any, success: bool) -> list[int]:
+    """A planner's work is measured by its goal: the agents that planned the goal's current iteration
+    (`Task.planned_by`) get XP when the goal passes its gate or fails (`workflow.set_status`). Executing agents
+    are credited per task in `learn`; a planner runs no task, so without this it never gained experience.
+    Uses the caller's session `s`. Returns the credited agent ids."""
+    ids = sorted({i for i in s.scalars(select(Task.planned_by).where(Task.goal_id == g.id,
+                                                                     Task.iteration == g.iteration)) if i})
+    for aid in ids:
+        a = s.get(Agent, aid)
+        if a is not None:
+            credit(a, success, ["planning"])
+    return ids
+
+
 def learn(agent_id: int, goal_id: int | None, lesson: str, success: bool, skills: list[str],
           task_id: int | None = None, commit: str = "", report: dict[str, Any] | None = None) -> None:
     text = lesson.strip()[:1000]
@@ -695,16 +723,9 @@ def learn(agent_id: int, goal_id: int | None, lesson: str, success: bool, skills
         if status != "approved":
             log_event("security", f"lesson for {a.name} {status}: {reason}", goal_id=goal_id, agent_id=agent_id, s=s,
                       rule="memory_poisoning")
-        a.xp += XP_SUCCESS if success else XP_FAILURE
-        a.level = 1 + a.xp // XP_PER_LEVEL
+        credit(a, success, skills)
         if success:
             a.tasks_done += 1
-            grown = dict(a.skills or {})
-            for sk in skills:
-                key = sk.strip().lower().replace(" ", "_")
-                if key:
-                    grown[key] = min(10, int(grown.get(key, 3)) + 1)
-            a.skills = grown
         else:
             a.tasks_failed += 1
     judge_contradictions(edges)
@@ -785,8 +806,9 @@ def review(item_id: int, approve: bool, reviewer: str, note: str = "") -> dict[s
         if approve:
             kgraph.on_knowledge(s, i)
             kgraph.link(s, ("knowledge", i.id), "VERIFIED_BY", ("user", reviewer.removeprefix("user:").lower()))
-            if was == "draft" and i.outcome == "imported":  # an approved import joins contradiction checking (REQ-005)
-                edges = _link_contradictions(s, i)
+            g = s.get(Goal, i.goal_id) if i.goal_id else None
+            if was == "draft" and not (g and g.origin == "eval"):  # an approved draft (an import, REQ-005, or a
+                edges = _link_contradictions(s, i)  # held-back lesson) joins contradiction checking; evals as learn()
         agent = i.agent_id
     judge_contradictions(edges)
     if was == "approved" and not approve:
@@ -959,7 +981,7 @@ def link_team(goal_id: int, outcomes: list[tuple[int, str]], passed: bool) -> No
 IMPORT_FORMATS = ("auto", "text", "markdown", "chat", "reports", "folder")
 IMPORT_MAX_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_ITEMS, IMPORT_CHUNK = 2 * 1024 * 1024, 50, 500, 1000
 IMPORT_SUFFIXES = (".md", ".markdown", ".txt")  # what a folder import reads; a single file may also be .json
-IMPORT_REFUSED = ("tls", "git-keys", "claude-accounts")  # data/ folders with keys and sign-ins
+IMPORT_REFUSED = ("tls", "git-keys", "claude-accounts", "codex-accounts")  # data/ folders with keys and sign-ins
 _HEADING = re.compile(r"^#{1,6}\s+\S")
 _TURN = re.compile(r"^## (User|ChatGPT|Assistant|Claude)\s*$")  # only these exact lines start a chat turn
 _TAG = re.compile(r"<[^>\n]{1,200}>")  # <box …>, <AsyncImage …/> in chat exports: removed, never parsed

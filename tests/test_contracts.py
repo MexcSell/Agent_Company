@@ -96,6 +96,19 @@ def test_limits_fail_out_of_scope_changes_and_runs_over_budget():
     assert contracts.limits(contracts.validate(base()), ["anything"], cost=9.0) == [], "no limits, no rows"
 
 
+def test_requires_change_fails_a_writing_task_without_a_command_on_an_empty_diff():
+    old_files = [{"type": "file_exists", "path": "f.txt"}, {"type": "contains", "value": "done"}]
+    c = contracts.validate(base(writes=True, acceptance=old_files))
+    (row,) = contracts.requires_change(c, [])
+    assert row["condition"] == {"type": "diff"} and row["passed"] is False and "existing files" in row["detail"]
+    assert contracts.requires_change(c, ["src/a.py"]) == [{"condition": {"type": "diff"}, "passed": True,
+                                                            "detail": ""}]
+    assert contracts.requires_change(c, None) == [], "an unknown change is not an empty diff"
+    with_cmd = contracts.validate(base(writes=True, acceptance=[*old_files, {"type": "command", "run": "true"}]))
+    assert contracts.requires_change(with_cmd, []) == [], "the command judges the task"
+    assert contracts.requires_change(contracts.validate(base(acceptance=old_files)), []) == [], "read-only"
+
+
 def test_findings_next_actions_and_recommendation_lines():
     out = ("Done.\nFINDING: a.py:3 | breaks on empty input | guard it\n- NEXT: add a regression test\n"
            "NEXT ACTION: update the docs\nRECOMMENDATION: PostgreSQL\nRECOMMENDATION: SQLite\n")

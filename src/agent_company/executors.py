@@ -49,6 +49,7 @@ class Grant:
 
     writes: bool = False
     shell: bool = False
+    checks: bool = False  # the run may run the syntax check and the test commands, without writes (EL-R-05)
     mcp: bool = False
     isolation: str = "L0"  # L0 text only, L1 read-only tools, L2 writes in the worktree (S14-R-07)
     permissions: list[str] = field(default_factory=list)  # the permissions this run uses
@@ -73,6 +74,8 @@ class Result:
     dropped: list[str] = field(default_factory=list)
     denied_tools: list[str] = field(default_factory=list)  # tool calls the CLI refused (Claude Code reports them)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)  # each call the run made: tool, input, ok
+    served_model: str = ""  # the model the provider says answered ("" when it does not say)
+    trace: dict[str, Any] = field(default_factory=dict)  # which model did the work and why (Run.trace)
 
 
 FILE_BLOCK_HELP = (
@@ -158,6 +161,18 @@ def parse_claude_stream(stdout: str) -> tuple[dict[str, Any] | None, list[dict[s
                     if str(block.get("tool_use_id")) in by_id:
                         by_id[str(block.get("tool_use_id"))]["ok"] = False
     return result, _capped(calls)
+
+
+def claude_served(stdout: str) -> str:
+    """The model the API answered with in a stream-json run: its assistant messages' `model` (the session's init
+    event names the requested one, the fallback when no message came)."""
+    served = init = ""
+    for ev in _events(stdout):
+        if ev.get("type") == "assistant":
+            served = str((ev.get("message") or {}).get("model") or "") or served
+        elif ev.get("type") == "system" and ev.get("subtype") == "init":
+            init = str(ev.get("model") or "")
+    return served or init
 
 
 class StuckWatch:
@@ -357,15 +372,21 @@ def gate(req: Request, kind: str) -> Grant:
     shell = shell_ok and writes
     if writes and kind in CLI_KINDS and not shell and not configure:  # configure only edits .claude/
         dropped.append("shell: no shell permission")
+    # a run without writes (a QA review) may still run the check list: syntax check, pytest, read-only git
+    checks = shell_ok and req.workdir is not None and not configure and CHECK_OK
+    if not req.writes and kind in CLI_KINDS and "shell" in perms and not checks:  # a writing request says why above
+        dropped.append(f"checks: autonomy G{n}" if n < 2 else "check: path not usable in a rule" if not CHECK_OK
+                       else "checks: no worktree" if req.workdir is None else "checks: configure step")
     servers, _ = req.data.get("mcp") or ({}, [])
     mcp = kind == "claude_code" and bool(servers.get("mcpServers")) and n >= 3
     if servers.get("mcpServers") and kind == "claude_code" and not mcp:
         dropped.append(f"mcp: autonomy G{n}")
-    used = sorted({"read"} | ({"write"} if writes else set()) | ({"shell"} if shell else set()))
+    used = sorted({"read"} | ({"write"} if writes else set()) | ({"shell"} if shell or checks else set()))
     if configure and writes and "write" not in perms:
         used = [p if p != "write" else "write:.claude" for p in used]
     isolation = "L2" if writes else "L1" if kind in CLI_KINDS else "L0"
-    return Grant(writes=writes, shell=shell, mcp=mcp, isolation=isolation, permissions=used, dropped=dropped)
+    return Grant(writes=writes, shell=shell, checks=checks, mcp=mcp, isolation=isolation, permissions=used,
+                 dropped=dropped)
 
 
 def _track(pid: int, program: str, kind: str, req: Request) -> None:
@@ -478,6 +499,9 @@ class Executor:
         res.isolation, res.permissions, res.dropped = grant.isolation, grant.permissions, grant.dropped
         if not res.tools:
             res.tools = self.tools(grant) if not grant.refused else []
+        c = self.choice
+        res.trace = {"requested": c.requested, "model": c.name, "model_id": c.model_id, "provider": c.provider,
+                     "base_url": c.base_url, "route": c.reason[:300], "served": res.served_model}
         return res
 
     def tools(self, grant: Grant) -> list[str]:
@@ -574,7 +598,11 @@ class LLMExecutor(Executor):
             kwargs["api_key"] = key or ("" if self.choice.api_key_env else "local")
         elif key:
             kwargs["api_key"] = key
-        llm = LLM(model=self.choice.model_id, **kwargs)
+        served = _ServedModel()
+        try:
+            llm = LLM(model=self.choice.model_id, interceptor=served, **kwargs)
+        except Exception:  # noqa: BLE001 - a provider class without interceptors: the run matters more than its trace
+            llm = LLM(model=self.choice.model_id, **kwargs)
         system = req.system + ("\n\n" + FILE_BLOCK_HELP if req.writes else "")
         text = llm.call([{"role": "system", "content": system}, {"role": "user", "content": req.prompt}])
         text = text if isinstance(text, str) else str(text)
@@ -585,12 +613,59 @@ class LLMExecutor(Executor):
             if blocks:
                 files = write_files(req.workdir, blocks)
         return Result(text=text, input_tokens=u.prompt_tokens or estimate_tokens(system + req.prompt),
-                      output_tokens=u.completion_tokens or estimate_tokens(text), files=files)
+                      output_tokens=u.completion_tokens or estimate_tokens(text), files=files,
+                      served_model=served.model)
 
 
-# Claude Code may run tests and inspect git, nothing else, through Bash.
-CLAUDE_BASH = ["Bash(pytest:*)", "Bash(python -m pytest:*)", "Bash(uv run:*)", "Bash(npm test:*)",
+def _ServedModel() -> Any:  # noqa: N802 - builds the interceptor class lazily (crewai imports slowly)
+    """A crewai transport interceptor that keeps the `model` of the provider's JSON answers: who actually served."""
+    import httpx
+    from crewai.llms.hooks.base import BaseInterceptor
+
+    class Served(BaseInterceptor[httpx.Request, httpx.Response]):
+        model = ""
+
+        def on_outbound(self, message: httpx.Request) -> httpx.Request:
+            return message
+
+        def on_inbound(self, message: httpx.Response) -> httpx.Response:
+            if message.status_code < 300 and "json" in message.headers.get("content-type", ""):
+                message.read()
+                try:
+                    self.model = str(json.loads(message.content).get("model") or "") or self.model
+                except (ValueError, AttributeError):
+                    pass
+            return message
+
+        async def aon_outbound(self, message: httpx.Request) -> httpx.Request:
+            return message
+
+        async def aon_inbound(self, message: httpx.Response) -> httpx.Response:
+            return message
+
+    return Served()
+
+
+EDIT_CHECK = Path(__file__).with_name("edit_check.py")  # the server's copy, never the worktree's
+CHECK_CMD = f"python3 -I {EDIT_CHECK}"
+CHECK_OK = bool(re.fullmatch(r"[A-Za-z0-9_./-]+", str(EDIT_CHECK)))  # rule syntax has no quoting
+CHECK_HINT = (f"Syntax check: run `{CHECK_CMD} <files>` (node --check for each .js file, compile() for each .py "
+              "file); a raw node command is refused.")
+
+# Claude Code may run tests, the syntax check and inspect git, nothing else, through Bash. `node` only through the
+# platform's wrapper: a `Bash(node --check:*)` prefix rule would also allow -r/--require/--import/--loader.
+# pytest as the planner writes it in acceptance commands: `python3 -B -m pytest` leaves no __pycache__ (V20)
+PYTEST_FORMS = ["pytest", "python -m pytest", "python3 -m pytest", "python3 -B -m pytest"]
+CLAUDE_BASH = [*(f"Bash({p}:*)" for p in PYTEST_FORMS), "Bash(uv run:*)", "Bash(npm test:*)",
                "Bash(npm run:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(ls:*)"]
+# a run without writes: no `uv run:*`/`npm run:*`/`npm test:*`, which run any code (and so could write files)
+CLAUDE_CHECK = [*(f"Bash({p}:*)" for p in PYTEST_FORMS), "Bash(uv run pytest:*)", "Bash(git status:*)",
+                "Bash(git diff:*)", "Bash(ls:*)"]
+if CHECK_OK:
+    CLAUDE_BASH.append(f"Bash({CHECK_CMD}:*)")
+    CLAUDE_CHECK.insert(0, f"Bash({CHECK_CMD}:*)")
+# `git diff --output=<path>` writes a file; a deny rule is a prefix too, so `git diff HEAD --output=x` is a known gap
+CLAUDE_CHECK_DENY = ["Bash(git diff --output:*)"]
 
 
 def claude_env(choice: Choice) -> dict[str, str] | None:
@@ -612,19 +687,37 @@ def claude_env(choice: Choice) -> dict[str, str] | None:
     return env
 
 
+def codex_env(choice: Choice) -> dict[str, str] | None:
+    """Codex with its own ChatGPT sign-in: a codex model's `account` is its CODEX_HOME, data/codex-accounts/<account>/
+    (where the CLI also refreshes the token)."""
+    import os
+
+    if not choice.account:
+        return None
+    from agent_company.router import codex_home
+
+    return {**os.environ, "CODEX_HOME": str(codex_home(choice.account))}
+
+
 # EL-R-05: after each edit the file is parsed (never run) and a syntax error goes back to the agent at once
 EDIT_CHECK_SETTINGS = {"hooks": {"PostToolUse": [{"matcher": "Edit|Write|MultiEdit", "hooks": [
     {"type": "command", "timeout": 30,
      "command": f"python3 -I {shlex.quote(str(Path(__file__).with_name('edit_check.py')))}"}]}]}}
 
 
+def with_check_hint(system: str, grant: Grant) -> str:
+    """The system prompt plus the syntax check's command line (an absolute path) when the run may run it."""
+    return f"{system}\n\n{CHECK_HINT}" if (grant.shell or grant.checks) and CHECK_OK else system
+
+
 class ClaudeCodeExecutor(Executor):
     kind = "claude_code"
 
     def tools(self, grant: Grant) -> list[str]:
-        """--allowedTools: Edit/Write need `write`, Bash needs `shell` (SEC-011), MCP tools autonomy G3."""
+        """--allowedTools: Edit/Write need `write`, Bash needs `shell` (SEC-011), MCP tools autonomy G3; a run
+        without writes gets at most the check list."""
         return (["Read", "Grep", "Glob"] + (["Edit", "Write"] if grant.writes else [])
-                + (list(CLAUDE_BASH) if grant.shell else []))
+                + (list(CLAUDE_BASH) if grant.shell else list(CLAUDE_CHECK) if grant.checks else []))
 
     def _run(self, req: Request) -> Result:
         if req.workdir is None:
@@ -633,7 +726,9 @@ class ClaudeCodeExecutor(Executor):
         grant = req.grant or Grant()
         tools = self.tools(grant)
         cmd = ["claude", "-p", req.prompt, "--output-format", "stream-json", "--verbose",
-               "--append-system-prompt", req.system, "--allowedTools", ",".join(tools)]
+               "--append-system-prompt", with_check_hint(req.system, grant), "--allowedTools", ",".join(tools)]
+        if grant.checks and not grant.shell:
+            cmd += ["--disallowedTools", ",".join(CLAUDE_CHECK_DENY)]
         if req.writes:
             cmd += ["--permission-mode", "acceptEdits", "--settings", json.dumps(EDIT_CHECK_SETTINGS)]
         if self.choice.model_id:
@@ -663,12 +758,13 @@ class ClaudeCodeExecutor(Executor):
             if mcp_file:
                 Path(mcp_file).unlink(missing_ok=True)
         data, calls = parse_claude_stream(proc.stdout)
+        served = claude_served(proc.stdout)
         if watch.reason:  # FW-R-02: ended because it repeated itself; the retry is told why
             return Result(text=str((data or {}).get("result") or ""), ok=False, error=watch.reason, tools=tools,
-                          tool_calls=calls, session_id=str((data or {}).get("session_id") or ""))
+                          tool_calls=calls, session_id=str((data or {}).get("session_id") or ""), served_model=served)
         if data is None:  # no result event: the CLI failed before it finished
             return Result(text=proc.stdout[-20_000:], ok=False, error=(proc.stderr or proc.stdout)[-2000:],
-                          tools=tools, tool_calls=calls)
+                          tools=tools, tool_calls=calls, served_model=served)
         u = data.get("usage") or {}
         inp = int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0) + int(
             u.get("cache_creation_input_tokens") or 0)
@@ -677,9 +773,16 @@ class ClaudeCodeExecutor(Executor):
                       cost=float(data.get("total_cost_usd") or 0.0),
                       ok=not data.get("is_error") and proc.returncode == 0,
                       error="" if proc.returncode == 0 else (proc.stderr or str(data.get("result")))[-2000:],
-                      session_id=str(data.get("session_id") or ""), tools=tools, tool_calls=calls,
+                      session_id=str(data.get("session_id") or ""), tools=tools, tool_calls=calls, served_model=served,
                       denied_tools=sorted({str(d.get("tool_name") or "?") for d in data.get("permission_denials") or []
                                            if isinstance(d, dict)}))
+
+
+# Codex's own ways to the web, outside its sandbox's network block: web search, the ChatGPT apps server
+# (`codex_apps` search_service.web_run), a browser and computer use. Agents get no web tools (`tools_for`); the research
+# room's web goes through the platform's tools (research_agent.py). Verification phase 3, V12.
+CODEX_NO_WEB = ["-c", 'web_search="disabled"', "--disable", "apps", "--disable", "browser_use",
+                "--disable", "computer_use"]
 
 
 class CodexExecutor(Executor):
@@ -694,11 +797,11 @@ class CodexExecutor(Executor):
         cwd = ensure_sandboxed(req.workdir)
         prompt = req.system + "\n\n" + req.prompt
         cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "-C", str(cwd),
-               "--sandbox", "workspace-write" if req.writes else "read-only"]
+               "--sandbox", "workspace-write" if req.writes else "read-only", *CODEX_NO_WEB]
         if self.choice.model_id:
             cmd += ["--model", self.choice.model_id]
         watch = stuck_watch("codex")
-        proc = self._spawn([*cmd, prompt], req, cwd, watch=watch)
+        proc = self._spawn([*cmd, prompt], req, cwd, env=codex_env(self.choice), watch=watch)
         parsed = parse_codex_stream(proc.stdout)
         if watch.reason:  # FW-R-02
             return Result(text="", input_tokens=estimate_tokens(prompt), ok=False, error=watch.reason,
@@ -715,9 +818,15 @@ class CodexExecutor(Executor):
                       tool_calls=parsed["tool_calls"])
 
 
-# Copilot may run tests and inspect git, nothing else, through its shell tool (as CLAUDE_BASH).
-COPILOT_SHELL = ["shell(pytest)", "shell(python -m pytest)", "shell(uv run)", "shell(npm test)", "shell(npm run)",
+# Copilot may run tests, the syntax check and inspect git, nothing else, through its shell tool (as CLAUDE_BASH).
+COPILOT_SHELL = [*(f"shell({p})" for p in PYTEST_FORMS), "shell(uv run)", "shell(npm test)", "shell(npm run)",
                  "shell(git status)", "shell(git diff)", "shell(ls)"]
+COPILOT_CHECK = [*(f"shell({p})" for p in PYTEST_FORMS), "shell(uv run pytest)", "shell(git status)",
+                 "shell(git diff)", "shell(ls)"]
+if CHECK_OK:
+    COPILOT_SHELL.append(f"shell({CHECK_CMD})")
+    COPILOT_CHECK.insert(0, f"shell({CHECK_CMD})")
+COPILOT_CHECK_DENY = ["shell(git diff --output)"]  # as CLAUDE_CHECK_DENY
 
 
 class CopilotExecutor(Executor):
@@ -726,18 +835,22 @@ class CopilotExecutor(Executor):
     kind = "copilot"
 
     def tools(self, grant: Grant) -> list[str]:
-        return (["write"] if grant.writes else []) + (list(COPILOT_SHELL) if grant.shell else [])
+        return (["write"] if grant.writes else []) + (
+            list(COPILOT_SHELL) if grant.shell else list(COPILOT_CHECK) if grant.checks else [])
 
     def _run(self, req: Request) -> Result:
         if req.workdir is None:
             raise RuntimeError("Copilot needs a worktree")
         cwd = ensure_sandboxed(req.workdir)
-        tools = self.tools(req.grant or Grant())
-        prompt = req.system + "\n\n" + req.prompt
+        grant = req.grant or Grant()
+        tools = self.tools(grant)
+        prompt = with_check_hint(req.system, grant) + "\n\n" + req.prompt
         cmd = ["copilot", "-p", prompt]
         for t in tools:
             cmd += ["--allow-tool", t]
         cmd += ["--deny-tool", "shell(git push)"]
+        for t in COPILOT_CHECK_DENY if grant.checks and not grant.shell else []:
+            cmd += ["--deny-tool", t]
         if self.choice.model_id:
             cmd += ["--model", self.choice.model_id]
         proc = self._spawn(cmd, req, cwd)

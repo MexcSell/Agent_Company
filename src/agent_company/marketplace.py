@@ -31,13 +31,11 @@ from __future__ import annotations
 
 import hashlib
 import io
-import ipaddress
 import json
 import os
 import re
 import resource
 import shutil
-import socket
 import stat
 import subprocess
 import tarfile
@@ -50,7 +48,7 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from agent_company import org
+from agent_company import netpin, org
 from agent_company.config import settings
 from agent_company.db import AgentImport, Agent, ModelEntry, Recruitment, log_event, now, session
 
@@ -136,27 +134,16 @@ def git_version() -> tuple[int, ...]:
     return _git_version
 
 
-def _is_public_host(host: str, port: int = 443) -> str | None:
-    """The address that was checked when every address of the host is global, else None."""
-    try:
-        addrs = [ipaddress.ip_address(host)]
-    except ValueError:
-        try:
-            addrs = [ipaddress.ip_address(i[4][0].split("%")[0]) for i in socket.getaddrinfo(host, port)]
-        except (OSError, UnicodeError, ValueError):
-            return None
-    if not addrs or not all(a.is_global for a in addrs):
-        return None
-    return str(addrs[0])
-
-
 def check_url(url: str) -> tuple[str, tuple[str, int, str] | None]:
     """The URL and its pin (host, port, checked address; None for file://) when it may be cloned; raises
     ImportRefused otherwise. git connects to the pinned address only (DNS rebinding)."""
     url = (url or "").strip()
     if not url or len(url) > 512 or any(c.isspace() or ord(c) < 32 for c in url) or url.startswith("-"):
         raise ImportRefused("give a repository URL without spaces")
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        raise ImportRefused("the repository URL cannot be parsed") from None
     if parts.scheme == "file":
         if not ALLOW_FILE_URLS:
             raise ImportRefused("file:// URLs are not allowed")
@@ -172,9 +159,10 @@ def check_url(url: str) -> tuple[str, tuple[str, int, str] | None]:
     except ValueError:
         raise ImportRefused("the repository URL names an invalid port") from None
     host = parts.hostname or ""
-    ip = _is_public_host(host, port) if host else None
-    if not ip:
-        raise ImportRefused(f"{host or url} is not a public host")
+    try:
+        ip = netpin.resolve_public(host, port)[0]
+    except netpin.NotPublic:
+        raise ImportRefused(f"{host or url} is not a public host") from None
     if git_version() < PIN_GIT:
         raise ImportRefused(f"git {'.'.join(map(str, git_version()))} can't pin the checked address "
                             f"(http.curloptResolve needs git 2.37 or newer): https imports are refused")
@@ -195,11 +183,6 @@ _GIT_SAFE = ["-c", "core.hooksPath=/dev/null", "-c", "core.symlinks=false", "-c"
              "-c", "submodule.recurse=false", "-c", "protocol.allow=never"]
 
 
-def _resolve_entry(pin: tuple[str, int, str]) -> str:
-    host, port, ip = pin
-    return f"{host}:{int(port)}:[{ip}]" if ":" in ip else f"{host}:{int(port)}:{ip}"
-
-
 def clone_command(url: str, dest: Path, pin: tuple[str, int, str] | None = None) -> list[str]:
     """A blob-filtered clone without checkout; an https URL is cloned only from its pinned address."""
     allow = ["-c", "protocol.https.allow=always"]
@@ -207,8 +190,11 @@ def clone_command(url: str, dest: Path, pin: tuple[str, int, str] | None = None)
         allow += ["-c", "protocol.file.allow=always"]
     elif pin is None:
         raise ImportRefused("an https clone needs the checked address (check_url)")
-    else:
-        allow += ["-c", f"http.curloptResolve={_resolve_entry(pin)}"]
+    elif netpin._literal(pin[0]) is None:  # a literal address is never resolved by curl: nothing to pin
+        try:
+            allow += ["-c", f"http.curloptResolve={netpin.curl_resolve_entry(*pin)}"]
+        except ValueError as e:
+            raise ImportRefused(f"the checked address cannot be pinned: {e}") from None
     return ["git", *_GIT_SAFE, "-c", "http.followRedirects=false", *allow,
             "clone", "--depth", "1", "--single-branch", "--no-recurse-submodules", "--template=", "--quiet",
             "--no-checkout", f"--filter=blob:limit={MAX_FILE_BYTES}", "--", url, str(dest)]

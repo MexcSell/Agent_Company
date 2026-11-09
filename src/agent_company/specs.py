@@ -11,6 +11,10 @@ Plan → Build → Review → Fix (docs/1.claude-code-multi-agent.jpg). The loop
     decisions.md     one entry per iteration: plan summary, gate result, findings
 
 They are committed with the goal's branch, so the approved merge carries them into the project.
+`check_plan()` rejects (never rewrites) a plan whose acceptance names another spec folder or a loop-written file;
+the GM is told why and plans again (K54).
+`save_answer()` writes a finished task's answer to its .md/.txt file_exists path: in the goal's own spec folder also
+over a stale file (read-only) or where the run made none (writing), never a loop file, another goal's folder or .git.
 `configure()` lets a CLI General Manager (Claude Code / Codex) update the project's `.claude/` configuration
 in the worktree; anything it changes outside `.claude/` and `.mcp.json` is put back.
 """
@@ -24,11 +28,14 @@ from typing import Any
 
 from sqlalchemy import select
 
-from agent_company.db import Goal, Task, session
+from agent_company.db import Goal, Task, log_event, session
 
+ANSWER_FILES = (".md", ".markdown", ".txt", ".rst")  # documents a task's answer may become
 CONFIG_PATHS = (".claude/", ".mcp.json")
 LOOP_FILES = ("requirements.md", "tasks.md", "review.md", "sa-review.md", "decisions.md")  # the loop writes them
-SPEC_DIR = re.compile(r"\.claude/specs/([^/\s'\"`]+)/")
+# A `.claude/specs/<X>` folder, with or without a trailing slash; check_plan rejects any <X> but the goal's own (K54).
+SPEC_DIR = re.compile(r"\.claude/specs/([^/\s'\"`;|&<>()]+)")
+LOOP_FILE = re.compile(rf"\.claude/specs/[^/\s'\"`;|&<>()]+/({'|'.join(map(re.escape, LOOP_FILES))})(?![\w.-])")
 
 
 def slug(title: str, goal_id: int) -> str:
@@ -52,6 +59,17 @@ def planner_note(goal: Any) -> str:
             "conditions.\n")
 
 
+def _normalise(goal: Any, path: str) -> str:
+    """A file_exists path in the worktree-relative form the loop writes and checks: without the absolute worktree
+    prefix, a leading `./` or a trailing `/` (characters only; containment is decided after resolving)."""
+    prefix = str(goal.worktree).rstrip("/") + "/" if goal.worktree else ""
+    if prefix and path.startswith(prefix):
+        path = path[len(prefix):]
+    while path.startswith("./"):
+        path = path[2:]
+    return path.rstrip("/")
+
+
 def _out_of_scope(goal: Any, path: str, allowed: list[str]) -> bool:
     """A file_exists path no task may create: outside the allowed paths, not exempt from the scope gate and not
     already in the worktree, so the condition can never pass."""
@@ -65,46 +83,50 @@ def _out_of_scope(goal: Any, path: str, allowed: list[str]) -> bool:
 
 
 def check_plan(goal: Any, plan: list[Any], *, drop_out_of_scope: bool = False) -> list[str]:
-    """Point every `.claude/specs/<X>/` path of the plan's acceptance conditions at this goal's spec folder (K54).
-    Mutates the conditions; returns `<key>: <old> -> <new>` per rewrite. Raises ValueError on a condition about a
-    file the loop writes itself, and on file_exists conditions outside the goal's allowed paths, which can never pass;
-    with `drop_out_of_scope` (the fallback plan) those are removed and reported instead."""
+    """Reject a plan whose acceptance conditions name a `.claude/specs/<X>` folder other than this goal's, or a file
+    the loop writes itself in any spec folder (K54), or a file_exists path outside the goal's allowed paths: such a
+    plan can never pass. Paths are not rewritten; the only change is the harmless normalisation of a spec file_exists
+    path (`_normalise`), returned as `<key>: <old> -> <new>`. Every problem of the plan is listed in one ValueError,
+    one per line. With `drop_out_of_scope` (the fallback plan) out-of-scope file_exists conditions are removed and
+    reported instead; the K54 problems still raise."""
     own = slug(goal.title, goal.id)
-    prefix = str(goal.worktree).rstrip("/") + "/" if goal.worktree else ""
-    loop_file = re.compile(rf"\.claude/specs/{re.escape(own)}/({'|'.join(map(re.escape, LOOP_FILES))})(?![\w.-])")
+    rel = relative_folder(goal)
     allowed = list(getattr(goal, "allowed_paths", None) or [])
-    report = []
+    report, problems, fixes = [], [], []
     outside: list[tuple[Any, Any, str]] = []
+
+    def scan(key: str, text: str, whole: bool = False) -> None:  # a file_exists path is named whole
+        for m in SPEC_DIR.finditer(text):
+            if m.group(1) != own:
+                problems.append(f"task {key}: {text if whole else m.group(0)} is outside this goal's spec folder "
+                                f"{rel}/; put spec documents there or in the source tree")
+                if whole:
+                    break
+        for m in LOOP_FILE.finditer(text):
+            problems.append(f"task {key}: {text if whole else m.group(0)} is written by the loop itself, not by a "
+                            "task (the gate writes decisions.md)")
+
     for c in plan:
         for cond in c.acceptance:
             if cond.type == "file_exists" and cond.path:
-                path = cond.path
-                if prefix and path.startswith(prefix):
-                    path = path[len(prefix):]
-                while path.startswith("./"):
-                    path = path[2:]
-                if SPEC_DIR.match(path):
-                    new = SPEC_DIR.sub(f".claude/specs/{own}/", path, count=1)
-                    if new != cond.path:
-                        report.append(f"{c.key}: {cond.path} -> {new}")
-                        cond.path = new
-                    if loop_file.fullmatch(new):
-                        raise ValueError(f"task {c.key}: {new} is written by the loop itself, not by a task")
-                    path = new
+                path = _normalise(goal, cond.path)
+                scan(c.key, path, whole=True)
+                if path != cond.path and SPEC_DIR.match(path):
+                    report.append(f"{c.key}: {cond.path} -> {path}")
+                    fixes.append((cond, path))
                 if allowed and _out_of_scope(goal, path, allowed):
                     outside.append((c, cond, path))
             elif cond.type == "command" and cond.run:
-                new = SPEC_DIR.sub(f".claude/specs/{own}/", cond.run)
-                if new != cond.run:
-                    report.append(f"{c.key}: {cond.run} -> {new}")
-                    cond.run = new
-                if m := loop_file.search(new):
-                    raise ValueError(f"task {c.key}: {m.group(0)} is written by the loop itself, not by a task")
+                scan(c.key, cond.run)
     if outside and not drop_out_of_scope:
-        raise ValueError("file_exists acceptance outside the goal's allowed paths can never pass: "
-                         + "; ".join(f"task {c.key}: {path}" for c, _, path in outside)
-                         + f". Allowed paths: {', '.join(allowed)}. Use a path inside them, or a contains, regex or "
-                         "command condition instead.")
+        problems.append("file_exists acceptance outside the goal's allowed paths can never pass: "
+                        + "; ".join(f"task {c.key}: {path}" for c, _, path in outside)
+                        + f". Allowed paths: {', '.join(allowed)}. Use a path inside them, or a contains, regex or "
+                        "command condition instead.")
+    if problems:
+        raise ValueError("\n".join(problems))
+    for cond, path in fixes:
+        cond.path = path
     for c, cond, path in outside:
         c.acceptance = [a for a in c.acceptance if a is not cond]
         report.append(f"{c.key}: dropped file_exists {path} (outside the allowed paths)")
@@ -114,6 +136,43 @@ def check_plan(goal: Any, plan: list[Any], *, drop_out_of_scope: bool = False) -
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
+
+
+def save_answer(goal: Any, contract: Any, text: str, *, writes: bool, changed: list[str] | None) -> list[str]:
+    """A finished task's acceptance names a document to exist: its whole answer becomes that document, so the check
+    measures the work, not the file permission (agents cannot write `.claude/`). In the goal's own spec folder a
+    read-only task's answer replaces a stale file from an earlier iteration (K336) and a writing task's answer fills
+    a path its run did not change (`changed` None: unknown, so none); loop files are never written. Another goal's
+    spec folder and `.git` are never
+    written, nor anything outside the worktree. Elsewhere only a read-only task writes, and only a new file.
+    Returns the worktree-relative paths written; a path that cannot be written is logged and skipped."""
+    if not text.strip() or not goal.worktree:
+        return []
+    root = Path(goal.worktree).resolve()
+    own = relative_folder(goal) + "/"
+    saved: list[str] = []
+    for cond in contract.acceptance:
+        path = _normalise(goal, cond.path or "")
+        if cond.type != "file_exists" or not path.lower().endswith(ANSWER_FILES):
+            continue
+        target = (root / path).resolve()
+        if root not in target.parents:
+            continue
+        rel = target.relative_to(root).as_posix()
+        if ".git" in target.relative_to(root).parts or rel in saved:
+            continue
+        if rel.startswith(own):
+            if target.name in LOOP_FILES or (writes and (changed is None or rel in changed)):  # a folder: _write logs
+                continue
+        elif rel.split("/")[:2] == [".claude", "specs"] or writes or target.exists():
+            continue
+        try:
+            _write(target, text)
+        except OSError as e:
+            log_event("error", f"saving the answer of task {contract.key} as {rel}: {e}", goal_id=goal.id)
+            continue
+        saved.append(rel)
+    return saved
 
 
 def write_plan(goal: Goal, iteration: int, plan: list[Any], summary: str = "") -> None:
@@ -132,22 +191,31 @@ def write_plan(goal: Goal, iteration: int, plan: list[Any], summary: str = "") -
 
 
 def write_outputs(goal: Goal, iteration: int, _: Any = None) -> None:
-    """After the tasks ran, before the gate commits: spec/design/review files from the outputs."""
+    """After the tasks ran, before the gate commits: spec/design/review files from the outputs. An architect task is
+    the spec when its key is `spec`/`specification` or its acceptance or saved answer names this goal's spec.md, and
+    then never also design. A spec.md or design.md that save_answer wrote (`gate["saved_answer"]`) or a run changed
+    itself (`gate["files"]`) for a task of this iteration is that task's, kept."""
     d = folder(goal)
     with session() as s:
         tasks = s.scalars(select(Task).where(Task.goal_id == goal.id, Task.iteration == iteration).order_by(Task.id)).all()
         rows = [(t.key, t.title, t.role, t.status, (t.output or "").strip()) for t in tasks]
+        kept = {p for t in tasks for field in ("saved_answer", "files") for p in (t.gate or {}).get(field) or []}
+        named = [{*((t.gate or {}).get("saved_answer") or []),  # the documents each task's acceptance names
+                  *(_normalise(goal, c.get("path") or "") for c in (t.contract or {}).get("acceptance") or []
+                    if c.get("type") == "file_exists")} for t in tasks]
+    own = relative_folder(goal)
 
     def section(items: list[tuple[str, str, str, str, str]]) -> str:  # whole: a spec cut at its start loses its frame
         return "\n\n".join(f"## {title} ({role}, {status})\n\n{out or '(no output)'}" for _, title, role, status, out in items)
 
-    spec = [r for r in rows if r[2] == "architect" and r[0] in {"spec", "specification"}]
+    spec = [r for r, n in zip(rows, named)
+            if r[2] == "architect" and (r[0] in {"spec", "specification"} or f"{own}/spec.md" in n)]
     design = [r for r in rows if r[2] == "architect" and r not in spec]
     review = [r for r in rows if r[2] in {"qa", "reviewer"}]
     sa = [r for r in rows if r[2] in {"security", "network_security", "analyst", "comprehensive_analyst"}]
-    if spec:
+    if spec and f"{own}/spec.md" not in kept:
         _write(d / "spec.md", f"# Specification: {goal.title}\n\n{section(spec)}")
-    if design:
+    if design and f"{own}/design.md" not in kept:
         _write(d / "design.md", f"# Design: {goal.title}\n\n{section(design)}")
     if review:
         _write(d / "review.md", f"# Review (iteration {iteration})\n\n{section(review)}")

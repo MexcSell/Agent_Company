@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from agent_company import org, organization
 from agent_company.executors import AUTONOMY, level
-from agent_company.db import Agent, AgentVersion, Goal, Relationship, Room, log_event, now, session
+from agent_company.db import Agent, AgentVersion, Goal, McpGrant, Relationship, Room, log_event, now, session
 
 _staff_lock = threading.Lock()
 
@@ -479,7 +479,7 @@ def seed() -> None:
                 a = Agent(name=spec.title, role=spec.role, title=spec.title, room_key=spec.room,
                           goal=spec.goal, backstory=spec.backstory, skills=dict(spec.skills),
                           permissions=list(spec.permissions), enabled=spec.enabled,
-                          autonomy=spec.default_autonomy)
+                          autonomy=spec.default_autonomy, plugins=list(org.KITS.get(spec.role, ())))
                 s.add(a)
                 s.flush()
             by_role[spec.role] = a
@@ -645,6 +645,22 @@ ROLE_SYNONYMS = {
     "designer": "architect",
     "planner": "general_manager", "manager": "general_manager", "project_manager": "general_manager",
     "pm": "general_manager", "gm": "general_manager",
+    "frontend_developer": "frontend", "frontend_engineer": "frontend", "ui_developer": "frontend",
+    "ui_designer": "frontend", "ux_designer": "frontend", "ui_ux": "frontend", "web_developer": "frontend",
+    "devops_engineer": "devops", "sre": "devops", "site_reliability_engineer": "devops", "release_engineer": "devops",
+    "build_engineer": "devops", "infrastructure_engineer": "devops", "ci_engineer": "devops",
+    "security_engineer": "security", "security_reviewer": "security", "appsec": "security",
+    "security_analyst": "security", "network_security_engineer": "network_security",
+    "dependency_auditor": "network_security", "supply_chain_auditor": "network_security",
+    "guard": "security_guard", "sandbox_guard": "security_guard",
+    "data_analyst": "analyst", "business_analyst": "analyst", "cross_project_analyst": "comprehensive_analyst",
+    "external_data_analyst": "external_data", "data_collector": "external_data", "crawler": "external_data",
+    "admin": "administrator", "budget_manager": "administrator", "agent_management": "agent_manager",
+    "recruiter": "agent_manager", "lab_engineer": "tech_scout", "experimenter": "tech_scout",
+    "prototyper": "tech_scout", "technology_introducer": "tech_introducer", "teacher": "instructor",
+    "trainer": "instructor", "learner": "student", "technical_writer": "product", "tech_writer": "product",
+    "documentation_writer": "product", "docs_writer": "product", "product_writer": "product",
+    "product_manager": "product", "sales_agent": "sales", "account_manager": "sales",
 }
 REUSE_COVERAGE = 0.7  # an existing agent covering this share of a task's skills is reused, not recruited
 
@@ -666,30 +682,33 @@ def _usable(room: str | None) -> Any:
 def resolve_role(role: str, goal_id: int | None = None) -> tuple[str, str | None]:
     """Map a planner role onto the catalog. Returns (role, note). For a room trial's goal (G-R-04) the measured
     room's roles resolve to themselves."""
-    role = _slug(role)
+    role, said = _slug(role), None
     if role in ROLE_SYNONYMS and role not in org.ROLES:
-        return ROLE_SYNONYMS[role], f"role '{role}' is '{ROLE_SYNONYMS[role]}'"
+        role, said = ROLE_SYNONYMS[role], f"role '{role}' is '{ROLE_SYNONYMS[role]}'"
     spec = org.ROLES.get(role)
     if spec is None or spec.enabled:
-        return role, None
+        return role, said
     with session() as s:
         off = organization.disabled_rooms(s)
         if s.scalars(select(Agent).where(Agent.role == role, _usable(trial_room(s, goal_id)),
                                          Agent.lifecycle == "active", Agent.room_key.not_in(off))).first():
-            return role, None
+            return role, said
     fallback = org.FALLBACK_WRITE_ROLE if spec.writes else org.FALLBACK_READ_ROLE
-    return fallback, f"role '{role}' is disabled; using '{fallback}'"
+    return fallback, (f"{said}; " if said else "") + f"role '{role}' is disabled; using '{fallback}'"
 
 
 def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None,
-          writes: bool | None = None, critical: bool = False, task_id: int | None = None) -> Agent:
+          writes: bool | None = None, critical: bool = False, task_id: int | None = None,
+          prefer: int | None = None) -> Agent:
     """Return an agent for the role and mark it busy.
 
     Picks the best idle enabled agent by team utility (`_rank`). With probability `explore_rate`, on a
     non-critical task of a user's goal, the best idle agent without enough evidence is given the chance instead
     (SPEC-12 S12-R-03). If all are busy the best one is cloned; if the role does not exist a new specialist is
     recruited and linked to similar agents so it can draw on their experience. With `task_id` the decision, its
-    candidates and their scores are recorded in the task's contract (`staffing`, AR-018).
+    candidates and their scores are recorded in the task's contract (`staffing`, AR-018). `prefer` (an agent id: a
+    project's own General Manager) takes the work when it is in the pool, healthy and within its quota; busy, a clone
+    of it does (verification phase 5).
     """
     from agent_company.config import settings
 
@@ -721,11 +740,15 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
         trainee = _trainee(s, goal_id, pool, role, writes)  # an exercise or experiment measures one agent (SPEC-13)
         if trainee is not None and trainee.id not in quota:  # a candidate in its qualification run (SPEC-03)
             quota[trainee.id] = over_quota(s, trainee)
+        preferred = next((a for a in pool if a.id == prefer and a.health != "degraded" and not quota[a.id]), None)
         if trainee is not None and (trainee in idle or (trainee not in pool and _free(trainee, goal_id)
                                                          and not quota[trainee.id])):
             agent, action = trainee, "assigned"
         elif trainee is not None and not quota[trainee.id]:  # busy: its clone, which merges back after the goal
             agent, action = _clone(s, trainee, cap=False), "cloned"  # the measured agent itself
+        elif preferred is not None:
+            agent, action = (preferred, "assigned") if preferred in idle else (_clone(s, preferred), "cloned")
+            why = "the project's own manager"
         elif idle:
             ranks = _rank(s, idle, skills, team)
             agent = max(idle, key=lambda a: ranks[a.id]["score"])
@@ -903,10 +926,12 @@ def _clone(s: Session, src: Agent, cap: bool = True) -> Agent:
                   backstory=base.backstory, skills=dict(base.skills), permissions=list(base.permissions),
                   # a disabled base is only staffed by a room trial (G-R-04): its clone stays disabled as well
                   autonomy=base.autonomy or "G3", model_pref=base.model_pref, playbook=base.playbook,
-                  enabled=base.enabled,
+                  enabled=base.enabled, plugins=list(base.plugins or []),
                   max_concurrent=base.max_concurrent or 1)
     s.add(clone)
     s.flush()
+    for server_id in list(s.scalars(select(McpGrant.server_id).where(McpGrant.agent_id == base.id))):
+        s.add(McpGrant(server_id=server_id, agent_id=clone.id))  # the original's tools, no more
     connect(s, clone.id, base.id, "similar", 0.7)
     _link_new(s, clone, list(base.skills or {}))
     record_version(s, clone, "system", f"cloned from {base.name}")
@@ -1051,6 +1076,56 @@ def update_agent(agent_id: int, changes: dict[str, Any], actor: str = "system",
         return agent_dict(a)
 
 
+def reestablish(actor: str = "system", dry_run: bool = False) -> list[dict[str, Any]]:
+    """Bring every agent that is not retired back to its role's baseline: the role template's permissions it lacks
+    (rights an administrator added beyond the template stay), a disabled agent of a gated role at most the role's
+    default autonomy (G2), the role's kit of catalog plugins and skills (`org.KITS`, duplicates dropped), and its
+    proficiency skills with one spelling each (`unit-testing` and `unit_testing` become `unit_testing` at the higher
+    level, as staffing matches them); levels are never raised, they come from evidence. A clone gets the MCP grants
+    of its original it lacks. Each change is a configuration version by `actor` and the definition file follows.
+    Returns what changed (or would, `dry_run`)."""
+    from agent_company import agentdefs
+
+    plans: list[dict[str, Any]] = []
+    with session() as s:
+        grants: dict[int, set[int]] = {}
+        for g in s.scalars(select(McpGrant)):
+            grants.setdefault(g.agent_id, set()).add(g.server_id)
+        for a in s.scalars(select(Agent).where(Agent.lifecycle != "retired").order_by(Agent.id)):
+            spec, changes = org.ROLES.get(a.role), {}
+            perms = list(a.permissions or [])
+            if spec is not None:
+                if missing := [p for p in spec.permissions if p not in perms]:
+                    changes["permissions"] = perms + missing
+                if not spec.enabled and not a.enabled and level(a.autonomy) > level(spec.default_autonomy):
+                    changes["autonomy"] = spec.default_autonomy
+            plugins = list(dict.fromkeys([*(a.plugins or []), *org.KITS.get(a.role, ())]))
+            if plugins != list(a.plugins or []):
+                changes["plugins"] = plugins
+            skills: dict[str, int] = {}
+            for k, v in (a.skills or {}).items():
+                skills[_slug(k)] = max(skills.get(_slug(k), 0), int(v))
+            if skills != dict(a.skills or {}):
+                changes["skills"] = skills
+            if a.parent_id and (missing_grants := grants.get(a.parent_id, set()) - grants.get(a.id, set())):
+                changes["mcp_grants"] = sorted(missing_grants)  # server ids
+            if changes:
+                plans.append({"id": a.id, "name": a.name, "changes": changes,
+                              "before": {k: getattr(a, k) for k in changes if k != "mcp_grants"}})
+    if not dry_run:
+        for p in plans:
+            config = {k: v for k, v in p["changes"].items() if k != "mcp_grants"}
+            if config:
+                update_agent(p["id"], config, actor)
+                agentdefs.sync(p["id"], "re-established: " + ", ".join(sorted(config)))
+            if p["changes"].get("mcp_grants"):
+                with session() as s:
+                    s.add_all(McpGrant(server_id=sid, agent_id=p["id"]) for sid in p["changes"]["mcp_grants"])
+                log_event("mcp", f"{p['name']}: MCP grants of its original {p['changes']['mcp_grants']} ({actor})",
+                          agent_id=p["id"])
+    return plans
+
+
 def rollback(agent_id: int, version: int, actor: str) -> dict[str, Any]:
     """Restore the configuration of an earlier version, recorded as a new version (S02-R-01, AT-016)."""
     with session() as s:
@@ -1189,7 +1264,8 @@ def agent_runs(agent_id: int, offset: int = 0, limit: int = 50,
 
 
 def agent_run(agent_id: int, run_id: int, visible: set[int] | None = None) -> dict[str, Any]:
-    """One run with what was recorded: its task's output, error and tool calls."""
+    """One run with what was recorded: its task's output, error, tool calls and which model did it and why."""
+    from agent_company import router
     from agent_company.db import Run
 
     with session() as s:
@@ -1208,6 +1284,7 @@ def agent_run(agent_id: int, run_id: int, visible: set[int] | None = None) -> di
         d.update(error=r.error or "", isolation=r.isolation or "", tools=list(r.tools or []),
                  permissions=list(r.permissions or []), withheld=list(r.dropped or []),
                  denied_tools=list(r.denied_tools or []), tool_calls=list(r.tool_calls or []),
+                 trace=dict(r.trace or {}), trace_issues=router.trace_issues(r.trace or {}),
                  task={"id": t.id, "key": t.key, "title": t.title, "status": t.status, "output": t.output,
                        "session_id": t.session_id} if t else None)
         return d

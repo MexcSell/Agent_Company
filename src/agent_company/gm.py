@@ -10,7 +10,8 @@ the GM can:
   skills, plugins, models and memory through the catalog;
 - add a missing skill, plugin, rule or command to the management page (`gm add`), then use it;
 - start the goal loop, where the agents plan, build, review and fix until the goal passes (`gm goal`);
-- start a study visit, which rewrites an agent's definition file (`gm study`);
+- start a study visit, which proposes a definition candidate an administrator applies after seeing its diff
+  (`gm study`, G-R-19);
 - record a hypothesis to test and move it along (`gm hypothesis`, `gm hypotheses`, `gm hypothesis-status`); as an
   agent it cannot mark one supported without a recorded test result (hypotheses.py, ASEAO07 S07-R-03);
 - write down the project's requirements as drafts a person approves, and name them on goals (`gm requirement`,
@@ -71,7 +72,7 @@ How you run the company (shell commands; GM below stands for: {gm}):
      (a story: "As a <actor>, I want <what>, so that <benefit>"; a use case: lines "Actors:", "Preconditions:",
      "Main flow:" with numbered steps, "Alternatives:", "Postconditions:")
   GM requirements {project['id']} [--trace]   the project's requirements; --trace: implemented, tested, merged
-  GM study [<agent id>]             one learning visit: rewrites an agent's definition
+  GM study [<agent id>]             one learning visit: a definition candidate an administrator applies
   GM schedule {project['id']} "<goal>" --every "daily 06:00" [--details "…"] [--check "…"] [--kind …]   a recurring goal (UTC;
        hourly | daily HH:MM | weekly <mon..sun> HH:MM); GM schedules {project['id']}
   GM import-skills <folder> [--only "a,b"] [--enable]   <folder>/<name>/SKILL.md skills into the catalog (screened)
@@ -316,4 +317,13 @@ def main(argv: list[str]) -> None:
         out = decisions.review(a.decision_id, "agent:general_manager", a.verdict, a.note, agent_id=gm_id)
     else:
         out = agentdefs.study(a.agent_id)
+        if out.get("candidate_id"):
+            c = agentdefs.candidate(out["candidate_id"])
+            print(f"definition candidate #{c['id']} for {c['agent_name']} (agent {c['agent_id']}), model {c['model']}, "
+                  f"status {c['status']}: an administrator applies or discards it after reading the diff")
+            print(c["diff"] or "(no change to the file)")
+            return
+        if out.get("studied") and not out.get("changed"):
+            print(f"{out['studied']}: no candidate ({out.get('detail', 'no change')})")
+            return
     print(json.dumps(out, indent=2, default=str))

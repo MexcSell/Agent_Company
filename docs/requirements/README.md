@@ -28,6 +28,8 @@ detail an implementer works from.
 | [WORKSPACE.md](WORKSPACE.md) | the code of 2026-11-05 (no document): the Workspace and File Manager, specified so they can be set up again on another computer; IDs `WS-R-nn` |
 | [FRAMEWORKS.md](FRAMEWORKS.md) | the cloned framework repositories in `/home/luca/update/` (aider, SWE-agent, mini-swe-agent, OpenHands, extensions, MetaGPT, AutoGen, Agent Framework, LangGraph, crewAI, Dify, Flowise, Open Interpreter): their functions compared with this repository; IDs `FW-R-nn` |
 | [EVOLUTION-LOOPS.md](EVOLUTION-LOOPS.md) | `/home/luca/update_2/1/a_1..a_9.jpg` (self-evolution and critic-loop diagrams) and the owner's shared ChatGPT conversations (research agent + Codex, evolving agents, Codex bridge, AXoR): model fallback at usage limits, the research lead's tool loop, evolution loops; IDs `EL-R-nn` |
+| [WEBSITE.md](WEBSITE.md) | the code of 2026-11-08 (no document): every page of the website, what it shows and does, who may do it and the API call behind it, specified so the site can be rebuilt elsewhere; IDs `WEB-<area>-nn` |
+| [AICO-UI.md](AICO-UI.md) | `/home/luca/update/update_3` (readme.docx + mockups), `update_4` (UIUX.docx, functional.docx = AICO-FRS-001, the 21-page UI/UX PDF + mockups), `update_5` (AICO mockups, palette, three experience levels): the redesign of the website's interface and functions, decisions, phases; IDs `UI-<area>-nn` |
 | [images/SOURCES.md](images/SOURCES.md) | which images were kept, which were not, and their sources |
 
 The master specification (`I am trying to download documents related to this.rtf`) gives one
@@ -138,7 +140,7 @@ the order is safety and correctness of that pipeline first, then management, the
      `research.filter_material`).
    - **From the continuously evolving organisation** (2026-11-06, `docs/temp/`): G-R-15 MCP tool drift, G-R-16
      latency tail, tool failures and human overrides, G-R-17 root causes by layer and G-R-18 model terms are done;
-     G-R-19 (a study rewrite as a candidate) needs the owner's decision; a cap of four model families is not
+     G-R-19 (a study rewrite as a candidate an administrator applies after seeing the diff, option a) is done; a cap of four model families is not
      enforced (a decision for the owner).
    - **Deliberately not taken**: S02-FR-17 runtime migration (single host).
 

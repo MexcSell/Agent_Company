@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from agent_company import gitsync, loop, prefs, projects, worktrees
 from agent_company.api import create_app
-from agent_company.db import Proposal, session
+from agent_company.db import Message, Proposal, session
 
 from agent_company.auth import DEFAULT_PERMISSIONS  # noqa: E402
 
@@ -34,6 +34,19 @@ def wait(gid, timeout=20):
             return g
         time.sleep(0.05)
     raise AssertionError("goal did not finish")
+
+
+def wait_outcome(gid, timeout=20):
+    """wait() returns on the final status; loop._chat_outcome posts 'Goal #N: ...' after it. Wait for that post."""
+    g = wait(gid, timeout)
+    end = time.time() + timeout
+    while time.time() < end:
+        with session() as s:
+            if s.scalars(select(Message.id).where(Message.goal_id == gid,
+                                                  Message.content.startswith(f"Goal #{gid}:"))).first():
+                return g
+        time.sleep(0.05)
+    raise AssertionError(f"no outcome message for goal #{gid}")
 
 
 def test_platform_project_is_protected_and_admin_only():
@@ -97,7 +110,7 @@ def test_a_repository_set_up_with_github_brings_its_url(tmp_path):
 def test_command_window_order_runs_a_goal_and_reports_back():
     p = projects.create("Gamma", quality_commands=["test -f WORKLOG.md"])
     out = projects.command(p["id"], ADMIN, "Build a hello world script")
-    g = wait(out["goal_id"])
+    g = wait_outcome(out["goal_id"])
     assert g.status == "awaiting_approval" and g.project_id == p["id"] and g.repo_path == p["path"]
     kinds = [m["kind"] for m in projects.messages(p["id"])]
     assert kinds[:3] == ["chat", "command", "chat"] and "plan" in kinds and "result" in kinds
@@ -212,7 +225,7 @@ def test_project_api_flow():
         assert app.get(f"/api/uploads/{up['id']}").content == b"hello"
         r = app.post(f"/api/projects/{pid}/command", json={"content": "Write a note and propose next steps",
                                                             "attachments": [up["id"]]}).json()
-        wait(r["goal_id"])
+        wait_outcome(r["goal_id"])
         d = app.get(f"/api/projects/{pid}").json()
         assert d["goals"][0]["project_id"] == pid and d["members"] and d["proposals"]
         prop = d["proposals"][0]["id"]

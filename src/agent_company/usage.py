@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
 
+from agent_company.config import settings
 from agent_company.db import Agent, ModelEntry, Run, Task, now, session
 
 
@@ -29,8 +33,9 @@ def cost_of(entry: ModelEntry | None, input_tokens: int, output_tokens: int) -> 
 def record(*, model_name: str, kind: str, input_tokens: int = 0, output_tokens: int = 0,
            cost: float | None = None, duration: float = 0.0, ok: bool = True, error: str = "",
            task_id: int | None = None, agent_id: int | None = None, purpose: str = "task",
-           goal_id: int | None = None, res: Any = None) -> None:
-    """One run. `res` (an executors.Result) adds what the tool gateway granted it."""
+           goal_id: int | None = None, res: Any = None, user_id: int | None = None) -> None:
+    """One run. `res` (an executors.Result) adds what the tool gateway granted it; `user_id` is the signed-in user
+    whose request made it (S04-R-09), None for agent work."""
     with session() as s:
         entry = s.scalars(select(ModelEntry).where(ModelEntry.name == model_name)).first()
         if cost is None:
@@ -38,11 +43,12 @@ def record(*, model_name: str, kind: str, input_tokens: int = 0, output_tokens: 
         s.add(Run(model_name=model_name, kind=kind, input_tokens=input_tokens,
                   output_tokens=output_tokens, cost=cost, duration=duration, ok=ok,
                   error=error[:2000], task_id=task_id, agent_id=agent_id, purpose=purpose, goal_id=goal_id,
-                  isolation=getattr(res, "isolation", "") or "", tools=list(getattr(res, "tools", None) or [])[:100],
+                  user_id=user_id, isolation=getattr(res, "isolation", "") or "", tools=list(getattr(res, "tools", None) or [])[:100],
                   permissions=list(getattr(res, "permissions", None) or []),
                   dropped=list(getattr(res, "dropped", None) or []),
                   denied_tools=list(getattr(res, "denied_tools", None) or [])[:100],
-                  tool_calls=list(getattr(res, "tool_calls", None) or [])))
+                  tool_calls=list(getattr(res, "tool_calls", None) or []),
+                  trace=dict(getattr(res, "trace", None) or {})))
     from agent_company import router
 
     if not ok and router.is_limit_error(error):  # a plan or quota limit: the router skips the model until its reset
@@ -74,6 +80,45 @@ def tokens_since(model_name: str, since: datetime) -> int:
         total = s.scalar(select(func.coalesce(func.sum(Run.input_tokens + Run.output_tokens), 0))
                          .where(Run.model_name == model_name, Run.started_at >= since))
         return int(total or 0)
+
+
+def user_tokens_since(user_id: int, since: datetime, purpose: str | None = None) -> int:
+    """Tokens of one user's runs since `since`, failed runs included; agent runs (user_id NULL) never count."""
+    q = select(func.coalesce(func.sum(Run.input_tokens + Run.output_tokens), 0)).where(
+        Run.user_id == user_id, Run.started_at >= since)
+    if purpose is not None:
+        q = q.where(Run.purpose == purpose)
+    with session() as s:
+        return int(s.scalar(q) or 0)
+
+
+class CapReached(Exception):
+    def __init__(self, used: int, cap: int, reset_at: str) -> None:
+        super().__init__(f"daily writing cap reached: {used} of {cap} tokens used; resets at {reset_at}")
+        self.used, self.cap, self.reset_at = used, cap, reset_at
+
+
+_user_locks: dict[int, threading.Lock] = {}
+_user_locks_guard = threading.Lock()
+
+
+@contextmanager
+def user_cap(user_id: int, purpose: str = "writing", estimate: int = 0) -> Iterator[None]:
+    """Per-user daily token cap (S04-R-09, setting `writing_daily_tokens_per_user`, 0 = none). The caller runs the
+    model and calls record(..., user_id=user_id, purpose=purpose) inside the block: the user's lock is held until
+    that row is stored, so two requests of one user cannot both pass. One process only."""
+    cap = int(settings().writing_daily_tokens_per_user or 0)
+    if cap <= 0:
+        yield
+        return
+    with _user_locks_guard:
+        lock = _user_locks.setdefault(user_id, threading.Lock())
+    with lock:
+        d0 = day_start()
+        used = user_tokens_since(user_id, d0, purpose)
+        if used + max(0, estimate) >= cap:
+            raise CapReached(used, cap, (d0 + timedelta(days=1)).isoformat())
+        yield
 
 
 def over_limit(entry: ModelEntry) -> str | None:
