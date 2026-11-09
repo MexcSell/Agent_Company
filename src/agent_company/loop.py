@@ -992,6 +992,12 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
         set_task_stage(task_id, "assigned", agent.name)  # S05-R-08
 
         set_status(task_id, "running", agent_id=agent.id, role=role)
+        from agent_company.projects import post_for_goal
+
+        # the command window shows who the GM gave which instruction, beside the order and the agents' reports
+        post_for_goal(goal.id, f"To {agent.name} ({role}): {contract.title}\n{_brief(contract.description)}".strip(),
+                      kind="assignment", agent_id=planner_id or _project_manager(goal), task_id=task_id,
+                      to=agent.name, to_agent_id=agent.id)
         if writes and iteration > 1:  # S09-R-03: the open defects of earlier iterations are this agent's to fix
             from agent_company.performance import assign
 

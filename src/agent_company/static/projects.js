@@ -11,7 +11,8 @@ let selectedProject = Number(store.get("ac.project")) || null;
 let projectChecked = new Set();
 let lastMessageId = 0;
 let pendingUploads = [];
-let projectMode = store.get("ac.project.mode") || "gm";  // gm | orders | plan
+// orders | plan | gm; orders (the GM's conversation with the agents) is the default, the CLI panel only on request
+let projectMode = store.get("ac.project.view") || "orders";
 let projectFiles = store.get("ac.project.files") === "1";
 const gmPanels = new Map();  // project id -> { el, panel }
 let projectSearch = "";
@@ -137,10 +138,10 @@ const LIFE = { active: [["paused", "Pause"], ["completed", "Complete"], ["archiv
   paused: [["active", "Resume"], ["archived", "Archive"], ["cancelled", "Cancel"]], archived: [["active", "Restore"]],
   completed: [["archived", "Archive"]], cancelled: [] };
 
-const KIND_LABEL = { command: "", plan: "Plan", result: "Result", error: "Problem", proposal: "Proposal", standup: "Stand-up", chat: "" };
+const KIND_LABEL = { command: "", plan: "Plan", assignment: "Instruction", result: "Report", error: "Problem", proposal: "Proposal", standup: "Stand-up", chat: "" };
 
 function messageHtml(m, count) {
-  const who = m.author_type === "user" ? esc(m.meta?.author || "You") : m.agent ? esc(m.agent) : "System";
+  const who = (m.author_type === "user" ? esc(m.meta?.author || "You") : m.agent ? esc(m.agent) : "System") + (m.meta?.to ? ` → ${esc(m.meta.to)}` : "");
   const files = (m.attachments || []).map((a) => a.content_type.startsWith("image/") ? `<a href="/api/uploads/${a.id}" target="_blank" rel="noopener"><img src="/api/uploads/${a.id}" alt="${esc(a.name)}" class="thumb"></a>` : `<a href="/api/uploads/${a.id}" target="_blank" rel="noopener">${esc(a.name)}</a>`).join(" ");
   return `<div class="msg by-${m.author_type} ${m.kind}" data-mid="${m.id}"><div class="msg-head row nowrap"><strong>${who}</strong>${KIND_LABEL[m.kind] ? ` <span class="pill ${m.kind === "error" ? "failed" : m.kind === "result" ? "done" : "info"}">${KIND_LABEL[m.kind]}</span>` : ""}${m.goal_id ? ` <a href="#" data-goal="${m.goal_id}" class="muted">#${m.goal_id}</a>` : ""}${projectSearch && m.topic ? ` <span class="pill">${esc(m.topic)}</span>` : ""}${m.meta?.classification ? ` <span class="pill pending" title="only models cleared for it receive this order">${esc(m.meta.classification)}</span>` : ""}${count > 1 ? ` <span class="pill" title="identical messages collapsed">×${count}</span>` : ""}<span class="muted grow" style="text-align:right">${ago(m.at)}</span><button class="icon-btn" data-copy="${m.id}" title="Copy" aria-label="Copy message">${icon("copy", 14)}</button></div>
     <div class="msg-body">${esc(m.content)}</div>${files ? `<div class="row">${files}</div>` : ""}</div>`;
@@ -192,10 +193,10 @@ async function projectMain(id, incremental, early = null) {
     main.innerHTML = `<div class="row nowrap proj-head"><div class="grow"><h2 style="margin:0">${esc(d.name)} ${d.protected ? '<span class="pill">protected</span>' : ""}${d.status !== "active" ? ` <span class="pill pending" title="${esc(d.status_reason || "")}">${esc(d.status)}</span>` : ""}${d.priority && d.priority !== "normal" ? ` <span class="pill info">${esc(d.priority)}</span>` : ""}${d.deadline ? ` <span class="pill ${d.overdue ? "failed" : ""}" title="deadline">${esc(d.deadline.slice(0, 10))}${d.overdue ? " overdue" : ""}</span>` : ""}${d.budget_usd ? ` <span class="pill ${d.spent_usd >= d.budget_usd ? "failed" : ""}" title="budget used">${money(d.spent_usd)} / ${money(d.budget_usd)}</span>` : ""}</h2><div class="muted mono ellipsis">${esc(d.path)}${d.github_url ? " · " + esc(d.github_url) : ""}</div></div>
         ${me.is_admin ? ib("edit", "Edit the project", 'id="p-edit"', "sm") + ib("download", "Write the company catalog into this project's .claude/ (agents, rules, skills, commands, hooks, .mcp.json)", 'id="p-config"', "sm") + ib("git", d.github_url ? "Sync to GitHub" : "Set a GitHub URL first", `id="p-sync" ${d.github_url ? "" : "disabled"}`, "sm") + ib("workspace", "Open the folder in the Workspace", 'id="p-wsp"', "sm") : ""}
         ${ib("folder", projectFiles ? "Hide files" : "Show files", 'id="p-files"', `sm ${projectFiles ? "on" : ""}`)}${ib("stop", "Stop the project's running goals", 'id="p-stop"', "sm danger")}${(me.is_admin || d.created_by === me.id) && !d.protected && LIFE[d.status]?.length ? `<select id="p-life" aria-label="Project status" title="Pause, resume, archive, complete or cancel the project" style="width:auto"><option value="">${esc(d.status)}…</option>${LIFE[d.status].map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select>` : ""}</div>
-      <div class="ag-tabs small proj-modes" role="tablist">${gmOk ? `<button role="tab" data-pmode="gm" aria-selected="${mode === "gm"}">${icon("general_manager", 14)} General Manager</button>` : ""}<button role="tab" data-pmode="orders" aria-selected="${mode === "orders"}">${icon("send", 14)} Orders &amp; reports</button><button role="tab" data-pmode="plan" aria-selected="${mode === "plan"}">${icon("goals", 14)} Plan</button>
-        <span class="grow"></span><span class="muted gm-is" title="${esc(d.gm?.reason || "")}">GM: ${esc(d.gm?.model || "–")}${cli ? "" : " · orders go to the agent loop"}</span></div>
+      <div class="ag-tabs small proj-modes" role="tablist"><button role="tab" data-pmode="orders" aria-selected="${mode === "orders"}" title="Your orders, the General Manager's instructions to the agents and their reports">${icon("send", 14)} Orders &amp; reports</button><button role="tab" data-pmode="plan" aria-selected="${mode === "plan"}">${icon("goals", 14)} Plan</button>${gmOk ? `<button role="tab" data-pmode="gm" aria-selected="${mode === "gm"}" title="Your own ${d.gm.kind === "codex" ? "Codex" : "Claude Code"} session in the project's folder (administrators). Orders for the company go to Orders &amp; reports.">${icon("general_manager", 14)} ${d.gm.kind === "codex" ? "Codex" : "Claude Code"}</button>` : ""}
+        <span class="grow"></span><span class="muted gm-is" title="${esc(d.gm?.reason || "")}">GM: ${esc(d.gm?.model || "–")}</span></div>
       <div id="p-props"></div><div class="proj-body" id="proj-body"></div>`;
-    main.querySelectorAll("[data-pmode]").forEach((b) => (b.onclick = () => { projectMode = b.dataset.pmode; store.set("ac.project.mode", projectMode); projectMain(id); }));
+    main.querySelectorAll("[data-pmode]").forEach((b) => (b.onclick = () => { projectMode = b.dataset.pmode; store.set("ac.project.view", projectMode); projectMain(id); }));
     $("#p-edit") && ($("#p-edit").onclick = () => projectForm(d));
     $("#p-sync") && ($("#p-sync").onclick = () => sendCommand(id, "/sync"));
     $("#p-stop").onclick = () => sendCommand(id, "/stop");

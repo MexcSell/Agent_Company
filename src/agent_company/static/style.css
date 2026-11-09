@@ -134,6 +134,7 @@ details summary { cursor: pointer; }
 .msg.by-user { align-self: flex-end; background: color-mix(in srgb, var(--accent) 10%, var(--panel)); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
 .msg.by-system { background: var(--panel-2); }
 .msg.error { border-color: color-mix(in srgb, var(--bad) 45%, var(--border)); }
+.msg.assignment { border-left: 3px solid color-mix(in srgb, var(--accent) 60%, var(--border)); margin-left: 16px; }
 .msg-head { display: flex; gap: 6px; align-items: center; font-size: 12.5px; }
 .msg-head .icon-btn { width: 22px; height: 22px; opacity: .6; }
 .msg-head .icon-btn:hover { opacity: 1; }

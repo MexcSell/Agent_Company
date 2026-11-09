@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from agent_company import gitsync, loop, prefs, projects, worktrees
 from agent_company.api import create_app
-from agent_company.db import Message, Proposal, session
+from agent_company.db import Agent, Message, Proposal, Task, session
 
 from agent_company.auth import DEFAULT_PERMISSIONS  # noqa: E402
 
@@ -114,6 +114,19 @@ def test_command_window_order_runs_a_goal_and_reports_back():
     assert g.status == "awaiting_approval" and g.project_id == p["id"] and g.repo_path == p["path"]
     kinds = [m["kind"] for m in projects.messages(p["id"])]
     assert kinds[:3] == ["chat", "command", "chat"] and "plan" in kinds and "result" in kinds
+    # the GM's instruction to each agent shows between the plan and that agent's report
+    msgs = projects.messages(p["id"])
+    sent = [m for m in msgs if m["kind"] == "assignment"]
+    with session() as s:
+        tasks = s.scalars(select(Task).where(Task.goal_id == g.id, Task.agent_id.is_not(None))).all()
+        assert tasks and sorted(m["meta"]["task_id"] for m in sent) == sorted(t.id for t in tasks)
+        for t in tasks:
+            m = next(m for m in sent if m["meta"]["task_id"] == t.id)
+            assert s.get(Agent, m["agent_id"]).role == "general_manager", "the GM gives the instruction"
+            assert m["meta"]["to_agent_id"] == t.agent_id and m["content"].startswith(f"To {m['meta']['to']} (")
+            assert t.title in m["content"]
+            report = next(r for r in msgs if r["kind"] in ("result", "error") and r["meta"].get("task_id") == t.id)
+            assert kinds.index("plan") < msgs.index(m) < msgs.index(report)
     loop.approve(g.id)
     assert "approved and merged" in projects.messages(p["id"])[-1]["content"]
 
