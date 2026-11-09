@@ -403,8 +403,9 @@ def merge_clone(clone_id: int) -> dict[str, Any] | None:
         if c is None or c.parent_id is None or c.lifecycle == "retired" or c.status == "busy":
             return None
         o = s.get(Agent, c.parent_id)
-        o.xp += c.xp
-        o.level = 1 + o.xp // 50
+        from agent_company.learning import add_xp
+
+        add_xp(o, c.xp or 0)
         o.tasks_done += c.tasks_done
         o.tasks_failed += c.tasks_failed
         skills = dict(o.skills or {})

@@ -1058,7 +1058,9 @@ def rotation_tick(min_age_seconds: int = 0, client: httpx.Client | None = None,
         a = s.get(Agent, agent_id)
         if a is not None:
             a.last_active_at = now()
-            a.xp += 2
+            from agent_company.learning import add_xp
+
+            add_xp(a, 2)
     return {"agent_id": agent_id, "shift_id": shift_id, **result}
 
 

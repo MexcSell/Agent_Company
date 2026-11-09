@@ -140,6 +140,13 @@ def set_status(s: Session, g: Goal, to: str, reason: str = "", actor: str = "sys
     s.add(GoalTransition(goal_id=g.id, from_status=cur, to_status=to, reason=reason[:500], actor=actor[:128]))
     if to in ("approved", "cancelled", "rejected", "paused", "failed"):
         _tasks_follow(s, g, to)
+    # The goal's verified outcome is its planner's (tasks are credited in learning.learn): it passed the gate
+    # (awaiting approval, or merged at once from running) or failed; an approval after waiting is not counted again.
+    passed = to == "awaiting_approval" or (to == "approved" and cur == "running")
+    if passed or to == "failed":
+        from agent_company.learning import credit_planners
+
+        credit_planners(s, g, passed)
     if g.kind and to in ("awaiting_approval", "approved", "rejected", "failed"):
         from agent_company import orchestration
 

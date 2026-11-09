@@ -41,7 +41,7 @@ from sqlalchemy.exc import OperationalError
 
 from agent_company import kgraph, registry
 from agent_company.config import REPO_ROOT, settings
-from agent_company.db import Agent, Goal, KgEdge, Lesson, Project, log_event, now, session
+from agent_company.db import Agent, Goal, KgEdge, Lesson, Project, Task, log_event, now, session
 
 XP_SUCCESS, XP_FAILURE, XP_PER_LEVEL = 10, 3, 50
 CLASSIFICATIONS = ["public", "internal", "confidential", "restricted", "secret"]
@@ -656,6 +656,38 @@ def _report_text(report: dict[str, Any]) -> str:
     return "\n".join(x for v in report.values() for x in (v if isinstance(v, list) else [v]) if x)
 
 
+def add_xp(a: Agent, points: int) -> None:
+    """Experience and the level that follows from it, always together."""
+    a.xp = (a.xp or 0) + points
+    a.level = 1 + a.xp // XP_PER_LEVEL
+
+
+def credit(a: Agent, success: bool, skills: list[str]) -> None:
+    """XP for a verified outcome of the agent's work; a success also grows the skills it used (at most 10)."""
+    add_xp(a, XP_SUCCESS if success else XP_FAILURE)
+    if success:
+        grown = dict(a.skills or {})
+        for sk in skills:
+            key = sk.strip().lower().replace(" ", "_")
+            if key:
+                grown[key] = min(10, int(grown.get(key, 3)) + 1)
+        a.skills = grown
+
+
+def credit_planners(s: Any, g: Any, success: bool) -> list[int]:
+    """A planner's work is measured by its goal: the agents that planned the goal's current iteration
+    (`Task.planned_by`) get XP when the goal passes its gate or fails (`workflow.set_status`). Executing agents
+    are credited per task in `learn`; a planner runs no task, so without this it never gained experience.
+    Uses the caller's session `s`. Returns the credited agent ids."""
+    ids = sorted({i for i in s.scalars(select(Task.planned_by).where(Task.goal_id == g.id,
+                                                                     Task.iteration == g.iteration)) if i})
+    for aid in ids:
+        a = s.get(Agent, aid)
+        if a is not None:
+            credit(a, success, ["planning"])
+    return ids
+
+
 def learn(agent_id: int, goal_id: int | None, lesson: str, success: bool, skills: list[str],
           task_id: int | None = None, commit: str = "", report: dict[str, Any] | None = None) -> None:
     text = lesson.strip()[:1000]
@@ -691,16 +723,9 @@ def learn(agent_id: int, goal_id: int | None, lesson: str, success: bool, skills
         if status != "approved":
             log_event("security", f"lesson for {a.name} {status}: {reason}", goal_id=goal_id, agent_id=agent_id, s=s,
                       rule="memory_poisoning")
-        a.xp += XP_SUCCESS if success else XP_FAILURE
-        a.level = 1 + a.xp // XP_PER_LEVEL
+        credit(a, success, skills)
         if success:
             a.tasks_done += 1
-            grown = dict(a.skills or {})
-            for sk in skills:
-                key = sk.strip().lower().replace(" ", "_")
-                if key:
-                    grown[key] = min(10, int(grown.get(key, 3)) + 1)
-            a.skills = grown
         else:
             a.tasks_failed += 1
     judge_contradictions(edges)
