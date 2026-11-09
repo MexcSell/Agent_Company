@@ -29,6 +29,7 @@ detail an implementer works from.
 | [FRAMEWORKS.md](FRAMEWORKS.md) | the cloned framework repositories in `/home/luca/update/` (aider, SWE-agent, mini-swe-agent, OpenHands, extensions, MetaGPT, AutoGen, Agent Framework, LangGraph, crewAI, Dify, Flowise, Open Interpreter): their functions compared with this repository; IDs `FW-R-nn` |
 | [EVOLUTION-LOOPS.md](EVOLUTION-LOOPS.md) | `/home/luca/update_2/1/a_1..a_9.jpg` (self-evolution and critic-loop diagrams) and the owner's shared ChatGPT conversations (research agent + Codex, evolving agents, Codex bridge, AXoR): model fallback at usage limits, the research lead's tool loop, evolution loops; IDs `EL-R-nn` |
 | [WEBSITE.md](WEBSITE.md) | the code of 2026-11-08 (no document): every page of the website, what it shows and does, who may do it and the API call behind it, specified so the site can be rebuilt elsewhere; IDs `WEB-<area>-nn` |
+| [AICO-UI.md](AICO-UI.md) | `/home/luca/update/update_3` (readme.docx + mockups), `update_4` (UIUX.docx, functional.docx = AICO-FRS-001, the 21-page UI/UX PDF + mockups), `update_5` (AICO mockups, palette, three experience levels): the redesign of the website's interface and functions, decisions, phases; IDs `UI-<area>-nn` |
 | [images/SOURCES.md](images/SOURCES.md) | which images were kept, which were not, and their sources |
 
 The master specification (`I am trying to download documents related to this.rtf`) gives one
