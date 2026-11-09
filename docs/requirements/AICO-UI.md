@@ -235,7 +235,12 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   versions, restore), Memory (the agent's knowledge items and lessons), Logs (runs' tool calls and errors),
   Relationships.
 - **UI-AG-03** Tools & MCP, Skills & plugins, Marketplace, Agent network stay as tabs (WEB-AG-12…15).
-- Status: partial.
+- Status: **done** (P1-1) but the org chart's connector styling (UI-TEAM-02 keeps the existing chart): `static/teams.js`
+  (Teams tab: rooms as department cards with lead, members, performance from `/api/performance`, daily budget;
+  project teams from the live goals' tasks; Agents tab: grid with search and room/status/model/skill filters); the
+  agent card's tabs are Overview, Agent code, Tasks & logs, Evaluation (measured figures, "not measured" otherwise),
+  Evolution, Memory (the agent's knowledge items, administrators), Relationships, Versions. The page is titled
+  "Teams & Agents" (view id `agents`; the separate `teams` id stays unregistered).
 
 ## 6. Workflows (P1)
 

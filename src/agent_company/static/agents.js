@@ -5,11 +5,11 @@
 // definition file: the body learning rewrites (agentdefs.py). Every configuration change is a version the card's
 // history can roll back to; degraded agents (failing runs or model test) are flagged and can be reset (SPEC-02).
 
-let agentsTab = store.get("ac.agents.tab") || "org";
+let agentsTab = store.get("ac.agents.tab") || "teams";
 
 async function viewAgents(quiet) {
-  if (quiet && $("#ag-page") && agentsTab !== "org") return;  // the catalog tabs keep their forms
-  const tabs = [["org", "Organisation", "sitemap"], ["network", "Agent network", "network"], ["mcp", "Tools & MCP", "plug"], ["catalog", "Skills & plugins", "book"], ...(me.is_admin ? [["market", "Marketplace", "git"]] : [])];
+  if (quiet && $("#ag-page") && !["org", "teams", "grid"].includes(agentsTab)) return;  // the catalog tabs keep their forms
+  const tabs = [["teams", "Teams", "sitemap"], ["grid", "Agents", "agents"], ["org", "Org chart", "sitemap"], ["network", "Agent network", "network"], ["mcp", "Tools & MCP", "plug"], ["catalog", "Skills & plugins", "book"], ...(me.is_admin ? [["market", "Marketplace", "git"]] : [])];
   if (!$("#ag-page") || !quiet) {
     $("#view").innerHTML = `<div class="ag-page" id="ag-page"><div class="ag-tabs" role="tablist">${tabs.map(([k, l, i]) => `<button role="tab" data-agtab="${k}" aria-selected="${agentsTab === k}">${icon(i, 16)} ${l}</button>`).join("")}
       <span class="grow"></span><span id="ag-tools"></span></div><div class="ag-body" id="ag-body"></div></div>`;
@@ -17,6 +17,8 @@ async function viewAgents(quiet) {
     document.querySelectorAll("[data-agtab]").forEach((b) => (b.onclick = () => { agentsTab = b.dataset.agtab; store.set("ac.agents.tab", agentsTab); viewAgents(); }));
   }
   if (agentsTab === "network") { $("#ag-tools").innerHTML = ""; return viewNetwork($("#ag-body")); }
+  if (agentsTab === "teams") return viewTeams($("#ag-body"));
+  if (agentsTab === "grid") return viewAgentGrid($("#ag-body"), quiet);
   if (agentsTab === "mcp") return viewMcp();
   if (agentsTab === "catalog") return viewCatalog();
   if (agentsTab === "market" && me.is_admin) return viewMarketplace();
@@ -210,12 +212,16 @@ async function agentModal(id, tab = "profile") {
     <optgroup label="Models">${m.models.map((x) => `<option value="${esc(x.name)}" ${x.name === a.model_pref ? "selected" : ""}>${esc(x.name)}${x.available ? "" : " (unavailable)"}</option>`).join("")}</optgroup>
     <optgroup label="Another agent (uses its model)">${others.map((x) => `<option value="agent:${x.id}" ${a.model_pref === `agent:${x.id}` ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</optgroup></select>`;
   const plugins = cat.filter((i) => ["plugin", "skill"].includes(i.kind));
-  const tabs = [["profile", "Profile"], ["definition", "Definition"], ["history", "Playbook & history"], ["runs", "Runs"], ["links", "Relationships"], ["config", "Versions"]];
+  // UI-AG-02: Overview (profile, capabilities, configuration), Agent code, Tasks & logs (runs with tool calls),
+  // Evaluation, Evolution (playbook and history), Memory, Relationships, Versions (configuration)
+  const tabs = [["profile", "Overview"], ["definition", "Agent code"], ["runs", "Tasks & logs"], ["evaluation", "Evaluation"], ["history", "Evolution"], ["memory", "Memory"], ["links", "Relationships"], ["config", "Versions"]];
   modal(`<div class="row"><div class="avatar">${roleIcon(a.role)}</div><div class="grow"><h2 style="margin:0">${esc(a.name)}</h2><div class="muted">${esc(a.title)} · ${esc(a.room)} · configuration v${a.config_version} · definition v${a.definition_version}</div></div>${a.health === "degraded" ? '<span class="pill failed">degraded</span>' : ""}${pill(a.enabled ? a.status : "disabled")}</div>
     <div class="ag-tabs small" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-mtab="${k}" aria-selected="${tab === k}">${l}</button>`).join("")}</div><div id="a-tab"></div>`);
   setCrumbs([...pageCrumbs, {label: a.name}]);
   document.querySelectorAll("[data-mtab]").forEach((b) => (b.onclick = () => agentModal(id, b.dataset.mtab)));
   const box = $("#a-tab");
+  if (tab === "evaluation") return agentEvaluationTab(box, a);
+  if (tab === "memory") return agentMemoryTab(box, a);
   if (tab === "definition") {
     const d = await api(`/api/agents/${id}/definition`);
     box.innerHTML = `<p class="muted">The agent runs with this file (<code>${esc(d.path)}</code>): learning rewrites its <b>Working method</b> and <b>Knowledge notes</b>, the card's settings rewrite the rest. Every change is a commit.</p>
@@ -519,4 +525,4 @@ async function marketDetail(id) {
   };
 }
 
-registerView({ id: "agents", title: "Agents", icon: "agents" }, viewAgents);
+registerView({ id: "agents", title: "Teams & Agents", icon: "agents" }, viewAgents);

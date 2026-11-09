@@ -308,6 +308,13 @@ A goal opens in a dialog from any `#id` link (`GET /api/goals/{id}`); there is n
 
 ## 8. Agents
 
+- **WEB-AG-00** The page is "Teams & Agents". Tabs: **Teams** (departments = rooms: description, lead, members with
+  their state, tasks and completion share, cost, daily budget, parent room; project teams = the agents on each live
+  goal), **Agents** (cards with state working/idle/blocked/failed/paused/disabled/retired, room, model, tasks, success,
+  last activity, top skills; search and filters by room, status, model, skill), **Org chart**, Agent network, Tools &
+  MCP, Skills & plugins, Marketplace. The agent card's tabs: Overview, Agent code, Tasks & logs, Evaluation, Evolution,
+  Memory, Relationships, Versions.
+
 Tabs: Organisation, Agent network, Tools & MCP, Skills & plugins, Marketplace (admins). The tab is kept per browser.
 
 ### 8.1 Organisation

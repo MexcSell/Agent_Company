@@ -146,7 +146,8 @@ feature came from.
   rule) pauses a goal after planning with `paused_for="plan"`: `loop.approve_plan` / `loop.revise_plan`); `static/projtabs.js`
   (UI-PROJ: portfolio at `#/projects`, workspace tabs Overview/Requirements/Tasks/Evaluation/Reports;
   `dashboard.portfolio`, `dashboard.project_tasks` + `board_column`; project fields `target_outcome`,
-  `related_project_id`, `team_strategy`);
+  `related_project_id`, `team_strategy`); `static/teams.js` (UI-TEAM/UI-AG: Teams & Agents page's Teams tab (rooms +
+  live goals' teams) and Agents grid, the agent card's Evaluation and Memory tabs);
   `a2a.py` (G-R-06: the A2A 1.0 agent card and JSON-RPC `SendMessage`/`GetTask`/`ListTasks`/`CancelTask` for
   issued bearer clients (`a2a_clients`, `a2a_tasks`); tasks become `origin="a2a"` goals that always wait for approval);
   `marketplace.py` (REQ-002 agent marketplace: a repository URL or uploaded package fetched as untrusted data into

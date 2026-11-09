@@ -104,11 +104,11 @@ def report(user: dict[str, Any], period: str = "24h", visible_projects: set[int]
                            .order_by(Goal.id.desc()).limit(20)):
             if not seen(g.project_id):
                 continue
-            ts = s.execute(select(Task.role, Task.stage, Task.status).where(
+            ts = s.execute(select(Task.role, Task.stage, Task.status, Task.agent_id).where(
                 Task.goal_id == g.id, Task.iteration == g.iteration)).all()
             live.append({"id": g.id, "title": g.title, "status": g.status, "project_id": g.project_id,
                          "iteration": g.iteration,
-                         "tasks": [{"role": r, "stage": st, "status": x} for r, st, x in ts]})
+                         "tasks": [{"role": r, "stage": st, "status": x, "agent_id": a} for r, st, x, a in ts]})
         tokens = s.execute(select(Run.model_name, func.coalesce(func.sum(Run.input_tokens + Run.output_tokens), 0),
                                   func.count(), func.coalesce(func.sum(Run.cost), 0.0))
                            .where(Run.started_at >= start).group_by(Run.model_name)).all()

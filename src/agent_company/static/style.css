@@ -815,3 +815,14 @@ a.kpi:focus-visible, button.kpi:focus-visible, .kpi.clickable:focus-visible { ou
 .board-head { gap: var(--space-2); }
 .board-card { display: flex; flex-direction: column; gap: 2px; padding: var(--space-2); border-radius: var(--radius-control); background: var(--panel); border: 1px solid var(--border); color: inherit; text-decoration: none; }
 .board-card:hover { border-color: var(--accent); }
+
+/* ---------- Teams & Agents (AICO UI-TEAM-01, UI-AG-01, teams.js) ---------- */
+.team-scroll { overflow: auto; height: 100%; padding: 2px; }
+.team-h { margin: var(--space-2) 0 var(--space-3); color: var(--text); text-transform: none; letter-spacing: 0; font-size: var(--fs-section); }
+.team-card { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.team-card.off { opacity: .6; }
+.team-card .gm-team button.badge { border: 0; cursor: pointer; font: inherit; font-size: var(--fs-meta); }
+.ag-cards { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.ag-card { display: flex; flex-direction: column; gap: var(--space-2); text-align: left; color: inherit; font: inherit; cursor: pointer; min-width: 0; }
+.ag-card:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.ag-card .avatar { width: 34px; height: 34px; flex: none; }
