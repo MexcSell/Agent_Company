@@ -51,13 +51,13 @@ IDs `EL-R-nn`; status words as in [README.md](README.md).
 
 ### EL-R-01 Usage limits move the work to another model
 
-**Status: done (`router.LIMIT_RE`, `router.mark_limited`, `Route.fallback`, `registry.ModelLimitReached`, `max_clones`)**
+**Status: done (`router.LIMIT_RE`, `router.mark_limited`, `Route.fallback`, `registry.ModelLimitReached`)**
 
 A run whose error names a plan or quota limit marks
 the model `limited_until` its reset (parsed from the message, else 60 minutes); the router skips it and the route's
 ordered fallbacks take the work; a usage limit does not degrade an agent; when every real model is limited the
 simulator does not stand in, staffing raises `ModelLimitReached` and the goal resumes at the earliest reset; clones per
-original are capped (`max_clones`). Configured 2026-11-06: every role falls back to Claude Code (host sign-in) and
+original are not capped (the cap was removed 2026-11-09). Configured 2026-11-06: every role falls back to Claude Code (host sign-in) and
 Codex CLI; the research room runs on Codex CLI with the Claude models as fallbacks.
 Acceptance: `tests/test_model_limits.py`.
 

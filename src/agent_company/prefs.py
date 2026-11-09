@@ -101,8 +101,6 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "research_tool_rounds": (int, "Rounds in which a research request's model plans tool calls (search the "
                                   "collected documents, arXiv papers, fetch a page) that the research lead runs before "
                                   "it writes the report (0 = off)"),
-    "max_clones": (int, "Clones an agent may have at once when all agents of its role are busy or degraded; beyond "
-                        "that the work waits (an administrator's own Clone is not counted against it)"),
     "health_recovery_minutes": (int, "A degraded agent is not staffed; after this many minutes its model is probed "
                                      "with the model test, and a passing probe makes it healthy again (the wait "
                                      "doubles after each failed probe, at most 6 h; 0 = never, an administrator "
@@ -130,7 +128,7 @@ LIMITS: dict[str, tuple[float, float]] = {
     "repo_map_chars": (0, 50_000), "stuck_repeat_limit": (0, 100), "stuck_error_limit": (0, 100),
     "approval_blocker_hours": (0, 720), "inactive_days": (1, 3650), "explore_rate": (0, 1),
     "improvement_min_score": (0, 100), "improvement_max_regression": (0, 100),
-    "shift_seconds": (0, 7 * 86400), "health_recovery_minutes": (0, 1440), "max_clones": (0, 50), "research_tool_rounds": (0, 5),
+    "shift_seconds": (0, 7 * 86400), "health_recovery_minutes": (0, 1440),"research_tool_rounds": (0, 5),
     "mcp_revalidate_hours": (0, 720), "benchmark_budget_usd": (0, 1000),
     "sandbox_memory_mb": (128, 262_144), "sandbox_tasks": (16, 65_536), "sandbox_cpus": (0.1, 256),
     **{k: (0, 10) for k in RETRIEVAL_KEYS},

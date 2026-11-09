@@ -475,7 +475,7 @@ Tabs: Organisation, Agent network, Tools & MCP, Skills & plugins, Marketplace (a
   a2a_enabled, shift_seconds, blocked_commands, retrieval_w_relevance, retrieval_w_technology, retrieval_w_verified,
   retrieval_w_author, retrieval_w_recency, retrieval_w_contradiction, retrieval_strategies, sandbox,
   sandbox_memory_mb, sandbox_tasks, sandbox_cpus, sandbox_paths, sandbox_env, dependency_audit,
-  research_tool_rounds, max_clones, health_recovery_minutes, mcp_revalidate_hours, required_test_stages,
+  research_tool_rounds, health_recovery_minutes, mcp_revalidate_hours, required_test_stages,
   contradiction_judge. Each one's meaning is its description in `prefs.py`.
 - **WEB-USR-01 Users** (admins): name (admin pill), status, computer (browser and OS, screen, time zone, language),
   registered. Actions by state: **Approve**, **Reject**, **Disable**, **Enable**, **Reset computer** (confirm; the user

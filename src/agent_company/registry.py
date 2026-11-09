@@ -52,10 +52,6 @@ class ModelLimitReached(QuotaExceeded):
     goal waits for the earliest reset (loop.resume_after_quota). A clone would ask for the same models."""
 
 
-class CloneLimitReached(QuotaExceeded):
-    """Every agent of the role is busy or degraded and the best one already has `max_clones` clones."""
-
-
 def _limit_blocked(role: str, pool: list[Agent]) -> str:
     """Why no agent of the pool can get a real model right now because of usage limits ('' if one can)."""
     from agent_company import router
@@ -745,7 +741,7 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
                                                          and not quota[trainee.id])):
             agent, action = trainee, "assigned"
         elif trainee is not None and not quota[trainee.id]:  # busy: its clone, which merges back after the goal
-            agent, action = _clone(s, trainee, cap=False), "cloned"  # the measured agent itself
+            agent, action = _clone(s, trainee), "cloned"  # the measured agent itself
         elif preferred is not None:
             agent, action = (preferred, "assigned") if preferred in idle else (_clone(s, preferred), "cloned")
             why = "the project's own manager"
@@ -906,16 +902,9 @@ def duplicates(threshold: float = 0.9) -> list[dict[str, Any]]:
         return sorted(out, key=lambda x: -x["similarity"])
 
 
-def _clone(s: Session, src: Agent, cap: bool = True) -> Agent:
-    from agent_company.config import settings
-
+def _clone(s: Session, src: Agent) -> Agent:
     base = s.get(Agent, src.parent_id) if src.parent_id else src
     n = s.scalar(select(func.count()).select_from(Agent).where(Agent.parent_id == base.id)) or 0
-    live = s.scalar(select(func.count()).select_from(Agent).where(Agent.parent_id == base.id,
-                                                                   Agent.lifecycle.in_(("active", "candidate")))) or 0
-    if cap and live >= settings().max_clones:  # 2026-11-06: a model limit once made 41 clones of the GM
-        raise CloneLimitReached(f"{base.name} already has {live} clone(s) (max_clones {settings().max_clones}); the "
-                                "work waits for one of them")
     name = f"{base.name} #{n + 2}"
     while s.scalars(select(Agent).where(Agent.name == name)).first():
         n += 1
@@ -1364,7 +1353,7 @@ def clone_agent(agent_id: int) -> dict[str, Any]:
             raise KeyError(agent_id)
         if src.lifecycle == "retired":
             raise ValueError("a retired agent cannot be cloned")
-        c = _clone(s, src, cap=False)  # an administrator's own decision
+        c = _clone(s, src)  # an administrator's own decision
         return agent_dict(c)
 
 

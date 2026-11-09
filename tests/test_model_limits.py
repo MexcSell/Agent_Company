@@ -82,16 +82,11 @@ def test_without_a_fallback_the_simulator_does_not_stand_in_and_staffing_waits(m
     assert not res.ok and "usage limit" in res.error and choice.name == "(usage limit)"
 
 
-def test_clones_are_capped(monkeypatch):
-    from agent_company import prefs
-
-    prefs.set_value("max_clones", 1, actor="user:admin")
+def test_clones_are_not_capped(monkeypatch):
     dev = registry.staff("developer", goal_id=None)
-    clone = registry.staff("developer", goal_id=None)  # the original is busy: one clone
-    assert clone.parent_id == dev.id
-    with pytest.raises(registry.CloneLimitReached):
-        registry.staff("developer", goal_id=None)
-    assert registry.clone_agent(dev.id)["id"], "an administrator's own clone is not capped"
+    clones = [registry.staff("developer", goal_id=None) for _ in range(6)]  # the original and its clones are busy
+    assert all(c.parent_id == dev.id for c in clones)
+    assert len({c.id for c in clones}) == 6
 
 
 def test_another_family_can_be_an_agent_cli(monkeypatch):

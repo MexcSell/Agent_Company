@@ -126,7 +126,6 @@ class Settings:
     dependency_audit: str = "block"
     # S02-FR-18: minutes before a degraded agent's model is probed again (doubling per failed probe); 0 = off
     health_recovery_minutes: int = 15
-    max_clones: int = 4
     research_tool_rounds: int = 2
     # G-R-15: hours between re-tests of every enabled MCP server, so a tool whose definition changed loses its allow
     mcp_revalidate_hours: int = 24
@@ -237,7 +236,6 @@ def load_settings() -> Settings:
         dependency_audit=(os.environ.get("DEPENDENCY_AUDIT") or "block").lower(),
         contradiction_judge=(os.environ.get("CONTRADICTION_JUDGE") or "advise").lower(),
         health_recovery_minutes=_int("HEALTH_RECOVERY_MINUTES", 15),
-        max_clones=_int("MAX_CLONES", 4),
         research_tool_rounds=_int("RESEARCH_TOOL_ROUNDS", 2),
         mcp_revalidate_hours=_int("MCP_REVALIDATE_HOURS", 24),
         required_test_stages=[x.strip().lower() for x in (os.environ.get("REQUIRED_TEST_STAGES") or "").split(",")
