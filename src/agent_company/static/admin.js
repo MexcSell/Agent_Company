@@ -1,16 +1,7 @@
 "use strict";
 // Notifications, settings and audit views.
 
-async function viewNotifications() {
-  const n = await api("/api/notifications");
-  $("#view").innerHTML = `${me.is_admin ? `<div class="card" style="margin-bottom:12px"><h2>Post a notice to every user</h2><form id="n-form" class="row"><input id="n-title" class="grow" required placeholder="Notice"><select id="n-level" style="width:auto"><option>info</option><option>warning</option><option>success</option><option>error</option></select><button class="btn icon primary" title="Post" aria-label="Post">${icon("send", 16)}</button></form></div>` : ""}
-    <div class="card"><div class="row"><h2 class="grow" style="margin:0">Notifications</h2>${ib("check", "Mark all read", `id="n-read" ${n.unread ? "" : "disabled"}`)}</div>
-    <div class="events" style="margin-top:8px">${n.items.map((x) => `<div class="row" style="${x.read ? "opacity:.65" : ""}">${pill(x.level === "error" ? "failed" : x.level === "warning" ? "pending" : x.level === "success" ? "done" : "info")}<strong>${esc(x.title)}</strong><span class="muted grow">${esc(x.body)}</span>${x.goal_id ? `<a href="#" data-goal="${x.goal_id}">goal #${x.goal_id}</a>` : ""}<span class="muted">${ago(x.at)}</span>${me.is_admin ? `${ib("trash", "Delete", `data-del="${x.id}"`, "sm ghost")}` : ""}</div>`).join("") || '<span class="muted">No notifications.</span>'}</div></div>`;
-  $("#n-read").onclick = async () => { await api("/api/notifications/read", { method: "POST" }); viewNotifications(); updateBadges(); };
-  document.querySelectorAll("[data-goal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); goalModal(Number(a.dataset.goal)); }));
-  document.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => { await api(`/api/notifications/${b.dataset.del}`, { method: "DELETE" }); viewNotifications(); updateBadges(); }));
-  if (me.is_admin) $("#n-form").onsubmit = async (e) => { e.preventDefault(); try { await api("/api/notifications", { method: "POST", body: { title: $("#n-title").value, level: $("#n-level").value } }); viewNotifications(); updateBadges(); } catch (err) { toast(err.message); } };
-}
+// The Notifications page is notifications.js (UI-NOTE-01).
 
 // Connection: HTTPS (own CA, default) or HTTP (sealed cookie); see transport.py.
 function connectionCard(tls, row) {
@@ -467,6 +458,5 @@ async function cleanupModal() {
 
 registerView({ id: "system", title: "System", icon: "system", admin: true }, viewSystem);
 // The Evolution page itself is evolution.js (Agent Evolution: candidates, then this content as a tab).
-registerView({ id: "notifications", title: "Notifications", icon: "bell" }, viewNotifications);
 registerView({ id: "settings", title: "Settings", icon: "settings", admin: true }, viewSettings);
 registerView({ id: "audit", title: "Audit log", icon: "audit", admin: true }, viewAudit);

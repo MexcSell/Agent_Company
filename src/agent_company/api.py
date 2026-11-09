@@ -1125,6 +1125,16 @@ def create_app(start_background: bool = True) -> FastAPI:
             seen = _visible_project_ids(s, user)
         return qa.report(period, seen)
 
+    @app.get("/api/search")
+    def search_all(q: str = "", user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        """UI-SRCH-01: projects, goals, tasks, agents, research reports, knowledge (administrators) and files by name,
+        grouped, of what the user may see (search.py)."""
+        from agent_company import search as company_search  # create_app has its own `search` route
+
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        return company_search.search(user, q, seen)
+
     @app.get("/api/projects-portfolio")
     def projects_portfolio(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         """UI-PROJ-01: every project the user may see with phase, progress, team, tasks and last activity."""

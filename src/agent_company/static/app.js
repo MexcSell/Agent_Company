@@ -553,20 +553,27 @@ function closeModal(updateHash = true) {
 }
 function initTopSearch() {
   const input = $("#top-search"), box = $("#top-search-results");
-  let projects = [], fetched = 0, pending = null, results = [], active = 0;
+  let projects = [], fetched = 0, pending = null, results = [], active = 0, found = [], seq = 0, timer = 0;
+  const KIND_ICON = {goal: "goals", task: "check", agent: "agents", report: "research", knowledge: "book", file: "files", project: "projects"};
   const close = () => { box.hidden = true; input.setAttribute("aria-expanded", "false"); };
-  const open = i => { const r = results[i]; if (!r) return; close(); input.blur(); if (r.project) location.hash = "#/projects/" + r.id; else show(r.id); };
+  const open = i => { const r = results[i]; if (!r) return; close(); input.blur(); if (r.href) location.hash = r.href.slice(1); else if (r.project) location.hash = "#/projects/" + r.id; else show(r.id); };
+  // UI-SRCH-01: the server's grouped results (goals, tasks, agents, reports, knowledge, files) after the pages
+  const ask = q => { clearTimeout(timer); if (q.length < 2) { found = []; return; } const mine = ++seq;
+    timer = setTimeout(async () => { try { const r = await api(`/api/search?q=${encodeURIComponent(q)}`); if (mine !== seq) return;
+      found = r.groups.filter(g => g.kind !== "project").flatMap(g => g.items.map(x => ({...x, kind: g.title.replace(/s$/, ""), icon: KIND_ICON[g.kind]})));
+      if (document.activeElement === input) draw(); } catch { /* the pages and projects stay searchable */ } }, 200); };
   function draw() {
     const q = input.value.trim().toLowerCase();
     const pages = navGroups().groups.flatMap(g => g.items);
-    results = [...pages.filter(v => (v.title + " " + v.id).toLowerCase().includes(q)).map(v => ({...v, label:v.title})),
-      ...projects.filter(p => (p.name + " " + (p.github_url || "")).toLowerCase().includes(q)).map(p => ({...p, label:p.name, project:true}))].slice(0,8);
+    results = [...[...pages.filter(v => (v.title + " " + v.id).toLowerCase().includes(q)).map(v => ({...v, label:v.title})),
+      ...projects.filter(p => (p.name + " " + (p.github_url || "")).toLowerCase().includes(q)).map(p => ({...p, label:p.name, project:true}))].slice(0,8),
+      ...(q ? found : [])].slice(0, 24);
     active = Math.min(active, Math.max(0, results.length - 1)); box.replaceChildren();
     results.forEach((r,i) => {
       const b = document.createElement("button"); b.type = "button"; b.setAttribute("role", "option"); b.setAttribute("aria-selected", String(i === active));
       const glyph = document.createElement("span"); glyph.innerHTML = icon(r.project ? VIEWS.find(v => v.id === "projects")?.icon : r.icon, 16);
       const label = document.createElement("span"); label.textContent = r.label;
-      const kind = document.createElement("small"); kind.textContent = r.project ? "Project" : "Page";
+      const kind = document.createElement("small"); kind.textContent = r.kind ? `${r.kind}${r.detail ? " · " + r.detail : ""}` : r.project ? "Project" : "Page";
       b.append(glyph, label, kind); b.onmousedown = e => e.preventDefault(); b.onclick = () => open(i); box.append(b);
     });
     box.hidden = !results.length; input.setAttribute("aria-expanded", String(!box.hidden));
@@ -581,7 +588,7 @@ function initTopSearch() {
       if (document.activeElement === input) draw();
     } catch { /* pages remain searchable offline */ } finally { pending = null; }
   };
-  input.oninput = () => { active = 0; if (me) draw(); };
+  input.oninput = () => { active = 0; if (me) { draw(); ask(input.value.trim()); } };
   input.onblur = close;
   input.onkeydown = e => {
     if (["ArrowDown", "ArrowUp"].includes(e.key)) { e.preventDefault(); active = (active + (e.key === "ArrowDown" ? 1 : -1) + results.length) % (results.length || 1); draw(); }

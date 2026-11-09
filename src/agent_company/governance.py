@@ -96,12 +96,38 @@ def _visible(q, user: dict[str, Any]):  # noqa: ANN001, ANN202
     return q
 
 
+CATEGORIES = ("approval", "blocker", "failure", "completion", "quality", "evolution", "security", "notice")
+
+
+def category(source: str, level: str, title: str) -> dict[str, Any]:
+    """AICO UI-NOTE-01: the notification's category and whether a person must act, from its source and title."""
+    src, t = (source or "").split(":")[0], (title or "").lower()
+    if src in ("security", "emergency"):
+        cat = "security"
+    elif src in ("proposals", "decision", "users") or "waits for approval" in t or "awaits your approval" in t \
+            or "need a person" in t or "needs approval" in t:
+        cat = "approval"
+    elif "refused" in t or "paused" in t or "blocked" in t or "not stored" in t:
+        cat = "blocker"
+    elif level == "error" or "failed" in t or "degraded" in t:
+        cat = "failure"
+    elif src in ("evolution", "knowledge", "agents"):
+        cat = "evolution"
+    elif "merged" in t or "finished" in t or level == "success":
+        cat = "completion"
+    elif src in ("quality", "defects"):
+        cat = "quality"
+    else:
+        cat = "notice"
+    return {"category": cat, "action": cat in ("approval", "blocker")}
+
+
 def list_notifications(user: dict[str, Any], limit: int = 100) -> dict[str, Any]:
     with session() as s:
         rows = s.scalars(_visible(select(Notification), user).order_by(Notification.id.desc()).limit(limit)).all()
         items = [{"id": n.id, "level": n.level, "title": n.title, "body": n.body, "source": n.source,
                   "goal_id": n.goal_id, "project_id": n.project_id, "at": n.created_at.isoformat(),
-                  "read": user["id"] in (n.read_by or [])} for n in rows]
+                  "read": user["id"] in (n.read_by or []), **category(n.source, n.level, n.title)} for n in rows]
         return {"items": items, "unread": sum(1 for i in items if not i["read"])}
 
 

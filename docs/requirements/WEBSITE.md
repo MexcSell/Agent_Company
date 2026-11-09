@@ -592,6 +592,16 @@ Tabs: Organisation, Agent network, Tools & MCP, Skills & plugins, Marketplace (a
   right, until, note; list with **Revoke**), **Git** (§3 WEB-SHELL-16), **Delete** (confirm). An admin cannot act on
   themselves here.
 
+## 19a. Notifications page and search
+
+- **WEB-NOTE-01** `#/notifications`: tabs All, Unread, Action needed (the approvals queue first, then notifications
+  that need a person); a category filter (Approval, Blocker, Failure, Completion, Quality, Evolution, Security,
+  Notice); the same notification in a row shows once with "×n"; selecting one marks it (and its group) read and shows
+  its details, goal and project links, *Open goal*, *Review the plan/merge* when it waits, *Ask the GM*, and Delete
+  for administrators. *Mark all read*; administrators post a notice to every user.
+- **WEB-SRCH-01** The top bar's search (Ctrl+K) lists pages and projects at once and then, from 2 characters, the
+  server's goals, tasks, agents, research reports, knowledge (administrators) and files; Enter opens the selected one.
+
 ## 20. Rules that hold everywhere
 
 - **WEB-ALL-01** The server enforces every right; a refused call answers 401 (signs the browser out to the device

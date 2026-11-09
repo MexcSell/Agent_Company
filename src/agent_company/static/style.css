@@ -882,3 +882,19 @@ button.wf-node:hover { border-color: var(--accent); border-left-color: var(--c);
 .org-diff .add { color: var(--ok); } .org-diff .del { color: var(--bad); } .org-diff .chg { color: var(--text); }
 .stepper > li.skip { opacity: .55; } .stepper > li.skip::before { border-style: dashed; }
 .stepper > li small { display: block; font-size: 10px; color: var(--muted); }
+
+/* ---------- Notifications (AICO UI-NOTE-01, notifications.js) ---------- */
+.nt { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 420px); gap: var(--space-3); align-items: start; }
+@media (max-width: 899px) { .nt { grid-template-columns: minmax(0, 1fr); } .nt-pane { order: -1; } }
+.nt-notice { margin-bottom: var(--space-3); } .nt-notice summary { cursor: pointer; }
+.nt-tools { gap: var(--space-2); margin-bottom: var(--space-3); flex-wrap: wrap; }
+.nt-tools select { width: auto; }
+.nt-rows { display: flex; flex-direction: column; gap: 2px; }
+.nt-item { display: flex; align-items: center; gap: var(--space-2); width: 100%; padding: var(--space-2); border: 1px solid transparent; border-radius: var(--radius-control); background: none; color: var(--text); font: inherit; cursor: pointer; }
+.nt-item:hover { background: var(--hover); }
+.nt-item.read { opacity: .65; }
+.nt-item.selected { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); background: color-mix(in srgb, var(--accent) 8%, transparent); opacity: 1; }
+.nt-pane { position: sticky; top: 0; }
+.nt-title { margin: var(--space-3) 0 var(--space-2); color: var(--text); text-transform: none; letter-spacing: 0; font-size: var(--fs-section); }
+.nt-appr { gap: var(--space-2); }
+.search-pop { max-height: 70vh; overflow: auto; }

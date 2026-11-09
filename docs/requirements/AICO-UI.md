@@ -361,8 +361,10 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
 - **UI-NOTE-01 Notifications page** (update_5 13-1): All / Unread / Action needed; category (completion, approval,
   blocker, failure, quality, evolution, security), severity, source, affected object link, required action, read
   state; the right pane shows the selected item with its actions. Duplicates are grouped ("×n").
-- Status: partial (UI-APPR-01 **done** in P0-2: `approvals.py`, `GET /api/approvals`, used by the Dashboard; the
-  Notifications page with categories and grouping is open).
+- Status: **done** (UI-APPR-01 in P0-2; UI-NOTE-01 in P1-6): `governance.category` adds `category` and `action` to
+  each notification (additive); `static/notifications.js` (All / Unread / Action needed with the approvals queue
+  first, category filter, "×n" groups of the same notification in a row, the right pane with details, links and
+  actions; opening an item marks its group read); `tests/test_search_notifications.py`.
 
 ## 14. Settings (P2)
 
@@ -377,6 +379,9 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   tasks, agents, knowledge items (FTS index), research reports, files by name in the project's repository; grouped
   results, keyboard navigation, Enter opens.
 
+- Status: **done** (P1-6): `search.py` + `GET /api/search?q=` (projects, goals by text or `#id`, tasks, agents,
+  research reports, knowledge for administrators, files by name via `git ls-files` from 3 characters; visible
+  projects only); the top bar's search shows pages and projects at once and the server's groups as they arrive.
 ---
 
 ## Delivery phases (goals for project 1)
