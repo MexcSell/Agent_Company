@@ -199,7 +199,9 @@ feature came from.
 
 - Python 3.12+, dependencies managed with `uv` (system pip is externally managed).
 - Models come from the Model Router (catalog + role routes in the DB); `MODEL` in `.env` is the
-  fallback. Never hard-code keys. The offline simulator only stands in when no real model is usable.
+  fallback. Never hard-code keys. The offline simulator only stands in when no real model is usable and it is
+  active (Models: switch and Test; switched off, `router.NoModel` is raised instead, `OfflineExecutor` refuses
+  every non-test run, and a usage limit still pauses the goal until its reset).
 - The General Manager is Claude Code by default (route `general_manager`; `enable_claude_code` is on in the DB
   settings). It can be switched on its agent card: another model, a `claude_code` model with a base URL, or
   another agent (`model_pref = "agent:<id>"`). A CLI GM's `.claude/` edits happen in the goal's worktree.

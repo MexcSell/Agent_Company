@@ -887,6 +887,10 @@ class OfflineExecutor(Executor):
     kind = "offline"
 
     def _run(self, req: Request) -> Result:
+        from agent_company.router import simulator_enabled
+
+        if req.purpose != "test" and not simulator_enabled():  # every path, also resolve()[0] callers
+            return Result(text="", ok=False, error="the offline simulator is switched off (Models)")
         fn = getattr(self, f"_{req.purpose}", self._task)
         text = fn(req)
         files: list[str] = []

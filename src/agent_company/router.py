@@ -194,6 +194,17 @@ class NotCleared(RuntimeError):
     """No usable model may receive content of this classification."""
 
 
+class NoModel(NotCleared):
+    """No real model is usable and the offline simulator is switched off (Models): nothing may do the work."""
+
+
+def simulator_enabled() -> bool:
+    """The offline simulator stands in only while it is active on the Models page (on by default)."""
+    with session() as s:
+        m = s.scalars(select(ModelEntry).where(ModelEntry.kind == "offline")).first()
+        return m is None or bool(m.enabled)
+
+
 def is_local(m: ModelEntry) -> bool:
     """Runs on this host: an OpenAI-compatible server on localhost, or a local provider (Ollama, vLLM)."""
     from urllib.parse import urlparse
@@ -496,7 +507,8 @@ def _choice_from_dict(m: dict[str, Any]) -> Choice:
 def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = False,
                   avoid_provider: str | None = None, classification: str = "internal",
                   other_cli: bool = True) -> list[Choice]:
-    """Every usable model for the role, best first, ending with the offline simulator.
+    """Every usable model for the role, best first, ending with the offline simulator while it is switched on.
+    Switched off, it never stands in: with no real model usable NoModel is raised (a usage limit still pauses).
 
     Only models cleared for `classification` are used (S14-R-05). When that rules out every real model that
     would otherwise have been used, NotCleared is raised: the simulator must not stand in for real work.
@@ -512,6 +524,8 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
         if offline is None:
             raise RuntimeError("model catalog not seeded")
         if settings().executor == "offline":
+            if not offline.enabled:
+                raise NoModel("the executor setting is 'offline' but the offline simulator is switched off (Models)")
             return [_choice(offline, "EXECUTOR=offline")]
         route = s.get(Route, role)
         candidates: list[tuple[str, str | None]] = []
@@ -563,7 +577,16 @@ def resolve_chain(role: str, model_pref: str | None = None, escalate: bool = Fal
         if blocked and not any(c.kind != "offline" for c in chain):
             raise NotCleared(f"no model is cleared for {classification} content: {', '.join(blocked)}. Clear a "
                              "local model for it (Models), or lower the classification")
-        chain.append(_choice(offline, "fallback (" + "; ".join(skipped) + ")" if skipped else "fallback"))
+        why = "fallback (" + "; ".join(skipped) + ")" if skipped else "fallback"
+        if offline.enabled:
+            chain.append(_choice(offline, why))
+        elif not chain:
+            if "usage limit reached" not in why:
+                raise NoModel(f"no model is usable for {role} and the offline simulator is switched off: "
+                              f"{why.removeprefix('fallback (').removesuffix(')') or 'no model configured'}")
+            # every real model is at its limit: the marker makes `limit_blocked` pause the goal until the reset;
+            # nothing runs it (OfflineExecutor refuses while the simulator is switched off)
+            chain.append(_choice(offline, why))
         requested = pref or (route.model_name if route else "")
         return [replace(c, requested=requested) for c in chain]
 
@@ -849,8 +872,6 @@ def update_model(model_id: int, data: dict[str, Any]) -> dict[str, Any]:
         if m is None:
             raise KeyError(model_id)
         fields = MODEL_FIELDS - ({"name", "kind", "model_id"} if m.builtin else set())
-        if m.kind == "offline" and data.get("enabled") is False:
-            raise ValueError("the offline simulator is the last fallback: it stays enabled")
         if "api_key" in data:  # "" removes the model's own key
             if data["api_key"] and m.kind != "llm":
                 raise ValueError("an API key is for API and local models; a CLI uses its own sign-in")
@@ -922,6 +943,8 @@ def test_model(model_id: int) -> dict[str, Any]:
         ok, why = available(m)
         if not ok and limited_until(m) is not None:  # a Test shows whether the limit is gone before its reset time
             ok, why = available(m, ignore_limit=True)
+        if m.kind == "offline":  # sends nothing anywhere: testable while switched off, before switching it on
+            ok, why = True, ""
         choice = _choice(m, "test")
         key = model_key(m)
     if not ok:

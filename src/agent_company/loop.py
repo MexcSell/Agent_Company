@@ -307,8 +307,9 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
         # not even uv's cache; goal 112 hands QA the gate's own output): until then an API model of another family;
         # a diff critic runs no tests, so it may be another family's CLI (`other_cli`, EL-R-03/EL-R-06)
         chain = router.resolve_chain(agent.role, pref, escalate, avoid_provider, level, other_cli=other_cli)
-    except router.NotCleared as e:
-        log_event("security", f"{agent.name}: {e}", goal_id=goal_id, agent_id=agent.id, classification=level)
+    except router.NotCleared as e:  # NoModel: no real model and the simulator switched off
+        log_event("error" if isinstance(e, router.NoModel) else "security", f"{agent.name}: {e}",
+                  goal_id=goal_id, agent_id=agent.id, classification=level)
         return (executors.Result(text="", ok=False, error=str(e)),
                 router.Choice(name="(not cleared)", kind="offline", model_id="", reason=str(e)))
     limited = router.limit_blocked(chain)

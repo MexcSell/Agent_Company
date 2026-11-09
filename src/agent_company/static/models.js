@@ -60,8 +60,12 @@ async function refreshModel(id) {
   el.innerHTML = modelInfoHtml(x, modelsInfo[x.id]);
   paintModel(x);
   const sw = document.querySelector(`[data-active="${x.id}"]`);
-  if (sw) { sw.checked = x.enabled; sw.closest(".mdl-switch").title = x.enabled ? "Active: routes and agents may use it" : "Inactive: never used"; }
+  if (sw) { sw.checked = x.enabled; sw.closest(".mdl-switch").title = activeTitle(x); }
 }
+// The offline simulator's switch decides whether it may stand in when no real model is usable.
+const activeTitle = (x) => (x.kind === "offline"
+  ? (x.enabled ? "Active: stands in when no real model is usable" : "Inactive: never stands in; work with no real model usable fails")
+  : (x.enabled ? "Active: routes and agents may use it" : "Inactive: never used"));
 const TYPE_LABEL = { claude_code: "Claude Code", codex: "Codex", copilot: "Copilot" };
 async function viewModels(quiet) {
   if (quiet && $("#mdl-page")) return;
@@ -71,10 +75,10 @@ async function viewModels(quiet) {
   const scrolls = [...document.querySelectorAll("#mdl-page .ag-scroll")].map((e) => e.scrollTop);  // a redraw keeps them
   $("#view").classList.add("fit");
   $("#view").innerHTML = `<div class="mdl-page" id="mdl-page"><section class="card ag-scroll"><div class="row nowrap"><h2 class="grow" style="margin:0">Model catalog</h2>${admin ? ib("plus", "Add a model", 'id="m-add"', "primary") : ""}</div>
-      <p class="muted">Executor mode: <code>${esc(m.executor)}</code>${m.default_model ? ` · MODEL: <code>${esc(m.default_model)}</code>` : ""}. Unavailable models fall back to MODEL, then to the offline simulator.</p>
+      <p class="muted">Executor mode: <code>${esc(m.executor)}</code>${m.default_model ? ` · MODEL: <code>${esc(m.default_model)}</code>` : ""}. Unavailable models fall back to MODEL, then to the offline simulator while it is active.</p>
       <div class="mdl-list">${m.models.map((x) => { const real = x.kind !== "offline"; return `<div class="mdl-item ${upDown(modelState(x, modelsInfo[x.id]))}">
         <div class="row nowrap"><span class="mdl-kind k-${esc(x.kind)}" title="Type">${esc(x.type === "CLI" ? "CLI · " + TYPE_LABEL[x.kind] : x.type)}</span><strong class="ellipsis" data-name-of="${x.id}">${esc(x.name)}</strong>${admin && real && !x.builtin ? `<button type="button" class="icon-btn sm" title="Rename" aria-label="Rename" data-rename="${x.id}">${icon("edit", 14)}</button>` : ""}<span class="grow"></span>
-          ${admin && real ? `<label class="mdl-switch" title="${x.enabled ? "Active: routes and agents may use it" : "Inactive: never used"}"><input type="checkbox" data-active="${x.id}" ${x.enabled ? "checked" : ""}><span></span></label>` : ""}${admin && real ? ib("bolt", "Test: send a short prompt and get the current usage and status", `data-test="${x.id}"`, "sm") : ""}${admin && real ? ib("settings", "Terms, name and limits", `data-terms="${x.id}"`, "sm") : ""}${admin && real ? ib("trash", "Delete", `data-del="${x.id}"`, "sm danger") : ""}</div>
+          ${admin ? `<label class="mdl-switch" title="${activeTitle(x)}"><input type="checkbox" data-active="${x.id}" ${x.enabled ? "checked" : ""}><span></span></label>` : ""}${admin ? ib("bolt", real ? "Test: send a short prompt and get the current usage and status" : "Test: run the simulator on a short prompt (sends nothing anywhere; works while it is switched off)", `data-test="${x.id}"`, "sm") : ""}${admin && real ? ib("settings", "Terms, name and limits", `data-terms="${x.id}"`, "sm") : ""}${admin && real ? ib("trash", "Delete", `data-del="${x.id}"`, "sm danger") : ""}</div>
         <div class="mdl-info" id="mi-${x.id}">${modelInfoHtml(x, modelsInfo[x.id])}</div>
         ${real ? termsLine(x) : ""}
         <div class="row nowrap muted" title="The most classified content this model may receive (SPEC-14): hosted models default to internal, local ones to restricted; secret only when set here">Receives up to ${admin && real ? `<select data-clear="${x.id}" style="width:auto">${["", ...CLEARANCES].map((c) => `<option value="${c}" ${(x.clearance_set ? x.clearance : "") === c ? "selected" : ""}>${c || `default (${x.clearance})`}</option>`).join("")}</select>` : `<b>${esc(x.clearance)}</b>${real ? "" : " (sends nothing anywhere)"}`}</div></div>`; }).join("")}</div></section>

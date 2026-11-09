@@ -198,16 +198,13 @@ def _entry(model_id):
         return m
 
 
-def test_model_types_and_the_offline_simulator_stays_enabled():
-    import pytest
-
+def test_model_types_and_the_offline_simulator_can_be_switched_off():
     local = router.add_model({"name": "Here", "kind": "llm", "model_id": "openai/qwen", "base_url": "http://127.0.0.1:8080/v1"})
     types = {x["name"]: x["type"] for x in router.list_models()}
     assert types["Here"] == "Local" and types["Claude Opus 5.5"] == "API" and types["Codex CLI"] == "CLI"
     assert types[router.OFFLINE] == "offline" and local["type"] == "Local"
     off = next(x for x in router.list_models() if x["kind"] == "offline")
-    with pytest.raises(ValueError):
-        router.update_model(off["id"], {"enabled": False})
+    assert router.update_model(off["id"], {"enabled": False})["enabled"] is False  # tests/test_simulator_switch.py
     assert router.update_model(local["id"], {"enabled": False})["available"] is False
 
 
