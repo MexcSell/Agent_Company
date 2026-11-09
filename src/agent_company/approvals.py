@@ -58,7 +58,8 @@ def queue(user: dict[str, Any], visible_projects: set[int] | None = None) -> lis
             if (g.checkpoint or {}).get("paused_for") == "clarification" and (
                     admin or policies.allows(user, "approve_goals", g.project_id)):
                 item("questions", g.id, f"Questions: {g.title}", g.updated_at, f"#/general-manager/{g.project_id}"
-                     if g.project_id else f"#/goals/{g.id}", g.project_id,
+                     if g.project_id else "#/general-manager/new" if g.topic == projects.ANALYSIS_TOPIC
+                     else f"#/goals/{g.id}", g.project_id,
                      f"goal #{g.id} · {len((g.checkpoint or {}).get('questions') or [])} question(s)")
         if not admin:
             return sorted(out, key=lambda x: x["at"] or "", reverse=True)
@@ -75,7 +76,9 @@ def queue(user: dict[str, Any], visible_projects: set[int] | None = None) -> lis
                  ("approve", "reject"), category=d.category)
         for p in s.scalars(select(Proposal).where(Proposal.status == "pending")):
             item("proposal", p.id, p.title, p.created_at, f"#/projects/{p.project_id}" if p.project_id else
-                 f"#/goals/{p.goal_id}", p.project_id, names.get(p.agent_id or 0, ""),
+                 # a "New project…" analysis (UI-GM-02) is decided on the GM page
+                 "#/general-manager/new" if p.kind in projects.CASE_KINDS else f"#/goals/{p.goal_id}",
+                 p.project_id, names.get(p.agent_id or 0, ""),
                  # a proposal for a project or a rule needs its case read on its page; follow-ups decide here
                  ("approve", "reject") if p.kind == "follow_up" and not projects.restricted(p.title, p.description)
                  else ("reject",), proposal_kind=p.kind)

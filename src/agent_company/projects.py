@@ -982,12 +982,22 @@ def extract_proposals(goal_id: int, agent_id: int, output: str) -> int:
     found = sorted(found)[:PROPOSALS_PER_TASK]
     if not found:
         return 0
+    added = 0
     with session() as s:
         g = s.get(Goal, goal_id)
+        # a product or project the goal already proposes is not proposed again (parallel tasks of one analysis)
+        named = {t.lower() for t in s.scalars(select(Proposal.title).where(
+            Proposal.goal_id == goal_id, Proposal.kind.in_(CASE_KINDS), Proposal.status == "pending"))}
         for _, kind, title, why, case in found:
+            title = title.strip()[:256]
+            if kind in CASE_KINDS:
+                if title.lower() in named:
+                    continue
+                named.add(title.lower())
             s.add(Proposal(goal_id=goal_id, project_id=g.project_id if g else None, agent_id=agent_id,
-                           title=title.strip()[:256], description=why.strip(), kind=kind, case=case))
-    return len(found)
+                           title=title, description=why.strip(), kind=kind, case=case))
+            added += 1
+    return added
 
 
 def proposal_dict(p: Proposal, names: dict[int, str]) -> dict[str, Any]:
@@ -1101,6 +1111,51 @@ def list_proposals(user: dict[str, Any], status: str = "") -> list[dict[str, Any
             q = q.where(Proposal.status == status)
         rows = s.scalars(q.order_by(Proposal.id.desc()).limit(200)).all()
         return [proposal_dict(p, names) for p in rows if seen is None or p.project_id in seen]
+
+
+# --- UI-GM-02: "New project…" — the GM analyses a request and proposes a project; it starts no code ---------------
+
+ANALYSIS_TOPIC = "new-project"
+ANALYSIS_NOTE = (
+    "This is a request for a new project, not an order to build it: nobody changes or creates a file. Analyse the "
+    "request: what it is for, who would use it, what it needs, how feasible it is and what it would cost, and say "
+    "what is unknown. The final task, and only that task, ends its answer with this block, every line filled:\n"
+    "PROPOSAL[new_project]: <project name> :: <why, one line>\n- Concept: …\n- Target user: …\n- Expected value: …\n"
+    "- Feasibility: …\n- Requirements: …\n- Estimated cost: …\n"
+    "A person reads the case and decides whether it becomes a project.")
+
+
+def analyse_new(text: str, user: dict[str, Any]) -> int:
+    """A message to "New project…" (UI-GM-02, S10-R-01): a read-only research goal without a project that ends in a
+    documented `PROPOSAL[new_project]`; only a person turns it into a project (`decide`)."""
+    from agent_company import loop
+
+    text = text.strip()
+    if not text:
+        raise ValueError("describe the project you have in mind")
+    head = re.sub(r"\s+", " ", text.splitlines()[0]).strip()
+    return loop.create_goal(f"New project analysis: {head[:200]}", f"{text[:8000]}\n\n{ANALYSIS_NOTE}",
+                            created_by=user["id"], origin="user", topic=ANALYSIS_TOPIC, kind="research")
+
+
+def analyses(user: dict[str, Any], limit: int = 30) -> list[dict[str, Any]]:
+    """The "New project…" analyses, newest first (a person sees their own, an administrator every one), each with
+    its questions while it waits for answers and the project proposals it raised."""
+    with session() as s:
+        q = select(Goal).where(Goal.project_id.is_(None), Goal.topic == ANALYSIS_TOPIC)
+        if not user["is_admin"]:
+            q = q.where(Goal.created_by == user["id"])
+        goals = s.scalars(q.order_by(Goal.id.desc()).limit(max(1, min(limit, 100)))).all()
+        names = dict(s.execute(select(Agent.id, Agent.name)).all())
+        props: dict[int, list[dict[str, Any]]] = {}
+        for p in s.scalars(select(Proposal).where(Proposal.goal_id.in_([g.id for g in goals]),
+                                                  Proposal.kind.in_(CASE_KINDS)).order_by(Proposal.id)):
+            props.setdefault(p.goal_id, []).append(proposal_dict(p, names))
+        return [{"goal_id": g.id, "title": g.title.removeprefix("New project analysis: "),
+                 "request": g.description.split(f"\n\n{ANALYSIS_NOTE}")[0], "status": g.status,
+                 "paused_for": (g.checkpoint or {}).get("paused_for") if g.status == "paused" else None,
+                 "questions": list((g.checkpoint or {}).get("questions") or []),
+                 "proposals": props.get(g.id, []), "at": g.created_at.isoformat()} for g in goals]
 
 
 def _root(s, goal: Goal) -> Goal:  # noqa: ANN001

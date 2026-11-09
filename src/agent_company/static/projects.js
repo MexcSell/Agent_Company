@@ -556,7 +556,7 @@ registerView({ id: "projects", title: "Projects", icon: "projects" }, viewProjec
 
 const CASE_FIELDS = [["concept", "Concept"], ["target_user", "Target user"], ["expected_value", "Expected value"], ["feasibility", "Feasibility"], ["requirements", "Requirements (draft; becomes the project's first requirement)"], ["estimated_cost", "Estimated cost"]];
 
-function proposalCase(p, id) {
+function proposalCase(p, id, after) {  // `after` redraws the caller (the GM page's New project…)
   if (!p) return;
   modal(`<h2>${icon("book", 18)} Case for '${esc(p.title)}'</h2><p class="muted">A proposed product or project becomes a project only when its requirements, feasibility and intended value are documented (ASEAO10).</p><form id="pcf">
     <label for="pc-kind">Kind</label><select id="pc-kind"><option value="product" ${p.kind === "product" ? "selected" : ""}>Product</option><option value="new_project" ${p.kind === "new_project" ? "selected" : ""}>New project</option><option value="follow_up">Follow-up work (becomes a goal)</option></select>
@@ -565,6 +565,6 @@ function proposalCase(p, id) {
   $("#pcf").onsubmit = async (e) => {
     e.preventDefault();
     const body = { kind: $("#pc-kind").value, case: Object.fromEntries(CASE_FIELDS.map(([k]) => [k, $(`#pc-${k}`).value])) };
-    try { await api(`/api/proposals/${p.id}/case`, { method: "POST", body }); $("#modal").hidden = true; projectMain(id, true); } catch (err) { toast(err.message); }
+    try { await api(`/api/proposals/${p.id}/case`, { method: "POST", body }); $("#modal").hidden = true; after ? after() : projectMain(id, true); } catch (err) { toast(err.message); }
   };
 }

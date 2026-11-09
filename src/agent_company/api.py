@@ -156,6 +156,16 @@ def goal_approver(goal_id: int, user: dict[str, Any] = Depends(current_user)) ->
     return {**user, "delegated": True}
 
 
+def question_answerer(goal_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    """`goal_approver`, or the person whose "New project…" analysis it is (UI-GM-02): the questions are about their
+    idea, and the analysis changes no file."""
+    with session() as s:
+        g = s.get(Goal, goal_id)
+        own = (g is not None and g.project_id is None and g.topic == projects.ANALYSIS_TOPIC
+               and g.created_by == user["id"])
+    return user if own else goal_approver(goal_id, user)
+
+
 def allowed(perm: str, launch: str = ""):  # noqa: ANN201
     """Dependency: administrators, or users granted `perm` (Users page → Permissions). `launch` names an action that
     starts agent work: a refused one is audited (SPEC-02 AT-014). Other refusals are not, the dashboard of a user
@@ -353,6 +363,10 @@ class ContractBody(BaseModel):
 
 class ReasonBody(BaseModel):
     reason: str = ""
+
+
+class AnalysisBody(BaseModel):
+    text: str = Field(default="", max_length=8000)
 
 
 class CleanupBody(BaseModel):
@@ -2955,7 +2969,7 @@ def create_app(start_background: bool = True) -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/goals/{goal_id}/questions/answer")
-    def goal_answer(goal_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(goal_approver)
+    def goal_answer(goal_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(question_answerer)
                     ) -> dict[str, Any]:
         """UI-GM-04: answer the General Manager's clarification questions ({"answers": ["...", ...]})."""
         answers = body.get("answers")
@@ -3631,6 +3645,28 @@ def create_app(start_background: bool = True) -> FastAPI:
     @app.get("/api/proposals")
     def proposals_list(status: str = "", user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         return projects.list_proposals(user, status)
+
+    # --- UI-GM-02: "New project…" — the GM analyses a request and proposes a project a person decides ---
+    @app.get("/api/project-analyses")
+    def project_analyses(user: dict[str, Any] = Depends(allowed("create_projects"))) -> list[dict[str, Any]]:
+        return projects.analyses(user)
+
+    @app.post("/api/project-analyses")
+    def project_analyse(body: AnalysisBody, request: Request,
+                        user: dict[str, Any] = Depends(allowed("run", "project_analysis"))) -> dict[str, Any]:
+        if not auth.can(user, "create_projects"):  # it starts agent work (run) towards a project (create_projects)
+            raise HTTPException(403, "needs the 'create_projects' permission")
+        try:
+            gid = projects.analyse_new(body.text, user)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(user, "project_analysis", gid, after={"text": body.text[:200]})
+        q = request.app.state.queue
+        if q is not None:
+            q.submit(gid)
+        else:
+            threading.Thread(target=_run_quietly, args=(gid,), daemon=True, name=f"goal-{gid}").start()
+        return {"goal_id": gid}
 
     @app.post("/api/proposals/{proposal_id}/case")
     def proposal_case(proposal_id: int, body: ProposalCaseBody, admin: dict[str, Any] = Depends(admin_user)

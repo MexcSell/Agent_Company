@@ -94,7 +94,7 @@ feature came from.
   again once it is clean (auto_merge, or a goal that needed no approval); every merge, with or without approval,
   records requirements, dependencies and the improvement's deployment through `loop._on_merged`); `projects.py` (projects with a GitHub URL, filled from the repository's remote (`repo_remote`), stack, skills, rooms, budget, deadline, priority and a lifecycle `set_status`; command window
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals (S10-R-01: a
-  `PROPOSAL[product]` becomes a project only with its documented case, decided by a person), uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress and goal times;
+  `PROPOSAL[product]` becomes a project only with its documented case, decided by a person; UI-GM-02 "New project…" on the GM page: `analyse_new` starts a read-only research goal without a project that ends in that proposal, `analyses`), uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress and goal times;
   blockers and generated items are reconciled from goal state by `sync`; a new project GM gets a handover package); `kgraph.py` (SPEC-11 knowledge graph: `kg_edges` written as side effects, the paged neighbourhood API);
   `schedules.py` (FW-R-04: a project's goals ordered `hourly`/`daily HH:MM`/`weekly <day> HH:MM` UTC by the
   `ScheduleThread`, origin `schedule`; skipped while the last one is open or the project is not active; Plan → Schedules);

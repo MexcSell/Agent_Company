@@ -515,6 +515,7 @@ function writeHash(hash, replace = false) {
   lastHash = location.hash;
 }
 function parseHash(hash) {
+  if (hash === "#/general-manager/new") return {view: "general-manager", id: null, fresh: true};  // UI-GM-02 New project…
   const m = /^#\/([a-z][a-z0-9-]*)(?:\/(\d+))?\/?$/.exec(hash);
   return m ? {view: m[1], id: ["projects", "goals", "agents", "general-manager"].includes(m[1]) && m[2] ? Number(m[2]) : null} : null;
 }
@@ -525,7 +526,7 @@ function route(r) {
   }
   closeModal(false); closeDrawer({ quiet: true });
   if (r.view === "projects" && r.id) { selectedProject = r.id; store.set("ac.project", r.id); }
-  if (r.view === "general-manager" && r.id) { gmProject = r.id; store.set("ac.gm.project", r.id); }
+  if (r.view === "general-manager" && (r.id || r.fresh)) { if (r.id) { gmProject = r.id; store.set("ac.gm.project", r.id); } gmSetNew(!!r.fresh); }
   show(r.view, {fromHash: true});
   if (r.view === "goals" && r.id) goalModal(r.id);
   if (r.view === "agents" && r.id) agentModal(r.id).catch(e => toast(e.message));

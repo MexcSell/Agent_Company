@@ -4,6 +4,10 @@
 // waiting for approval, the focused goal's requirements, plan, team, status and completion report (cards built from
 // stored records, never from the agent's text), open decisions, this project's approvals and its agents.
 let gmProject = Number(store.get("ac.gm.project")) || null, gmFocus = null, gmSearch = "";
+// UI-GM-02: "New project…", the conversation where the GM analyses an idea and proposes a project
+let gmNew = store.get("ac.gm.new") === "1";
+const gmMayPropose = () => me.is_admin || !!me.permissions?.create_projects;
+function gmSetNew(on) { gmNew = on; store.set("ac.gm.new", on ? "1" : "0"); }
 const GM_TASK_TONE = { done: "ok", skipped: "neutral", failed: "bad", cancelled: "neutral", running: "info", queued: "neutral" };
 
 function gmCard(title, body, extra = "") {
@@ -34,6 +38,7 @@ async function viewGeneralManager(quiet) {
     });
   }
   await gmConversations(list);
+  if (gmNew && gmMayPropose()) return gmNewProject();
   if (gmProject === null) return;
   if (current === "general-manager") setCrumbs([{ label: list.find((p) => p.id === gmProject)?.name || "", href: "#/general-manager/" + gmProject }]);
   await Promise.all([projectMain(gmProject, quiet), gmContext(gmProject)]);
@@ -45,20 +50,22 @@ async function gmConversations(list) {
   const topics = gmProject !== null ? await api(`/api/projects/${gmProject}/topics`).catch(() => []) : [];
   const q = gmSearch, cur = topicOf(gmProject);
   const shown = list.filter((p) => !q || p.name.toLowerCase().includes(q) || (p.id === gmProject && topics.some((t) => t.name.toLowerCase().includes(q))));
-  const html = shown.map((p) => {
-    const on = p.id === gmProject;
+  const fresh = gmMayPropose() && (!q || "new project".includes(q)) ? `<div class="gm-conv${gmNew ? " selected" : ""}" data-new="1" title="The General Manager analyses an idea and proposes a project; nothing is built"><div class="row nowrap"><span class="avatar proj-av" style="width:26px;height:26px">${icon("plus", 16)}</span><strong class="grow ellipsis">New project…</strong></div></div>` : "";
+  const html = fresh + shown.map((p) => {
+    const on = p.id === gmProject && !gmNew;
     const ts = on ? topics.filter((t) => (!t.archived || me.is_admin) && (!q || t.name.toLowerCase().includes(q) || p.name.toLowerCase().includes(q))) : [];
     return `<div class="gm-conv${on ? " selected" : ""}" data-pid="${p.id}"><div class="row nowrap"><span class="avatar proj-av" style="width:26px;height:26px">${icon(p.protected ? "settings" : "projects", 16)}</span><strong class="grow ellipsis">${esc(p.name)}</strong>${p.running_goals ? `<span class="badge info">${p.running_goals} live</span>` : ""}</div>
       ${ts.length ? `<div class="gm-topics">${ts.map((t) => `<button class="gm-topic${t.name === cur ? " active" : ""}" data-topic="${esc(t.name)}">#${esc(t.name)}${t.unread ? ` <span class="badge bad">${t.unread}</span>` : ""}</button>`).join("")}</div>` : ""}</div>`;
-  }).join("") || gmEmpty(q ? "No conversation matches." : "No project yet.");
+  }).join("") || (fresh ? "" : gmEmpty(q ? "No conversation matches." : "No project yet."));
   const box = $("#gm-convs");
   if (!box || box.dataset.html === html) return;
   box.innerHTML = html; box.dataset.html = html;
   box.querySelectorAll(".gm-conv").forEach((el) => (el.onclick = (e) => {
+    if (el.dataset.new) { if (!gmNew) { gmSetNew(true); writeHash("#/general-manager/new"); viewGeneralManager(true); } return; }
     const pid = Number(el.dataset.pid), topic = e.target.closest("[data-topic]")?.dataset.topic;
     if (topic) store.set(`ac.project.topic.${pid}`, topic);
-    if (pid === gmProject && !topic) return;
-    gmProject = pid; gmFocus = null; store.set("ac.gm.project", pid); lastMessageId = 0; messageCache = [];
+    if (pid === gmProject && !topic && !gmNew) return;
+    gmSetNew(false); gmProject = pid; gmFocus = null; store.set("ac.gm.project", pid); lastMessageId = 0; messageCache = [];
     writeHash("#/general-manager/" + pid); viewGeneralManager(true);
   }));
 }
@@ -141,5 +148,79 @@ async function gmContext(pid) {
     if (!ok && note === null) return;
     try { await api(`/api/decisions/${b.dataset.decOk || b.dataset.decNo}/decide`, { method: "POST", body: { approve: ok, note: note || "" } }); toast(ok ? "Approved" : "Rejected"); gmContext(pid); } catch (e) { toast(e.message); }
   }));
+}
+// UI-GM-02 (FR-003.5): a message to "New project…" is a read-only research goal of the GM that ends in a documented
+// PROPOSAL[new_project] (S10-R-01); a person reads the case here and decides whether it becomes a project.
+async function gmNewProject() {
+  const main = $("#proj-main"), ctx = $("#gm-ctx");
+  if (!main) return;
+  if (current === "general-manager") setCrumbs([{ label: "New project…", href: "#/general-manager/new" }]);
+  if (main.dataset.pid !== "new") {
+    main.dataset.pid = "new"; main.dataset.mode = "new";
+    main.innerHTML = `<div class="proj-head"><h2 style="margin:0">New project…</h2><p class="muted" style="margin:4px 0 0">Describe an idea. The General Manager analyses it (purpose, users, requirements, feasibility, cost) and proposes a project with its documented case. Nothing is built and no file is written; you decide whether it becomes a project.</p></div>
+      <form id="gm-an-form" style="margin-top:10px"><textarea id="gm-an-text" rows="5" maxlength="8000" placeholder="What should the project do, for whom, and why?" aria-label="Describe the project"></textarea>
+        <div class="row nowrap" style="margin-top:6px"><span class="muted dash-meta grow">A read-only research goal; the General Manager may ask questions first.</span><button class="btn primary keep-text">Ask the General Manager</button></div></form>
+      <h3 style="margin:16px 0 6px">Analyses</h3><div id="gm-an-list" class="dash-list"></div>`;
+    $("#gm-an-form").onsubmit = async (e) => {
+      e.preventDefault();
+      const text = $("#gm-an-text").value.trim();
+      if (!text) return toast("Describe the project first.");
+      try { const r = await api("/api/project-analyses", { method: "POST", body: { text } }); $("#gm-an-text").value = ""; toast(`The General Manager analyses it (goal #${r.goal_id})`); gmNewList(); } catch (err) { toast(err.message); }
+    };
+    if (ctx) {
+      delete ctx.dataset.html;  // gmContext draws again when a project is chosen
+      ctx.innerHTML = gmCard("How it works", `<ol class="gm-acc"><li>You describe the idea; the General Manager plans a read-only analysis.</li><li>If something is unclear it asks; answer on the analysis.</li><li>The analysis ends with a proposal: concept, target user, expected value, feasibility, requirements and estimated cost.</li><li>A person approves a complete case; the project is created with its requirements as a draft. Rejecting it ends it.</li></ol>`);
+    }
+    $("#proj-rail") && ($("#proj-rail").innerHTML = "");
+  }
+  await gmNewList();
+}
+
+function gmAnalysis(a) {
+  const asking = a.status === "paused" && a.paused_for === "clarification";
+  const props = a.proposals.map((p) => {
+    const filled = CASE_FIELDS.filter(([k]) => p.case[k]);
+    const ready = !p.case_missing.length, open = p.status === "pending";
+    return `<div class="gm-card" style="margin-top:8px"><div class="row nowrap"><strong class="grow ellipsis">${esc(p.title)}</strong>${pill(p.spawned_project_id ? "approved" : p.status)}</div>
+      ${p.description ? `<p class="muted" style="margin:4px 0">${esc(p.description)}</p>` : ""}
+      ${filled.length ? `<div class="gm-kv">${filled.map(([k, label]) => `<span class="muted">${esc(label.replace(/ \(.*\)$/, ""))}</span><span>${esc(p.case[k])}</span>`).join("")}</div>` : ""}
+      ${p.case_missing.length && open ? `<p class="dash-meta" style="margin:6px 0 0"><span class="badge warn">case incomplete</span> missing ${p.case_missing.map((k) => esc((CASE_FIELDS.find(([x]) => x === k) || [k, k])[1].replace(/ \(.*\)$/, ""))).join(", ")}</p>` : ""}
+      <div class="row nowrap" style="margin-top:6px">${p.spawned_project_id ? `<button class="btn sm primary" data-an-open="${p.spawned_project_id}">Open the project</button>` : ""}
+        ${open && me.is_admin ? `${ready ? `<button class="btn sm primary" data-an-ok="${p.id}">Create the project</button>` : ""}<button class="btn sm" data-an-case="${p.id}">${ready ? "Edit the case" : "Complete the case"}</button><button class="btn sm" data-an-no="${p.id}">Reject</button>` : ""}
+        ${open && !me.is_admin ? '<span class="muted dash-meta">An administrator decides it.</span>' : ""}</div></div>`;
+  }).join("");
+  const done = ["approved", "failed", "cancelled", "rejected"].includes(a.status);
+  return `<div class="gm-card${asking ? " gm-await" : ""}"><div class="row nowrap"><strong class="grow ellipsis" title="${esc(a.request)}">${esc(a.title)}</strong>${pill(asking ? "waiting" : a.status)}<a class="dash-meta" href="#/goals/${a.goal_id}">goal #${a.goal_id}</a><span class="muted dash-meta">${ago(a.at)}</span></div>
+    ${a.request !== a.title ? `<details><summary class="muted dash-meta">Request</summary><div style="white-space:pre-wrap">${esc(a.request)}</div></details>` : ""}
+    ${asking ? `<p class="dash-meta" style="margin:6px 0 0">The General Manager asks:</p>${a.questions.map((q, i) => `<label class="dash-meta" style="display:block;margin:6px 0 2px">${i + 1}. ${esc(q)}</label><textarea rows="2" data-answer="${a.goal_id}" aria-label="Answer ${i + 1}"></textarea>`).join("")}<div class="row nowrap" style="margin-top:6px"><button class="btn sm primary" data-answers="${a.goal_id}">Send answers</button></div>` : ""}
+    ${props || (done ? gmEmpty("The analysis ended without a proposal; open the goal for its findings.") : gmEmpty(asking ? "" : "Analysing…"))}</div>`;
+}
+
+async function gmNewList() {
+  const box = $("#gm-an-list");
+  if (!box) return;
+  const list = await api("/api/project-analyses").catch(() => []);
+  const html = list.length ? list.map(gmAnalysis).join("") : gmEmpty("No analysis yet. Describe an idea above.");
+  if (box.dataset.html === html) return;
+  if ([...box.querySelectorAll("[data-answer]")].some((x) => x.value.trim() || x === document.activeElement)) return;  // keep a half-written answer
+  box.innerHTML = html; box.dataset.html = html; iconize(box);
+  const call = async (path, body, msg) => { try { const r = await api(path, { method: "POST", body }); toast(msg); gmNewList(); updateBadges(); return r; } catch (e) { toast(e.message); } };
+  box.querySelectorAll("[data-answers]").forEach((b) => (b.onclick = () => {
+    const answers = [...box.querySelectorAll(`[data-answer="${b.dataset.answers}"]`)].map((x) => x.value.trim());
+    if (!answers.some(Boolean)) return toast("Answer at least one question.");
+    box.querySelectorAll(`[data-answer="${b.dataset.answers}"]`).forEach((x) => (x.value = "")); document.activeElement?.blur();
+    call(`/api/goals/${b.dataset.answers}/questions/answer`, { answers }, "Answers sent; the General Manager plans again");
+  }));
+  box.querySelectorAll("[data-an-ok]").forEach((b) => (b.onclick = async () => {
+    if (!confirm("Create the project from this case? Its requirements become a draft requirement.")) return;
+    const r = await call(`/api/proposals/${b.dataset.anOk}/approve`, undefined, "Project created");
+    if (r?.spawned_project_id) { gmSetNew(false); gmProject = r.spawned_project_id; store.set("ac.gm.project", gmProject); writeHash("#/general-manager/" + gmProject); viewGeneralManager(); }
+  }));
+  box.querySelectorAll("[data-an-no]").forEach((b) => (b.onclick = () => confirm("Reject this proposal?") && call(`/api/proposals/${b.dataset.anNo}/reject`, undefined, "Rejected")));
+  box.querySelectorAll("[data-an-case]").forEach((b) => (b.onclick = () => {
+    const p = list.flatMap((a) => a.proposals).find((x) => x.id === Number(b.dataset.anCase));
+    proposalCase(p, null, () => { delete box.dataset.html; gmNewList(); });
+  }));
+  box.querySelectorAll("[data-an-open]").forEach((b) => (b.onclick = () => { gmSetNew(false); gmProject = Number(b.dataset.anOpen); store.set("ac.gm.project", gmProject); writeHash("#/general-manager/" + gmProject); viewGeneralManager(); }));
 }
 registerView({ id: "general-manager", title: "General Manager", icon: "general_manager" }, viewGeneralManager);

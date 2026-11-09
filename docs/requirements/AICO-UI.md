@@ -183,7 +183,12 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   improvement, A2A or room-trial goals); the GM page shows them with an answer box, `POST
   /api/goals/{id}/questions/answer` (`goal_approver`, audited) plans the iteration again with the answers, which stay in
   the planner's feedback for later iterations; the queue lists them as kind `questions`
-  (`tests/test_clarification.py`). Open: "New project…" as a GM analysis (a message needs a project today), message →
+  (`tests/test_clarification.py`). "New project…" (UI-GM-02, follow-ups): the first conversation of the page; a message
+  there is `projects.analyse_new`, a read-only `research` goal without a project (topic `new-project`, a scratch
+  workspace) whose final task ends with `PROPOSAL[new_project]` and its case lines; `GET|POST /api/project-analyses`
+  (`run` and `create_projects`, audited) lists a person's analyses with their questions and proposals, and an
+  administrator completes the case, creates the project (`projects.decide`, S10-R-01) or rejects it there; a goal's
+  repeated case proposal of one name is stored once (`tests/test_project_analysis.py`). Open: message →
   requirement/merge links beyond the goal (UI-GM-05).
 
 ## 4. Projects and the project workspace (P0)
