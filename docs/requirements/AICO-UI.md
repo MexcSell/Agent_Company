@@ -255,7 +255,14 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
 - **UI-WF-04 Agent communication**: the goal's blackboard messages as a thread beside the graph (FR-008.5).
 - **UI-WF-05 Templates**: the workflow templates (`strategies.py`) with versions (read-only list here; changes stay
   in Evolution).
-- Status: open (data exists: `depends_on`, `stage`, runs, blackboard).
+- Status: **partial** (P1-2): `static/workflows.js` (route `#/workflows`): per goal the current iteration's tasks
+  in layers by `depends_on` (parallel branches side by side) with role, agent, state colour, duration and retries,
+  then Quality gate (from the goal's history) and Approval & merge; filters project, live / recent, blocked only; a
+  blocked task or paused goal shows why; node drawer with input, paths, acceptance checks and their results, output,
+  changed files, findings, blockers, handoffs (blackboard entries of the task) and the stage log; Agent messages
+  (blackboard `messages`) beside the graph; Templates tab (read-only). Goal detail tasks carry `started_at`,
+  `finished_at`, `priority` (additive). Open: **Retry** / **Retry with another agent** (UI-WF-03) — retrying a task
+  inside a running DAG is the loop's; no endpoint yet.
 
 ## 7. Deliverables (P1)
 

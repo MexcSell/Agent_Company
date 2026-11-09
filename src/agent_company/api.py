@@ -2287,7 +2287,9 @@ def create_app(start_background: bool = True) -> FastAPI:
                            "agent_id": t.agent_id, "status": t.status, "model": t.model_name,
                            "stage": workflow.task_stage(t), "stage_log": t.stage_log or [],
                            "depends_on": t.depends_on, "output": t.output[-8000:], "gate": t.gate,
-                           "contract": t.contract}
+                           "contract": t.contract, "priority": t.priority,
+                           "started_at": t.started_at.isoformat() if t.started_at else None,
+                           "finished_at": t.finished_at.isoformat() if t.finished_at else None}
                           for t in s.scalars(select(Task).where(Task.goal_id == goal_id).order_by(Task.id))]
             d["events"] = [_event_dict(e) for e in s.scalars(
                 select(Event).where(Event.goal_id == goal_id).order_by(Event.id))]

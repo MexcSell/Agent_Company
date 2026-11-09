@@ -370,6 +370,17 @@ Tabs: Organisation, Agent network, Tools & MCP, Skills & plugins, Marketplace (a
   model (role route or a catalog model), autonomy; **Approve** (enable with the ticked permissions) or **Reject**
   (retire the candidate and delete the package; confirm, reason).
 
+## 8a. Workflows
+
+- **WEB-WF-01** `#/workflows`, tab Execution: one card per live goal (or live and the last 10 finished), foldable,
+  filtered by project and "blocked only". The graph: the current iteration's tasks in columns by dependency, each
+  node with title, role, agent, state (Queued, Ready, Waiting, Running, Blocked, Failed, Succeeded, Cancelled),
+  duration and retries; then Quality gate and Approval & merge. A paused goal or a blocked task shows its reason.
+  Agent messages of the goal beside the graph. A node opens a drawer: input, allowed paths, dependencies, acceptance
+  checks with results, output, changed files, findings, blockers, handoffs, stage log.
+- **WEB-WF-02** Tab Templates: each goal kind's workflow template in force (roles, writes, iterations, mode, review,
+  checks, versions, goals run under it); read-only.
+
 ## 9. Company map (read-only)
 
 - **WEB-MAP-01** The room tree as nested boxes: the engine line (General Management → Organization Engine →

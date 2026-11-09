@@ -826,3 +826,30 @@ a.kpi:focus-visible, button.kpi:focus-visible, .kpi.clickable:focus-visible { ou
 .ag-card { display: flex; flex-direction: column; gap: var(--space-2); text-align: left; color: inherit; font: inherit; cursor: pointer; min-width: 0; }
 .ag-card:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
 .ag-card .avatar { width: 34px; height: 34px; flex: none; }
+
+/* ---------- Workflows (AICO UI-WF, workflows.js): execution graph per goal ---------- */
+.wf-legend { display: inline-flex; flex-wrap: wrap; gap: var(--space-1); }
+.wf-goal { margin-bottom: var(--space-3); }
+.wf-goal-head { gap: var(--space-2); cursor: pointer; }
+.wf-goal-head a { color: inherit; text-decoration: none; }
+.wf-caret { color: var(--muted); width: 14px; }
+.wf-why { margin-top: var(--space-2); font-size: var(--fs-meta); }
+.wf-split { display: flex; gap: var(--space-3); margin-top: var(--space-3); align-items: flex-start; }
+.wf-split > .wf-canvas { flex: 1 1 auto; min-width: 0; }
+.wf-msgs { flex: 0 0 260px; display: flex; flex-direction: column; gap: var(--space-2); max-height: 360px; overflow: auto; }
+.wf-msgs h3 { margin: 0; }
+@media (max-width: 1099px) { .wf-split { flex-direction: column; } .wf-msgs { flex-basis: auto; width: 100%; } }
+.wf-canvas { overflow-x: auto; padding: var(--space-2) 0; }
+.wf-inner { position: relative; }
+.wf-svg { position: absolute; inset: 0; overflow: visible; }
+.wf-edge { fill: none; stroke: var(--border); stroke-width: 2; }
+.wf-edge.ok { stroke: color-mix(in srgb, var(--ok) 70%, var(--border)); }
+.wf-node { --c: var(--muted); position: absolute; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: var(--space-2); border-radius: var(--radius-control); border: 1px solid var(--border); border-left: 4px solid var(--c); background: var(--panel-2); color: var(--text); font: inherit; font-size: var(--fs-meta); text-align: left; cursor: pointer; overflow: hidden; }
+button.wf-node:hover { border-color: var(--accent); border-left-color: var(--c); }
+.wf-node.fixed { cursor: default; background: color-mix(in srgb, var(--c) 8%, var(--panel-2)); }
+.wf-node.ok { --c: var(--ok); } .wf-node.bad { --c: var(--bad); } .wf-node.warn { --c: var(--warn); } .wf-node.info { --c: var(--info); } .wf-node.neutral { --c: var(--muted); }
+.wf-node .muted { font-size: 11px; line-height: 1.35; }
+.wf-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
+.wf-node.info .wf-dot { animation: wf-pulse 1.6s ease-in-out infinite; }
+@keyframes wf-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .wf-node.info .wf-dot { animation: none; } }
