@@ -767,11 +767,47 @@ def _item(i: Lesson, names: dict[int, str], disputed: dict[int, list[int]]) -> d
             "review_due_at": i.review_due_at.isoformat() if i.review_due_at else None, "at": i.created_at.isoformat()}
 
 
+# A knowledge item: every lesson except the research room's own notes (outcome "research"); an approved report's
+# findings are outcome "research" too but of kind "research", and are items (S06-R-04).
+IS_ITEM = (Lesson.outcome != "research") | (Lesson.kind == "research")
+SCOPES = ("company", "project", "room", "agent", "research", "evaluation")  # UI-KN-01
+
+
+def _is_item(i: Lesson | None) -> bool:
+    return i is not None and (i.outcome != "research" or i.kind == "research")
+
+
+def _scoped(query: Any, scope: str, project_id: int | None, room: str, agent_id: int | None) -> Any:
+    """UI-KN-01: company-wide items (no project), one project's (or any project's), a room's members', one
+    agent's, research findings, or what eval goals taught."""
+    if scope not in SCOPES:
+        raise ValueError(f"scope must be one of {', '.join(SCOPES)}")
+    if scope == "company":
+        return query.where(Lesson.project_id.is_(None))
+    if scope == "project":
+        return query.where(Lesson.project_id == project_id if project_id else Lesson.project_id.is_not(None))
+    if scope == "room":
+        if not room:
+            raise ValueError("the room scope needs a room")
+        return query.where(Lesson.agent_id.in_(select(Agent.id).where(Agent.room_key == room)))
+    if scope == "agent":
+        if agent_id is None:
+            raise ValueError("the agent scope needs an agent")
+        return query.where(Lesson.agent_id == agent_id)
+    if scope == "research":
+        return query.where(Lesson.kind == "research")
+    return query.where(Lesson.goal_id.in_(select(Goal.id).where(Goal.origin == "eval")))
+
+
 def knowledge(status: str = "", agent_id: int | None = None, limit: int = 200, q: str = "",
-              kind: str = "") -> list[dict[str, Any]]:
-    """Knowledge items, newest first; `q` matches the text or a technology, `status` may list several (a,b)."""
+              kind: str = "", scope: str = "", project_id: int | None = None,
+              room: str = "") -> list[dict[str, Any]]:
+    """Knowledge items, newest first; `q` matches the text or a technology, `status` may list several (a,b),
+    `scope` narrows them (UI-KN-01, `_scoped`)."""
     with session() as s:
-        query = select(Lesson).where(Lesson.outcome != "research")
+        query = select(Lesson).where(IS_ITEM)
+        if scope:
+            query = _scoped(query, scope, project_id, room, agent_id)
         if status:
             query = query.where(Lesson.status.in_([x for x in status.split(",") if x]))
         if agent_id is not None:
@@ -790,7 +826,7 @@ def knowledge(status: str = "", agent_id: int | None = None, limit: int = 200, q
 def item(item_id: int) -> dict[str, Any]:
     with session() as s:
         i = s.get(Lesson, item_id)
-        if i is None or i.outcome == "research":
+        if not _is_item(i):
             raise KeyError(f"knowledge item {item_id}")
         return _item(i, dict(s.execute(select(Agent.id, Agent.name)).all()), _open_contradictions(s, [i.id]))
 
@@ -833,7 +869,7 @@ def supersede(item_id: int, text: str, reviewer: str, note: str = "") -> dict[st
         raise ValueError("the new version needs text")
     with session() as s:
         old = s.get(Lesson, item_id)
-        if old is None or old.outcome == "research":
+        if not _is_item(old):
             raise KeyError(f"knowledge item {item_id}")
         if old.status == "superseded":
             raise ValueError("this item already has a newer version")
@@ -864,7 +900,7 @@ def delete(item_id: int) -> dict[str, Any]:
     """Remove an item and every graph edge that names it (S11-R-06, KT-015); playbooks are rebuilt without it."""
     with session() as s:
         i = s.get(Lesson, item_id)
-        if i is None or i.outcome == "research":
+        if not _is_item(i):
             raise KeyError(f"knowledge item {item_id}")
         agent, key = i.agent_id, str(item_id)
         edges = s.scalars(select(KgEdge).where(

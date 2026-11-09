@@ -2567,8 +2567,12 @@ def create_app(start_background: bool = True) -> FastAPI:
     # --- knowledge items (SPEC-11): lessons with provenance; people review, agents never do ---
     @app.get("/api/knowledge")
     def knowledge_list(status: str = "", agent_id: int | None = None, q: str = "", kind: str = "",
-                       limit: int = 200, _: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
-        return learning.knowledge(status, agent_id, max(1, min(limit, 1000)), q, kind)
+                       limit: int = 200, scope: str = "", project_id: int | None = None, room: str = "",
+                       _: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
+        try:
+            return learning.knowledge(status, agent_id, max(1, min(limit, 1000)), q, kind, scope, project_id, room)
+        except ValueError as err:
+            raise HTTPException(400, str(err)) from None
 
     # --- SE-R-21: the ranking procedure per query class, learned offline and guarded by recall@5 ---
     @app.get("/api/knowledge/retrieval")

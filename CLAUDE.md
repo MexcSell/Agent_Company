@@ -106,7 +106,7 @@ feature came from.
   index with `retrieval_w_*` weights guarded by `evals/retrieval.json` recall@5; SE-R-21 ranking procedure per query
   class (`query_class`, `retrieval_strategies` setting) learned on `evals/retrieval-classes.json` by `learn_strategies`; a task's package adds the project's
   standards from the base branch and matching research documents; contradictions and versions as `kg_edges`,
-  resolved by people; REQ-005 `import_knowledge`: an admin imports a text/Markdown file, a folder inside `data_dir`,
+  resolved by people; UI-KN-01 `knowledge(scope=company|project|room|agent|research|evaluation)`, an approved report's findings are items (`IS_ITEM`); REQ-005 `import_knowledge`: an admin imports a text/Markdown file, a folder inside `data_dir`,
   a chat export or experience reports as `outcome="imported"` items under the root GM, screened and `draft` until a
   person approves them, never in a playbook or definition file)
   + `evolution.py` (playbook candidates are experiments; V28: the smoke suite then the held-out `holdout_suite`,

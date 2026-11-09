@@ -370,14 +370,16 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   recommendation, risks, implementation impact, confidence, limitations, and its claims with citations.
 - **UI-KN-01** Knowledge page: search, filters by scope (company, project, team/room, agent, research, evaluation),
   review queue, contradictions side by side, graph explorer, version history (existing knowledge.js content restyled).
-- Status: **partial** (P2): both pages have the design's page head and counts (Research: requests in progress, reports
+- Status: **done** (P2; report sections and the scope filter in the follow-ups): both pages have the design's page head and counts (Research: requests in progress, reports
   awaiting review, reports, sources monitored, documents, agents on the rotation; Knowledge: items, approved, waiting
   for review, contradictions, hypotheses, from research); their existing sections are unchanged below. Report sections
   (follow-ups): `research.REPORT_INSTRUCTIONS` asks for the design's sections (Objective, Scope, Findings, Comparison,
   Recommendation, Risks, Implementation impact, Confidence, Gaps, Limitations, Sources), `_approved_text` keeps them in
   that order (empty ones dropped), `report_dict.sections` lists those present and the report view shows them as an
-  index beside the claims with citations (`tests/test_research_review.py`). Open: the Knowledge scope filter
-  (company/project/room/agent).
+  index beside the claims with citations (`tests/test_research_review.py`). Knowledge scope filter (follow-ups):
+  `GET /api/knowledge?scope=company|project|room|agent|research|evaluation` (with `project_id`, `room`, `agent_id`;
+  `learning._scoped`) and a scope menu on the page; an approved report's findings (`kind="research"`) are listed as
+  items, the research room's own notes are not (`learning.IS_ITEM`; `tests/test_knowledge_scope.py`).
 
 ## 13. Notifications and approvals (P0 for the queue, P1 for the page)
 
