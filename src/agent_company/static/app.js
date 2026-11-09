@@ -146,8 +146,26 @@ function prefetchView(id) {
 function toast(msg) { const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.append(t); setTimeout(() => t.remove(), 4000); }
 
 // --- theme ----------------------------------------------------------------------
-function applyTheme(t) { if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme; const dark = t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches; $("#theme").innerHTML = icon(dark ? "sun" : "moon", 18); }
-function toggleTheme() { const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches; const t = dark ? "light" : "dark"; store.set("ac.theme", t); applyTheme(t); }
+// ac.theme is "dark" (the default), "light" or "system"; data-theme always holds the resolved "dark" or "light".
+const THEMES = ["dark", "light", "system"];
+const systemDark = matchMedia("(prefers-color-scheme: dark)");
+function themePref() { const t = store.get("ac.theme"); return THEMES.includes(t) ? t : "dark"; }
+function applyTheme(pref = themePref()) {
+  const dark = pref === "system" ? systemDark.matches : pref !== "light";
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  const b = $("#theme");
+  if (b) { b.innerHTML = icon(dark ? "sun" : "moon", 18); b.title = `Theme: ${pref}${pref === "system" ? ` (${dark ? "dark" : "light"} now)` : ""}`; }
+}
+function toggleTheme() { const t = THEMES[(THEMES.indexOf(themePref()) + 1) % THEMES.length]; store.set("ac.theme", t); applyTheme(t); }
+systemDark.addEventListener("change", () => { if (themePref() === "system") applyTheme("system"); });
+// Accent per browser (ac.accent); blue is the primary colour, so it sets no attribute.
+const ACCENTS = ["indigo", "violet", "blue", "green", "amber", "rose", "grey"];
+function accentPref() { const a = store.get("ac.accent"); return ACCENTS.includes(a) ? a : "blue"; }
+function applyAccent(name = accentPref()) {
+  if (ACCENTS.includes(name) && name !== "blue") document.documentElement.dataset.accent = name;
+  else delete document.documentElement.dataset.accent;
+}
+function setAccent(name) { if (!ACCENTS.includes(name)) return; store.set("ac.accent", name); applyAccent(name); }
 
 // --- device sign-in -------------------------------------------------------------
 function deviceSecret(create) {
@@ -213,59 +231,105 @@ async function boot() {
       try { const r = await api("/api/emergency", { method: "POST", body: { on: true, reason } }); toast(`Emergency stop: ${r.cancelled_goals.length} goal(s) cancelled, ${r.terminated.length} process(es) ended`); updateBadges(); } catch (e) { toast(e.message); }
     };
   }
-  try { navLayout = (await api("/api/ui/nav_layout")).value || null; } catch { navLayout = null; }
-  renderRail(); me.ui_mode === "simple" ? show("simple") : show(VIEWS.some((v) => v.id === current && (!v.admin || me.is_admin)) ? current : "dashboard");
+  try { const n = await api("/api/ui/nav_layout"); navLayout = n.value || null; navDefault = n.default || NAV_DEFAULT; } catch { navLayout = null; }
+  renderRail();
+  const linked = parseHash(location.hash);  // a link (#/projects/1) wins, also in Simple mode; ac.view is the fallback
+  if (linked) route(linked);
+  else show(me.ui_mode === "simple" ? "simple" : VIEWS.some((v) => v.id === current && (!v.admin || me.is_admin)) ? current : "dashboard", { replace: true });
   connectLive();
 }
-// --- rail: two groups (top, bottom) in the order an administrator set (Settings → Navigation) -----------
+// --- grouped sidebar in the order an administrator set (Settings → Navigation) -----------
 // Notifications, the audit log, settings and users are buttons at the top right instead (TOPBAR), never on the rail.
-const NAV_DEFAULT = { top: ["dashboard", "projects", "goals", "agents", "companymap", "models", "evolution", "research", "knowledge", "performance"],
-  bottom: ["workspace", "machines", "security", "system"] };
+// Keep the legacy top-order export for existing shell consumers. Groups own rendering and persistence.
+// Offline mirror of prefs.DEFAULT_NAV_GROUPS (UI-D-02 order with pages of later phases; ids without a view are dropped),
+// kept equal by tests/test_nav_layout.py.
+const NAV_DEFAULT = { top: ["dashboard", "general-manager", "projects", "goals", "teams", "agents", "companymap", "workflows", "deliverables"], groups: [
+  {key:"company", title:"Company", items:["dashboard","general-manager","projects","goals","teams","agents","companymap","workflows","deliverables"]},
+  {key:"intelligence", title:"Intelligence", items:["research","knowledge","performance","evaluation","models"]},
+  {key:"evolution", title:"Evolution", items:["evolution","organization","changes"]},
+  {key:"system", title:"System", items:["workspace","machines","security","system"]}], hidden:[] };
 const TOPBAR = ["notifications", "audit", "settings", "users"];
-let navLayout = null, railEditing = false;
+const VIEW_GROUP = Object.assign(Object.fromEntries(NAV_DEFAULT.groups.flatMap(g => g.items.map(id => [id,g.key]))), {simple:"company"});
+let navLayout = null, navDefault = NAV_DEFAULT, railEditing = false, lastOverview = null;
 function navGroups() {
-  const lay = navLayout && (navLayout.top || navLayout.bottom) ? navLayout : NAV_DEFAULT;
-  // REQ-003: the Simple view is on the rail only in Simple mode
-  const seen = new Set(), vis = VIEWS.filter((v) => (!v.admin || me.is_admin) && !TOPBAR.includes(v.id) && (v.id !== "simple" || me.ui_mode === "simple")), by = Object.fromEntries(vis.map((v) => [v.id, v]));
-  const pick = (ids) => ids.filter((id) => by[id] && !seen.has(id) && seen.add(id)).map((id) => by[id]);
-  // A view the saved order does not name takes its default place (before the next default neighbour it has).
-  const saved = new Set([...(lay.top || []), ...(lay.bottom || []), ...(lay.hidden || [])]);
-  const withDefaults = (g) => {
-    const ids = [...(lay[g] || [])];
-    NAV_DEFAULT[g].forEach((id, i) => {
-      if (saved.has(id)) return;
-      const next = NAV_DEFAULT[g].slice(i + 1).find((x) => ids.includes(x));
-      ids.splice(next ? ids.indexOf(next) : ids.length, 0, id);
-    });
-    return ids;
-  };
-  const top = pick(withDefaults("top")), bottom = pick(withDefaults("bottom")), hidden = pick(lay.hidden || []);
-  return { top, bottom: [...bottom, ...vis.filter((v) => !seen.has(v.id))], hidden };  // views with no default place go to the bottom
+  const lay = navLayout?.groups ? navLayout : navDefault;
+  const vis = VIEWS.filter(v => (!v.admin || me.is_admin) && !TOPBAR.includes(v.id) && (v.id !== "simple" || me.ui_mode === "simple"));
+  const by = Object.fromEntries(vis.map(v => [v.id,v]));
+  // The editor's rule (placeNav): a default page the layout lacks goes after its predecessor; an unknown id goes last.
+  const groups = placeNav(lay.groups, navDefault.groups, [], lay.hidden);
+  const saved = new Set([...groups.flatMap(g => g.items), ...lay.hidden]);
+  vis.forEach(v => {
+    if (saved.has(v.id)) return;
+    (groups.find(g => g.key === (v.group || VIEW_GROUP[v.id] || "system")) || groups.at(-1)).items.push(v.id);
+  });
+  return {groups:groups.map(g => ({...g,items:g.items.filter(id => by[id] && !lay.hidden.includes(id)).map(id => by[id])})), hidden:lay.hidden.filter(id => by[id]).map(id => by[id])};
 }
 function railButton(v) {
-  return `<button data-v="${v.id}" title="${v.title}" aria-label="${v.title}" class="${v.id === current ? "active" : ""}" draggable="${railEditing}">${icon(v.icon)}<span class="rail-label">${v.title}</span>${badges[v.id] ? `<span class="badge">${badges[v.id]}</span>` : ""}</button>`;
+  return `<button data-v="${esc(v.id)}" title="${esc(v.title)}" aria-label="${esc(v.title)}" class="sb-item${v.id === current ? " active" : ""}" draggable="${railEditing}">${icon(v.icon)}<span class="rail-label">${esc(v.title)}</span></button>`;
+}
+function sidebarDetails() {
+  return `<${me.is_admin ? 'a href="#/system"' : 'div'} class="sb-status" id="sb-status" data-state="operating"><span class="sb-dot"></span><span class="sb-status-text"><strong>Operating</strong><span class="muted sb-status-sub"></span></span></${me.is_admin ? 'a' : 'div'}><div class="sb-user" id="sb-user"><span class="avatar">${esc(me.name.slice(0,1))}</span><span class="sb-user-text"><strong>${esc(me.name)}</strong><span class="muted">${me.is_admin ? "Administrator" : "Member"}</span></span></div>`;
+}
+function groupedMarkup(g) {
+  return g.groups.map(x => `<section class="sb-group">${railEditing ? `<input data-group-title maxlength="40" value="${esc(x.title)}"><button data-group-shift="-1" aria-label="Move group up">↑</button><button data-group-shift="1" aria-label="Move group down">↓</button>` : `<h3 data-group-title>${esc(x.title)}</h3>`}<div class="sb-items" data-group="${x.key}">${x.items.map(railButton).join("")}</div></section>`).join("");
+}
+function wireSidebar(root) {
+  root.querySelectorAll("button[data-v]").forEach(b => {
+    b.onclick = () => { if (!railEditing) { closeDrawer({ quiet: true }); show(b.dataset.v); } };
+    b.onpointerenter = b.onfocus = () => { if (!railEditing) prefetchView(b.dataset.v); };
+  });
 }
 function renderRail() {
-  const g = navGroups();
-  $("#rail").innerHTML = `<div class="rail-group" data-group="top">${g.top.map(railButton).join("")}</div><div class="rail-gap"></div>
-    <div class="rail-group" data-group="bottom">${g.bottom.map(railButton).join("")}</div>
-    ${me.is_admin ? `<button class="rail-edit${railEditing ? " on" : ""}" id="rail-edit" title="${railEditing ? "Done: save the order" : "Edit: drag icons to reorder (also in Settings → Navigation)"}" aria-label="Edit navigation">${icon(railEditing ? "check" : "grip", 18)}</button>` : ""}`;
-  $("#rail").classList.toggle("editing", railEditing);
-  $("#rail").querySelectorAll("button[data-v]").forEach((b) => {
-    b.onclick = () => { if (!railEditing) show(b.dataset.v); };
-    b.onpointerenter = b.onfocus = () => { if (!railEditing) prefetchView(b.dataset.v); };
-    b.classList.toggle("pending", b.dataset.v === current && $("#view").classList.contains("loading"));
+  if (!me) return;
+  const g = navGroups(), rail = $("#rail");
+  rail.classList.add("sidebar");
+  rail.innerHTML = `<div class="sb-brand"><span class="sb-logo">${icon("companymap")}</span><div class="sb-brand-text"><strong>Agent Company</strong><span>Autonomous Engineering Organization</span></div><button class="sb-collapse" id="sb-collapse" aria-label="Toggle sidebar">↔</button></div><div class="sb-groups">${groupedMarkup(g)}${railEditing ? `<section class="sb-group"><h3>Hidden</h3><div class="sb-items" data-group="hidden">${g.hidden.map(railButton).join("")}</div></section>` : ""}</div>
+    ${me.is_admin ? `<button class="rail-edit" id="rail-edit" title="Edit navigation">${icon(railEditing ? "check" : "grip",18)}</button>` : ""}${sidebarDetails()}
+    <div class="sb-bottom">${(g.groups[0]?.items || []).slice(0,4).map(railButton).join("")}<button id="sb-more">More</button></div>`;
+  wireSidebar(rail);
+  $("#sb-collapse").onclick = () => { store.set("ac.sidebar", $("#app").dataset.labels === "1" ? "collapsed" : "expanded"); applyLayout(); };
+  $("#rail-edit") && ($("#rail-edit").onclick = async () => { const lay = railEditing ? readNav(rail) : null; railEditing = !railEditing; if (lay) await saveNav(lay); else renderRail(); applyLayout(); });
+  if (railEditing) {
+    wireNavDrag(rail, () => {});
+    rail.querySelectorAll("[data-group-shift]").forEach(b => b.onclick = () => {
+      const col = b.parentElement, next = Number(b.dataset.groupShift) < 0 ? col.previousElementSibling : col.nextElementSibling;
+      if (!next || !next.querySelector("[data-group-title]")) return;
+      col.parentElement.insertBefore(Number(b.dataset.groupShift) < 0 ? col : next, Number(b.dataset.groupShift) < 0 ? next : col);
+    });
+  }
+  $("#sb-more").onclick = () => { openDrawer("Menu", `<div class="sidebar-menu">${groupedMarkup(g)}${sidebarDetails().replaceAll(' id="sb-status"', "").replaceAll(' id="sb-user"', "")}</div>`); wireSidebar($("#drawer-body")); applyBadges(); applyStatus(lastOverview); };
+  renderTopViews(); applyBadges(); setActiveNav(current); applyStatus(lastOverview);
+}
+function setActiveNav(id) {
+  document.querySelectorAll("#rail [data-v], #top-views [data-v]").forEach(b => { const on = b.dataset.v === id; b.classList.toggle("active",on); if (on) b.setAttribute("aria-current","page"); else b.removeAttribute("aria-current"); });
+}
+function applyBadges() {
+  document.querySelectorAll("[data-v]").forEach(b => {
+    const n = badges[b.dataset.v], old = b.querySelector(".nav-count");
+    if (!n) { old?.remove(); return; }
+    if (!old) b.insertAdjacentHTML("beforeend", `<span class="nav-count">${Number(n)}</span>`);
+    else if (old.textContent !== String(n)) old.textContent = n;
   });
-  $("#rail-edit") && ($("#rail-edit").onclick = () => { railEditing = !railEditing; if (!railEditing) saveNav(readNav($("#rail"))); renderRail(); });
-  if (railEditing) wireNavDrag($("#rail"), () => {});
-  renderTopViews();
+}
+function applyStatus(o) {
+  if (!o) return;
+  lastOverview = o;
+  const state = o.stop_level ? "stop" : (o.goals?.paused && !o.goals?.running) ? "paused" : o.degraded_agents ? "degraded" : "operating";
+  const title = state === "stop" ? `Stopped (${o.stop_level})` : state === "degraded" ? `Degraded · ${o.degraded_agents} agent(s)` : state[0].toUpperCase()+state.slice(1), sub = `${o.goals?.running || 0} goals running`;
+  document.querySelectorAll(".sb-status").forEach(el => {
+    if (el.dataset.state !== state) el.dataset.state = state;
+    if (el.title !== title) el.title = title;
+    const strong = el.querySelector("strong"), small = el.querySelector(".sb-status-sub");
+    if (strong.textContent !== title) strong.textContent = title;
+    if (small.textContent !== sub) small.textContent = sub;
+  });
 }
 // The top-bar buttons: the same views as rail icons (active state, badges, prefetch), only placed top right.
 function renderTopViews() {
   const box = $("#top-views");
   if (!box || !me) return;
   box.innerHTML = TOPBAR.map((id) => VIEWS.find((v) => v.id === id)).filter((v) => v && (!v.admin || me.is_admin))
-    .map((v) => `<button class="icon-btn top-view${v.id === current ? " active" : ""}${v.id === current && $("#view").classList.contains("loading") ? " pending" : ""}" data-v="${v.id}" title="${esc(v.title)}" aria-label="${esc(v.title)}">${icon(v.icon, 18)}${badges[v.id] ? `<span class="badge">${badges[v.id]}</span>` : ""}</button>`).join("");
+    .map((v) => `<button class="icon-btn top-view${v.id === current ? " active" : ""}${v.id === current && $("#view").classList.contains("loading") ? " pending" : ""}" data-v="${v.id}" title="${esc(v.title)}" aria-label="${esc(v.title)}">${icon(v.icon, 18)}${badges[v.id] ? `<span class="nav-count">${badges[v.id]}</span>` : ""}</button>`).join("");
   box.querySelectorAll("button[data-v]").forEach((b) => {
     b.onclick = () => show(b.dataset.v);
     b.onpointerenter = b.onfocus = () => prefetchView(b.dataset.v);
@@ -277,7 +341,7 @@ function renderTopViews() {
     $("#mode-toggle").onclick = async () => {
       try {
         const r = await api("/api/auth/me/ui_mode", { method: "PUT", body: { mode: simple ? "advanced" : "simple" } });
-        me.ui_mode = r.mode; show(r.mode === "simple" ? "simple" : "dashboard");
+        me.ui_mode = r.mode; renderRail(); show(r.mode === "simple" ? "simple" : "dashboard");
       } catch (e) { toast(e.message); }
     };
   }
@@ -297,10 +361,31 @@ function wireNavDrag(root, changed) {
     grp.insertBefore(dragging, after || null);
   }));
 }
+// Restore unseen pages without consulting the DOM; inputs remain unchanged.
+function placeNav(groups, defaults, registered, hidden = []) {
+  const placed = groups.map(g => ({...g, items: [...g.items]}));
+  const present = new Set([...placed.flatMap(g => g.items), ...hidden]);
+  defaults.forEach(g => g.items.forEach((id, i) => {
+    const to = placed.find(x => x.key === g.key);
+    if (!to || present.has(id) || registered.includes(id)) return;
+    const prev = g.items.slice(0, i).reverse().find(x => to.items.includes(x));
+    to.items.splice(prev ? to.items.indexOf(prev) + 1 : 0, 0, id);
+    present.add(id);
+  }));
+  return placed;
+}
 const readNav = (root) => {
-  const ids = (g) => [...root.querySelectorAll(`[data-group="${g}"] [data-v]`)].map((b) => b.dataset.v);
-  const hiddenNow = root.querySelector('[data-group="hidden"]') ? ids("hidden") : (navLayout?.hidden || []);
-  return { top: ids("top"), bottom: ids("bottom"), hidden: hiddenNow };
+  const ids = el => [...el.querySelectorAll("[data-v]")].map(b => b.dataset.v);
+  const groups = [...root.querySelectorAll("[data-group]")].filter(el => el.dataset.group !== "hidden").map(el => {
+    const title = el.parentElement.querySelector("[data-group-title]");
+    return {key:el.dataset.group, title:title?.value ?? title?.textContent ?? el.dataset.group, items:ids(el)};
+  });
+  // Preserve unregistered and mode/permission-filtered views when editing the visible navigation.
+  const present = new Set([...groups.flatMap(g => g.items), ...ids(root.querySelector('[data-group="hidden"]') || document.createElement('div'))]);
+  const placed = placeNav(groups, (navLayout || navDefault).groups,
+    VIEWS.filter(v => (!v.admin || me.is_admin) && (v.id !== "simple" || me.ui_mode === "simple")).map(v => v.id), [...present]);
+  const hidden = root.querySelector('[data-group="hidden"]');
+  return {groups:placed, hidden:hidden ? [...new Set([...ids(hidden), ...(navLayout?.hidden || []).filter(id => !VIEWS.some(v => v.id === id))])] : (navLayout?.hidden || [])};
 };
 async function saveNav(lay) {
   try { navLayout = (await api("/api/ui/nav_layout", { method: "PUT", body: { value: lay } })).value; toast("Navigation saved for every user"); } catch (e) { toast(e.message); }
@@ -319,7 +404,7 @@ async function updateBadges() {
     if (es) { es.classList.toggle("on", !!o.stopped); es.title = o.stopped ? `A stop is active (${o.stop_level}): open System to see or lift it` : "Emergency stop: stop all autonomous work now"; }
     const sl = $("#stop-level");  // S15-R-01: every user sees that work is stopped, and how widely
     if (sl) { sl.hidden = !o.stop_level; sl.textContent = o.stop_level ? `${o.stop_level} stop` : ""; sl.title = o.stop_level ? `${o.stop_level} stop active (${STOP_SCOPE[o.stop_level]}): autonomous work is ${o.stop_level === "E5" ? "stopped company-wide" : "partly stopped"}` : ""; }
-    renderRail(); setFavicon(o);
+    applyBadges(); applyStatus(o); setFavicon(o);
   } catch (e) { if (!e.status || e.status >= 502) setFavicon(null); /* else signed out */ }
 }
 // The page each view showed last: painted at once when the user comes back, while the fresh one loads
@@ -334,17 +419,20 @@ function enter() {
   view.classList.remove("enter"); void view.offsetWidth; view.classList.add("enter");
   clearTimeout(enter.timer); enter.timer = setTimeout(() => view.classList.remove("enter"), 700);  // live re-renders don't animate
 }
-function show(id) {
+function show(id, opts = {}) {
+  if (!VIEWS.some(v => v.id === id && (!v.admin || me?.is_admin))) id = "dashboard";
   const view = $("#view");
-  if (newBuild && id !== current && !window.WSP?.dirtyTabs?.()) { store.set("ac.view", id); location.reload(); return; }
+  if (newBuild && id !== current && !window.WSP?.dirtyTabs?.()) { store.set("ac.view", id); writeHash("#/" + id, true); location.reload(); return; }
   if (id !== current) {
     VIEWS.find((x) => x.id === current)?.leave?.();  // e.g. Machines closes its console
     if (!SELF_UPDATING.has(current) && !view.classList.contains("loading"))
       viewCache[current] = { html: view.innerHTML, cls: ["flush", "fit"].filter((c) => view.classList.contains(c)) };
   }
   current = id; store.set("ac.view", id);
+  if (!opts.fromHash) { closeModal(false); closeDrawer({ quiet: true }); writeHash(opts.hash || "#/" + id, opts.replace); }
+  setCrumbs([]);
   view.classList.remove("flush", "fit"); view.scrollTop = 0;  // a new page starts at its top
-  const v = VIEWS.find((x) => x.id === id); $("#view-title").textContent = v.title; renderRail();
+  const v = VIEWS.find((x) => x.id === id); $("#view-title").textContent = v.title; setActiveNav(id);
   const snap = !SELF_UPDATING.has(id) && viewCache[id];
   if (snap) { view.innerHTML = snap.html; view.classList.add(...snap.cls); enter(); }
   else if (!SELF_UPDATING.has(id)) view.innerHTML = `<div class="view-wait muted"><span class="spin"></span> Loading ${esc(v.title)}…</div>`;
@@ -410,10 +498,131 @@ async function render(quiet) {
     else { show.overwritten = true; $("#view").classList.add("stale"); }
   }
 }
+// Hash routes and breadcrumbs share the existing page/detail renderers.
+let lastHash = location.hash, pageCrumbs = [];
+function writeHash(hash, replace = false) {
+  if (location.hash !== hash) history[replace ? "replaceState" : "pushState"](null, "", hash);
+  lastHash = location.hash;
+}
+function parseHash(hash) {
+  const m = /^#\/([a-z][a-z0-9-]*)(?:\/(\d+))?\/?$/.exec(hash);
+  return m ? {view: m[1], id: ["projects", "goals", "agents"].includes(m[1]) && m[2] ? Number(m[2]) : null} : null;
+}
+function route(r) {
+  if (!me) return;
+  if (!r || !VIEWS.some(v => v.id === r.view && (!v.admin || me.is_admin))) {
+    r = {view: "dashboard"}; writeHash("#/dashboard", true);
+  }
+  closeModal(false); closeDrawer({ quiet: true });
+  if (r.view === "projects" && r.id) { selectedProject = r.id; store.set("ac.project", r.id); }
+  show(r.view, {fromHash: true});
+  if (r.view === "goals" && r.id) goalModal(r.id);
+  if (r.view === "agents" && r.id) agentModal(r.id).catch(e => toast(e.message));
+}
+addEventListener("hashchange", () => {
+  if (location.hash === lastHash) return;
+  lastHash = location.hash;
+  const r = parseHash(location.hash);
+  r && route(r);
+});
+window.setCrumbs = function setCrumbs(items) {
+  items = items.slice(0, 4).map(x => ({label: String(x.label ?? ""), href: x.href}));
+  if ($("#modal").hidden) pageCrumbs = items;
+  const key = JSON.stringify([current, items]), root = $("#crumbs");
+  if (root.dataset.key === key) return;  // a live redraw sets the same trail: keep the links in place
+  root.dataset.key = key;
+  const title = document.createElement("h1");
+  title.id = "view-title"; title.textContent = VIEWS.find(v => v.id === current)?.title || "Dashboard";
+  const first = document.createElement("li");
+  if (items.length) { const a = document.createElement("a"); a.href = "#/" + current; a.append(title); first.append(a); }
+  else { first.append(title); first.setAttribute("aria-current", "page"); }
+  root.replaceChildren(first);
+  items.forEach((x, i) => {
+    const li = document.createElement("li"), a = document.createElement("a");
+    a.textContent = x.label;
+    if (i < items.length - 1 && /^#\//.test(x.href || "")) a.href = x.href;
+    if (i === items.length - 1) li.setAttribute("aria-current", "page");
+    li.append(a); root.append(li);
+  });
+};
+function closeModal(updateHash = true) {
+  $("#modal").hidden = true;
+  setCrumbs(pageCrumbs);
+  if (updateHash && /^#\/(goals|agents)\/\d+/.test(location.hash)) writeHash("#/" + current, true);
+}
+function initTopSearch() {
+  const input = $("#top-search"), box = $("#top-search-results");
+  let projects = [], fetched = 0, pending = null, results = [], active = 0;
+  const close = () => { box.hidden = true; input.setAttribute("aria-expanded", "false"); };
+  const open = i => { const r = results[i]; if (!r) return; close(); input.blur(); if (r.project) location.hash = "#/projects/" + r.id; else show(r.id); };
+  function draw() {
+    const q = input.value.trim().toLowerCase();
+    const pages = navGroups().groups.flatMap(g => g.items);
+    results = [...pages.filter(v => (v.title + " " + v.id).toLowerCase().includes(q)).map(v => ({...v, label:v.title})),
+      ...projects.filter(p => (p.name + " " + (p.github_url || "")).toLowerCase().includes(q)).map(p => ({...p, label:p.name, project:true}))].slice(0,8);
+    active = Math.min(active, Math.max(0, results.length - 1)); box.replaceChildren();
+    results.forEach((r,i) => {
+      const b = document.createElement("button"); b.type = "button"; b.setAttribute("role", "option"); b.setAttribute("aria-selected", String(i === active));
+      const glyph = document.createElement("span"); glyph.innerHTML = icon(r.project ? VIEWS.find(v => v.id === "projects")?.icon : r.icon, 16);
+      const label = document.createElement("span"); label.textContent = r.label;
+      const kind = document.createElement("small"); kind.textContent = r.project ? "Project" : "Page";
+      b.append(glyph, label, kind); b.onmousedown = e => e.preventDefault(); b.onclick = () => open(i); box.append(b);
+    });
+    box.hidden = !results.length; input.setAttribute("aria-expanded", String(!box.hidden));
+  }
+  input.onfocus = async () => {
+    if (!me) return;
+    draw();
+    if (Date.now() - fetched < 60000) return;
+    try {
+      pending ||= api("/api/projects");
+      projects = (await pending).filter(p => !["archived", "cancelled"].includes(p.status)); fetched = Date.now();
+      if (document.activeElement === input) draw();
+    } catch { /* pages remain searchable offline */ } finally { pending = null; }
+  };
+  input.oninput = () => { active = 0; if (me) draw(); };
+  input.onblur = close;
+  input.onkeydown = e => {
+    if (["ArrowDown", "ArrowUp"].includes(e.key)) { e.preventDefault(); active = (active + (e.key === "ArrowDown" ? 1 : -1) + results.length) % (results.length || 1); draw(); }
+    if (e.key === "Enter") { e.preventDefault(); open(active); }
+    if (e.key === "Escape") { e.stopPropagation(); close(); }
+  };
+  document.addEventListener("keydown", e => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && !e.target.closest?.(".xterm")) { e.preventDefault(); input.focus(); }
+  });
+}
+
 function modal(html) { $("#modal-body").innerHTML = html; $("#modal").hidden = false; }
-$("#modal-close").onclick = () => ($("#modal").hidden = true);
-$("#modal").onclick = (e) => { if (e.target.id === "modal") $("#modal").hidden = true; };
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#modal").hidden = true; });
+$("#modal-close").onclick = closeModal;
+$("#modal").onclick = (e) => { if (e.target.id === "modal") closeModal(); };
+// The drawer: one right-side panel under the modal. A quiet redraw of the page never touches it.
+let drawerState = null;
+function openDrawer(title, html, { onClose } = {}) {
+  const d = $("#drawer");
+  if (!d) return;
+  if (!drawerState) drawerState = { back: document.activeElement };
+  drawerState.onClose = onClose;
+  $("#drawer-title").textContent = title;
+  $("#drawer-body").innerHTML = html;
+  d.hidden = false;
+  iconize(d);
+  $("#drawer-close").focus();
+}
+function closeDrawer(opts) {  // opts.quiet: leaving the page (show/route), so onClose must not reopen anything there
+  const d = $("#drawer");
+  if (!d || d.hidden) return;
+  d.hidden = true;
+  const st = drawerState; drawerState = null;
+  if (st?.onClose && !opts?.quiet) try { st.onClose(); } catch { /* ignore */ }
+  if (st?.back && st.back.isConnected && typeof st.back.focus === "function") st.back.focus();
+}
+$("#drawer-close") && ($("#drawer-close").onclick = closeDrawer);
+// Escape closes the topmost layer: the modal if it is open, otherwise the drawer.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!$("#modal").hidden) closeModal();
+  else if ($("#drawer") && !$("#drawer").hidden) closeDrawer();
+});
 
 // --- dashboard ------------------------------------------------------------------
 async function viewDashboard() {
@@ -438,8 +647,12 @@ function usageTable(u) {
 let selectedGoal = null, goalFilter = "all";
 function goalModal(id) {
   selectedGoal = id;
+  writeHash("#/goals/" + id);
   modal(`<div id="goal-detail"><div class="cc-working"><span class="spin"></span> Loading goal #${Number(id)}…</div></div>`);
-  goalDetail(id).catch((e) => ($("#goal-detail").innerHTML = `<p class="muted">${esc(e.message)}</p>`));
+  setCrumbs([...pageCrumbs, {label: "Goal #" + id}]);
+  goalDetail(id).catch((e) => {
+    if (selectedGoal === id && $("#goal-detail")) $("#goal-detail").innerHTML = `<p class="muted">${esc(e.message)}</p>`;
+  });
 }
 const GOAL_FILTERS = { all: "All", active: "Active", awaiting_approval: "Awaiting approval", approved: "Merged",
   failed: "Failed", cancelled: "Cancelled" };
@@ -475,7 +688,9 @@ async function viewGoals(quiet) {
   $("#goal-list").querySelectorAll(".list-item").forEach((el) => (el.onclick = () => goalModal(Number(el.dataset.id))));
 }
 async function goalDetail(id, openIds = new Set()) {
+  const detail = $("#goal-detail");
   const g = await api(`/api/goals/${id}`);
+  if (!detail || detail !== $("#goal-detail") || $("#modal").hidden || selectedGoal !== id) return;
   const iters = [...new Set(g.tasks.map((t) => t.iteration))].sort((a, b) => b - a);
   const actions = [
     g.status === "awaiting_approval" && (me.is_admin || (me.delegations || []).some((d) => d.permission === "approve_goals" && d.project_id === g.project_id)) ? ib("check", "Approve and merge", 'data-act="approve"', "primary") + ib("x", "Reject", 'data-act="reject"', "danger") : "",
@@ -904,7 +1119,9 @@ function start() {
 $("#theme").onclick = toggleTheme;
 $("#layout").onclick = layoutPicker;
 applyLayout();
+initTopSearch();
 window.addEventListener("resize", () => applyProjectLayout());
-applyTheme(store.get("ac.theme"));
+applyTheme();
+applyAccent();
 api("/api/auth/me").then(boot).catch(tryDevice);
 }

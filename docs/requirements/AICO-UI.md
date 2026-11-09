@@ -41,7 +41,7 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   - **Evolution**: Agent Evolution, Organization Evolution, Change History
   - **System**: Workspace, Machines, Security, System
 
-  The sidebar collapses to the icon rail (button and below 1100 px) and becomes a bottom bar on phones. Notifications,
+  The sidebar collapses to the icon rail (button and below 1280 px) and becomes a bottom bar on phones. Notifications,
   Audit log, Settings and Users stay top-bar buttons (CLAUDE.md rule kept); Notifications remains also a full page
   reached from its button and from every notification link.
 - **UI-D-03 Palette: update_5's tokens** (the newest folder; update_3's and update_4's differ). Dark (default):
@@ -53,8 +53,8 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   Center* (company status, GM communication, approvals, deliverables) = Simple mode and the top of the Dashboard;
   Levels 2 *Management & Orchestration* and 3 *Engineering & Intelligence* = Advanced mode. No third mode.
 - **UI-D-05 Saved navigation migrates.** `/api/ui/nav_layout` gains a `groups` form (`{groups: [{key, title,
-  items}], hidden}`); a saved `top/bottom` layout is read as the default groups with its own hidden list, so no
-  administrator keeps a broken order. Settings → Navigation edits groups (rename, reorder, move items).
+  items}], hidden}`); a saved `top/bottom` layout is read as the default groups with each hidden id removed from its
+  group, plus the hidden list, so no administrator keeps a broken order. Settings → Navigation edits groups (rename, reorder, move items).
 - **UI-D-06 Project lifecycle display.** The design's Draft → Planning → Ready → Active → Blocked → QA/Review →
   Release ready → Completed → Archived (+ Failed, Cancelled) is a **phase** derived from the project's status and its
   goals (no new stored states): Planning = only goals in planning; Blocked = an open blocker; QA/Review = a goal
@@ -64,6 +64,13 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   lead, enabled, budget); a project-specific team = a goal's team (`teams.py`). No third team model.
 - **UI-D-08 Evidence before claims** (update_3 §5, PDF p13, BR-010): every progress, completion and acceptance shown
   comes from the gate (`Task.gate`, checks, review verdicts, `mission.py` labels), never from an agent's own text.
+- Status (P0-1, goal 337; paths under `src/agent_company/`):
+  - UI-D-02 **done**: `static/app.js` (`NAV_DEFAULT` groups; pages added later slot into their group by id),
+    `static/layouts.js`, `static/style.css`.
+  - UI-D-03 **done**: `static/style.css`, `static/workspace.css`, `static/app.js` (`applyAccent`), `static/layouts.js`.
+  - UI-D-05 **done**: `prefs.py` (groups form; an old `top/bottom` value is read as the default groups with each
+    hidden id removed from its group, plus the hidden list), `api.py`, `static/app.js`, `static/admin.js`;
+    `tests/test_nav_layout.py`.
 
 ---
 
@@ -81,7 +88,7 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   dialog. *Acceptance:* a style-guide page (Settings → Appearance → "Components") renders each once.
 - **UI-SHELL-03 Sidebar** per UI-D-02: brand block ("Agent Company · Autonomous Engineering Organization", status
   pill), group titles, labelled items with icon and badge, collapse button, active item highlighted, company status
-  card at the bottom (operating / degraded / paused / maintenance from `/api/overview` + stop state), user block
+  card at the bottom (operating / degraded / paused / stopped from `/api/overview` + stop state), user block
   (name, role). Admin-only items are hidden for others (WEB-ROLE-03 unchanged).
 - **UI-SHELL-04 Top bar**: breadcrumbs (page / project / goal or agent), **global search** (Ctrl+K: projects, goals,
   tasks, agents, knowledge, reports, files; UI-SRCH-01), system status pill, Simple/Advanced switch, emergency stop,
@@ -97,6 +104,25 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   `#/agents/:id`, `#/goals/:id`, `#/teams`, `#/workflows`, `#/evaluation`, `#/evolution`, `#/organization`,
   `#/changes`, `#/deliverables`, `#/notifications`, `#/settings`); back/forward and links work; `ac.view` stays the
   fallback. *Acceptance:* opening `/#/projects/1` shows project 1.
+
+- Status (P0-1, goal 337; paths under `src/agent_company/`):
+  - UI-SHELL-01 **done**: `static/style.css` (`:root`, `[data-theme="light"]`, `[data-accent]`), `static/workspace.css`;
+    `tests/test_ui_tokens.py`.
+  - UI-SHELL-02 **done**: `static/style.css`, `static/app.js` (`openDrawer`/`closeDrawer`), `static/index.html`
+    (`#drawer`), `static/admin.js` (`componentsPreview`).
+  - UI-SHELL-03 **done**: `static/app.js` (`navGroups`, sidebar, status card), `static/layouts.js`, `static/style.css`,
+    `api.py` (`degraded_agents` in `/api/overview`).
+  - UI-SHELL-04 **done** for P0-1: `static/index.html`, `static/app.js` (`setCrumbs`, `initTopSearch`),
+    `static/projects.js`, `static/agents.js`. The search box finds pages and open projects client-side. The global
+    search over goals, tasks, agents, knowledge, reports and files is UI-SRCH-01, phase P1-6.
+  - UI-SHELL-05 **done**: `static/app.js` (badges and active item updated in place, quiet redraws unchanged),
+    `static/layouts.js` (labels off = collapsed, rail bottom = bottom bar, rail right = mirrored);
+    `tests/test_index_scripts.py`.
+  - UI-SHELL-06 **partial**: responsive rules in `static/style.css` and `static/layouts.js`. The headless screenshots
+    at 1440/1024/768/390 px have not been run.
+  - UI-SHELL-07 **done**: `static/app.js` (`parseHash`, `route`, `writeHash`, `hashchange`; `show()` writes the
+    hash), `static/projects.js`, `static/agents.js`. `ac.view` is the fallback when there is no hash. Pages that do
+    not exist yet get their routes when they register.
 
 ## 2. Dashboard — Company Control Hub (P0)
 

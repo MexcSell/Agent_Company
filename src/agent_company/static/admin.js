@@ -56,20 +56,58 @@ async function switchTransport(mode, reset) {
 
 // Navigation: the rail's two groups (and hidden icons), the same for every user. Edit, then drag.
 function navCard() {
-  const g = navGroups(), item = (v) => `<button type="button" class="nav-item" data-v="${v.id}" title="${esc(v.title)}">${icon(v.icon, 18)}<span>${esc(v.title)}</span></button>`;
-  const col = (key, label, hint, list) => `<div class="nav-col"><h3>${label}</h3><p class="muted">${hint}</p><div class="nav-list" data-group="${key}">${list.map(item).join("")}</div></div>`;
-  return `<div class="card nav-card" style="margin-bottom:12px"><div class="row"><h2 class="grow" style="margin:0">Navigation</h2>
-      ${ib("edit", "Edit: drag icons between the lists", 'id="nav-edit"')}${ib("save", "Save for every user", 'id="nav-save" disabled', "primary")}${ib("refresh", "Back to the default order", 'id="nav-reset"')}</div>
-    <p class="muted">The icon rail on the left: the top group, then the bottom group. Press Edit, then drag icons to reorder them, move them between groups, or to Hidden (drag back to add them again). The rail's own edit button (bottom of the rail) does the same in place. Notifications, Audit log, Settings and Users are buttons at the top right, not on the rail.</p>
-    <div class="nav-cols" id="nav-cols">${col("top", "Top", "Work", g.top)}${col("bottom", "Bottom", "Tools and administration", g.bottom)}${col("hidden", "Hidden", "Not on the rail", g.hidden)}</div></div>`;
+  const g = navGroups(), item = v => `<button type="button" class="nav-item" data-v="${esc(v.id)}">${icon(v.icon,18)}${esc(v.title)}</button>`;
+  const col = x => `<div class="nav-col"><input data-group-title maxlength="40" value="${esc(x.title)}" disabled><button data-shift="-1" disabled aria-label="Move group left">←</button><button data-shift="1" disabled aria-label="Move group right">→</button><div class="nav-list" data-group="${x.key}">${x.items.map(item).join("")}</div></div>`;
+  return `<div class="card nav-card"><h2>Navigation</h2>${ib("edit","Edit",'id="nav-edit"')}${ib("save","Save for every user",'id="nav-save" disabled')}${ib("refresh","Reset",'id="nav-reset"')}<p class="muted">Rename or reorder groups. Drag pages between groups or to Hidden. Notifications, Audit, Settings and Users stay in the top bar.</p><div class="nav-cols" id="nav-cols">${g.groups.map(col).join("")}<div class="nav-col"><h3>Hidden</h3><div class="nav-list" data-group="hidden">${g.hidden.map(item).join("")}</div></div></div></div>`;
 }
 function wireNavCard() {
-  const box = $("#nav-cols");
-  if (!box) return;
-  let lay = null;
-  $("#nav-edit").onclick = () => { box.classList.add("editing"); wireNavDrag(box, (l) => { lay = l; $("#nav-save").disabled = false; }); toast("Drag the icons, then save"); };
-  $("#nav-save").onclick = async () => { if (lay) { await saveNav(lay); box.classList.remove("editing"); $("#nav-save").disabled = true; } };
-  $("#nav-reset").onclick = async () => { if (confirm("Restore the default order for every user?")) { await saveNav(NAV_DEFAULT); viewSettings(); } };
+  const box = $("#nav-cols"); if (!box) return;
+  $("#nav-edit").onclick = () => {
+    box.classList.add("editing"); box.querySelectorAll("input, [data-shift]").forEach(el => el.disabled = false);
+    const changed = () => $("#nav-save").disabled = false;
+    wireNavDrag(box, changed); box.oninput = changed;
+    box.querySelectorAll("[data-shift]").forEach(b => b.onclick = () => {
+      const col = b.parentElement, next = Number(b.dataset.shift) < 0 ? col.previousElementSibling : col.nextElementSibling;
+      if (!next || !next.querySelector('[data-group-title]')) return;
+      box.insertBefore(Number(b.dataset.shift) < 0 ? col : next, Number(b.dataset.shift) < 0 ? next : col); changed();
+    });
+  };
+  $("#nav-save").onclick = async () => { await saveNav(readNav(box)); viewSettings(); };
+  $("#nav-reset").onclick = async () => { await saveNav(navDefault); viewSettings(); };
+}
+
+// Appearance: theme and accent are kept per browser (the top bar's theme button, Screen format); the
+// Components preview shows each shared component once, with sample text only.
+function appearanceCard() {
+  return `<div class="card" style="margin-bottom:12px"><div class="row"><h2 class="grow" style="margin:0">Appearance</h2>
+      ${ib("max", "Screen format and accent", 'id="s-layout"')}${ib("eye", "Components", 'id="s-components"')}</div>
+    <p class="muted">Kept in this browser: theme <strong>${esc(themePref())}</strong> (the top bar's theme button cycles dark, light, system) and accent <strong>${esc(accentPref())}</strong> (Screen format). Components shows the shared page parts once.</p></div>`;
+}
+function wireAppearanceCard() {
+  $("#s-layout") && ($("#s-layout").onclick = layoutPicker);
+  $("#s-components") && ($("#s-components").onclick = componentsPreview);
+}
+function componentsPreview() {
+  const sample = '<span class="badge neutral">Sample</span>';
+  modal(`<div class="cmp-preview"><h2>Components ${sample}</h2><p class="muted">Every figure and text below is a sample, not live data.</p>
+    <section><h3>Page head</h3><header class="page-head"><div class="page-head-text"><h2 class="page-title">Page title</h2><p class="page-sub muted">Subtitle (sample)</p></div>
+      <div class="page-actions"><button type="button" class="btn keep-text">Secondary</button><button type="button" class="btn primary keep-text">Primary action</button></div></header></section>
+    <section><h3>KPIs</h3><div class="grid kpis">
+      <div class="card kpi"><span class="kpi-icon">${icon("goals", 18)}</span><div class="value">12</div><div class="label">Sample value</div></div>
+      <div class="card kpi"><span class="kpi-icon">${icon("projects", 18)}</span><div class="value">3</div><div class="label">Sample with trend</div><div class="kpi-trend up">+1 (sample)</div></div>
+      <button type="button" class="card kpi"><span class="kpi-icon">${icon("agents", 18)}</span><div class="value">7</div><div class="label">Sample, clickable</div><div class="kpi-trend down">−2 (sample)</div></button></div></section>
+    <section><h3>Card</h3><section class="card"><div class="card-head"><h3>Card title</h3><a class="view-all" href="#" data-noop>View all</a></div><p class="muted" style="margin:0">Card content (sample).</p></section></section>
+    <section><h3>Badges</h3><div class="row"><span class="badge ok">ok</span><span class="badge warn">warn</span><span class="badge bad">bad</span><span class="badge info">info</span><span class="badge neutral">neutral</span></div></section>
+    <section><h3>Progress</h3><div class="grid" style="max-width:360px">${[["", 40], ["ok", 75], ["bad", 20]].map(([c, v]) => `<div class="progress ${c}" role="progressbar" aria-label="Sample progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${v}"><span style="width:${v}%"></span></div>`).join("")}</div></section>
+    <section><h3>Stepper</h3><ol class="stepper"><li class="done">Plan</li><li class="current" aria-current="step">Build</li><li>Review</li><li class="failed">Merge</li></ol></section>
+    <section><h3>Timeline</h3><ul class="timeline"><li class="ok"><time>sample time</time><div>A sample event that passed</div></li><li class="warn"><time>sample time</time><div>A sample event waiting</div></li><li class="bad"><time>sample time</time><div>A sample event that failed</div></li><li class="info"><time>sample time</time><div>A sample note</div></li></ul></section>
+    <section><h3>Empty state</h3><div class="empty card">${icon("dashboard", 28)}<p class="empty-title">Nothing here yet</p><p class="muted">A sample empty state.</p></div></section>
+    <section><h3>Tabs</h3><div class="tabs" role="tablist" id="cmp-tabs"><button type="button" class="tab active" role="tab" aria-selected="true">Overview</button><button type="button" class="tab" role="tab" aria-selected="false">Runs</button><button type="button" class="tab" role="tab" aria-selected="false">Settings</button></div></section>
+    <section><h3>Drawer</h3><button type="button" class="btn keep-text" id="cmp-drawer">Open drawer</button></section></div>`);
+  $("#modal-body [data-noop]").onclick = (e) => e.preventDefault();
+  document.querySelectorAll("#cmp-tabs .tab").forEach((t) => (t.onclick = () => document.querySelectorAll("#cmp-tabs .tab").forEach((x) => { x.classList.toggle("active", x === t); x.setAttribute("aria-selected", String(x === t)); })));
+  // The drawer sits under the modal: close the preview first, reopen it when the drawer closes.
+  $("#cmp-drawer").onclick = () => { $("#modal").hidden = true; openDrawer("Example", '<p>A sample drawer: a right-side panel. Close it with ✕ or Escape.</p>', { onClose: componentsPreview }); };
 }
 
 async function viewSettings(quiet) {
@@ -80,7 +118,7 @@ async function viewSettings(quiet) {
     : r.choices.length ? `<select data-k="${r.key}">${r.choices.map((c) => `<option ${c === r.value ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`
     : r.type === "list" ? `<textarea data-k="${r.key}" rows="2">${esc((r.value || []).join("\n"))}</textarea>`
     : `<input data-k="${r.key}" value="${esc(r.value)}" ${r.type === "str" ? "" : 'type="number" step="any"'}>`;
-  $("#view").innerHTML = navCard() + connectionCard(tls, all.find((r) => r.key === "transport")) + `<div class="card"><h2>Settings</h2><p class="muted">Saved settings override <code>.env</code> and apply immediately. Reset returns a setting to its <code>.env</code> value.</p>
+  $("#view").innerHTML = appearanceCard() + navCard() + connectionCard(tls, all.find((r) => r.key === "transport")) + `<div class="card"><h2>Settings</h2><p class="muted">Saved settings override <code>.env</code> and apply immediately. Reset returns a setting to its <code>.env</code> value.</p>
     <div class="table-wrap"><table id="s-table">${rows.map((r) => `<tr><td><strong>${esc(r.key)}</strong><div class="muted">${esc(r.description)}</div></td><td style="min-width:200px">${input(r)}</td><td class="row nowrap">${ib("save", "Save", `data-save="${r.key}"`, "sm primary")}${r.overridden ? ib("refresh", "Reset to the .env value", `data-reset="${r.key}"`, "sm") : ""}</td></tr>`).join("")}</table></div></div>
     <div class="card"><h2>Policy versions</h2><p class="muted">Every change of a governance setting (approval, budgets, recruitment approval, proposals, command rules, …) is kept as a version with its author. Restoring one is a change of its own. Projects add stricter rules on their edit form.</p>
     ${versions.length ? `<div class="table-wrap"><table><tr><th class="num">Version</th><th>Change</th><th>By</th><th>When</th><th></th></tr>${versions.map((v, i) => `<tr><td class="num">${v.version}</td><td>${esc(v.note)}</td><td>${esc(v.author)}</td><td>${ago(v.created_at)}</td><td>${i ? `<button class="btn sm" data-restore="${v.version}">Restore</button>` : '<span class="muted">in force</span>'}</td></tr>`).join("")}</table></div>` : '<p class="muted">No governance setting changed yet.</p>'}</div>
@@ -88,6 +126,7 @@ async function viewSettings(quiet) {
       <div class="row"><span class="grow">${mtok.set ? `Token set (…${esc(mtok.hint)})` : '<span class="muted">No token: only administrators\' sessions can read it.</span>'}</span>
       <button class="btn sm" id="mt-new">${mtok.set ? "Replace token" : "Create token"}</button>${mtok.set ? '<button class="btn sm danger" id="mt-del">Revoke</button>' : ""}</div></div>` : ""}`;
   wireNavCard();
+  wireAppearanceCard();
   $("#mt-new") && ($("#mt-new").onclick = async () => {
     if (mtok.set && !confirm("Replace the metrics token? Scrapers using the old one stop working.")) return;
     try { const r = await api("/api/metrics/token", { method: "POST" }); prompt("The metrics token (shown only now): copy it into your Prometheus scrape config", r.token); viewSettings(); } catch (e) { toast(e.message); }

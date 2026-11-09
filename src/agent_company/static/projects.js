@@ -24,7 +24,13 @@ async function viewProjects(quiet) {
   // The selected project's details load alongside the list: one round trip instead of two.
   const guess = selectedProject, early = guess !== null ? api(`/api/projects/${guess}`).catch(() => null) : null;
   const list = await api("/api/projects");
-  if (!list.some((p) => p.id === selectedProject)) selectedProject = (list.find((p) => !p.protected) || list[0])?.id ?? null;
+  if (!list.some((p) => p.id === selectedProject)) {
+    // An unknown or inaccessible id (#/projects/999999, a stale ac.project) falls back; the URL names what is shown.
+    // replaceState, so Back never returns to the bad id and a quiet redraw adds no history entry.
+    selectedProject = (list.find((p) => !p.protected) || list[0])?.id ?? null;
+    if (selectedProject !== null) store.set("ac.project", selectedProject);
+    if (/^#\/projects\/\d+/.test(location.hash)) writeHash(selectedProject !== null ? `#/projects/${selectedProject}` : "#/projects", true);
+  }
   if (!quiet || !$("#proj-list")) {
     $("#view").innerHTML = `<div class="proj${projectFiles ? " with-files" : ""}">
       <aside class="card proj-side"><div class="row nowrap"><h2 class="grow" style="margin:0">Projects</h2>${me.is_admin || me.permissions?.create_projects ? ib("plus", "New project", 'id="p-new"', "primary sm") : ""}</div>
@@ -46,7 +52,7 @@ async function viewProjects(quiet) {
   $("#proj-list").querySelectorAll(".list-item").forEach((el) => (el.onclick = (e) => {
     if (e.target.matches("input[type=checkbox]")) return;
     if (e.ctrlKey || e.metaKey) { toggleCheck(Number(el.dataset.id)); return; }
-    selectedProject = Number(el.dataset.id); store.set("ac.project", selectedProject); lastMessageId = 0; viewProjects(true);
+    selectedProject = Number(el.dataset.id); store.set("ac.project", selectedProject); lastMessageId = 0; writeHash("#/projects/" + selectedProject); viewProjects(true);
   }));
   $("#proj-list").querySelectorAll("[data-check]").forEach((c) => (c.onchange = () => toggleCheck(Number(c.dataset.check))));
   if ($("#p-del")) $("#p-del").disabled = projectChecked.size === 0;
@@ -181,6 +187,7 @@ function gmPanel(d) {
 
 async function projectMain(id, incremental, early = null) {
   const d = (early && await early) || await api(`/api/projects/${id}`);
+  if (current === "projects" && selectedProject === id && $("#modal").hidden) setCrumbs([{label: d.name, href: "#/projects/" + id}]);
   // The GM conversation is a CLI agent (Claude Code or Codex, whichever the GM resolves to now) and the
   // administrators' tool (CLAUDE.md); with an API model as GM, or for other users, orders go to the agent loop.
   const cli = ["claude_code", "codex"].includes(d.gm?.kind);

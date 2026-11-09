@@ -198,7 +198,10 @@ async function definitionCandidate(id) {
 
 // --- the agent card -------------------------------------------------------------------------
 async function agentModal(id, tab = "profile") {
+  writeHash("#/agents/" + id);
+  const requestHash = location.hash;
   const [a, m, versions, all, cat] = await Promise.all([api(`/api/agents/${id}`), api("/api/models"), api(`/api/agents/${id}/versions`), api("/api/agents"), api("/api/catalog")]);
+  if (location.hash !== requestHash) return;
   const skills = Object.entries(a.skills || {}).sort((x, y) => y[1] - x[1]).map(([k, v]) => `<span class="pill">${esc(k)} ${v}</span>`).join(" ");
   const admin = me.is_admin || me.permissions?.manage_agents;
   const isGm = a.role === "general_manager" && !a.parent_id;
@@ -210,6 +213,7 @@ async function agentModal(id, tab = "profile") {
   const tabs = [["profile", "Profile"], ["definition", "Definition"], ["history", "Playbook & history"], ["runs", "Runs"], ["links", "Relationships"], ["config", "Versions"]];
   modal(`<div class="row"><div class="avatar">${roleIcon(a.role)}</div><div class="grow"><h2 style="margin:0">${esc(a.name)}</h2><div class="muted">${esc(a.title)} · ${esc(a.room)} · configuration v${a.config_version} · definition v${a.definition_version}</div></div>${a.health === "degraded" ? '<span class="pill failed">degraded</span>' : ""}${pill(a.enabled ? a.status : "disabled")}</div>
     <div class="ag-tabs small" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-mtab="${k}" aria-selected="${tab === k}">${l}</button>`).join("")}</div><div id="a-tab"></div>`);
+  setCrumbs([...pageCrumbs, {label: a.name}]);
   document.querySelectorAll("[data-mtab]").forEach((b) => (b.onclick = () => agentModal(id, b.dataset.mtab)));
   const box = $("#a-tab");
   if (tab === "definition") {
