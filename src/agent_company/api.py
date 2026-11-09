@@ -39,6 +39,7 @@ from agent_company import (
     executors,
     experiments,
     files,
+    githooks,
     gitsync,
     governance,
     hypotheses,
@@ -75,6 +76,7 @@ from agent_company import (
     usage,
     workflow,
     workspace,
+    worktrees,
 )
 from agent_company.config import settings
 from agent_company.db import Agent, AuditEvent, Decision, Event, Goal, Task, Upload, now, session
@@ -262,6 +264,10 @@ class GoalTeamBody(BaseModel):
 
 class TaskRetryBody(BaseModel):
     agent_id: int | None = None  # UI-WF-03 "Retry with another agent"
+
+
+class ForkBody(BaseModel):
+    iteration: int  # FW-R-07: continue the goal from this iteration's checkpoint commit
 
 
 class StrategyBody(BaseModel):
@@ -1456,6 +1462,39 @@ def create_app(start_background: bool = True) -> FastAPI:
                                               request.client.host if request.client else None)
         headers = {"WWW-Authenticate": 'Bearer realm="bridge"'} if status == 401 else None
         return JSONResponse(out, status_code=status, headers=headers)
+
+    @app.post("/api/hooks/github/{project_id}")
+    async def github_hook(project_id: int, request: Request) -> JSONResponse:
+        """FW-R-06: a GitHub webhook delivery; no session, the HMAC signature with the project's secret is the only
+        credential (githooks.py). Off for a project without a secret (404)."""
+        length = request.headers.get("content-length") or "0"
+        if not length.isdigit() or int(length) > githooks.MAX_BODY:
+            return JSONResponse({"error": "payload too large"}, status_code=413)
+        raw = await request.body()
+        status, out = await asyncio.to_thread(githooks.receive, project_id, request.headers.get("x-github-event", ""),
+                                              request.headers.get("x-github-delivery", ""),
+                                              request.headers.get("x-hub-signature-256", ""), raw)
+        return JSONResponse(out, status_code=status)
+
+    @app.get("/api/projects/{project_id}/webhook")
+    def project_webhook(project_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        return githooks.status(project_id)
+
+    @app.post("/api/projects/{project_id}/webhook")
+    def project_webhook_secret(project_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        """FW-R-06: a new secret for the project's GitHub webhook, shown once; turns the webhook on. Audited."""
+        try:
+            secret = githooks.set_secret(project_id)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "github_webhook_secret", project_id, severity="warning")
+        return {**githooks.status(project_id), "secret": secret}
+
+    @app.delete("/api/projects/{project_id}/webhook")
+    def project_webhook_off(project_id: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        githooks.clear_secret(project_id)
+        _audit(admin, "github_webhook_off", project_id)
+        return githooks.status(project_id)
 
     @app.get("/api/a2a/clients")
     def a2a_clients(_: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
@@ -3029,6 +3068,28 @@ def create_app(start_background: bool = True) -> FastAPI:
                 raise KeyError(goal_id)
         loop.cancel(goal_id, actor=f"user:{user['name']}")
         return {"ok": True}
+
+    @app.post("/api/goals/{goal_id}/fork")
+    def goal_fork(goal_id: int, body: ForkBody,
+                  user: dict[str, Any] = Depends(allowed("run", "goal_create"))) -> dict[str, Any]:
+        """FW-R-07: a new goal that continues this one from an earlier iteration's checkpoint commit; audited. As for
+        a new goal, only administrators carry over quality commands or permits."""
+        with session() as s:
+            g = s.get(Goal, goal_id)
+            seen = _visible_project_ids(s, user)
+            if g is None or (seen is not None and g.project_id is not None and g.project_id not in seen):
+                raise HTTPException(404, "goal not found")
+            privileged = bool(g.quality_commands or g.permits)
+        if privileged and not user["is_admin"]:
+            _audit(user, "goal_fork_denied", goal_id, after={"needs": "administrator"}, severity="warning")
+            raise HTTPException(403, "only administrators can fork a goal with quality commands or permits")
+        try:
+            new = loop.fork_goal(goal_id, body.iteration, f"user:{user['name']}", created_by=user["id"])
+        except (ValueError, worktrees.WorktreeError) as e:
+            raise HTTPException(409, str(e)) from e
+        _audit(user, "goal_fork", goal_id, after={"iteration": body.iteration, "goal": new})
+        loop.enqueue(new)
+        return {"id": new}
 
     @app.post("/api/tasks/{task_id}/retry")
     def task_retry(task_id: int, body: TaskRetryBody | None = None,

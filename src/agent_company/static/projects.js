@@ -323,9 +323,9 @@ const day = (iso) => (iso ? iso.slice(0, 10) : "");
 
 async function projectPlan(id) {
   const box = $("#plan");
-  const [d, tr, gap, sched] = await Promise.all([api(`/api/projects/${id}/plan`).catch((e) => ({ error: e.message })),
+  const [d, tr, gap, sched, wh] = await Promise.all([api(`/api/projects/${id}/plan`).catch((e) => ({ error: e.message })),
     api(`/api/projects/${id}/traceability`).catch(() => null), api(`/api/projects/${id}/capability_gap`).catch(() => null),
-    api(`/api/projects/${id}/schedules`).catch(() => [])]);
+    api(`/api/projects/${id}/schedules`).catch(() => []), me.is_admin ? api(`/api/projects/${id}/webhook`).catch(() => null) : null]);
   if (!box || !box.isConnected) return;
   if (d.error) { box.innerHTML = `<p class="muted">${esc(d.error)}</p>`; return; }
   d.requirement_kinds = ["functional", "non_functional", "story", "use_case"];
@@ -366,12 +366,18 @@ async function projectPlan(id) {
       <span class="muted">${x.enabled ? `next ${new Date(x.next_run_at).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}${x.last_goal_id ? ` · last <a href="#" data-goal="${x.last_goal_id}">#${x.last_goal_id}</a>` : ""}${x.kind ? ` · ${esc(x.kind)}` : ""}</span>
       ${admin ? ib(x.enabled ? "pause" : "play", x.enabled ? "Pause the schedule" : "Resume the schedule", `data-sch="${x.id}" data-on="${x.enabled ? "0" : "1"}"`, "sm") + ib("trash", "Delete the schedule", `data-sch-del="${x.id}"`, "sm") : ""}</div>
     ${x.note ? `<div class="muted">${esc(x.note)}</div>` : ""}</div>`;
+  // GitHub webhook (FW-R-06): off until a secret exists; a labelled issue becomes a goal that waits for approval
+  const hook = wh ? `<section class="plan-sec"><div class="row nowrap"><h3 class="grow" style="margin:0">GitHub webhook</h3>${wh.enabled
+      ? `<span class="pill done">on</span>${ib("refresh", "New secret (the old one stops working)", 'data-wh="new"', "sm")}${ib("x", "Turn the webhook off", 'data-wh="off"', "sm")}`
+      : `<span class="pill">off</span>${ib("play", "Turn on: create the secret", 'data-wh="new"', "sm primary")}`}</div>
+    <p class="muted">An issue of ${wh.github_url ? `<code>${esc(wh.github_url)}</code>` : "the project's repository (set its GitHub URL first)"} labelled <code>${esc(wh.label)}</code> becomes a goal; it always waits for your approval before merging. On GitHub: payload URL <code>${esc(location.origin + wh.path)}</code>, content type application/json, the secret, events: Issues. GitHub must reach this server.</p>
+    ${wh.deliveries.length ? `<div class="list">${wh.deliveries.slice(0, 5).map((x) => `<div class="row nowrap muted"><span class="grow ellipsis" title="${esc(x.delivery)}">${esc(x.outcome)}</span>${x.goal_id ? `<a href="#" data-goal="${Number(x.goal_id)}">#${Number(x.goal_id)}</a>` : ""}<span>${day(x.at)}</span></div>`).join("")}</div>` : ""}</section>` : "";
   const section = (title, add, rows, empty) => `<section class="plan-sec"><div class="row nowrap"><h3 class="grow" style="margin:0">${title}</h3>${admin && add ? ib("plus", `Add ${add}`, `data-add="${add}"`, "sm") : ""}</div><div class="list">${rows || `<p class="muted">${empty}</p>`}</div></section>`;
   const html = `<div class="row nowrap"><strong>Progress</strong><div class="plan-bar grow" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div><span class="muted">${pct}% over ${d.progress.parts} goal(s) and milestone(s)</span></div>
     ${section("Blockers &amp; risks", "risk", d.risks.map(risk).join(""), "No open blockers or risks.")}
     ${section("Next", "action item", d.action_items.map(item).join(""), "Nothing waiting.")}
     ${section("Milestones", "milestone", d.milestones.map(ms).join(""), "No milestones yet.")}
-    ${section("Schedules", "schedule", (sched || []).map(sch).join(""), "No scheduled goals. A schedule orders the same goal hourly, daily or weekly.")}
+    ${section("Schedules", "schedule", (sched || []).map(sch).join(""), "No scheduled goals. A schedule orders the same goal hourly, daily or weekly.")}${hook}
     ${section("Insights", "", d.insights.map(ins).join(""), "Agents report insights in their task output.")}${reqs}${caps}
     ${(d.handovers || []).length ? `<section class="plan-sec"><details id="ho-sec" ${box.querySelector("#ho-sec")?.open ? "open" : ""}><summary><h3 style="margin:0;display:inline">General Manager handovers</h3> <span class="muted">${d.handovers.length}</span></summary><div class="list">${d.handovers.map((h) => `<div class="list-item"><div class="row nowrap"><strong class="grow ellipsis">${esc(h.from_agent || "(none)")} → ${esc(h.to_agent || "")}</strong><span class="muted">${esc(h.actor)} · ${day(h.at)}</span></div>
       ${h.reason ? `<div class="muted">${esc(h.reason)}</div>` : ""}<div class="muted">Open goals: ${(h.package.goals || []).map((g) => `<a href="#" data-goal="${Number(g.id)}">#${Number(g.id)}</a> ${esc(g.status)}`).join(", ") || "none"} · blockers: ${esc((h.package.blockers || []).map((r) => r.title).join("; ") || "none")} · action items: ${(h.package.action_items || []).length}${h.package.reassigned ? ` · ${Number(h.package.reassigned)} moved to the new GM` : ""}</div></div>`).join("")}</div></details></section>` : ""}`;
@@ -390,6 +396,11 @@ async function projectPlan(id) {
     : api(`/api/milestones/${b.dataset.ms}/${b.dataset.act}`, { method: "POST" }).then((m) => toast(b.dataset.act === "check" ? `${Math.round(m.progress * 100)}% met` : "Milestone completed")))));
   box.querySelectorAll("[data-sch]").forEach((b) => (b.onclick = () => act(() => api(`/api/schedules/${b.dataset.sch}`, { method: "PATCH", body: { enabled: b.dataset.on === "1" } }))));
   box.querySelectorAll("[data-sch-del]").forEach((b) => (b.onclick = () => act(() => (confirm("Delete this schedule? Goals it created stay.") ? api(`/api/schedules/${b.dataset.schDel}`, { method: "DELETE" }) : null))));
+  box.querySelectorAll("[data-wh]").forEach((b) => (b.onclick = () => act(async () => {
+    if (b.dataset.wh === "off") return confirm("Turn the GitHub webhook off? Deliveries are refused until a new secret is made.") ? api(`/api/projects/${id}/webhook`, { method: "DELETE" }) : null;
+    const r = await api(`/api/projects/${id}/webhook`, { method: "POST" });
+    prompt("The webhook secret, shown once: enter it on GitHub (Settings → Webhooks).", r.secret);
+  })));
   box.querySelectorAll("[data-ins]").forEach((b) => (b.onclick = () => act(() => {
     const body = { status: b.dataset.st };
     if (body.status === "accepted") body.as_proposal = confirm("Accepted insights become knowledge items. Also propose it as follow-up work (a proposal waiting for a decision)?");

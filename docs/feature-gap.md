@@ -185,9 +185,9 @@ Machines code):
 | Prometheus metrics endpoint | Flowise, Agent Framework | done (`metrics.py`, `GET /metrics`, FW-R-03) |
 | Scheduled goals | OpenHands automations, extensions catalog | done (`schedules.py`, Plan → Schedules, FW-R-04) |
 | Import skills from a `SKILL.md` registry | OpenHands extensions | done (`catalog.import_skills`, FW-R-05) |
-| Goals from GitHub events (webhook) | OpenHands automations | needs the owner's decision (FW-R-06) |
-| Fork a goal from an earlier iteration | LangGraph time travel | open (FW-R-07) |
-| Condense long feedback | OpenHands condensers, SWE-agent history processors | partial (FW-R-08) |
+| Goals from GitHub events (webhook) | OpenHands automations | done, off per project until an administrator makes its secret (`githooks.py`, Plan → GitHub webhook, FW-R-06) |
+| Fork a goal from an earlier iteration | LangGraph time travel | done (`loop.fork_goal`, goal view → Iterations → Continue from #N, FW-R-07) |
+| Condense long feedback | OpenHands condensers, SWE-agent history processors | done (`loop._earlier_iterations`, setting `feedback_history_chars`, FW-R-08) |
 | ACP executor (Gemini CLI, OpenCode) | OpenHands, Open Interpreter | open (FW-R-09) |
 | Guardrails, termination conditions, checkpoints, interrupts, SOP documents, middleware, declarative agents, evaluations, memory, trajectories | crewAI, AutoGen, LangGraph, MetaGPT, Agent Framework, Flowise, SWE-agent | done, adapted (see FRAMEWORKS.md §2) |
 | Visual canvas, vector RAG, annotation replies, harness emulation, voice/IDE watch | Dify, Flowise, Open Interpreter, aider | skip (reasons in FRAMEWORKS.md §2) |

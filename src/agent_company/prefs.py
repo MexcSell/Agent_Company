@@ -55,6 +55,10 @@ SCHEMA: dict[str, tuple[type, str]] = {
                                 "row (0 = never)"),
     "stuck_error_limit": (int, "A Claude Code or Codex run ends when the same tool call fails with the same error this "
                                "many times (0 = never)"),
+    "feedback_history_chars": (int, "Characters of earlier iterations, one condensed line each, in the planner's "
+                                    "prompt beside the last iteration's findings (0 = only the last findings)"),
+    "github_webhook_label": (str, "A GitHub issue with this label becomes a goal of the project whose webhook "
+                                  "received it (the webhook is off until a project has a secret)"),
     "company_name": (str, "The company's name, shown in the sidebar and the browser tab"),
     "company_timezone": (str, "IANA timezone the dashboard shows dates and times in, e.g. Europe/Berlin (schedules stay UTC)"),
     "candidate_smoke": (bool, "A candidate playbook must pass the smoke suite before it is tried on users' goals"),
@@ -138,7 +142,7 @@ LIMITS: dict[str, tuple[float, float]] = {
     "retry_max_attempts": (1, 10), "retry_base_seconds": (0, 600), "retry_max_seconds": (0, 3600),
     "candidate_repeats": (1, 10), "canary_window": (3, 50), "canary_min_pass": (0, 100),
     "min_improvement": (0, 100), "max_goal_depth": (1, 10), "escalate_after": (1, 10), "cost_overrun_factor": (1, 20),
-    "repo_map_chars": (0, 50_000), "stuck_repeat_limit": (0, 100), "stuck_error_limit": (0, 100),
+    "repo_map_chars": (0, 50_000), "stuck_repeat_limit": (0, 100), "stuck_error_limit": (0, 100), "feedback_history_chars": (0, 20_000),
     "approval_blocker_hours": (0, 720), "inactive_days": (1, 3650), "explore_rate": (0, 1),
     "improvement_min_score": (0, 100), "improvement_max_regression": (0, 100),
     "shift_seconds": (0, 7 * 86400), "health_recovery_minutes": (0, 1440),"research_tool_rounds": (0, 5),

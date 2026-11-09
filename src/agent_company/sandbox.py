@@ -253,12 +253,12 @@ def status() -> dict[str, object]:
 
 def mode_for(goal=None, project_id: int | None = None, s=None) -> str:  # noqa: ANN001 - a Goal row
     """The sandbox mode for a goal's or project's commands: the company setting, made stricter by the project's
-    rule (`policies.effective`); work that came in over A2A and a trial that asks for it (a marketplace
-    candidate's eval run, REQ-002) are always `required`, whatever the settings say."""
+    rule (`policies.effective`); work that came in over A2A or from a GitHub issue (FW-R-06) and a trial that asks
+    for it (a marketplace candidate's eval run, REQ-002) are always `required`, whatever the settings say."""
     from agent_company import policies
 
     if goal is not None:
-        if goal.origin == "a2a" or (goal.trial or {}).get("sandbox") == "required":
+        if goal.origin in ("a2a", "github") or (goal.trial or {}).get("sandbox") == "required":
             return "required"
         project_id = goal.project_id
     return policies.effective("sandbox", project_id, s=s)

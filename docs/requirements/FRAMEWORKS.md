@@ -1,7 +1,7 @@
 # Functions from the cloned agent frameworks (`/home/luca/update/*`)
 
-Source: the thirteen repositories cloned into `/home/luca/update/` (read on 2026-11-06; nothing in them was run,
-no code copied). Excluded on the owner's instruction: the folder `1`, `1.txt`, `other_claude.txt`.
+Source: the thirteen repositories cloned into `/home/luca/update/` (read on 2026-11-06, swept again on 2026-11-09:
+unchanged since, newest commit 2026-11-04; nothing in them was run, no code copied). Excluded on the owner's instruction: the folder `1`, `1.txt`, `other_claude.txt`.
 IDs `FW-R-nn`; status words as in [README.md](README.md) (`done (symbol)`, `partial`, `open`, `skip (reason)`).
 Every `R` ends with an acceptance condition that is a pytest test (offline, temp `DATA_DIR`).
 
@@ -32,9 +32,9 @@ Every `R` ends with an acceptance condition that is a pytest test (offline, temp
 | Metrics for Prometheus / OpenTelemetry (Flowise, Agent Framework) | numbers on the Performance page and `/api/...`; nothing a monitoring system can scrape | **FW-R-03** |
 | Scheduled automations (OpenHands automations, extensions catalog `cron` triggers) | research requests recur (S06-R-01); goals only from a person, a proposal or A2A | **FW-R-04** |
 | Skill registry with `SKILL.md` folders (extensions, Agent Framework skills) | `catalog.py` skills written into `.claude/skills/`; no import of a skills folder | **FW-R-05** |
-| Event triggers: a GitHub webhook starts a goal (OpenHands automations) | none | open (FW-R-06): a new inbound network path; needs the owner's decision and a threat-model entry |
-| Fork a goal from an earlier iteration (LangGraph time travel) | best-iteration rollback (`loop._keep_best`), checkpoints per iteration | open (FW-R-07) |
-| Context condensing for long conversations (OpenHands condensers, SWE-agent history processors) | Claude Code and Codex compact their own sessions (`/compact`); goal feedback is passed per iteration | partial (FW-R-08) |
+| Event triggers: a GitHub webhook starts a goal (OpenHands automations) | none | **FW-R-06** (the owner's order of 2026-11-09; off per project until a secret exists) |
+| Fork a goal from an earlier iteration (LangGraph time travel) | best-iteration rollback (`loop._keep_best`), checkpoints per iteration | **FW-R-07** |
+| Context condensing for long conversations (OpenHands condensers, SWE-agent history processors) | Claude Code and Codex compact their own sessions (`/compact`); only the last iteration's findings reached the planner | **FW-R-08** |
 | Task output guardrails with retry (crewAI) | the quality gate, review verdicts and acceptance conditions check every task; a read-only task's answer is checked against its acceptance (`842847d`) | done, adapted (`quality.py`, `checks.py`, `contracts.py`) |
 | Termination conditions (AutoGen) | cost, token, time and agent budgets, iteration limit, emergency stops | done (`budgets.py`, `loop.py`, `governance.stop`) |
 | Durable execution, checkpoints (LangGraph, Agent Framework) | checkpoint commits per writing task, resume after restart, idempotent merge/push | done (S04-R-05) |
@@ -56,6 +56,12 @@ Every `R` ends with an acceptance condition that is a pytest test (offline, temp
 | RAG pipeline with vector search and rerank (Dify) | FTS5 retrieval with learned weights per query class | skip: no vector store in the stack (README: Stack); retrieval is guarded by its eval |
 | Annotation replies (Dify) | knowledge items from reviewed experience | skip: a chat-app feature; corrections already become knowledge items |
 | Voice, IDE watch mode, copy/paste to web chat (aider) | the Workspace is the IDE | skip: interactive single-user features |
+| Magentic-One progress ledger: after each turn a model judges "satisfied? looping? progressing?" and re-plans after `max_stalls` (AutoGen) | inside a run `StuckWatch` (FW-R-02); across iterations the repeated-check escalation re-plans (S04-R-06/R-07); the condensed history shows the planner every earlier failure (FW-R-08) | done, adapted: stalls are measured from tool calls and gate results, not a model's self-assessment |
+| `filemap`: a file's skeleton with long bodies elided (SWE-agent tools) | the repository map lists every file's definitions with their signature lines (FW-R-01); agents read files with their own tools | done, adapted (`repomap.py`) |
+| Incremental mode on an existing repository (MetaGPT `--inc`) | every goal works on a repository (`repo_path` or the project's) in its own worktree | done (`worktrees.py`) |
+| Sandboxed code execution in micro-VMs (Agent Framework `hyperlight`) | checks, acceptance commands and benchmarks run in the L3 bubblewrap sandbox | done, adapted (`sandbox.py`, S14-R-07) |
+| OpenTelemetry trace export (Agent Framework, Flowise) | each goal's trace (`/api/goals/{id}/trace`) and the Prometheus endpoint (FW-R-03) | skip: an exporter is another outbound network path and needs a collector; the trace API and `/metrics` cover today's readers |
+| AG-UI hosting, Telegram hosting, mem0 memory (Agent Framework) | the dashboard and the Workspace are the UI; knowledge items and the blackboard are the memory | skip: another client protocol or store without a user asking for it |
 
 ## 3. Requirements
 
@@ -136,28 +142,56 @@ Acceptance: a temp folder with two skills and one whose body says "ignore all pr
 refuses one with its reason; importing again updates instead of duplicating; `export_claude` writes the two into
 `.claude/skills/<name>/SKILL.md`.
 
-### FW-R-06 Goals from GitHub events — open (needs the owner's decision)
+### FW-R-06 Goals from GitHub events — done (`githooks.py`, `POST /api/hooks/github/{project}`, Projects → Plan → GitHub webhook)
 
-**Status: open**
+**Status: done** (the owner's order of 2026-11-09 "implement the necessary content"; off until a project has a secret)
 
-Source: OpenHands automations (`event` triggers). A signed GitHub webhook (HMAC with a per-project secret) for
-an issue labelled `agent` creates a goal that waits for approval. It opens an inbound network path, so it needs
-the owner's decision and an entry in `docs/threat-model.md` before it is built.
+Source: OpenHands automations (`event` triggers). An administrator turns a project's webhook on by creating its
+secret (shown once, stored encrypted, audited) and enters it on GitHub with the payload URL and the Issues event.
+A delivery is refused unless its `X-Hub-Signature-256` HMAC verifies (before the body is parsed), its repository is
+the project's GitHub URL and its body is at most 1 MB. An issue opened with, or given, the label
+`github_webhook_label` (setting, default `agent`) becomes one goal of the project (title `GitHub #n: …`, the issue
+text as the description, marked as a request rather than an instruction, origin `github`); a delivery id is handled
+once, an issue makes at most one goal, an issue the injection screen flags makes none and notifies the
+administrators. A `github` goal runs its checks in the required sandbox and always waits for a person's approval;
+the owner policy's auto-merge skips it. Threat model: the boundary row "GitHub → API".
 
-### FW-R-07 Fork a goal from an earlier iteration — open
+Acceptance (`tests/test_githooks.py`): without a secret 404; a wrong signature 401; a labelled issue makes one goal
+with origin `github` whose sandbox mode is `required`; the same delivery or a second label makes no second goal;
+ping, push, unlabelled and other-repository deliveries and a flagged issue make none; auto-merge leaves it waiting.
 
-**Status: open**
+### FW-R-07 Fork a goal from an earlier iteration — done (`loop.fork_goal`, `POST /api/goals/{id}/fork`, goal view → Iterations)
 
-Source: LangGraph time travel. "Continue from iteration N": a new goal whose branch starts at that iteration's
-checkpoint commit, with the original goal's plan and that iteration's feedback.
+**Status: done**
 
-### FW-R-08 Condense long feedback — partial
+Source: LangGraph time travel (`get_state_history`, resume from a checkpoint). "Continue from #N" on a goal's
+iterations: a new goal (`<title> (from #id, iteration N)`) whose branch is created at that iteration's checkpoint
+commit (the gate's `head` in the history, `worktrees.start_branch`), with the order's description, checks, scope,
+permits, budget, project, topic and template, the baseline measured on the untouched code (not re-run on the
+fork's commit, so the earlier iteration's failures are not excused as pre-existing), and a first plan that starts
+from that iteration's plan and gate findings (an iteration 0 judged and failed in its checkpoint). The original goal
+is not changed. Benchmark and improvement goals are not forked; only administrators fork a goal with quality
+commands or permits, as for creating one; audited.
 
-**Status: partial**
+Acceptance (`tests/test_fork_and_condense.py`): the fork's branch points at iteration 1's commit, its baseline is
+the original's, its first plan prompt names the original goal, the plan of iteration 1 and its findings, and its
+worktree descends from that commit; an iteration without a commit and an eval goal are refused; the API audits and
+answers 403 for a member forking a goal with quality commands.
 
-Source: OpenHands condensers, SWE-agent `LastNObservations`. Claude Code and Codex compact their own sessions;
-the loop's own prompts (planner, CrewAI executors) could keep the last N iterations' feedback whole and summarise
-older ones. Open until a goal is measured to hit a context limit.
+### FW-R-08 Condense long feedback — done (`loop._earlier_iterations`, setting `feedback_history_chars`)
+
+**Status: done**
+
+Source: OpenHands condensers, SWE-agent `LastNObservations`. The previous iteration's findings reach the planner
+whole, as before; from iteration 3 every earlier iteration is condensed to one line from the goal's history (gate
+result, score, failing checks, the first finding, kept per iteration as `findings`), newest first, within
+`feedback_history_chars` (default 2000; 0 = off), with a note of how many were left out. A goal whose checks are
+hidden (a final evaluation, LE-021) gets none and stores no findings. Claude Code and Codex still compact their own
+sessions.
+
+Acceptance: iterations 1 and 2 are condensed newest first in iteration 4's prompt and 3 is not repeated; a small
+budget leaves the oldest out with the note; the setting 0 and hidden checks give nothing; a real three-iteration goal's
+third plan carries iteration 1's line and its second plan none.
 
 ### FW-R-09 ACP executor — open
 
@@ -173,4 +207,5 @@ would add Gemini CLI, OpenCode or Open Interpreter as model kinds. Worth it once
 3. FW-R-03 metrics endpoint.
 4. FW-R-04 scheduled goals.
 5. FW-R-05 skill import.
-6. Then, on the owner's decision: FW-R-06, FW-R-07, FW-R-09.
+6. FW-R-06, FW-R-07, FW-R-08 (done 2026-11-09 on the owner's order).
+7. FW-R-09 when Gemini CLI, OpenCode or Open Interpreter is wanted as a model.

@@ -590,6 +590,7 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                   + project_note
                   + (f"\nThe previous iteration failed the quality gate. Fix these findings:\n{feedback}\n"
                      if feedback else "")
+                  + _earlier_iterations(goal, iteration)  # FW-R-08
                   + (f"\nResearch notes:\n{notes}\n" if notes else "")
                   + strategies.planner_note(goal) + specs.planner_note(goal) + teams.planner_note(goal.id)
                   + teststrategy.planner_note(teststrategy.derive(goal.id, None, iteration))  # S09-R-02
@@ -679,6 +680,32 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
 
 MAX_QUESTIONS = 3
 _questions: dict[int, list[str]] = {}  # UI-GM-04: the planner's clarification questions, read once by run_goal
+
+
+def _earlier_iterations(goal: Goal, iteration: int) -> str:
+    """FW-R-08 (OpenHands condensers, SWE-agent `LastNObservations`): the previous iteration's findings reach the
+    planner whole (`feedback`); every iteration before it is condensed to one line from the goal's history (gate
+    result, score, failing checks, the first finding), newest first, within `feedback_history_chars`. "" before
+    iteration 3, with the setting 0, or for a goal whose checks are hidden (LE-021)."""
+    budget = settings().feedback_history_chars
+    if budget <= 0 or iteration < 3 or (goal.trial or {}).get("hide_checks"):
+        return ""
+    older = sorted((h for h in goal.history or [] if h.get("iteration", 0) < iteration - 1),
+                   key=lambda h: -h["iteration"])
+    lines: list[str] = []
+    for h in older:
+        first = next((ln.strip() for ln in (h.get("findings") or "").splitlines() if ln.strip()), "")
+        line = (f"- Iteration {h['iteration']}: gate {'passed' if h.get('passed') else 'failed'} "
+                f"(score {float(h.get('score') or 0):.0%}); failing: {', '.join(h.get('failed_checks') or []) or '-'}"
+                + (f"; {first[:200]}" if first else ""))
+        if sum(len(x) + 1 for x in lines) + len(line) > budget:
+            break
+        lines.append(line)
+    if not lines:
+        return ""
+    left = len(older) - len(lines)
+    return ("\nEarlier iterations, condensed (newest first; the previous one's findings are above in full):\n"
+            + "\n".join(lines) + (f"\n- … {left} earlier iteration(s) left out" if left else "") + "\n")
 
 
 def _project_manager(goal: Goal) -> int | None:
@@ -1765,8 +1792,9 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                     return {"status": "approved", "iterations": iteration, "report": report}
                 waiting = decisions.blocking(goal_id)
                 # an improvement candidate reaches main only through approve(): verified first (selfevolve); work
-                # ordered by an outside A2A caller always waits for a person, whatever require_approval says
-                held = waiting or goal.origin in ("improvement", "a2a")
+                # ordered by an outside A2A caller or a GitHub issue (FW-R-06) always waits for a person, whatever
+                # require_approval says
+                held = waiting or goal.origin in ("improvement", "a2a", "github")
                 status = "awaiting_approval" if report["needs_approval"] or held else "approved"
                 note = ""
                 if status == "approved":  # merge before the final state: a refused merge leaves it for a person
@@ -1899,6 +1927,7 @@ def _record_history(goal_id: int, iteration: int, report: dict[str, Any]) -> Non
     failed = {c["check"] for c in report.get("checks", []) if not c["passed"]}
     with session() as s:
         g = s.get(Goal, goal_id)
+        hidden = bool((g.trial or {}).get("hide_checks"))  # a final evaluation's findings name its checks (LE-021)
         out_of_scope = any(not c["passed"] and c["condition"].get("type") == "out_of_scope"
                            for t in s.scalars(select(Task).where(Task.goal_id == goal_id, Task.iteration == iteration))
                            for c in (t.gate or {}).get("acceptance", []))
@@ -1906,6 +1935,8 @@ def _record_history(goal_id: int, iteration: int, report: dict[str, Any]) -> Non
                      {"iteration": iteration, "commit": report.get("head"), "score": report.get("score", 0.0),
                       "passed": report["passed"], "scope_failed": "scope" in failed or out_of_scope,
                       "failed_checks": sorted(failed),
+                      # FW-R-08/FW-R-07: what the gate found, for the planner's condensed history and a fork
+                      "findings": "" if hidden else _brief(report.get("feedback") or "", 1500),
                       "changed_files": list(report.get("changed_files") or [])[:200],  # S09-R-02 defect history
                       "stages": {r["stage"]: r["status"] for r in report.get("stages", [])},
                       # S09-R-04: what the gate itself ran, on which commit, with which result and toolchain
@@ -2557,6 +2588,64 @@ def return_to_development(goal_id: int, actor: str, reason: str) -> dict[str, An
     post_for_goal(goal_id, f"Goal #{goal_id} was returned to development: {reason[:500]}", kind="result")
     enqueue(goal_id)
     return {"status": "queued", "next_iteration": g.iteration + 1, "extra_iteration": extra}
+
+
+FORK_ORIGINS = {"eval", "improvement"}  # benchmark runs and platform candidates have their own pipelines
+
+
+def fork_goal(goal_id: int, iteration: int, actor: str, created_by: int | None = None) -> int:
+    """FW-R-07 (LangGraph time travel): a new goal that continues `goal_id` from `iteration`. Its branch starts at
+    that iteration's checkpoint commit (the gate's `head` in the history), it keeps the order (description, checks,
+    scope, permits, budget, project, topic, template) and the baseline measured on the untouched code, and its first
+    plan starts from that iteration's plan and gate findings. The original goal is not changed. Returns the new id;
+    the caller queues it."""
+    src = _goal(goal_id)
+    if src.origin in FORK_ORIGINS:
+        raise ValueError(f"a goal of origin {src.origin} cannot be forked")
+    h = next((h for h in src.history or [] if h.get("iteration") == iteration), None)
+    if not h or not h.get("commit"):
+        raise ValueError(f"goal #{goal_id} has no checkpoint commit for iteration {iteration}")
+    repo = Path(src.repo_path or "")
+    if not src.repo_path or not (repo / ".git").exists():
+        raise ValueError(f"goal #{goal_id} has no repository")
+    sha = worktrees.git(repo, "rev-parse", "--verify", "--quiet", f"{h['commit']}^{{commit}}", check=False)
+    if not sha:
+        raise ValueError(f"commit {h['commit'][:10]} of iteration {iteration} is no longer in {repo}")
+    with session() as s:
+        plan = [f"- {t.key}: {t.title} ({t.role}, {t.status})" for t in s.scalars(
+            select(Task).where(Task.goal_id == goal_id, Task.iteration == iteration).order_by(Task.id))]
+    cp = src.checkpoint or {}
+    findings = h.get("findings") or (cp.get("feedback", "") if cp.get("iteration") == iteration else "")
+    if (src.trial or {}).get("hide_checks"):
+        findings = ""
+    feedback = (f"This goal continues goal #{src.id} ({src.title}) from its iteration {iteration}: the branch starts "
+                f"at that iteration's commit {sha[:10]}, with its changes.\n"
+                + (f"The plan of iteration {iteration} was:\n" + "\n".join(plan[:40]) + "\n" if plan else "")
+                + f"Its quality gate {'passed' if h.get('passed') else 'failed'} (score {float(h.get('score') or 0):.0%})"
+                + (f"; failing checks: {', '.join(h['failed_checks'])}" if h.get("failed_checks") else "") + ".\n"
+                + (f"Findings:\n{findings}" if findings else ""))
+    new = create_goal(f"{src.title} (from #{src.id}, iteration {iteration})"[:256], src.description, src.repo_path,
+                      list(src.urls or []), list(src.quality_commands or []), src.max_iterations,
+                      created_by=created_by if created_by is not None else src.created_by, project_id=src.project_id,
+                      attachments=list(src.attachments or []), origin=src.origin,
+                      allowed_paths=list(src.allowed_paths or []), protect_tests=src.protect_tests,
+                      permits=list(src.permits or []), estimated_cost_usd=src.estimated_cost_usd, topic=src.topic,
+                      classification=src.classification, budget_usd=src.budget_usd, budget_tokens=src.budget_tokens,
+                      max_active_agents=src.max_active_agents, requirement_keys=list(src.requirement_keys or []),
+                      kind=src.kind, deadline=src.deadline)
+    branch = worktrees.start_branch(repo, f"goal-{new}", sha)
+    with session() as s:
+        row = s.get(Goal, new)
+        row.baseline = dict(src.baseline or {})  # measured on the untouched code, not on the fork's commit
+        if src.strategy and not row.strategy:
+            row.strategy = dict(src.strategy)
+        # an iteration 0 judged and failed: run_goal plans iteration 1 from this feedback (see _run_steps)
+        row.checkpoint = {"iteration": 0, "planned": True, "evaluated": True, "passed": False, "feedback": feedback,
+                          "fork": {"goal": src.id, "iteration": iteration, "commit": sha}}
+    log_event("goal", f"forked from goal #{src.id} iteration {iteration} ({sha[:10]}) by {actor} on {branch}",
+              goal_id=new, fork_of=src.id, fork_iteration=iteration)
+    log_event("goal", f"goal #{new} continues this goal from iteration {iteration} ({actor})", goal_id=src.id)
+    return new
 
 
 def cancel(goal_id: int, actor: str = "system") -> None:

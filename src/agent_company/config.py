@@ -78,6 +78,10 @@ class Settings:
     # fails with the same error this many times (FW-R-02); 0 = that rule off.
     stuck_repeat_limit: int = 5
     stuck_error_limit: int = 3
+    # Characters of the condensed earlier iterations in the planner's prompt (FW-R-08); 0 = only the last findings.
+    feedback_history_chars: int = 2000
+    # The label that turns a GitHub issue into a goal of the project whose webhook received it (FW-R-06).
+    github_webhook_label: str = "agent"
     # A candidate playbook must pass the smoke suite before it is tried on users' goals (S13-D-02).
     # UI-SET-01: the company's name (rail, tab title) and the timezone the dashboard shows dates and times in.
     company_name: str = "Agent Company"
@@ -219,6 +223,8 @@ def load_settings() -> Settings:
         repo_map_chars=_int("REPO_MAP_CHARS", 4000),
         stuck_repeat_limit=_int("STUCK_REPEAT_LIMIT", 5),
         stuck_error_limit=_int("STUCK_ERROR_LIMIT", 3),
+        feedback_history_chars=_int("FEEDBACK_HISTORY_CHARS", 2000),
+        github_webhook_label=os.environ.get("GITHUB_WEBHOOK_LABEL") or "agent",
         company_name=os.environ.get("COMPANY_NAME") or "Agent Company",
         company_timezone=os.environ.get("COMPANY_TIMEZONE") or "UTC",
         candidate_smoke=_bool("CANDIDATE_SMOKE", True),

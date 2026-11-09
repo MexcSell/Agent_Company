@@ -550,6 +550,8 @@ class Project(Base):
     target_outcome: Mapped[str] = mapped_column(Text, default="")
     related_project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     team_strategy: Mapped[str] = mapped_column(String(16), default="gm")
+    # FW-R-06: the GitHub webhook's HMAC secret, encrypted (githooks.py); "" = the webhook is off for this project
+    webhook_secret_enc: Mapped[str] = mapped_column(Text, default="")
 
 
 class Message(Base):
@@ -663,6 +665,21 @@ class Schedule(Base):
     note: Mapped[str] = mapped_column(Text, default="")  # what the last due run did (created #n, skipped: why)
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class WebhookDelivery(Base):
+    """A GitHub webhook delivery a project received (githooks.py, FW-R-06): each delivery id is handled once, each
+    issue makes at most one goal."""
+
+    __tablename__ = "webhook_deliveries"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    delivery: Mapped[str] = mapped_column(String(64), unique=True)  # X-GitHub-Delivery
+    event: Mapped[str] = mapped_column(String(32), default="")
+    issue: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    outcome: Mapped[str] = mapped_column(Text, default="")  # created #n | ignored: why | refused: why
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class Risk(Base):

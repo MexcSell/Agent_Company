@@ -121,7 +121,7 @@ def on_awaiting_approval(goal_id: int) -> dict[str, Any] | None:
             return None
         with session() as s:
             g = s.get(Goal, goal_id)
-            if g is None or g.origin in ("a2a", "eval") or g.status != "awaiting_approval":
+            if g is None or g.origin in ("a2a", "github", "eval") or g.status != "awaiting_approval":
                 return None
             project_id = g.project_id
     except Exception as e:  # noqa: BLE001
@@ -168,7 +168,7 @@ def retry_refused() -> list[int]:
             select(Goal).where(Goal.status == "awaiting_approval").order_by(Goal.id))]
         found = []
         for gid, repo, base, origin in waiting:
-            if origin in ("a2a", "eval") or not repo:
+            if origin in ("a2a", "github", "eval") or not repo:
                 continue
             last = s.scalars(select(Event).where(Event.goal_id == gid, Event.kind == "goal")
                              .order_by(Event.id.desc()).limit(1)).first()

@@ -94,6 +94,16 @@ def create(repo: Path | str, name: str, base: str | None = None) -> tuple[Path, 
     return path, branch, base
 
 
+def start_branch(repo: Path | str, name: str, commit: str) -> str:
+    """Create the branch `create(repo, name)` will use, at `commit` instead of the base (FW-R-07: a forked goal
+    starts where the earlier iteration ended). An existing branch is left as it is. Returns the branch name."""
+    repo = Path(repo).resolve()
+    branch = f"agents/{_safe(name)}"
+    if not git(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False):
+        git(repo, "branch", branch, commit)
+    return branch
+
+
 def _worktree_of(repo: Path, path: Path) -> bool:
     """Whether `path` is a working worktree registered in `repo`."""
     listed = {Path(w.get("worktree", "")).resolve() for w in list_worktrees(repo)}
