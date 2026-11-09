@@ -178,8 +178,13 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   `paused_for="plan"` (no new goal state: planning → paused is an existing transition), `POST
   /api/goals/{id}/plan/approve` resumes the stored plan, `/plan/revise` {note} plans the iteration again with the
   note as feedback; both `goal_approver`, audited; the queue lists them as kind `plan`
-  (`tests/test_plan_approval.py`). Open: clarification questions (`paused_for="clarification"`), "New project…" as a
-  GM analysis (a message needs a project today), message → requirement/merge links beyond the goal (UI-GM-05).
+  (`tests/test_plan_approval.py`). Clarification questions (follow-ups): the plan JSON's optional `questions` (at
+  most 3) pause the goal after planning with `paused_for="clarification"` (one round per goal, never for eval,
+  improvement, A2A or room-trial goals); the GM page shows them with an answer box, `POST
+  /api/goals/{id}/questions/answer` (`goal_approver`, audited) plans the iteration again with the answers, which stay in
+  the planner's feedback for later iterations; the queue lists them as kind `questions`
+  (`tests/test_clarification.py`). Open: "New project…" as a GM analysis (a message needs a project today), message →
+  requirement/merge links beyond the goal (UI-GM-05).
 
 ## 4. Projects and the project workspace (P0)
 

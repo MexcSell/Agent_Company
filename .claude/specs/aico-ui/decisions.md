@@ -68,3 +68,7 @@ with the full suite and headless screenshots; later phases are written and check
   judged and failed with the person's reason as feedback, so the loop's ordinary resume plans the next iteration from
   it in the same worktree. At the iteration limit the goal gets exactly one more iteration; otherwise the reopen
   could not run at all.
+- UI-GM-04 clarification questions ride on the plan JSON (`questions`), not a separate model call: the GM asks while
+  it plans, and the tasks it would run on its best assumption are stored (then discarded on the re-plan). One round
+  per goal (`clarified` survives checkpoint rewrites), so a model that always asks cannot stall a goal; the answers
+  stay in the planner's feedback for every later iteration. Goals nobody ordered by hand never wait.

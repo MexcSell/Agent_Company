@@ -67,7 +67,8 @@ async function gmContext(pid) {
   const [d, q, dash] = await Promise.all([api(`/api/projects/${pid}`), api("/api/approvals").catch(() => ({ items: [] })), api("/api/dashboard?period=7d").catch(() => null)]);
   const goals = d.goals || [], topic = topicOf(pid);
   const waiting = goals.filter((g) => g.status === "paused" && g.paused_for === "plan");
-  if (!goals.some((g) => g.id === gmFocus)) gmFocus = (waiting[0] || goals.find((g) => (g.topic || "general") === topic) || goals[0])?.id || null;
+  const asking = goals.filter((g) => g.status === "paused" && g.paused_for === "clarification");
+  if (!goals.some((g) => g.id === gmFocus)) gmFocus = (asking[0] || waiting[0] || goals.find((g) => (g.topic || "general") === topic) || goals[0])?.id || null;
   const g = gmFocus ? await api(`/api/goals/${gmFocus}`).catch(() => null) : null;
   const finished = g && ["approved", "failed", "cancelled", "rejected"].includes(g.status);
   const rep = finished ? await api(`/api/goals/${g.id}/report`).catch(() => null) : null;
@@ -78,6 +79,14 @@ async function gmContext(pid) {
   parts.push(gmCard(esc(d.name), `<div class="row nowrap"><span class="badge ${tone}">${esc(phase)}</span><span class="grow"></span><strong>${proj ? Math.round(proj.progress * 100) : 0}%</strong></div>
     <div class="progress" style="margin:8px 0"><span style="width:${proj ? Math.round(proj.progress * 100) : 0}%"></span></div>
     <div class="muted dash-meta">GM: ${esc(d.gm?.model || "–")} · ${goals.filter((x) => GOAL_ACTIVE.includes(x.status)).length} goal(s) open${proj?.next_milestone ? ` · next: ${esc(proj.next_milestone.name)}` : ""}</div>`));
+  // UI-GM-04: the GM's clarification questions, each with an answer box; the goal is planned again with the answers
+  for (const w of asking) {
+    const qs = (await api(`/api/goals/${w.id}`).catch(() => null))?.questions || [];
+    parts.push(`<section class="gm-card gm-await"><div class="card-head"><h3>The General Manager asks</h3><span class="badge warn">goal #${w.id}</span></div>
+      <p style="margin:0 0 8px"><a href="#/goals/${w.id}">${esc(w.title)}</a></p>
+      ${qs.map((q, i) => `<label class="dash-meta" style="display:block;margin:6px 0 2px">${i + 1}. ${esc(q)}</label><textarea rows="2" data-answer="${w.id}" aria-label="Answer ${i + 1}"></textarea>`).join("")}
+      <div class="row nowrap" style="margin-top:6px"><button class="btn sm primary" data-answers="${w.id}">Send answers</button></div></section>`);
+  }
   // UI-GM-04: plans that wait for a person
   for (const w of waiting) {
     parts.push(`<section class="gm-card gm-await"><div class="card-head"><h3>Awaiting plan approval</h3><span class="badge warn">goal #${w.id}</span></div>
@@ -113,9 +122,15 @@ async function gmContext(pid) {
   const html = parts.join("");
   const box = $("#gm-ctx");
   if (!box || box.dataset.html === html) return;
+  if ([...box.querySelectorAll("[data-answer]")].some((x) => x.value.trim() || x === document.activeElement)) return;  // keep a half-written answer
   box.innerHTML = html; box.dataset.html = html; iconize(box);
   box.querySelector("[data-refocus]") && (box.querySelector("[data-refocus]").onclick = () => { gmFocus = null; gmContext(pid); });
   box.querySelectorAll("[data-plan-ok]").forEach((b) => (b.onclick = async () => { try { await api(`/api/goals/${b.dataset.planOk}/plan/approve`, { method: "POST" }); toast("Plan approved: the goal runs it now"); gmContext(pid); updateBadges(); } catch (e) { toast(e.message); } }));
+  box.querySelectorAll("[data-answers]").forEach((b) => (b.onclick = async () => {
+    const answers = [...box.querySelectorAll(`[data-answer="${b.dataset.answers}"]`)].map((x) => x.value.trim());
+    if (!answers.some(Boolean)) return toast("Answer at least one question.");
+    try { await api(`/api/goals/${b.dataset.answers}/questions/answer`, { method: "POST", body: { answers } }); toast("Answers sent; the General Manager plans again"); box.querySelectorAll("[data-answer]").forEach((x) => (x.value = "")); document.activeElement?.blur(); gmContext(pid); } catch (e) { toast(e.message); }
+  }));
   box.querySelectorAll("[data-plan-rev]").forEach((b) => (b.onclick = async () => {
     const note = prompt("What should the revised plan change? (the planner reads it)");
     if (!note || !note.trim()) return;

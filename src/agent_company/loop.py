@@ -553,6 +553,9 @@ Optionally add "estimated_cost_usd" (the whole goal's expected model cost) and "
   "requires_human_approval": true|false}] for significant choices (technology, architecture, anything costly or
 hard to undo); critical ones always wait for a person; technical and critical ones become ADR files in docs/adr/.
 Label facts, measurements, inferences and hypotheses as such.
+Optionally "questions": ["..."] (at most 3) when the goal cannot be planned well without the person who ordered it:
+an ambiguous outcome, a choice only they can make, missing access. The goal then waits for their answers and is
+planned again with them; still list the tasks you would run on your best assumption. Ask only what matters.
 A task with "writes": false cannot create files: check its answer (contains, regex, min_length); a file_exists
 path ending in .md or .txt is filled by the loop with that task's whole answer (an architect's spec).
 Prefer few, well-scoped tasks. Include a QA review task: it verifies the logic (data flow of the normal,
@@ -662,12 +665,19 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                            what="ADR files")
         if isinstance(data, dict):
             _set_estimate(goal.id, data.get("estimated_cost_usd"))
+            asked = [str(q).strip()[:500] for q in (data.get("questions") or []) if str(q).strip()]
+            if asked and isinstance(data.get("questions"), list):
+                _questions[goal.id] = asked[:MAX_QUESTIONS]
         log_event("plan", f"{gm.name} planned {len(plan)} task(s) with {choice.name}: {summary}"[:500],
                   goal_id=goal.id, agent_id=gm.id)
         _chat_plan(goal, iteration, plan, summary, gm.id)
         return plan, gm.id
     finally:
         registry.release(gm.id, goal.id)
+
+
+MAX_QUESTIONS = 3
+_questions: dict[int, list[str]] = {}  # UI-GM-04: the planner's clarification questions, read once by run_goal
 
 
 def _project_manager(goal: Goal) -> int | None:
@@ -1605,16 +1615,25 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                     notes = _research(goal, iteration, feedback)
                     if iteration == 1:
                         _configure(goal)
-                    plan, planner_id = _plan(goal, iteration, feedback, notes)
+                    _questions.pop(goal_id, None)
+                    answers = (_goal(goal_id).checkpoint or {}).get("answers")  # UI-GM-04, every iteration after
+                    plan, planner_id = _plan(goal, iteration, feedback + (
+                        "\n\nThe person who ordered the goal answered your questions; plan with these answers and ask "
+                        f"nothing more:\n{answers}" if answers else ""), notes)
                 except registry.QuotaExceeded as e:  # the planner (or the researcher) is out of quota
                     return _out_of_quota(goal_id, str(e), report)
+                asked = _questions.pop(goal_id, None)
                 goal = _goal(goal_id)  # the plan may have chosen the workflow template (S04-R-11)
                 _cleared_for(goal_id, plan)
                 ids = _persist(goal_id, iteration, plan, planned_by=planner_id)
                 _spec_step(specs.write_plan, goal, iteration, plan)
+                kept = _clarification(goal_id)  # one round of questions per goal; its answers stay
+                clarified = kept.get("clarified")
                 _update_goal(goal_id, checkpoint={"iteration": iteration, "planned": True, "notes": notes,
                                                   "feedback": feedback, "planner_id": planner_id,
-                                                  "commit": _plan_commit(goal, iteration)})
+                                                  "commit": _plan_commit(goal, iteration), **kept})
+                if asked and not clarified and _may_ask(_goal(goal_id)):
+                    return _out_for_questions(goal_id, iteration, asked, report)
                 if _plan_needs_approval(_goal(goal_id)):
                     return _out_for_plan_approval(goal_id, iteration, len(ids), report)
             from agent_company.scheduler import run_dag
@@ -1665,7 +1684,7 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                 report["feedback"] += _escalate_repeated(goal_id, iteration)
             _update_goal(goal_id, checkpoint={"iteration": iteration, "planned": True, "evaluated": True,
                                               "passed": report["passed"], "feedback": report["feedback"],
-                                              "commit": report.get("head")})
+                                              "commit": report.get("head"), **_clarification(goal_id)})
             track_defects(goal_id, iteration, report["checks"])
             log_event("gate", f"iteration {iteration}: quality gate {'passed' if report['passed'] else 'failed'}",
                       goal_id=goal_id, iteration=iteration,
@@ -2034,6 +2053,65 @@ def _out_for_plan_approval(goal_id: int, iteration: int, tasks: int, report: dic
         projects.post_for_goal(goal_id, f"Goal #{goal_id}: the plan of iteration {iteration} ({tasks} task(s)) "
                                "awaits your approval.", kind="plan", awaiting="plan")
     return {"status": "paused", "iterations": iteration, "report": report, "awaiting": "plan"}
+
+
+def _clarification(goal_id: int) -> dict[str, Any]:
+    """The checkpoint keys that outlive an iteration: whether the planner asked already, and the answers."""
+    return {k: v for k, v in (_goal(goal_id).checkpoint or {}).items() if k in ("clarified", "answers")}
+
+
+def _may_ask(g: Goal) -> bool:
+    """Benchmark, improvement, A2A and room-trial goals have nobody to answer: they plan on the assumption."""
+    return g.origin not in ("eval", "improvement", "a2a") and not g.trial
+
+
+def _out_for_questions(goal_id: int, iteration: int, questions: list[str], report: dict[str, Any]) -> dict[str, Any]:
+    """UI-GM-04 (AT-003, FR-003.4): the planner asked; the goal waits for the person's answers (`answer_questions`
+    plans the iteration again with them). One round per goal."""
+    from agent_company.governance import notify
+
+    g = _goal(goal_id)
+    why = f"the General Manager asks {len(questions)} question(s) before planning iteration {iteration}"
+    _update_goal(goal_id, status="paused", reason=why)
+    with session() as s:
+        row = s.get(Goal, goal_id)
+        row.checkpoint = {**(row.checkpoint or {}), "paused_for": "clarification", "paused_why": why,
+                          "questions": questions}
+    log_event("goal", f"paused: {why}", goal_id=goal_id, iteration=iteration, questions=questions)
+    notify(f"Goal #{goal_id}: the General Manager has questions"[:256],
+           f"{g.title}\n" + "\n".join(f"- {q}" for q in questions), level="info", source="goal", goal_id=goal_id,
+           project_id=g.project_id)
+    if g.project_id:
+        from agent_company import projects
+
+        projects.post_for_goal(goal_id, f"Goal #{goal_id}: before planning I need to know:\n"
+                               + "\n".join(f"{i}. {q}" for i, q in enumerate(questions, 1)),
+                               kind="plan", awaiting="clarification")
+    return {"status": "paused", "iterations": iteration, "report": report, "awaiting": "clarification",
+            "questions": questions}
+
+
+def answer_questions(goal_id: int, actor: str, answers: list[str]) -> None:
+    """The person's answers to the planner's questions: the iteration is planned again with them (UI-GM-04)."""
+    g = _goal(goal_id)
+    cp = dict(g.checkpoint or {})
+    if g.status != "paused" or cp.get("paused_for") != "clarification":
+        raise ValueError(f"goal #{goal_id} has no questions waiting for an answer")
+    questions = list(cp.get("questions") or [])
+    answers = [str(a or "").strip()[:2000] for a in (answers or [])]
+    if not any(answers):
+        raise ValueError("answer at least one question")
+    text = "\n".join(f"Q{i}: {q}\nA{i}: {answers[i - 1] if i <= len(answers) and answers[i - 1] else '(no answer)'}"
+                     for i, q in enumerate(questions, 1))
+    with session() as s:
+        row = s.get(Goal, goal_id)
+        row.checkpoint = {**cp, "planned": False, "answers": text, "clarified": True}
+    log_event("goal", f"{actor} answered the General Manager's questions", goal_id=goal_id, answers=text[:2000])
+    if g.project_id:
+        from agent_company import projects
+
+        projects.post_for_goal(goal_id, f"Answers for goal #{goal_id}:\n{text}"[:4000], kind="chat")
+    resume(goal_id, actor)
 
 
 def approve_plan(goal_id: int, actor: str) -> None:

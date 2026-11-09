@@ -40,11 +40,11 @@ async function viewNotifications(quiet) {
   }
   const sel = n.items.find((x) => x.id === noteSel);
   const [label, tone] = sel ? NOTE_CAT[sel.category] || NOTE_CAT.notice : [];
-  const appr = sel?.goal_id ? q.items.filter((a) => a.id === sel.goal_id && ["goal", "plan"].includes(a.kind)) : [];
+  const appr = sel?.goal_id ? q.items.filter((a) => a.id === sel.goal_id && ["goal", "plan", "questions"].includes(a.kind)) : [];
   const pane = sel ? `<div class="row nowrap"><span class="badge ${tone}">${esc(label)}</span><span class="badge neutral">${esc(sel.level)}</span><span class="grow"></span><span class="muted dash-meta">${new Date(sel.at + (/Z$|[+-]\d\d:\d\d$/.test(sel.at) ? "" : "Z")).toLocaleString()}</span></div>
       <h3 class="nt-title">${esc(sel.title)}</h3>${sel.body ? `<p style="white-space:pre-wrap">${esc(sel.body)}</p>` : ""}
       <div class="gm-kv"><span class="muted">Source</span><span>${esc(sel.source)}</span>${sel.goal_id ? `<span class="muted">Goal</span><span><a href="#/goals/${sel.goal_id}">#${sel.goal_id}</a></span>` : ""}${sel.project_id ? `<span class="muted">Project</span><span><a href="#/projects/${sel.project_id}">#${sel.project_id}</a></span>` : ""}<span class="muted">Action</span><span>${sel.action ? "needed: open it and decide" : "none"}</span></div>
-      <div class="row" style="margin-top:12px;gap:8px">${sel.goal_id ? `<a class="btn primary" href="#/goals/${sel.goal_id}">Open goal</a>` : ""}${appr.map((a) => `<a class="btn" href="${esc(a.link)}">${a.kind === "plan" ? "Review the plan" : "Review the merge"}</a>`).join("")}${sel.project_id ? `<a class="btn" href="#/general-manager/${sel.project_id}">Ask the GM</a>` : ""}${me.is_admin ? `<button class="btn danger" id="nt-del">Delete</button>` : ""}</div>`
+      <div class="row" style="margin-top:12px;gap:8px">${sel.goal_id ? `<a class="btn primary" href="#/goals/${sel.goal_id}">Open goal</a>` : ""}${appr.map((a) => `<a class="btn" href="${esc(a.link)}">${a.kind === "plan" ? "Review the plan" : a.kind === "questions" ? "Answer the questions" : "Review the merge"}</a>`).join("")}${sel.project_id ? `<a class="btn" href="#/general-manager/${sel.project_id}">Ask the GM</a>` : ""}${me.is_admin ? `<button class="btn danger" id="nt-del">Delete</button>` : ""}</div>`
     : `<div class="empty"><p class="empty-title">Select a notification</p><p class="muted">Its details, the object it is about and what you can do appear here.</p></div>`;
   const p = $("#nt-pane");
   if (p.dataset.html !== pane) {

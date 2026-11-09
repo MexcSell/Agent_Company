@@ -5,7 +5,7 @@ const DASH_PERIODS = { "24h": "Last 24 hours", "7d": "Last 7 days", "30d": "Last
 const DASH_PHASE = { draft: ["Draft", "neutral"], planning: ["Planning", "info"], active: ["Active", "ok"], blocked: ["Blocked", "bad"],
   review: ["QA / Review", "warn"], release_ready: ["Release ready", "ok"], paused: ["Paused", "warn"], completed: ["Completed", "ok"],
   archived: ["Archived", "neutral"], cancelled: ["Cancelled", "neutral"] };
-const DASH_KIND = { goal: ["Goal", "goals"], plan: ["Plan approval", "goals"], decision: ["Decision", "check"], proposal: ["Proposal", "bolt"], definition: ["Agent evolution", "evolution"],
+const DASH_KIND = { goal: ["Goal", "goals"], plan: ["Plan approval", "goals"], questions: ["GM questions", "goals"], decision: ["Decision", "check"], proposal: ["Proposal", "bolt"], definition: ["Agent evolution", "evolution"],
   recruitment: ["Recruitment", "user_add"], experiment: ["Experiment", "performance"], requirements: ["Requirements", "files"], user: ["Account", "users"] };
 const DASH_TONES = ["--tone-blue", "--tone-green", "--tone-orange", "--tone-purple", "--tone-teal", "--tone-pink", "--tone-grey"];
 const DASH_QUIET = new Set(["retrieval"]);  // ranking runs: thousands, not activity a person follows

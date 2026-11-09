@@ -17,7 +17,7 @@ from agent_company.db import (Agent, Decision, DefinitionCandidate, Experiment, 
                               Requirement, session)
 
 OPEN_DECISION = ("submitted", "under_review", "escalated")
-KINDS = ("goal", "plan", "decision", "proposal", "definition", "recruitment", "experiment", "requirements", "user")
+KINDS = ("goal", "plan", "questions", "decision", "proposal", "definition", "recruitment", "experiment", "requirements", "user")
 
 
 def _at(t: datetime | None) -> str | None:
@@ -55,6 +55,11 @@ def queue(user: dict[str, Any], visible_projects: set[int] | None = None) -> lis
                 item("plan", g.id, f"Plan: {g.title}", g.updated_at, f"#/general-manager/{g.project_id}"
                      if g.project_id else f"#/goals/{g.id}", g.project_id, f"goal #{g.id} · iteration {g.iteration}",
                      ("approve",))
+            if (g.checkpoint or {}).get("paused_for") == "clarification" and (
+                    admin or policies.allows(user, "approve_goals", g.project_id)):
+                item("questions", g.id, f"Questions: {g.title}", g.updated_at, f"#/general-manager/{g.project_id}"
+                     if g.project_id else f"#/goals/{g.id}", g.project_id,
+                     f"goal #{g.id} · {len((g.checkpoint or {}).get('questions') or [])} question(s)")
         if not admin:
             return sorted(out, key=lambda x: x["at"] or "", reverse=True)
 

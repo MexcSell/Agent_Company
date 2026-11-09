@@ -147,7 +147,8 @@ feature came from.
   counted figures with the period before, project phase `phase` derived per UI-D-06, live goals, token share, room
   accept rates, finished goals; `static/dashboard.js`); `static/gm.js` (UI-GM: the General Manager page, conversations |
   `projectMain` | context cards from stored records; setting `require_plan_approval` (company or a project's stricter
-  rule) pauses a goal after planning with `paused_for="plan"`: `loop.approve_plan` / `loop.revise_plan`); `static/projtabs.js`
+  rule) pauses a goal after planning with `paused_for="plan"`: `loop.approve_plan` / `loop.revise_plan`; the plan's optional `questions` pause it with
+  `paused_for="clarification"` until `loop.answer_questions`, one round per goal); `static/projtabs.js`
   (UI-PROJ: portfolio at `#/projects`, workspace tabs Overview/Requirements/Tasks/Evaluation/Reports;
   `dashboard.portfolio`, `dashboard.project_tasks` + `board_column`; project fields `target_outcome`,
   `related_project_id`, `team_strategy`); `static/teams.js` (UI-TEAM/UI-AG: Teams & Agents page's Teams tab (rooms +

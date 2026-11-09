@@ -2911,6 +2911,20 @@ def create_app(start_background: bool = True) -> FastAPI:
         _audit(admin, "goal_plan_approve", goal_id, after={"delegated": bool(admin.get("delegated"))})
         return {"ok": True}
 
+    @app.post("/api/goals/{goal_id}/questions/answer")
+    def goal_answer(goal_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(goal_approver)
+                    ) -> dict[str, Any]:
+        """UI-GM-04: answer the General Manager's clarification questions ({"answers": ["...", ...]})."""
+        answers = body.get("answers")
+        if not isinstance(answers, list) or len(answers) > loop.MAX_QUESTIONS:
+            raise HTTPException(400, f"answers: a list of at most {loop.MAX_QUESTIONS} strings")
+        try:
+            loop.answer_questions(goal_id, f"user:{admin['name']}", [str(a) for a in answers])
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+        _audit(admin, "goal_answer", goal_id, after={"answers": [str(a)[:300] for a in answers]})
+        return {"ok": True}
+
     @app.post("/api/goals/{goal_id}/plan/revise")
     def goal_plan_revise(goal_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(goal_approver)
                          ) -> dict[str, Any]:
@@ -4184,6 +4198,8 @@ def _goal_dict(g: Goal) -> dict[str, Any]:
             "estimated_cost_usd": g.estimated_cost_usd or 0.0, "budget_usd": g.budget_usd or 0.0,
             "budget_tokens": g.budget_tokens or 0, "max_active_agents": g.max_active_agents or 0,
             "paused_for": (g.checkpoint or {}).get("paused_for", ""), "requirement_keys": g.requirement_keys or [],
+            "questions": list((g.checkpoint or {}).get("questions") or [])
+            if (g.checkpoint or {}).get("paused_for") == "clarification" else [],  # UI-GM-04
             "kind": g.kind or "", "topic": g.topic or "general", "strategy": dict(g.strategy or {}), "test_strategy": dict(g.test_strategy or {}),
             "deadline": g.deadline.isoformat() if g.deadline else None,
             "created_at": g.created_at.isoformat(), "updated_at": g.updated_at.isoformat()}
