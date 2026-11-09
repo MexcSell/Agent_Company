@@ -173,7 +173,7 @@ const KIND_LABEL = { command: "", plan: "Plan", assignment: "Instruction", resul
 function messageHtml(m, count) {
   const who = (m.author_type === "user" ? esc(m.meta?.author || "You") : m.agent ? esc(m.agent) : "System") + (m.meta?.to ? ` → ${esc(m.meta.to)}` : "");
   const files = (m.attachments || []).map((a) => a.content_type.startsWith("image/") ? `<a href="/api/uploads/${a.id}" target="_blank" rel="noopener"><img src="/api/uploads/${a.id}" alt="${esc(a.name)}" class="thumb"></a>` : `<a href="/api/uploads/${a.id}" target="_blank" rel="noopener">${esc(a.name)}</a>`).join(" ");
-  return `<div class="msg by-${m.author_type} ${m.kind}" data-mid="${m.id}"><div class="msg-head row nowrap"><strong>${who}</strong>${KIND_LABEL[m.kind] ? ` <span class="pill ${m.kind === "error" ? "failed" : m.kind === "result" ? "done" : "info"}">${KIND_LABEL[m.kind]}</span>` : ""}${m.goal_id ? ` <a href="#" data-goal="${m.goal_id}" class="muted">#${m.goal_id}</a>` : ""}${projectSearch && m.topic ? ` <span class="pill">${esc(m.topic)}</span>` : ""}${m.meta?.classification ? ` <span class="pill pending" title="only models cleared for it receive this order">${esc(m.meta.classification)}</span>` : ""}${count > 1 ? ` <span class="pill" title="identical messages collapsed">×${count}</span>` : ""}<span class="muted grow" style="text-align:right">${ago(m.at)}</span><button class="icon-btn" data-copy="${m.id}" title="Copy" aria-label="Copy message">${icon("copy", 14)}</button></div>
+  return `<div class="msg by-${m.author_type} ${m.kind}" data-mid="${m.id}"><div class="msg-head row nowrap"><strong>${who}</strong>${KIND_LABEL[m.kind] ? ` <span class="pill ${m.kind === "error" ? "failed" : m.kind === "result" ? "done" : "info"}">${KIND_LABEL[m.kind]}</span>` : ""}${m.goal_id ? ` <a href="#" data-goal="${m.goal_id}" class="muted">#${m.goal_id}</a>` : ""}${projectSearch && m.topic ? ` <span class="pill">${esc(m.topic)}</span>` : ""}${m.meta?.classification ? ` <span class="pill pending" title="only models cleared for it receive this order">${esc(m.meta.classification)}</span>` : ""}${count > 1 ? ` <span class="pill" title="identical messages collapsed">×${count}</span>` : ""}<span class="muted grow" style="text-align:right">${ago(m.at)}</span>${m.kind === "command" ? `<button class="icon-btn" data-trace="${m.id}" title="What this order led to (goals, requirements, tasks, merge, release)" aria-label="Trace order #${m.id}">${icon("sitemap", 14)}</button>` : ""}<button class="icon-btn" data-copy="${m.id}" title="Copy" aria-label="Copy message">${icon("copy", 14)}</button></div>
     <div class="msg-body">${esc(m.content)}</div>${files ? `<div class="row">${files}</div>` : ""}</div>`;
 }
 
@@ -193,6 +193,28 @@ function renderMessages(append) {
   if (atBottom || !append) box.scrollTop = box.scrollHeight;
   box.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = () => { const m = messageCache.find((x) => x.id === Number(b.dataset.copy)); navigator.clipboard?.writeText(m.content).then(() => toast("Copied"), () => toast("Copy failed")); }));
   box.querySelectorAll("[data-goal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); goalModal(Number(a.dataset.goal)); }));
+  box.querySelectorAll("[data-trace]").forEach((b) => (b.onclick = () => orderTrace(Number(b.dataset.trace))));
+}
+
+// UI-GM-05 (FR-003.7): an order's id and what it led to, from stored records: its goal and follow-ups, their
+// requirements, tasks, decisions, merge and release record.
+async function orderTrace(id) {
+  let t;
+  try { t = await api(`/api/messages/${id}/trace`); } catch (e) { return toast(e.message); }
+  const counts = (o) => Object.entries(o).map(([k, n]) => `${n} ${esc(k)}`).join(" · ") || "no task yet";
+  const dec = (xs) => xs.map((d) => `<span class="pill" title="${esc(d.status)}">decision #${d.id} ${esc(d.topic.slice(0, 60))}</span>`).join(" ");
+  const goal = (g) => `<div class="card" style="margin:6px 0;padding:8px 10px${g.parent_goal_id && g.id !== t.goals[0].id ? ";margin-left:18px" : ""}">
+    <div class="row nowrap"><a href="#" data-tgoal="${g.id}"><strong>#${g.id}</strong></a><span class="grow ellipsis" title="${esc(g.title)}">${esc(g.title)}</span>${pill(g.status)}</div>
+    <div class="gm-kv" style="margin-top:6px"><span class="muted">From</span><span>${g.id === t.goals[0].id ? "this order" : `follow-up of #${g.parent_goal_id} (${esc(g.origin)})`}</span>
+      <span class="muted">Requirements</span><span>${g.requirements.length ? g.requirements.map((k) => `<span class="badge info">${esc(k)}</span>`).join(" ") : '<span class="muted">none linked</span>'}</span>
+      <span class="muted">Tasks</span><span>${counts(g.tasks)}${g.iteration ? ` <span class="muted">(iteration ${g.iteration})</span>` : ""}</span>
+      ${g.decisions.length ? `<span class="muted">Decisions</span><span>${dec(g.decisions)}</span>` : ""}
+      <span class="muted">Merge</span><span>${g.release ? `<code>${esc(g.release.merge_commit.slice(0, 10)) || "–"}</code> by ${esc(g.release.approved_by || "?")} · <a href="#/deliverables">release #${g.release.id}</a> ${pill(g.release.status)}` : '<span class="muted">not merged</span>'}</span></div></div>`;
+  modal(`<h2>${icon("sitemap", 18)} Order #${t.message.id}</h2><p class="muted" style="white-space:pre-wrap;max-height:8em;overflow:auto">${esc(t.message.content)}</p>
+    ${t.decisions.length ? `<p>Recorded: ${dec(t.decisions)}</p>` : ""}
+    ${t.goals.length ? t.goals.map(goal).join("") : '<p class="muted">This order started no goal (a command, only decisions, or the project took no new goals).</p>'}
+    ${t.truncated ? '<p class="muted">The first 50 goals are shown.</p>' : ""}`);
+  document.querySelectorAll("#modal [data-tgoal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); goalModal(Number(a.dataset.tgoal)); }));
 }
 
 // The General Manager as Claude Code in the project's folder (administrators): one panel per project, kept.

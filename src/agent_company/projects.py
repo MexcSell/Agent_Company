@@ -882,12 +882,81 @@ def command(project_id: int, user: dict[str, Any], content: str, attachment_ids:
     gid = loop.create_goal(title, content or title, repo_path=p.path, quality_commands=list(p.quality_commands),
                            created_by=user["id"], project_id=p.id, attachments=files,
                            extract_checks=user["is_admin"], topic=topic, classification=level)
+    with session() as s:  # UI-GM-05: the order names the goal it started
+        s.get(Message, mid).goal_id = gid
     ahead = loop.lane_ahead(gid)
     reply(f"Order received as goal #{gid}. " + (f"It starts when goal #{ahead} of this topic is done."
                                                if ahead else "Planning now."),
           author_type="agent", goal_id=gid, agent_id=p.manager_id)
     loop.enqueue(gid)
     return {"message_id": mid, "goal_id": gid}
+
+
+ORDER_REPLY = "Order received as goal #"
+TRACE_GOALS = 50
+
+
+def _order_goal(s, m: Message) -> int | None:  # noqa: ANN001
+    """The goal an order started: its own link, or (orders before UI-GM-05) the GM's "Order received" reply."""
+    if m.goal_id or m.kind != "command":
+        return m.goal_id
+    lane = (Message.project_id == m.project_id) & (Message.topic == m.topic)
+    nxt = s.scalars(select(Message.id).where(lane, Message.id > m.id, Message.kind == "command")
+                    .order_by(Message.id)).first()  # a reply after the next order answers that one
+    return s.scalars(select(Message.goal_id).where(
+        lane, Message.id > m.id, Message.id < (nxt or m.id + 50), Message.goal_id.is_not(None),
+        Message.content.like(f"{ORDER_REPLY}%")).order_by(Message.id)).first()
+
+
+def trace(message_id: int, user: dict[str, Any]) -> dict[str, Any]:
+    """UI-GM-05 (FR-003.7): what a message led to, from stored records only: the goal it started or belongs to and
+    the follow-up goals spawned from it, each with its requirements, tasks, decisions, merge and release record; and
+    the decisions the message itself recorded (`DECISION:` lines)."""
+    from agent_company.db import Decision, Deliverable, Requirement, RequirementLink
+
+    with session() as s:
+        m = s.get(Message, message_id)
+        if m is None:
+            raise KeyError(message_id)
+        pid = m.project_id
+    get(pid, user)  # the project must be visible to the person
+    with session() as s:
+        m = s.get(Message, message_id)
+        root = _order_goal(s, m)
+        ids: list[int] = []
+        frontier = [root] if root else []
+        while frontier and len(ids) < TRACE_GOALS:  # the goal and its descendants (follow-ups), breadth first
+            ids += frontier
+            frontier = list(s.scalars(select(Goal.id).where(Goal.parent_goal_id.in_(frontier))
+                                      .order_by(Goal.id)))[: TRACE_GOALS - len(ids)]
+        goals = {g.id: g for g in s.scalars(select(Goal).where(Goal.id.in_(ids)))}
+        keys: dict[int, set[str]] = {i: set(goals[i].requirement_keys or []) for i in goals}
+        for gid, key in s.execute(select(RequirementLink.goal_id, Requirement.key)
+                                  .join(Requirement, Requirement.id == RequirementLink.requirement_id)
+                                  .where(RequirementLink.goal_id.in_(ids))):
+            keys[gid].add(key)
+        tasks: dict[int, dict[str, int]] = {}
+        for gid, status, n in s.execute(select(Task.goal_id, Task.status, func.count()).where(Task.goal_id.in_(ids))
+                                        .group_by(Task.goal_id, Task.status)):
+            tasks.setdefault(gid, {})[status] = n
+        decisions: dict[int, list[dict[str, Any]]] = {}
+        for d in s.scalars(select(Decision).where(Decision.goal_id.in_(ids)).order_by(Decision.id)):
+            decisions.setdefault(d.goal_id, []).append({"id": d.id, "topic": d.topic, "status": d.status})
+        releases = {r.goal_id: r for r in s.scalars(select(Deliverable).where(Deliverable.goal_id.in_(ids)))}
+        recorded = [{"id": d.id, "topic": d.topic, "status": d.status}
+                    for d in s.scalars(select(Decision).where(Decision.project_id == pid).order_by(Decision.id))
+                    if any(str(e).startswith(f"message #{m.id} ") for e in d.evidence or [])]
+        out = []
+        for i in ids:
+            g, rel = goals[i], releases.get(i)
+            out.append({"id": g.id, "title": g.title, "status": g.status, "parent_goal_id": g.parent_goal_id,
+                        "origin": g.origin, "iteration": g.iteration, "requirements": sorted(keys[i]),
+                        "tasks": tasks.get(i, {}), "decisions": decisions.get(i, []),
+                        "release": {"id": rel.id, "merge_commit": rel.merge_commit, "status": rel.status,
+                                    "approved_by": rel.approved_by, "at": rel.created_at.isoformat()} if rel else None})
+        return {"message": {"id": m.id, "kind": m.kind, "topic": m.topic, "content": m.content[:2000],
+                            "at": m.created_at.isoformat()}, "project_id": pid, "goals": out, "decisions": recorded,
+                "truncated": len(ids) >= TRACE_GOALS}
 
 
 def status_text(project_id: int, topic: str = GENERAL) -> str:

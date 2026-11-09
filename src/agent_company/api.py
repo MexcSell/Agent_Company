@@ -3591,6 +3591,11 @@ def create_app(start_background: bool = True) -> FastAPI:
         projects.get(project_id, user)
         return projects.messages(project_id, after, limit=100 if q.strip() else 300, topic=topic, q=q)
 
+    @app.get("/api/messages/{message_id}/trace")
+    def message_trace(message_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        """UI-GM-05: the goals, requirements, tasks, decisions, merges and releases a message led to."""
+        return projects.trace(message_id, user)
+
     @app.post("/api/projects/{project_id}/command")
     def project_command(project_id: int, body: CommandBody, user: dict[str, Any] = Depends(current_user)
                         ) -> dict[str, Any]:

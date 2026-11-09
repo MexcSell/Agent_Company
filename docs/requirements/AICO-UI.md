@@ -171,7 +171,7 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
 - **UI-GM-05 Traceability** (FR-003.7): each instruction gets its id (the message id) and links to the goal(s),
   requirements, tasks, merge and deliverable it produced.
 - **UI-GM-06** For admins, the GM's Claude Code panel (WEB-PROJ-09) is a tab of this page ("Console"), unchanged.
-- Status: **partial** (P0-3): `static/gm.js` (route `#/general-manager/:projectId`; the centre reuses
+- Status: **done** (P0-3; questions, New project… and traceability in the follow-ups): `static/gm.js` (route `#/general-manager/:projectId`; the centre reuses
   `projects.js` `projectMain`, so orders, topics, attachments, classification, commands and the admin console are
   the Projects page's own), cards in the right panel from the focused goal's stored records; UI-GM-04 plan approval
   **done** as setting `require_plan_approval` (company, or a project's stricter rule): the goal pauses with
@@ -188,8 +188,12 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   workspace) whose final task ends with `PROPOSAL[new_project]` and its case lines; `GET|POST /api/project-analyses`
   (`run` and `create_projects`, audited) lists a person's analyses with their questions and proposals, and an
   administrator completes the case, creates the project (`projects.decide`, S10-R-01) or rejects it there; a goal's
-  repeated case proposal of one name is stored once (`tests/test_project_analysis.py`). Open: message →
-  requirement/merge links beyond the goal (UI-GM-05).
+  repeated case proposal of one name is stored once (`tests/test_project_analysis.py`). UI-GM-05 (follow-ups): an
+  order message names the goal it started (`Message.goal_id`; older orders through the GM's "Order received as goal
+  #N" reply before the next order); `GET /api/messages/{id}/trace` (`projects.trace`, visible projects) lists that
+  goal and its follow-ups (`parent_goal_id`, at most 50) with requirement keys (the goal's and its requirement links),
+  task counts by status, decisions, merge commit and release record, and the decisions the order itself recorded; each
+  order has a Trace button in the command window (`tests/test_order_trace.py`).
 
 ## 4. Projects and the project workspace (P0)
 
