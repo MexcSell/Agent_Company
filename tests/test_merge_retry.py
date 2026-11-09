@@ -91,3 +91,28 @@ def test_a_failing_record_after_the_merge_does_not_fail_the_goal(monkeypatch):
     gid = loop.create_goal("Merged anyway", quality_commands=["test -f WORKLOG.md"])
     assert loop.run_goal(gid)["status"] == "approved"
     assert goal(gid).status == "approved"
+
+
+def test_a_retry_refused_for_another_reason_stops_and_notifies_once(monkeypatch):
+    from sqlalchemy import select
+
+    from agent_company import decisions
+    from agent_company.db import Notification
+
+    gid = loop.create_goal("Decide later", quality_commands=["test -f WORKLOG.md"])
+    assert loop.run_goal(gid)["status"] == "awaiting_approval"
+    repo = goal(gid).repo_path
+    tracked = dirty(repo)
+    prefs.set_value("auto_merge", True)
+    assert ownerpolicy.on_awaiting_approval(gid)["merged"] is False
+    worktrees.git(repo, "checkout", "--", tracked)
+    monkeypatch.setattr(decisions, "blocking", lambda g: [{"id": 7, "topic": "Database"}])  # a person must decide now
+    assert ownerpolicy.retry_refused() == []
+    assert ownerpolicy.retry_refused() == [], "stopped: not tried again every minute"
+
+    def refusals():
+        with session() as s:
+            return len(s.scalars(select(Notification).where(
+                Notification.title == f"Automatic merge of goal #{gid} refused")).all())
+
+    assert refusals() == 2, "the dirty-tree refusal and the decision, nothing per minute after"

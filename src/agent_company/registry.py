@@ -755,7 +755,7 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
             agent, action = _clone(s, trainee), "cloned"  # the measured agent itself
         elif preferred is not None:
             agent, action = (preferred, "assigned") if preferred in idle else (_clone(s, preferred), "cloned")
-            why = "the project's own manager"
+            why = "the project's own manager" if role == "general_manager" else "chosen by a person (task retry)"
         elif idle:
             listed = _topic_agents(s, g)  # V22: a topic's assigned agents take its goals' work when they are free
             mine = [a for a in idle if a.id in listed or a.parent_id in listed]

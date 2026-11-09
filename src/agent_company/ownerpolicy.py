@@ -189,14 +189,17 @@ def retry_refused() -> list[int]:
         except Exception:  # noqa: BLE001 - a missing repository stays for a person
             continue
         if settings().auto_merge:
-            ok = (on_awaiting_approval(gid) or {}).get("merged")
+            res = on_awaiting_approval(gid) or {}
+            ok, reason = bool(res.get("merged")), str(res.get("reason") or "")
         else:
             try:
                 loop.approve(gid, actor=loop.AUTO_ACTOR)
-                ok = True
-            except Exception as e:  # noqa: BLE001 - approve logged the refusal; it waits for a person
-                log_event("goal", f"merge retry refused: {e}", goal_id=gid)
-                ok = False
+                ok, reason = True, ""
+            except Exception as e:  # noqa: BLE001 - it waits for a person
+                ok, reason = False, str(e) or type(e).__name__
+        if not ok and not any(x in reason for x in TRANSIENT_REFUSAL):
+            # another reason now (a decision, a critical defect): no more retries, one refusal is enough
+            log_event("goal", f"merge retry stopped: {reason}"[:1000], goal_id=gid)
         if ok:
             log_event("goal", "merged on retry: the repository's checkout is clean again", goal_id=gid)
             merged.append(gid)
