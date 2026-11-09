@@ -89,7 +89,10 @@ feature came from.
   daily room budgets over a room's subtree are `Room.daily_budget_usd`, checked with the agent quota in `registry.over_quota`); `ownerpolicy.py` (owner policy, both settings off by default: `auto_approve_proposals`
   approves pending follow-up proposals through `projects.decide(by_human=False, hold=True)`, while project, rule,
   restricted and guard- or budget-limited proposals stay pending and duplicates are rejected; `auto_merge` calls
-  `loop.approve` at awaiting_approval; audited as `policy:auto-approve`/`policy:auto-merge`); `projects.py` (projects with a GitHub URL, filled from the repository's remote (`repo_remote`), stack, skills, rooms, budget, deadline, priority and a lifecycle `set_status`; command window
+  `loop.approve` at awaiting_approval; audited as `policy:auto-approve`/`policy:auto-merge`; `retry_refused`, every
+  minute from the ScheduleThread: a merge refused only because the checkout was dirty or on another branch is tried
+  again once it is clean (auto_merge, or a goal that needed no approval); every merge, with or without approval,
+  records requirements, dependencies and the improvement's deployment through `loop._on_merged`); `projects.py` (projects with a GitHub URL, filled from the repository's remote (`repo_remote`), stack, skills, rooms, budget, deadline, priority and a lifecycle `set_status`; command window
   with topics (conversation lanes, `/summary`, `DECISION:` lines → decision records), proposals (S10-R-01: a
   `PROPOSAL[product]` becomes a project only with its documented case, decided by a person), uploads); `management.py` (milestones, risks and blockers, insights, ranked action items, progress and goal times;
   blockers and generated items are reconciled from goal state by `sync`; a new project GM gets a handover package); `kgraph.py` (SPEC-11 knowledge graph: `kg_edges` written as side effects, the paged neighbourhood API);

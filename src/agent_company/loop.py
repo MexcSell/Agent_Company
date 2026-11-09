@@ -1501,6 +1501,7 @@ def _chat_outcome(goal_id: int, out: dict[str, Any]) -> None:
                   agent_id=None, status=out["status"])
 
 
+AUTO_ACTOR = "auto (no approval required)"
 MERGE_STATE = {"approved": "merged", "awaiting_approval": "waiting for approval to merge"}
 
 
@@ -1692,7 +1693,9 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                         status, note = "awaiting_approval", f"\nThe automatic merge was refused: {e}"
                         log_event("goal", f"automatic merge refused: {e}", goal_id=goal_id)
                 _update_goal(goal_id, status=status, result=_summary(goal_id, iteration, report) + note)
-                if status != "approved" or _record_release(goal_id, _merged_sha(goal_id), "auto (no approval required)"):
+                if status == "approved":
+                    _on_merged(goal_id, _merged_sha(goal_id), AUTO_ACTOR)
+                if status != "approved" or _record_release(goal_id, _merged_sha(goal_id), AUTO_ACTOR):
                     _notify_goal(goal_id, status)
                 if status == "approved":
                     _push(goal_id)
@@ -2312,6 +2315,21 @@ def _record_release(goal_id: int, sha: str, actor: str) -> bool:
         return False
 
 
+def _on_merged(goal_id: int, sha: str, actor: str) -> None:
+    """What every merge records, with or without approval: the improvement's deployment, the requirements it
+    implements and the dependency changes it brought in (S08-R-05). The merge has happened, so a failing record is
+    logged, never raised."""
+    from agent_company import dependencies, selfevolve
+
+    for name, fn in (("selfevolve", lambda: selfevolve.on_merged(goal_id, sha, actor)),
+                     ("requirements", lambda: requirements.on_merged(goal_id, sha)),
+                     ("dependencies", lambda: dependencies.on_merged(goal_id, sha))):
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            log_event("error", f"after merge ({name}): {type(e).__name__}: {e}", goal_id=goal_id)
+
+
 def _push(goal_id: int) -> None:
     from agent_company.gitsync import auto_push
 
@@ -2350,11 +2368,7 @@ def approve(goal_id: int, actor: str = "system") -> dict[str, Any]:
         log_event("goal", f"merge refused: {e}", goal_id=goal_id)
         raise ValueError(str(e)) from e
     _update_goal(goal_id, status="approved", reason=f"merged {sha[:10]}", actor=actor)
-    selfevolve.on_merged(goal_id, sha, actor)
-    requirements.on_merged(goal_id, sha)
-    from agent_company import dependencies
-
-    dependencies.on_merged(goal_id, sha)  # S08-R-05: the dependency changes this merge brought in
+    _on_merged(goal_id, sha, actor)
     from agent_company.projects import post_for_goal
 
     if _record_release(goal_id, sha, actor):  # UI-DEL-01: completion is reported only once the record is stored

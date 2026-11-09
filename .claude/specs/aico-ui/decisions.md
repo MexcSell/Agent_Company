@@ -45,3 +45,12 @@ with the full suite and headless screenshots; later phases are written and check
 - Workflows are read-only: retrying a task inside a running DAG belongs to the loop; the drawer points to the goal.
 - A release record is written after the goal is marked approved (the mission report needs a finished goal) and before
   any completion message or notification; a failure leaves the merge in place and says so.
+
+## Follow-ups (2026-11-09, owner: "all issues are approved")
+- A merge refused because the main checkout had uncommitted changes (or was on another branch) is retried, not
+  merged in another worktree: a dirty checkout means someone is editing it, and merging elsewhere would leave its
+  working files behind the branch head. `ownerpolicy.retry_refused` runs every minute from the ScheduleThread (no new
+  thread) and only touches the goal once the checkout is clean, so a dirty tree causes no repeated refusals.
+- The records after a merge (`selfevolve`, `requirements`, `dependencies`) live in `loop._on_merged`, used by
+  `approve()` and the merge without approval; `_push` stays separate because the two paths push differently. A
+  failing record is logged: the merge has already happened.

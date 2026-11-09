@@ -150,3 +150,54 @@ def on_awaiting_approval(goal_id: int) -> dict[str, Any] | None:
     except Exception as e:  # noqa: BLE001
         log_event("error", f"owner policy merge record: {type(e).__name__}: {e}", goal_id=goal_id)
     return {"merged": True, "merge_commit": sha}
+
+
+TRANSIENT_REFUSAL = ("has uncommitted changes", "switch it to")  # worktrees.merge: the checkout, not the work
+
+
+def retry_refused() -> list[int]:
+    """Merge again the goals whose merge was refused only because the repository's checkout had uncommitted changes
+    or was on another branch, once that checkout is clean and on the base branch: with `auto_merge` through
+    `on_awaiting_approval`, otherwise only goals that needed no approval (their 'automatic merge refused' event).
+    Called every minute by the ScheduleThread; returns the goal ids merged."""
+    from agent_company import loop, worktrees
+    from agent_company.db import Event
+
+    with session() as s:
+        waiting = [(g.id, g.repo_path, g.base_branch, g.origin) for g in s.scalars(
+            select(Goal).where(Goal.status == "awaiting_approval").order_by(Goal.id))]
+        found = []
+        for gid, repo, base, origin in waiting:
+            if origin in ("a2a", "eval") or not repo:
+                continue
+            last = s.scalars(select(Event).where(Event.goal_id == gid, Event.kind == "goal")
+                             .order_by(Event.id.desc()).limit(1)).first()
+            if last is None or "merge refused" not in last.message \
+                    or not any(x in last.message for x in TRANSIENT_REFUSAL):
+                continue
+            auto = s.scalars(select(Event.id).where(Event.goal_id == gid, Event.kind == "goal",
+                                                    Event.message.like("automatic merge refused%"))).first()
+            found.append((gid, repo, base, auto is not None))
+    merged: list[int] = []
+    for gid, repo, base, auto in found:
+        if not (settings().auto_merge or auto):
+            continue
+        try:
+            if worktrees.git(repo, "rev-parse", "--abbrev-ref", "HEAD") != base \
+                    or worktrees.git(repo, "status", "--porcelain", "--untracked-files=no"):
+                continue  # still dirty or switched: try again next minute, without another refusal
+        except Exception:  # noqa: BLE001 - a missing repository stays for a person
+            continue
+        if settings().auto_merge:
+            ok = (on_awaiting_approval(gid) or {}).get("merged")
+        else:
+            try:
+                loop.approve(gid, actor=loop.AUTO_ACTOR)
+                ok = True
+            except Exception as e:  # noqa: BLE001 - approve logged the refusal; it waits for a person
+                log_event("goal", f"merge retry refused: {e}", goal_id=gid)
+                ok = False
+        if ok:
+            log_event("goal", "merged on retry: the repository's checkout is clean again", goal_id=gid)
+            merged.append(gid)
+    return merged

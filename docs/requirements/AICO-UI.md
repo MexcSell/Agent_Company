@@ -281,8 +281,8 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   an error event and a warning notification are written and completion is not reported (no "approved and merged"
   message, no "was merged" notification). `GET /api/deliverables[?project_id]`, `/api/deliverables/{id}`,
   `/download[?what=sbom]`; `static/deliverables.js` (`#/deliverables`); `tests/test_deliverables.py`. No tag is
-  created (the column stays empty). The merge without approval still skips `requirements.on_merged` and
-  `dependencies.on_merged` (existing gap, unchanged).
+  created (the column stays empty). The merge without approval records `requirements.on_merged` and
+  `dependencies.on_merged` too (`loop._on_merged`, `tests/test_merge_retry.py`).
 
 ## 8. Evaluation & QA (P1)
 

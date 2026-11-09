@@ -200,3 +200,9 @@ class ScheduleThread(threading.Thread):
                 tick()
             except Exception as e:  # noqa: BLE001 - one broken schedule must not stop the others
                 log_event("error", f"schedules: {type(e).__name__}: {e}")
+            try:  # a merge refused only for a dirty or switched checkout is tried again once it is clean
+                from agent_company import ownerpolicy
+
+                ownerpolicy.retry_refused()
+            except Exception as e:  # noqa: BLE001
+                log_event("error", f"merge retry: {type(e).__name__}: {e}")
