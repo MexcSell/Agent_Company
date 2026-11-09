@@ -343,6 +343,10 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   versions, org versions, route changes, governance setting versions, merges, self-evolution deploys/rollbacks —
   filter by kind, agent, project, period; each entry links to its diff or record and its restore action where one
   exists. Read from existing tables via a new `GET /api/changes` (admin; paged).
+- Status: **done** (P2): `changes.py` (agent configuration and playbook versions, applied definition rewrites,
+  organisation versions, governance versions, `route_set`/`routes_auto` audit records, release records,
+  self-evolution contracts deployed or rolled back), `GET /api/changes?kind&agent_id&project_id&days&offset&limit`,
+  `static/changes.js` (`#/changes`); `tests/test_changes.py`.
 
 ## 12. Research & Knowledge (P2)
 
@@ -351,6 +355,10 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   recommendation, risks, implementation impact, confidence, limitations, and its claims with citations.
 - **UI-KN-01** Knowledge page: search, filters by scope (company, project, team/room, agent, research, evaluation),
   review queue, contradictions side by side, graph explorer, version history (existing knowledge.js content restyled).
+- Status: **partial** (P2): both pages have the design's page head and counts (Research: requests in progress, reports
+  awaiting review, reports, sources monitored, documents, agents on the rotation; Knowledge: items, approved, waiting
+  for review, contradictions, hypotheses, from research); their existing sections are unchanged below. The report view
+  with the design's section list and the scope filter (company/project/room/agent) are open.
 
 ## 13. Notifications and approvals (P0 for the queue, P1 for the page)
 
@@ -372,6 +380,10 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   Company (name, timezone), Navigation (groups, UI-D-05), Governance (approval policies, autonomy levels G0–G4 shown with
   the PDF p18 names: Observe, Prepare, Execute with limits, Approval required, Restricted), Models & routing (link),
   Tools & integrations (link), Limits & budgets, Knowledge & retention, Notifications, Connection, Metrics.
+- Status: **done** (P2) with the platform's own autonomy names (G0 observe … G4 bounded autonomy, `executors.AUTONOMY`)
+  instead of the PDF's: a section menu (Appearance, Navigation, Connection, Governance & approvals, Limits & budgets,
+  Sandbox & security, Models & executors, Knowledge research & learning, Other, Policy versions, Metrics); each settings
+  key is placed by pattern (`SET_SECTIONS` in admin.js). Company name and timezone are not settings yet (open).
 
 ## 15. Global search (P1)
 

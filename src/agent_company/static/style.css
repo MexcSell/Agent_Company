@@ -898,3 +898,15 @@ button.wf-node:hover { border-color: var(--accent); border-left-color: var(--c);
 .nt-title { margin: var(--space-3) 0 var(--space-2); color: var(--text); text-transform: none; letter-spacing: 0; font-size: var(--fs-section); }
 .nt-appr { gap: var(--space-2); }
 .search-pop { max-height: 70vh; overflow: auto; }
+.ch-list a { color: inherit; } .ch-list a:hover { color: var(--accent); }
+
+/* ---------- Settings sections (AICO UI-SET-01) ---------- */
+.set-page { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: var(--space-3); align-items: start; }
+.set-nav { position: sticky; top: 0; display: flex; flex-direction: column; gap: 2px; padding: var(--space-2); }
+.set-nav a { color: var(--muted); text-decoration: none; padding: var(--space-1) var(--space-2); border-radius: var(--radius-control); font-size: var(--fs-meta); }
+.set-nav a:hover { color: var(--text); background: var(--hover); }
+.set-main { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.set-main > .set-sec > .card { margin-bottom: 0 !important; }
+.set-sec { scroll-margin-top: var(--space-3); }
+@media (max-width: 899px) { .set-page { grid-template-columns: minmax(0, 1fr); } .set-nav { position: static; flex-direction: row; flex-wrap: wrap; } }
+@media (max-width: 699px) { .wf-legend { flex-basis: 100%; } }

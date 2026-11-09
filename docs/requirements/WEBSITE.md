@@ -602,6 +602,13 @@ Tabs: Organisation, Agent network, Tools & MCP, Skills & plugins, Marketplace (a
 - **WEB-SRCH-01** The top bar's search (Ctrl+K) lists pages and projects at once and then, from 2 characters, the
   server's goals, tasks, agents, research reports, knowledge (administrators) and files; Enter opens the selected one.
 
+## 19b. Change History (admins)
+
+- **WEB-HIST-01** `#/changes`: one timeline of agent configuration, playbook and definition changes, organisation
+  versions, governance settings, model routes, merges and self-evolution deploys/rollbacks, newest first, 50 per page;
+  filters kind, agent, project, period (24 h, 7 d, 30 d, a year); each entry links to its page and names where it is
+  restored.
+
 ## 20. Rules that hold everywhere
 
 - **WEB-ALL-01** The server enforces every right; a refused call answers 401 (signs the browser out to the device

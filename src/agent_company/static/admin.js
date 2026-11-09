@@ -101,6 +101,15 @@ function componentsPreview() {
   $("#cmp-drawer").onclick = () => { $("#modal").hidden = true; openDrawer("Example", '<p>A sample drawer: a right-side panel. Close it with ✕ or Escape.</p>', { onClose: componentsPreview }); };
 }
 
+// UI-SET-01: Settings sections, in order; a settings key goes to the first section whose pattern matches it.
+const SET_SECTIONS = [["appearance", "Appearance", null], ["navigation", "Navigation", null], ["connection", "Connection", null],
+  ["governance", "Governance & approvals", /approv|auto_merge|proposal|recruit|qualify|goal_depth|a2a|blocked_commands|task_critic|candidate_smoke|auto_push/],
+  ["limits", "Limits & budgets", /budget|limit|cost|max_|timeout|stuck|quota|iteration|parallel/],
+  ["security", "Sandbox & security", /sandbox|dependency|test_stages|classification|secret/],
+  ["models", "Models & executors", /^enable_|executor|model|router|codex|copilot|claude/],
+  ["knowledge", "Knowledge, research & learning", /retrieval|research|repo_map|rotation|study|learn|knowledge|benchmark|mcp|kpi|inactive|improvement/],
+  ["other", "Other settings", /./], ["versions", "Policy versions", null], ["metrics", "Metrics", null]];
+const SET_AUTONOMY = { G0: "observe: no runs", G1: "recommend: read-only", G2: "low-risk: the goal's worktree and test commands", G3: "approved workflows: G2 and granted MCP tools", G4: "bounded autonomy" };
 async function viewSettings(quiet) {
   if (quiet && $("#s-table")) return;
   const [all, tls, versions, mtok] = await Promise.all([api("/api/settings"), api("/api/tls"), api("/api/policy/versions").catch(() => []), api("/api/metrics/token").catch(() => null)]);
@@ -109,13 +118,18 @@ async function viewSettings(quiet) {
     : r.choices.length ? `<select data-k="${r.key}">${r.choices.map((c) => `<option ${c === r.value ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`
     : r.type === "list" ? `<textarea data-k="${r.key}" rows="2">${esc((r.value || []).join("\n"))}</textarea>`
     : `<input data-k="${r.key}" value="${esc(r.value)}" ${r.type === "str" ? "" : 'type="number" step="any"'}>`;
-  $("#view").innerHTML = appearanceCard() + navCard() + connectionCard(tls, all.find((r) => r.key === "transport")) + `<div class="card"><h2>Settings</h2><p class="muted">Saved settings override <code>.env</code> and apply immediately. Reset returns a setting to its <code>.env</code> value.</p>
-    <div class="table-wrap"><table id="s-table">${rows.map((r) => `<tr><td><strong>${esc(r.key)}</strong><div class="muted">${esc(r.description)}</div></td><td style="min-width:200px">${input(r)}</td><td class="row nowrap">${ib("save", "Save", `data-save="${r.key}"`, "sm primary")}${r.overridden ? ib("refresh", "Reset to the .env value", `data-reset="${r.key}"`, "sm") : ""}</td></tr>`).join("")}</table></div></div>
-    <div class="card"><h2>Policy versions</h2><p class="muted">Every change of a governance setting (approval, budgets, recruitment approval, proposals, command rules, …) is kept as a version with its author. Restoring one is a change of its own. Projects add stricter rules on their edit form.</p>
+  // UI-SET-01: the page in sections with a menu; the settings table is split by what a key governs (SET_SECTIONS)
+  const secOf = (k) => SET_SECTIONS.find(([, , re]) => re && re.test(k))?.[0] || "other";
+  const table = (sec) => { const rs = rows.filter((r) => secOf(r.key) === sec); return rs.length ? `<div class="table-wrap"><table>${rs.map((r) => `<tr><td><strong>${esc(r.key)}</strong><div class="muted">${esc(r.description)}</div></td><td style="min-width:200px">${input(r)}</td><td class="row nowrap">${ib("save", "Save", `data-save="${r.key}"`, "sm")}${r.overridden ? ib("refresh", "Reset to .env", `data-reset="${r.key}"`, "sm") : ""}</td></tr>`).join("")}</table></div>` : '<p class="muted">No setting here.</p>'; };
+  const sections = SET_SECTIONS.filter(([k]) => k !== "appearance" && k !== "navigation" && k !== "connection" && k !== "metrics" && k !== "versions").map(([k, title]) => `<section class="card set-sec" id="set-${k}"><h2>${title}</h2>${k === "governance" ? `<p class="muted">Agents' autonomy levels (set per agent on its card): ${Object.entries(SET_AUTONOMY).map(([g, d]) => `<strong>${g}</strong> ${esc(d)}`).join(" · ")}. A project may only make these rules stricter (Projects → Edit).</p>` : ""}${table(k)}</section>`).join("");
+  $("#view").innerHTML = `<div class="set-page"><nav class="set-nav card" aria-label="Settings sections">${SET_SECTIONS.map(([k, title]) => `<a href="#" data-sec="${k}">${title}</a>`).join("")}</nav><div class="set-main">
+    <section class="set-sec" id="set-appearance">${appearanceCard()}</section><section class="set-sec" id="set-navigation">${navCard()}</section><section class="set-sec" id="set-connection">${connectionCard(tls, all.find((r) => r.key === "transport"))}</section>${sections}<span id="s-table" hidden></span>
+    <section class="set-sec" id="set-versions"><div class="card"><h2>Policy versions</h2><p class="muted">Every change of a governance setting (approval, budgets, recruitment approval, proposals, command rules, …) is kept as a version with its author. Restoring one is a change of its own. Projects add stricter rules on their edit form.</p>
     ${versions.length ? `<div class="table-wrap"><table><tr><th class="num">Version</th><th>Change</th><th>By</th><th>When</th><th></th></tr>${versions.map((v, i) => `<tr><td class="num">${v.version}</td><td>${esc(v.note)}</td><td>${esc(v.author)}</td><td>${ago(v.created_at)}</td><td>${i ? `<button class="btn sm" data-restore="${v.version}">Restore</button>` : '<span class="muted">in force</span>'}</td></tr>`).join("")}</table></div>` : '<p class="muted">No governance setting changed yet.</p>'}</div>
-    ${mtok ? `<div class="card"><h2>Metrics for Prometheus</h2><p class="muted"><code>GET /metrics</code> answers goals, tasks, runs, tool calls, tokens, cost, gate results, open incidents, agents and stops in the Prometheus text format: for an administrator's session, or a scraper sending <code>Authorization: Bearer &lt;token&gt;</code>. The token is shown once; only its hash is kept. No label carries a title, a prompt or a path.</p>
+    ${mtok ? `<div class="card set-sec" id="set-metrics"><h2>Metrics for Prometheus</h2><p class="muted"><code>GET /metrics</code> answers goals, tasks, runs, tool calls, tokens, cost, gate results, open incidents, agents and stops in the Prometheus text format: for an administrator's session, or a scraper sending <code>Authorization: Bearer &lt;token&gt;</code>. The token is shown once; only its hash is kept. No label carries a title, a prompt or a path.</p>
       <div class="row"><span class="grow">${mtok.set ? `Token set (…${esc(mtok.hint)})` : '<span class="muted">No token: only administrators\' sessions can read it.</span>'}</span>
-      <button class="btn sm" id="mt-new">${mtok.set ? "Replace token" : "Create token"}</button>${mtok.set ? '<button class="btn sm danger" id="mt-del">Revoke</button>' : ""}</div></div>` : ""}`;
+      <button class="btn sm" id="mt-new">${mtok.set ? "Replace token" : "Create token"}</button>${mtok.set ? '<button class="btn sm danger" id="mt-del">Revoke</button>' : ""}</div></div>` : ""}</div></div>`;
+  document.querySelectorAll("[data-sec]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); document.getElementById("set-" + a.dataset.sec)?.scrollIntoView({ behavior: "smooth", block: "start" }); }));
   wireNavCard();
   wireAppearanceCard();
   $("#mt-new") && ($("#mt-new").onclick = async () => {

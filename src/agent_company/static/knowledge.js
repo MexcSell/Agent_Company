@@ -84,7 +84,11 @@ async function viewKnowledge() {
     i.status !== "superseded" && i.status !== "quarantined" ? ib("edit", "Write a new version (supersedes this one)", `data-ksup="${i.id}"`, "sm") : "",
     ib("sitemap", "Show its graph", `data-kgraph="knowledge:${i.id}"`, "sm"),
     ib("trash", "Delete the item and its links", `data-kdel="${i.id}"`, "sm danger")].join("");
-  $("#view").innerHTML = `<div class="card"><form id="k-search" class="row"><input id="k-q" class="grow" placeholder="Search the text or a technology…" value="${esc(kState.q)}">
+  const kTile = (ic, v, l) => `<div class="card kpi"><span class="kpi-icon">${icon(ic, 18)}</span><div class="value">${v}</div><div class="label">${l}</div></div>`;
+  // UI-KN-01: page head and counts; search, filters, review queue, contradictions and the graph follow
+  $("#view").innerHTML = `<div class="page-head"><div class="page-head-text"><h2 class="page-title">Knowledge &amp; Memory</h2><p class="muted page-sub">What the company learned, with its provenance: lessons, experience reports, research and imports. A person approves an item before agents use it.</p></div></div>
+    <div class="grid dash-kpis" style="margin-bottom:12px">${kTile("book", items.length, "Items shown")}${kTile("check", items.filter((i) => i.status === "approved").length, "Approved")}${kTile("pause", queue.length, "Waiting for review")}${kTile("emergency", pairs.length, "Contradictions")}${kTile("goals", (hyps || []).length ?? 0, "Hypotheses")}${kTile("research", items.filter((i) => i.outcome === "research").length, "From research")}</div>
+    <div class="card"><form id="k-search" class="row"><input id="k-q" class="grow" placeholder="Search the text or a technology…" value="${esc(kState.q)}">
       <select id="k-status" style="width:auto">${K_STATUSES.map(([v, l]) => `<option value="${v}" ${kState.status === v ? "selected" : ""}>${l}</option>`).join("")}</select>
       <select id="k-kind" style="width:auto">${K_KINDS.map((v) => `<option value="${v}" ${kState.kind === v ? "selected" : ""}>${v || "every kind"}</option>`).join("")}</select><button class="btn">Search</button></form>
       <form id="k-gform" class="row" style="margin-top:6px"><input id="k-gent" class="grow" placeholder="Graph around an entity: agent:3, goal:12, knowledge:5, technology:python, skill:testing…"><button class="btn">Graph</button></form>

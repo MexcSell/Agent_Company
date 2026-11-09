@@ -156,7 +156,8 @@ feature came from.
   Organization Evolution versions; `organization.record_version` keeps table `org_versions` at each structural change,
   `compare_versions`, `restore_version` (rooms only)); `search.py` (UI-SRCH: `GET /api/search`, grouped, visible
   projects only; the top-bar search); `static/notifications.js` (UI-NOTE: tabs, categories from
-  `governance.category`, grouped repeats, detail pane);
+  `governance.category`, grouped repeats, detail pane); `changes.py` (UI-HIST: `GET /api/changes`, the change timeline
+  from the version tables; `static/changes.js`); Settings in sections (`SET_SECTIONS` in admin.js);
   `a2a.py` (G-R-06: the A2A 1.0 agent card and JSON-RPC `SendMessage`/`GetTask`/`ListTasks`/`CancelTask` for
   issued bearer clients (`a2a_clients`, `a2a_tasks`); tasks become `origin="a2a"` goals that always wait for approval);
   `marketplace.py` (REQ-002 agent marketplace: a repository URL or uploaded package fetched as untrusted data into

@@ -1135,6 +1135,14 @@ def create_app(start_background: bool = True) -> FastAPI:
             seen = _visible_project_ids(s, user)
         return company_search.search(user, q, seen)
 
+    @app.get("/api/changes")
+    def changes_list(kind: str = "", agent_id: int | None = None, project_id: int | None = None, days: int = 30,
+                     offset: int = 0, limit: int = 50, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        """UI-HIST-01: the company's change timeline (changes.py), administrators, paged."""
+        from agent_company import changes
+
+        return changes.timeline(kind, agent_id, project_id, days, max(0, offset), limit)
+
     @app.get("/api/projects-portfolio")
     def projects_portfolio(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         """UI-PROJ-01: every project the user may see with phase, progress, team, tasks and last activity."""

@@ -845,7 +845,12 @@ async function shiftHistory() {
 async function viewResearch(quiet) {
   if (quiet && $("#r-crawl")) return; // keep forms and results stable
   const [docs, src, reports] = await Promise.all([api("/api/research/documents"), api("/api/research/sources"), api("/api/research/requests")]);
-  $("#view").innerHTML = `<div class="grid two"><div class="grid">
+  // UI-RES-01: the page head with the three areas' counts — ongoing requests, reports awaiting review, sources
+  const ongoing = reports.filter((r) => ["queued", "running", "pending"].includes(r.status)).length, toReview = reports.filter((r) => r.review === "pending" || r.review === "in_review").length;
+  const tile = (ic, v, l) => `<div class="card kpi"><span class="kpi-icon">${icon(ic, 18)}</span><div class="value">${v}</div><div class="label">${l}</div></div>`;
+  $("#view").innerHTML = `<div class="page-head"><div class="page-head-text"><h2 class="page-title">Research &amp; Intelligence</h2><p class="muted page-sub">Questions for the research room, the sources it watches and the reports it writes; a report is used only after an independent review.</p></div></div>
+    <div class="grid dash-kpis" style="margin-bottom:12px">${tile("research", ongoing, "Requests in progress")}${tile("check", toReview, "Reports awaiting review")}${tile("book", reports.length, "Reports")}${tile("network", src.sources.length, "Sources monitored")}${tile("files", Array.isArray(docs) ? docs.length : (docs.total ?? docs.items?.length ?? 0), "Documents collected")}${tile("agents", src.roster.length, "Agents on the rotation")}</div>
+    <div class="grid two"><div class="grid">
     <div class="card"><h2>Collect a website</h2><form id="r-crawl"><label>URL</label><input id="r-url" type="url" required placeholder="https://docs.crewai.com/">
       <div class="row"><div class="grow"><label>Link depth (0 = this page only)</label><input id="r-depth" type="number" min="0" max="3" value="1"></div><div class="grow"><label>Max pages</label><input id="r-max" type="number" min="1" max="200" value="20"></div></div>
       <div class="row" style="margin-top:10px"><button class="btn primary">Collect</button></div></form><div id="r-out"></div></div>
