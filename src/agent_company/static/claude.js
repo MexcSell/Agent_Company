@@ -994,7 +994,7 @@ window.WSP = window.WSP || {};
       const at = Date.parse(w.resets_at), rest = Math.max(0, (at - now) / 1000);
       const parts = `Input ${fmt.format(w.input_tokens)} · output ${fmt.format(w.output_tokens)} · cache read ${fmt.format(w.cache_read_tokens)} · cache write ${fmt.format(w.cache_write_tokens)} · ${fmt.format(w.messages)} replies`
         + (w.models.length ? `\n${w.models.map((m) => `${m.model}: ${fmtK(m.tokens)} tokens${m.priced ? `, ${money2(m.cost)}` : ", no price"}`).join("\n")}` : "");
-      const when = new Date(at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
+      const when = new Date(at).toLocaleString([], inTz({ weekday: "short", hour: "2-digit", minute: "2-digit" }));
       return `<tr><th>${label}</th><td title="${esc(parts)}"><b>${fmtK(w.tokens)}</b> <span class="muted">tokens</span></td>
         <td title="Cost at API prices${w.unpriced_tokens ? `; ${fmt.format(w.unpriced_tokens)} tokens of models without a price are not counted` : ""}"><b>${money2(w.cost)}</b>${w.unpriced_tokens ? "+" : ""}</td>
         <td title="Resets ${esc(new Date(at).toLocaleString())}">resets ${esc(when)} <span class="muted">· in ${left(rest)}</span></td></tr>`;

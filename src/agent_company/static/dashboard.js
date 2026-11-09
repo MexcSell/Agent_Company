@@ -92,7 +92,7 @@ async function viewDashboard(quiet) {
     };
   }
   const [state, tone, why] = dashCompany(o);
-  const today = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+  const today = new Date().toLocaleDateString(undefined, inTz({ weekday: "long", month: "long", day: "numeric" }));
   dashFill("dash-sub", `${esc(today)} · ${esc(why)}`);
   dashFill("dash-status", `<span class="badge ${tone}">● ${state}</span>`);
   applyStatus?.(o);

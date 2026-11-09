@@ -1067,7 +1067,8 @@ def create_app(start_background: bool = True) -> FastAPI:
                 "usage": usage.summary()["totals"], "unread": governance.unread_count(user),
                 "pending_proposals": proposals, "audit_last": audit_last, "build": static_build(),
                 "stopped": (bool(governance.emergency()) or bool(governance.stops())) if user["is_admin"] else False,
-                "stop_level": governance.stop_level()}  # every user sees the level (S15-R-01), not its scope
+                "stop_level": governance.stop_level(),  # every user sees the level (S15-R-01), not its scope
+                "company": {"name": settings().company_name, "timezone": settings().company_timezone}}  # UI-SET-01
 
     @app.get("/api/approvals")
     def approvals_queue(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:

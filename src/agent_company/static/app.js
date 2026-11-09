@@ -79,7 +79,7 @@ function limitCards(limits) {
   const now = Date.now();
   const card = (l) => {
     const at = Date.parse(l.resets_at || ""), pct = Math.round(l.percent);
-    const when = at ? new Date(at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "";
+    const when = at ? new Date(at).toLocaleString([], inTz({ weekday: "short", hour: "2-digit", minute: "2-digit" })) : "";
     return `<div class="wc-limit" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${esc(l.label)}: ${pct}% used" title="${esc(l.label)}: ${pct}% of the limit used${at ? `\nResets ${esc(new Date(at).toLocaleString())}` : ""}">
       ${limitRing(l.percent, l.severity)}<div><b>${esc(l.label)}</b><div><b>${pct}%</b> <span class="muted">used</span>${LIMIT_SEV[l.severity] ? ` <span class="wc-badge ${esc(l.severity)}">${LIMIT_SEV[l.severity]}</span>` : ""}</div>
       ${at ? `<div class="muted">resets ${esc(when)} · in ${timeLeft(Math.max(0, (at - now) / 1000))}</div>` : ""}</div></div>`;
@@ -179,6 +179,16 @@ function deviceInfo() {
   return { label: `${browser} on ${os}`, userAgent: ua.slice(0, 300), screen: `${screen.width}x${screen.height}`, language: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
 }
 let me = null, pollTimer = null;
+// UI-SET-01: the company's name and timezone (Settings → Company), from /api/overview
+let COMPANY = { name: store.get("ac.company") || "Agent Company", timezone: "" };
+function inTz(opts = {}) { return COMPANY.timezone ? { ...opts, timeZone: COMPANY.timezone } : opts; }
+function applyCompany(c) {
+  if (!c) return;
+  COMPANY = { name: c.name || "Agent Company", timezone: c.timezone || "" };
+  store.set("ac.company", COMPANY.name);
+  const b = document.querySelector(".sb-brand-text strong");
+  if (b && b.textContent !== COMPANY.name) b.textContent = COMPANY.name;
+}
 
 function authScreen(state, message = "") {
   $("#app").hidden = true; const box = $("#auth"); box.hidden = false;
@@ -283,7 +293,7 @@ function renderRail() {
   if (!me) return;
   const g = navGroups(), rail = $("#rail");
   rail.classList.add("sidebar");
-  rail.innerHTML = `<div class="sb-brand"><span class="sb-logo">${icon("network", 20)}</span><div class="sb-brand-text"><strong>Agent Company</strong><span title="Autonomous Engineering Organization">Autonomous Engineering Org.</span></div><button class="sb-collapse" id="sb-collapse" aria-label="Toggle sidebar" title="Collapse or expand the sidebar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button></div><div class="sb-groups">${groupedMarkup(g)}${railEditing ? `<section class="sb-group"><h3>Hidden</h3><div class="sb-items" data-group="hidden">${g.hidden.map(railButton).join("")}</div></section>` : ""}</div>
+  rail.innerHTML = `<div class="sb-brand"><span class="sb-logo">${icon("network", 20)}</span><div class="sb-brand-text"><strong>${esc(COMPANY.name)}</strong><span title="Autonomous Engineering Organization">Autonomous Engineering Org.</span></div><button class="sb-collapse" id="sb-collapse" aria-label="Toggle sidebar" title="Collapse or expand the sidebar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button></div><div class="sb-groups">${groupedMarkup(g)}${railEditing ? `<section class="sb-group"><h3>Hidden</h3><div class="sb-items" data-group="hidden">${g.hidden.map(railButton).join("")}</div></section>` : ""}</div>
     ${me.is_admin ? `<button class="rail-edit" id="rail-edit" title="Edit navigation">${icon(railEditing ? "check" : "grip",18)}</button>` : ""}${sidebarDetails()}
     <div class="sb-bottom">${(g.groups[0]?.items || []).slice(0,4).map(railButton).join("")}<button id="sb-more">More</button></div>`;
   wireSidebar(rail);
@@ -404,7 +414,7 @@ async function updateBadges() {
     if (es) { es.classList.toggle("on", !!o.stopped); es.title = o.stopped ? `A stop is active (${o.stop_level}): open System to see or lift it` : "Emergency stop: stop all autonomous work now"; }
     const sl = $("#stop-level");  // S15-R-01: every user sees that work is stopped, and how widely
     if (sl) { sl.hidden = !o.stop_level; sl.textContent = o.stop_level ? `${o.stop_level} stop` : ""; sl.title = o.stop_level ? `${o.stop_level} stop active (${STOP_SCOPE[o.stop_level]}): autonomous work is ${o.stop_level === "E5" ? "stopped company-wide" : "partly stopped"}` : ""; }
-    applyBadges(); applyStatus(o); setFavicon(o);
+    applyCompany(o.company); applyBadges(); applyStatus(o); setFavicon(o);
   } catch (e) { if (!e.status || e.status >= 502) setFavicon(null); /* else signed out */ }
 }
 // The page each view showed last: painted at once when the user comes back, while the fresh one loads
@@ -796,7 +806,7 @@ async function goalTrace(id) {
   ].filter((r) => r.at).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const by = {};
   t.runs.forEach((r) => { const key = `${r.agent || "?"} · ${r.model || "-"}`; const x = (by[key] ||= { runs: 0, failed: 0, tokens: 0, cost: 0, sec: 0 }); x.runs++; x.failed += r.ok ? 0 : 1; x.tokens += r.tokens; x.cost += r.cost; x.sec += r.duration; });
-  const time = (iso) => new Date(iso + (iso.endsWith("Z") || iso.includes("+") ? "" : "Z")).toLocaleTimeString();
+  const time = (iso) => new Date(iso + (iso.endsWith("Z") || iso.includes("+") ? "" : "Z")).toLocaleTimeString([], inTz());
   $("#goal-detail").innerHTML = `<div class="row" style="padding-right:24px"><button class="btn icon" id="trace-back" title="Back to the goal" aria-label="Back to the goal">${icon("up", 16)}</button><h2 class="grow" style="margin:0">Trace · #${t.goal.id} ${esc(t.goal.title)}</h2>${pill(t.goal.status)}</div>
     <p class="muted">${t.runs.length} run(s) · ${t.gates.length} gate result(s) · ${t.operations.length} operation(s) · ${money(t.runs.reduce((n, r) => n + r.cost, 0))}</p>
     ${Object.keys(by).length ? `<div class="table-wrap"><table><tr><th>Agent · model</th><th class="num">Runs</th><th class="num">Failed</th><th class="num">Tokens</th><th class="num">Seconds</th><th class="num">Cost</th></tr>${Object.entries(by).map(([key, x]) => `<tr><td>${esc(key)}</td><td class="num">${x.runs}</td><td class="num">${x.failed}</td><td class="num">${fmt.format(x.tokens)}</td><td class="num">${x.sec.toFixed(1)}</td><td class="num">${money(x.cost)}</td></tr>`).join("")}</table></div>` : ""}
@@ -992,7 +1002,7 @@ function setFavicon(o) {
   document.querySelector("link[rel=icon]").href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
   const parts = offline ? ["offline"] : [stop && `${stop} stop`, running && `${running} running`, waiting && `${waiting} awaiting approval`,
     unread && `${unread} unread`, audit && `${audit} new in the audit log`].filter(Boolean);
-  document.title = parts.length ? `(${parts.join(" · ")}) Agent Company` : "Agent Company";
+  document.title = parts.length ? `(${parts.join(" · ")}) ${COMPANY.name}` : COMPANY.name;
 }
 
 registerView({ id: "goals", title: "Goals", icon: "goals" }, viewGoals);

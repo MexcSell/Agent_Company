@@ -55,6 +55,8 @@ SCHEMA: dict[str, tuple[type, str]] = {
                                 "row (0 = never)"),
     "stuck_error_limit": (int, "A Claude Code or Codex run ends when the same tool call fails with the same error this "
                                "many times (0 = never)"),
+    "company_name": (str, "The company's name, shown in the sidebar and the browser tab"),
+    "company_timezone": (str, "IANA timezone the dashboard shows dates and times in, e.g. Europe/Berlin (schedules stay UTC)"),
     "candidate_smoke": (bool, "A candidate playbook must pass the smoke suite before it is tried on users' goals"),
     "candidate_repeats": (int, "Repeats per side when a candidate playbook runs the smoke and held-out suites (1-10)"),
     "holdout_suite": (str, "Held-out suite (hidden checks) a candidate playbook must also not lose on after the smoke "
@@ -209,6 +211,20 @@ def _coerce(key: str, value: Any) -> Any:
             raise ValueError(f"{key} must be between {lo:g} and {hi:g}")
     if key in CHOICES and value not in CHOICES[key]:
         raise ValueError(f"{key} must be one of {sorted(CHOICES[key])}")
+    if key == "company_name":
+        value = " ".join(value.split())
+        if not value or len(value) > 64:
+            raise ValueError("company_name: 1-64 characters")
+    if key == "company_timezone":
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        value = value.strip()
+        try:
+            if not value:
+                raise ValueError(value)
+            ZoneInfo(value)
+        except (ValueError, ZoneInfoNotFoundError) as e:
+            raise ValueError(f"company_timezone: {value!r} is not an IANA timezone (e.g. Europe/Berlin)") from e
     if key == "holdout_suite" and not value.strip():
         return ""  # no held-out stage
     if key in ("benchmark_suite", "holdout_suite"):

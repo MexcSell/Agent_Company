@@ -388,7 +388,9 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
 - Status: **done** (P2) with the platform's own autonomy names (G0 observe … G4 bounded autonomy, `executors.AUTONOMY`)
   instead of the PDF's: a section menu (Appearance, Navigation, Connection, Governance & approvals, Limits & budgets,
   Sandbox & security, Models & executors, Knowledge research & learning, Other, Policy versions, Metrics); each settings
-  key is placed by pattern (`SET_SECTIONS` in admin.js). Company name and timezone are not settings yet (open).
+  key is placed by pattern (`SET_SECTIONS` in admin.js). Company section (follow-ups): settings `company_name` (sidebar
+  brand, tab title) and `company_timezone` (IANA, validated; dashboard date and reset times via `inTz` in app.js;
+  schedules stay UTC), sent to every user in `/api/overview` `company`; `tests/test_company_settings.py`.
 
 ## 15. Global search (P1)
 

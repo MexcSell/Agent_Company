@@ -79,6 +79,9 @@ class Settings:
     stuck_repeat_limit: int = 5
     stuck_error_limit: int = 3
     # A candidate playbook must pass the smoke suite before it is tried on users' goals (S13-D-02).
+    # UI-SET-01: the company's name (rail, tab title) and the timezone the dashboard shows dates and times in.
+    company_name: str = "Agent Company"
+    company_timezone: str = "UTC"
     candidate_smoke: bool = True
     # V28: how much evidence a playbook promotion rests on: repeats per side of the smoke trial, a held-out suite
     # (hidden checks) the candidate must also not lose on, the live canary's length and its minimum pass rate (%).
@@ -216,6 +219,8 @@ def load_settings() -> Settings:
         repo_map_chars=_int("REPO_MAP_CHARS", 4000),
         stuck_repeat_limit=_int("STUCK_REPEAT_LIMIT", 5),
         stuck_error_limit=_int("STUCK_ERROR_LIMIT", 3),
+        company_name=os.environ.get("COMPANY_NAME") or "Agent Company",
+        company_timezone=os.environ.get("COMPANY_TIMEZONE") or "UTC",
         candidate_smoke=_bool("CANDIDATE_SMOKE", True),
         candidate_repeats=_int("CANDIDATE_REPEATS", 2),
         holdout_suite=os.environ.get("HOLDOUT_SUITE", "python-final"),
