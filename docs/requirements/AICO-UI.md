@@ -362,8 +362,12 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   review queue, contradictions side by side, graph explorer, version history (existing knowledge.js content restyled).
 - Status: **partial** (P2): both pages have the design's page head and counts (Research: requests in progress, reports
   awaiting review, reports, sources monitored, documents, agents on the rotation; Knowledge: items, approved, waiting
-  for review, contradictions, hypotheses, from research); their existing sections are unchanged below. The report view
-  with the design's section list and the scope filter (company/project/room/agent) are open.
+  for review, contradictions, hypotheses, from research); their existing sections are unchanged below. Report sections
+  (follow-ups): `research.REPORT_INSTRUCTIONS` asks for the design's sections (Objective, Scope, Findings, Comparison,
+  Recommendation, Risks, Implementation impact, Confidence, Gaps, Limitations, Sources), `_approved_text` keeps them in
+  that order (empty ones dropped), `report_dict.sections` lists those present and the report view shows them as an
+  index beside the claims with citations (`tests/test_research_review.py`). Open: the Knowledge scope filter
+  (company/project/room/agent).
 
 ## 13. Notifications and approvals (P0 for the queue, P1 for the page)
 

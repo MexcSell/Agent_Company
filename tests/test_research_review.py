@@ -233,3 +233,20 @@ def test_the_api_lets_an_administrator_decide_a_waiting_report(monkeypatch):
         out = app.post(f"/api/research/requests/{rid}/review", json={"approve": True}).json()
         assert out["review"] == "approved" and out["reviewed_by"] == "user:admin"
         assert app.post("/api/research/requests/999/review", json={"approve": True}).status_code == 404
+
+
+def test_ui_res_01_the_design_sections_are_asked_for_kept_and_listed():
+    from agent_company import research
+    from agent_company.db import ResearchReport, now
+
+    for name in research.REPORT_SECTIONS:
+        assert f"## {name}" in research.REPORT_INSTRUCTIONS
+    text = ("## Objective\nPick a queue.\n## Scope\nOnly Python libraries.\n## Findings\n1. A is fast [1] \"fast\"\n"
+            "## Comparison\nnone\n## Risks\nA is young.\n## Implementation impact\nOne module changes.\n"
+            "## Confidence\nmedium: two sources.\n## Sources\n[1] A - https://a.example - docs")
+    r = ResearchReport(question="Which queue?", report=text, review="draft", sources=[], claims=[], created_at=now())
+    assert research.report_dict(r)["sections"] == ["Objective", "Scope", "Findings", "Risks",
+                                                   "Implementation impact", "Confidence", "Sources"]
+    out = research._approved_text(r, [], 0, "qa")
+    assert out.index("## Scope") < out.index("## Findings") < out.index("## Risks") < out.index("## Sources")
+    assert "## Comparison" not in out, "an empty section is not carried over"

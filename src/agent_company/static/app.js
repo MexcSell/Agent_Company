@@ -937,6 +937,7 @@ function reportToolSteps(steps) {
   return `<details${rows.length <= 6 ? " open" : ""}><summary>Tool steps (${rows.length})</summary><div class="events">${rows.join("")}</div></details>`;
 }
 
+const REPORT_SECTIONS = ["Objective", "Scope", "Findings", "Comparison", "Recommendation", "Risks", "Implementation impact", "Confidence", "Gaps", "Limitations", "Sources"];  // research.REPORT_SECTIONS
 function reportModal(r) {
   const langs = r.languages || [];
   const meta = [r.keywords.length ? `keywords: ${esc(r.keywords.join(", "))}` : "", r.source_preferences !== "any" ? `prefers ${esc(r.source_preferences.replace("_", " "))} sources` : "", r.published_after || r.published_before ? `published ${esc(r.published_after || "…")}..${esc(r.published_before || "…")}` : "", langs.length ? `languages: ${esc(langs.join(", "))}` : "", `priority ${esc(r.priority)}`, r.recurring ? `${esc(r.recurring)}, ${r.runs} run(s)${r.next_run_at ? `, next ${esc(new Date(r.next_run_at).toLocaleString())}` : ""}` : "", r.deadline ? `deadline ${esc(new Date(r.deadline).toLocaleString())}` : "", r.budget_usd ? `${money(r.cost_usd)} of ${money(r.budget_usd)}` : "", r.goal_id ? `for goal #${Number(r.goal_id)}` : ""].filter(Boolean).join(" · ");
@@ -945,7 +946,9 @@ function reportModal(r) {
   const text = r.review === "approved" ? r.approved_report : r.report;
   const label = r.review && r.review !== "approved" ? `<p class="muted">Draft: not used by knowledge, search or goals${r.approved_report ? " (an earlier approved version is)" : ""}.</p>` : "";
   const act = me.is_admin && ["draft", "in_review"].includes(r.review) ? `<div class="row" style="margin:8px 0"><button class="btn primary" id="rr-ok">Approve</button><button class="btn danger" id="rr-no">Reject</button></div>` : "";
-  modal(`<h2>${esc(r.question)}</h2>${pill(r.status)}<p class="muted">${meta}</p>${review}${act}${claims}${reportToolSteps(r.tool_steps)}${label}<div class="md">${typeof renderMarkdown === "function" ? renderMarkdown(text || "(not ready yet)") : `<pre>${esc(text)}</pre>`}</div>`);
+  // UI-RES-01: the design's sections, those the report lacks greyed out
+  const secs = (r.sections && r.report) ? `<div class="row wrap" aria-label="Report sections">${REPORT_SECTIONS.map((n) => `<span class="badge ${r.sections.includes(n) ? "ok" : "neutral"}" title="${r.sections.includes(n) ? "in the report" : "not in the report"}">${esc(n)}</span>`).join("")}</div>` : "";
+  modal(`<h2>${esc(r.question)}</h2>${pill(r.status)}<p class="muted">${meta}</p>${review}${act}${secs}${claims}${reportToolSteps(r.tool_steps)}${label}<div class="md">${typeof renderMarkdown === "function" ? renderMarkdown(text || "(not ready yet)") : `<pre>${esc(text)}</pre>`}</div>`);
   const send = async (approve) => {
     const note = approve ? "" : prompt("Why is this report rejected?");
     if (!approve && !note) return;
