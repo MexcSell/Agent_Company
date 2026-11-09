@@ -29,9 +29,12 @@ async function viewOrg(quiet) {
   const showRetired = store.get("ac.retired") === "1";
   const agents = all.filter((a) => showRetired || a.lifecycle !== "retired");
   const retired = all.length - all.filter((a) => a.lifecycle !== "retired").length;
+  const clones = all.filter((a) => a.parent_id && a.lifecycle !== "retired");
+  const manage = me.is_admin || me.permissions?.manage_agents;
   const attention = health.degraded.length || health.inactive.length ? `<button type="button" class="btn sm" id="a-attn" title="Degraded agents and agents idle long enough to review for retirement">${health.degraded.length ? `${health.degraded.length} degraded` : ""}${health.degraded.length && health.inactive.length ? " · " : ""}${health.inactive.length ? `${health.inactive.length} inactive` : ""}</button>` : "";
   $("#ag-tools").innerHTML = `${attention}<span class="muted">${agents.length} agents · ${all.filter((a) => a.status === "busy").length} working</span>
     ${retired ? `<label class="row" style="margin:0"><input type="checkbox" id="a-retired" style="width:auto" ${showRetired ? "checked" : ""}> retired (${retired})</label>` : ""}
+    ${manage && clones.length ? ib("merge", `Merge clones into their originals (${clones.length})`, 'id="a-merge-all"') : ""}
     ${me.is_admin ? ib("sitemap", "Rooms: hierarchy, leads, switches, position history and export", 'id="a-rooms"') : ""}
     ${me.is_admin ? ib("user_add", "Add an agent", 'id="a-new"', "primary") : ""}`;
   const byId = new Map(agents.map((a) => [a.id, a])), kids = new Map();
@@ -60,6 +63,30 @@ async function viewOrg(quiet) {
   $("#a-new") && ($("#a-new").onclick = () => newAgentForm(rooms, all));
   $("#a-rooms") && ($("#a-rooms").onclick = () => roomsModal());
   $("#a-attn") && ($("#a-attn").onclick = () => attentionModal(health));
+  $("#a-merge-all") && ($("#a-merge-all").onclick = () => mergeClonesModal(all));
+}
+
+// Clones fold their experience (XP, task counts, skills, lessons) into their original and retire; a busy clone waits.
+function mergeClonesModal(all) {
+  const names = new Map(all.map((a) => [a.id, a.name])), groups = new Map();
+  all.filter((a) => a.parent_id && a.lifecycle !== "retired").forEach((a) => { if (!groups.has(a.parent_id)) groups.set(a.parent_id, []); groups.get(a.parent_id).push(a); });
+  const row = (a) => `<label class="row nowrap" style="margin:4px 0"><input type="checkbox" data-mc="${a.id}" style="width:auto" ${a.status === "busy" ? "disabled" : "checked"}><span class="grow">${esc(a.name)}</span><span class="muted">${a.status === "busy" ? "busy, merge later" : `${a.tasks_done} done · L${a.level}`}</span></label>`;
+  modal(`<h2>${icon("merge", 18)} Merge clones</h2><p class="muted">Each selected clone's XP, task counts, skills and lessons go to its original; the clone is retired and keeps its history.</p>
+    ${[...groups].map(([pid, cs]) => `<h3>Into ${esc(names.get(pid) || `#${pid}`)}</h3>${cs.map(row).join("")}`).join("")}
+    <div class="row" style="margin-top:12px">${ib("merge", "Merge the selected clones", 'id="mc-go"', "primary")}</div>`);
+  $("#mc-go").onclick = async () => {
+    const ids = [...document.querySelectorAll("[data-mc]:checked")].map((c) => Number(c.dataset.mc));
+    if (!ids.length) return toast("No clone selected");
+    $("#mc-go").disabled = true;
+    let merged = 0;
+    const failed = [];
+    for (const id of ids) {
+      try { await api(`/api/agents/${id}/merge`, { method: "POST" }); merged++; } catch (e) { failed.push(`${names.get(id)}: ${e.message}`); }
+    }
+    toast(`${merged} clone(s) merged${failed.length ? ` · ${failed.length} skipped (${failed.join("; ")})` : ""}`);
+    $("#modal").hidden = true;
+    viewAgents();
+  };
 }
 
 function attentionModal(h) {
