@@ -756,6 +756,10 @@ def advance_insight(insight_id: int, status: str, actor: str, decision: str = ""
         log_event("insight", f"insight #{i.id} {status} by {actor}", goal_id=i.goal_id, s=s, insight_id=i.id)
         out = insight_dict(i, dict(s.execute(select(Agent.id, Agent.name)).all()))
     if out["proposal_id"]:
+        if settings().auto_approve_proposals:  # owner policy: a follow-up from an insight, after the session
+            from agent_company import ownerpolicy
+
+            ownerpolicy.approve_pending(ids=[out["proposal_id"]])
         sync(out["project_id"])
     return out
 

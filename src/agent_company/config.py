@@ -42,9 +42,11 @@ class Settings:
     # Proposals agents raise: "user" waits for an administrator, "superiors" lets the GM decide.
     proposal_policy: str = "user"
     max_proposal_goals: int = 3  # goals one goal may spawn through approved proposals
+    rule_proposal_min_goals: int = 3  # failed goals with one RCA cause before a project rule is proposed (EL-R-04)
     goal_budget_usd: float = 0.0  # 0 = no limit
     goal_time_budget: int = 0  # seconds, 0 = no limit
     goal_token_budget: int = 0  # model tokens per goal, 0 = no limit (S04-R-09)
+    writing_daily_tokens_per_user: int = 0  # writing-assistant tokens per user and UTC day, 0 = no limit (S04-R-09)
     goal_agent_limit: int = 0  # agents working on one goal at once, 0 = no limit (S04-R-09)
     auto_push: bool = False
     allow_preexisting_failures: bool = False
@@ -94,6 +96,11 @@ class Settings:
     # A new recruit of a writing role first runs an eval suite as a candidate (SPEC-03 S03-R-04); off by default: it
     # costs model calls, and the offline simulator fails the smoke suite on purpose.
     qualify_recruits: bool = False
+    # EL-R-06: a critic of another model family reviews each writing task's diff before its dependants start
+    task_critic: bool = False
+    # Owner policy (ownerpolicy.py): follow-up proposals approved and passing goals merged without a person's click
+    auto_approve_proposals: bool = False
+    auto_merge: bool = False
     # Verified self-evolution (selfevolve.py): a candidate is accepted when its weighted benchmark score beats the
     # baseline by this many percent and no metric is worse by more than `improvement_max_regression` percent.
     improvement_min_score: float = 2.0
@@ -177,9 +184,11 @@ def load_settings() -> Settings:
         quality_commands=commands,
         proposal_policy=(os.environ.get("PROPOSAL_POLICY") or "user").lower(),
         max_proposal_goals=_int("MAX_PROPOSAL_GOALS", 3),
+        rule_proposal_min_goals=_int("RULE_PROPOSAL_MIN_GOALS", 3),
         goal_budget_usd=float(os.environ.get("GOAL_BUDGET_USD") or 0),
         goal_time_budget=_int("GOAL_TIME_BUDGET", 0),
         goal_token_budget=_int("GOAL_TOKEN_BUDGET", 0),
+        writing_daily_tokens_per_user=_int("WRITING_DAILY_TOKENS_PER_USER", 0),
         goal_agent_limit=_int("GOAL_AGENT_LIMIT", 0),
         auto_push=_bool("AUTO_PUSH", False),
         allow_preexisting_failures=_bool("ALLOW_PREEXISTING_FAILURES", False),
@@ -209,6 +218,9 @@ def load_settings() -> Settings:
         explore_rate=float(os.environ.get("EXPLORE_RATE") or 0.1),
         recruit_requires_approval=(os.environ.get("RECRUIT_REQUIRES_APPROVAL") or "never").lower(),
         qualify_recruits=_bool("QUALIFY_RECRUITS", False),
+        task_critic=_bool("TASK_CRITIC", False),
+        auto_approve_proposals=_bool("AUTO_APPROVE_PROPOSALS", False),
+        auto_merge=_bool("AUTO_MERGE", False),
         improvement_min_score=float(os.environ.get("IMPROVEMENT_MIN_SCORE") or 2),
         improvement_max_regression=_int("IMPROVEMENT_MAX_REGRESSION", 25),
         improvement_auto_rollback=_bool("IMPROVEMENT_AUTO_ROLLBACK", True),

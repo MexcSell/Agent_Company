@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from agent_company import governance, registry, router, usage
+from agent_company import governance, org, registry, router, usage
 from agent_company.api import create_app
 from agent_company.db import Agent, AgentVersion, ModelEntry, Notification, Route, now, session
 
@@ -183,7 +183,7 @@ def test_agent_version_api():
         assert app.patch(f"/api/agents/{aid}", json={"model_pref": "Nope"}).status_code == 400
         versions = app.get(f"/api/agents/{aid}/config-versions").json()
         assert versions[0]["version"] == v + 1
-        assert app.post(f"/api/agents/{aid}/rollback?version={v}").json()["plugins"] == []
+        assert app.post(f"/api/agents/{aid}/rollback?version={v}").json()["plugins"] == list(org.KITS["developer"])
         assert app.post(f"/api/agents/{aid}/rollback?version=999").status_code == 404
         _fail(aid, 3)
         h = app.get("/api/agents/health").json()

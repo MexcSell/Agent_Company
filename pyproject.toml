@@ -24,7 +24,10 @@ postgres = ["psycopg[binary]>=3.2"]
 agent-company = "agent_company.__main__:main"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "pip-audit>=2.9.0",
+    "pytest>=8",
+]
 
 [build-system]
 requires = ["hatchling"]

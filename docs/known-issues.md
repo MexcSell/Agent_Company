@@ -135,3 +135,86 @@ Status: **open** (not solved), **mitigated** (worked around, risk remains), **fi
 | Q2 | Quota days are UTC days. A goal paused for a quota resumes on the goal queue's watcher (every 5 s, server only), not from the CLI. | by design |
 | Q3 | Only the base agent's quota counts; a quota set on a clone is ignored (clones take their base's limits). | by design |
 | Q4 | Costs come from the model catalog's prices; runs on models without a price (Claude Code on a subscription, the simulator) cost $0 and never use a quota. | open (quotas need priced models) |
+
+## Added 2026-11-08 (verification phase 1, model registration)
+
+See `docs/verification/phase-1-models.md`.
+
+| # | Problem | Status |
+|---|---------|--------|
+| V1 | OpenAI's per-minute 429 ("Rate limit reached for <model> ... try again in 1.2s") matched `LIMIT_RE`, so one burst benched the model for 60 minutes as if its quota were used up. | fixed (`(?<!rate )` in `LIMIT_RE`; a used-up quota still benches it) |
+| V2 | Deleting a model left routes escalating to it (`Route.escalation`); resolution skipped the name, but the Routes table still showed a model that no longer exists. | fixed (`delete_model` clears it) |
+| V3 | A model Test was not audited, though it sends a request at the provider's cost. | fixed (`model_test` audit record) |
+| V4 | Deleting a model leaves agents whose own model (`model_pref`) named it; they fall back to their role's route ("not in catalog" in the run's reason), and the agent card still names the removed model. | open (low) |
+| V5 | A Test run from the CLI without `prefs.load()` sees none of the DB settings (`enable_claude_code`, `enable_codex`), refuses every CLI model and stores that refusal as the model's status. | open (low; use the Models page or load prefs first) |
+| V6 | Five catalog API models (four Claude, OpenRouter Free router) have no key on this host; they show as unavailable and have never passed a Test. | open (configuration) |
+
+## Added 2026-11-08 (verification phase 2, model routing)
+
+See `docs/verification/phase-2-routing.md`. Each run now records `Run.trace` (assigned model, model run, model ID,
+provider, address, why, the model the provider reported); `router.trace_issues` names disagreements.
+
+| # | Problem | Status |
+|---|---------|--------|
+| V7 | With no fallback and the only assigned model disabled or keyless, the offline simulator does the work. That is the documented design, but phase 2's rule allows only configured fallbacks. The trace records it (`provider: offline`) and `trace_issues` flags it. | open (owner to decide) |
+| V8 | Codex and Copilot runs do not report which model answered (`served` empty; Codex's `model_id` is empty when it uses the account's default). | open (low) |
+| V9 | Every model with a base URL reports provider `local`; the trace's `base_url` tells two such servers apart. | by design |
+| V10 | A routing model (`openrouter/openrouter/free`, `openrouter/auto`) answers as whichever model it picked, so `trace_issues` reports "the provider answered as X, not free" on every run. The flag is kept on purpose (the model that served is still not the one named). | open (decide when such a model gets a key) |
+
+## Added 2026-11-08 (verification phase 3, individual agents)
+
+See `docs/verification/phase-3-agents.md`. Seven agents ran alone on their role tasks (live runs 2101–2114); results
+were graded by running their code, counting seeded defects and validating plans, not by their own claims.
+
+| # | Problem | Status |
+|---|---------|--------|
+| V11 | A `command` acceptance condition without `run` (`{"type": "command", "value": "pytest"}`) ran `true` and passed whatever the work was. | fixed (`contracts.Condition` refuses it; the planner is asked again) |
+| V12 | Codex's own web tools (`web_search`, the ChatGPT apps server's `search_service.web_run`, browser and computer use) were on in every Codex run: the security and UI/UX agents (no `network`) searched the web, and the research lead used them instead of the platform's tools, then cited a document that did not exist. | fixed (`executors.CODEX_NO_WEB` on every `CodexExecutor` run; live rerun: research used `fetch_url`, UI/UX no web) |
+| V13 | Codex's read-only sandbox runs any program for an agent without `shell` (`python3 -c`, as uid 0) and reads outside the worktree; writes and network are blocked. Codex reads files through these commands. | open (threat-model known gap; move a `read`-only agent to Claude Code, or decide how Codex should run it) |
+| V14 | Claude Code's `acceptEdits` (writing runs) auto-approves file commands in the worktree (`rm -r __pycache__`) and read-only commands (`git log`, `cat`) outside the run's allow-list; `Run.tools` understates what the run could do. | open (low; bounded to the worktree) |
+| V15 | The GM's own model `claude_37` is benched until Nov 11; the GM runs on its role route (Claude Code) and `trace_issues` flags every run as a substitution without a configured fallback. | open (owner: clear the GM's `model_pref` or give it fallbacks) |
+| V16 | The research tool loop shows its planner only the first 400 characters of each document (`research_agent._material_text`): navigation text on sqlite.org, so it re-fetched the same pages and judged them "partial headers" (31,624 characters were stored). | open (low) |
+
+## Added 2026-11-09 (verification phase 4, agent communication)
+
+See `docs/verification/phase-4-communication.md`. The GM delegated to the developer through the real loop, offline
+(two stub providers, 19 cases) and live (goal #330: GM → developer → QA, 130 s, a handoff message delivered).
+
+| # | Problem | Status |
+|---|---------|--------|
+| V17 | A task did not record its sender (the planner's id stayed only in the goal's checkpoint, overwritten each iteration) or its creation time. | fixed (`Task.planned_by`, `Task.created_at`; shown in the goal trace) |
+| V18 | An agent message to a role that does not exist was stored and never delivered; a `MESSAGE` line with an unknown kind was ignored. Nobody learnt either went nowhere. | fixed (each is an event in the goal's log naming the sender and the line; the misaddressed one is not stored) |
+| V19 | `run_goal` checked "queued" and changed the status later: a goal handed out twice at once ran twice and the second run failed it (IllegalTransition). | fixed (`loop._claim`: one conditional UPDATE takes the goal) |
+| V20 | The GM's acceptance commands (`python3 -B -m pytest`, `python3 -B -c`) were outside the developer's and QA's allow-lists; both ran plain `pytest`, leaving `__pycache__/` in the worktree. The gate runs the exact commands in L3. | fixed in phase 5 (`executors.PYTEST_FORMS`: `python3 [-B] -m pytest` allowed; `python3 -B -c` stays refused) |
+
+## Added 2026-11-09 (verification phase 5, project registration)
+
+See `docs/verification/phase-5-projects.md`. TEST-PROJECT-001/002 through the API: stored, reopened, updated,
+isolated (users, goals, messages, files); offline only.
+
+| # | Problem | Status |
+|---|---------|--------|
+| V21 | A project's General Manager (`Project.manager_id`) did not plan its goals: the best-ranked GM did. | fixed (`registry.staff(prefer=…)`; `loop._plan`, `_configure` and `rca` pass the project's manager) |
+| V22 | A topic's agent list (the plan's "assigned developer/QA") is shown but staffing ignores it; workers come from the project's rooms, and every core agent is in `development`. | open (owner: should a listed agent constrain staffing?) |
+
+## Added 2026-11-09 (verification phase 6, project task execution)
+
+See `docs/verification/phase-6-execution.md`. TEST-PROJECT-003 (project #2, archived) on this server: the order through
+the command window, goal #332 (architect → developer → QA, 682 s), a working calculator in its repository.
+
+| # | Problem | Status |
+|---|---------|--------|
+| V23 | A project's description (its registered requirements) reached no agent; the planner got stack, rooms, deadline, priority, budget and formal requirements only. | fixed (`loop._project_context`: "Description (as registered)") |
+| V24 | Task stages had no transition table: a late worker moved a cancelled task on (goal #111, task 691: cancelled → review → failed). | fixed (`workflow.TASK_TRANSITIONS`; `completed`/`cancelled` final; illegal moves refused and logged) |
+| V25 | A goal run in a process that ends while a background thread works on it stays `planning` until the next server restart: the phase 4/6 live scripts left smoke-trial eval goals #331 and #333 (cancelled by hand). | open (low; the live scripts no longer start smoke trials; a fix records the owning process on the goal) |
+
+## Added 2026-11-09 (verification phases 7 and 8, quality and evolution)
+
+See `docs/verification/phase-7-quality.md` and `phase-8-evolution.md`. Live: this server's QA passed a correct
+delivery and failed a buggy and an incomplete one (goals #334–#336), naming each defect; the gate agreed.
+
+| # | Problem | Status |
+|---|---------|--------|
+| V26 | A cross-family review depends on the routes: QA's own model and the developer's route are both Claude Code, so developer and QA run on the same family (runs 2125/2126). | open (owner: Models → Routes → Assign models, or a `qa` route of another family) |
+| V27 | Playbook experiments dropped the suite's S09-R-05 dimensions (compliance, tokens, tool failures) that route and template experiments keep. | fixed (`evolution.smoke_trial` stores `dimensions` per side) |
+| V28 | Playbook promotions rest on a 3-task smoke suite with 1 repeat, no held-out set, and a 3-task live canary; #16 was promoted on 1/3 live. | open (owner: suite size, repeats, a hidden final set; costs model time) |

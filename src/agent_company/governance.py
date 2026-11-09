@@ -351,7 +351,8 @@ def lift(level: str, scope: str | int, actor: str) -> dict[str, Any]:
 
 INCIDENT_CATEGORIES = ["unauthorized_access", "credential_compromise", "prompt_injection", "data_leakage",
                        "malicious_code", "privilege_escalation", "agent_compromise", "supply_chain",
-                       "audit_manipulation", "unauthorized_deployment", "policy_violation"]
+                       "audit_manipulation", "unauthorized_deployment", "policy_violation",
+                       "infrastructure"]  # the host failed the work (the L3 sandbox did not start), not an agent
 INCIDENT_FLOW = ["open", "contained", "investigating", "remediated", "closed"]
 SEVERITIES = ["SEV-1", "SEV-2", "SEV-3", "SEV-4"]
 

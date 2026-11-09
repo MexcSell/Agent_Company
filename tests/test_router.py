@@ -1,4 +1,5 @@
 import httpx
+import pytest
 
 from agent_company import router, usage
 from agent_company.config import reset_settings
@@ -286,6 +287,28 @@ def test_openrouter_key_status_and_codex_limits(tmp_path):
     assert "no plan limits" in router.codex_limits(tmp_path / "none")["detail"]
 
 
+def test_codex_status_reads_the_models_own_sign_in(monkeypatch, tmp_path):
+    """A Test of a Codex model with its own account stores that account's plan windows, not the server's ~/.codex."""
+    import json
+    import time
+
+    def write(home, plan, pct):
+        day = home / "sessions" / "2026" / "11" / "08"
+        day.mkdir(parents=True)
+        rl = {"primary": {"used_percent": pct, "window_minutes": 300, "resets_at": time.time() + 3600},
+              "secondary": None, "plan_type": plan}
+        (day / "rollout-x.jsonl").write_text(json.dumps({"type": "event_msg", "payload": {"type": "token_count",
+                                                                                           "rate_limits": rl}}) + "\n")
+
+    write(tmp_path / "host", "plus", 40.0)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "host"))
+    write(router.codex_home("acct"), "free", 5.0)
+    own = router.provider_status(router.Choice("Own", "codex", "", "test", account="acct"))
+    host = router.provider_status(router.Choice("Host", "codex", "", "test"))
+    assert own["plan"] == "free" and own["limits"][0]["used_percent"] == 5.0
+    assert host["plan"] == "plus" and host["limits"][0]["used_percent"] == 40.0
+
+
 def test_model_info_shows_status_cli_account_and_usage_windows(monkeypatch, tmp_path):
     import base64
     import json
@@ -341,3 +364,39 @@ def test_a_refused_key_reads_plainly():
     client = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(401, json={"error": "no"})))
     st = router.provider_status(router.Choice("m", "llm", "openrouter/x/y", ""), "sk-bad", client)
     assert st == {"source": "error", "detail": "usage not available: the key was refused (HTTP 401)"}
+
+
+def test_auto_routes_assign_models_usable_now(monkeypatch):
+    """Assign models: the strongest leads, a mid model reviews, the cheapest collects; a limited model only
+    comes last among the fallbacks, and with no usable model nothing changes."""
+    before = router.list_routes()
+    with pytest.raises(ValueError, match="no model is usable"):
+        router.auto_routes()
+    assert router.list_routes() == before
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    plan = router.auto_routes()
+    assert plan["architect"]["model"] == "Claude Fable 5.1" and plan["architect"]["escalation"] == ""
+    assert plan["qa"]["model"] == "Claude Sonnet 5.5" and plan["qa"]["escalation"] == "Claude Fable 5.1"
+    assert plan["research"]["model"] == plan["sales"]["model"] == "Claude Haiku 5.5"
+    assert router.list_routes()["qa"] == "Claude Sonnet 5.5"
+    assert router.list_fallbacks()["qa"] == plan["qa"]["fallback"] and "Claude Sonnet 5.5" not in plan["qa"]["fallback"]
+    router.mark_limited("Claude Fable 5.1", "You've hit your session limit · resets 9:50pm")
+    plan = router.auto_routes()
+    assert plan["general_manager"]["model"] == "Claude Opus 5.5"
+    assert plan["general_manager"]["fallback"][-1] == "Claude Fable 5.1"
+    assert all(p["model"] != "Claude Fable 5.1" for p in plan.values())
+
+
+def test_auto_routes_review_in_another_family(monkeypatch):
+    from agent_company.db import ModelEntry, session
+
+    monkeypatch.setenv("ENABLE_CLAUDE_CODE", "1")
+    monkeypatch.setenv("ENABLE_CODEX", "1")
+    reset_settings()
+    monkeypatch.setattr(router.shutil, "which", lambda name: f"/usr/bin/{name}")
+    with session() as s:
+        for m in s.query(ModelEntry).filter(ModelEntry.kind == "llm"):
+            m.enabled = False
+    plan = router.plan_routes()
+    assert plan["developer"]["model"] == "Claude Code" and plan["qa"]["model"] == "Codex CLI"
+    assert plan["qa"]["escalation"] == "Claude Code"

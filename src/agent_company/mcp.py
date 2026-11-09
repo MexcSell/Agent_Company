@@ -13,6 +13,8 @@ Taken from AXoR (/home/thomas/subnet-scout, backend/app/mcp_hub.py), reduced to 
   ticks it again: a server can change what an allowed tool says or takes without the name changing. `McpThread`
   re-tests every enabled server each `mcp_revalidate_hours`.
 - Grants (`mcp_grants`): a server open to `everyone` is offered to every agent; otherwise only to granted agents.
+  A new server (also one from the catalog) is open to no agent until an administrator grants agents or ticks
+  'every agent'.
 - Runtime: `claude_config(agent_id)` is the `--mcp-config` JSON for Claude Code (granted, enabled, tested
   servers only, with their allowed tools as `mcp__<slug>__<tool>` names). `call()` runs one tool and is
   written to `mcp_calls`, as every call from the dashboard is.
@@ -275,6 +277,10 @@ CATALOG: list[dict[str, Any]] = [
     {"key": "database", "name": "Database (read-only)", "transport": "stdio", "command": "python", "args": ["database.py"],
      "allow": "all", "about": "Read-only SQL on PostgreSQL or an SQLite file: tables, columns, SELECT queries. Bundled (from AXoR).",
      "fields": [{"part": "env", "key": "DATABASE_URL", "label": "Database URL (postgresql://… or sqlite:////path.db)"}]},
+    {"key": "bridge", "name": "Company bridge", "transport": "stdio", "command": "python", "args": ["bridge.py"],
+     "allow": "all", "fields": [],
+     "about": "The company's own tools for a running agent: its task, progress, insights, review requests. "
+              "Scoped to the run's goal and task by a per-run token. Bundled; grant it per agent (EL-R-09)."},
 ]
 CATALOG_BY_KEY = {c["key"]: c for c in CATALOG}
 

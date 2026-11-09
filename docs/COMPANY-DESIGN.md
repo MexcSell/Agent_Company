@@ -47,7 +47,7 @@ whole company, not only the code agents.
 | Competent developers (Architect, Backend Developer, QA) | Claude Code | Codex CLI | Claude Code |
 | Auxiliary Developer (Codex) | Codex CLI (its own choice on its card) | — | Claude Code: a task the assistant failed is retried by the competent developer |
 | Research Lead | Codex CLI (route `research`) | claude_37, then Claude Code | Claude Code |
-| Reviewers of another agent's work | another family when one is usable (EL-R-03): Claude reviews Codex and the other way round in the research room; code reviews in the goal loop use only API models of another family until QA receives the gate's test output (goal 93) | | |
+| Reviewers of another agent's work | another family when one is usable (EL-R-03): Claude reviews Codex and the other way round in the research room; code reviews in the goal loop use only API models of another family until QA receives the gate's test output (goal 112) | | |
 | GitHub Copilot | registered kind `copilot`; not installed on this host | | |
 
 The research lead calls its model through the router, gets a JSON plan back and carries it out with its own tools
@@ -80,7 +80,7 @@ screen serves the structure above:
 | Evolution, Performance, Knowledge | Evolution Engine | none |
 | Research | the research room; a report now carries its `tool_steps` | show the steps on the report (part of the goal below) |
 | Workspace, Machines, Security, System | administrator's tools | none |
-| **Company map** (new) | one picture of §1–§3: the engine line with each room's agents, each agent's model and fallbacks as badges, the live goals with the lifecycle step they are in | queued as a goal |
+| **Company map** (new) | one picture of §1–§3: the engine line with each room's agents, each agent's model and fallbacks as badges, the live goals with the lifecycle step they are in | done (`static/companymap.js`, goal 101) |
 
 The Company map is a read-only view built from existing endpoints (`/api/rooms`, `/api/agents`, `/api/models`
 routes and fallbacks, running goals); no new data. It replaces nothing.

@@ -874,13 +874,18 @@ class Monitor(threading.Thread):
 # --- §7 agent score ----------------------------------------------------------------------------------------
 
 # Weights depend on the agent's purpose (§7): research favours quality, coding correctness and reliability.
+_W_RESEARCH = {"completion": 2, "quality": 4, "reliability": 1, "efficiency": 1, "latency": 0.5, "cost": 1}
+_W_CODING = {"completion": 3, "quality": 4, "reliability": 2, "efficiency": 1.5, "latency": 0.5, "cost": 0.5}
+_W_REVIEW = {"completion": 3, "quality": 3, "reliability": 3, "efficiency": 1, "latency": 0.5, "cost": 0.5}
+_W_PLANNING = {"completion": 2, "quality": 4, "reliability": 2, "efficiency": 2, "latency": 0.5, "cost": 1}
+_W_DEFAULT = {"completion": 3, "quality": 3, "reliability": 2, "efficiency": 1, "latency": 0.5, "cost": 0.5}
 ROLE_WEIGHTS: dict[str, dict[str, float]] = {
-    "default": {"completion": 3, "quality": 3, "reliability": 2, "efficiency": 1, "latency": 0.5, "cost": 0.5},
-    "researcher": {"completion": 2, "quality": 4, "reliability": 1, "efficiency": 1, "latency": 0.5, "cost": 1},
-    "developer": {"completion": 3, "quality": 4, "reliability": 2, "efficiency": 1.5, "latency": 0.5, "cost": 0.5},
-    "qa": {"completion": 3, "quality": 3, "reliability": 3, "efficiency": 1, "latency": 0.5, "cost": 0.5},
-    "general_manager": {"completion": 2, "quality": 4, "reliability": 2, "efficiency": 2, "latency": 0.5,
-                        "cost": 1},
+    "default": _W_DEFAULT,
+    **dict.fromkeys(("research", "external_data", "analyst", "comprehensive_analyst", "student"), _W_RESEARCH),
+    **dict.fromkeys(("developer", "frontend", "devops", "tech_scout"), _W_CODING),
+    **dict.fromkeys(("qa", "security", "network_security", "security_guard", "tech_introducer"), _W_REVIEW),
+    **dict.fromkeys(("general_manager", "architect"), _W_PLANNING),
+    **dict.fromkeys(("administrator", "agent_manager", "instructor", "product", "sales"), _W_DEFAULT),
 }
 
 

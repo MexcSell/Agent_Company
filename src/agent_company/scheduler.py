@@ -4,7 +4,11 @@ Tasks are persisted (`tasks` table). `run_dag` runs one iteration's tasks: a tas
 starts once all its dependencies are done, ready tasks start lowest `priority`
 first, at most `max_parallel` run at once (process-wide), and tasks that write
 files take the worktree's write lock so two writers never edit one tree at once.
-A failed task skips everything that depends on it.
+A failed task skips everything that depends on it, except a review: a review
+(`quality.REVIEW_ROLES`) waits until all its dependencies finished and runs on
+partial work when at least one is done; it is skipped only when none is done.
+A contract's `after` keys set order only: the task waits until they finished,
+whatever their outcome, and is never skipped because of them.
 """
 
 from __future__ import annotations
@@ -77,9 +81,12 @@ def run_dag(task_ids: list[int], worker: Callable[[int], bool], worktree: str,
             cancelled: Callable[[], bool] = lambda: False, max_agents: int = 0) -> dict[int, str]:
     """Run tasks respecting dependencies. `worker(task_id)` returns True on success. `max_agents` (> 0) caps
     how many of these tasks, each staffed by one agent, run at once (the goal's budget, S04-R-09)."""
+    from agent_company.quality import REVIEW_ROLES
+
     with session() as s:
         rows = list(s.scalars(select(Task).where(Task.id.in_(task_ids))))
-        tasks = {t.id: (t.key, list(t.depends_on), t.priority, t.writes) for t in rows}
+        tasks = {t.id: (t.key, list(t.depends_on), t.priority, t.writes,
+                        list((t.contract or {}).get("after") or []), t.role in REVIEW_ROLES) for t in rows}
         # a resumed iteration (S04-R-05): tasks that finished before the restart keep their result
         state: dict[int, str] = {t.id: t.status if t.status in {"done", "failed", "skipped"} else "queued"
                                  for t in rows}
@@ -89,6 +96,29 @@ def run_dag(task_ids: list[int], worker: Callable[[int], bool], worktree: str,
 
     def deps_of(tid: int) -> list[int]:
         return [by_key[k] for k in tasks[tid][1] if k in by_key]
+
+    def afters_of(tid: int) -> list[int]:
+        return [by_key[k] for k in tasks[tid][4] if k in by_key]
+
+    fin = {"done", "failed", "skipped"}
+
+    def partial_review(tid: int) -> bool:
+        return tasks[tid][5] and bool(deps_of(tid))
+
+    def skip_reason(tid: int) -> str:
+        dep_states = [state[d] for d in deps_of(tid)]
+        if partial_review(tid):
+            if all(x in fin for x in dep_states) and "done" not in dep_states:
+                return "skipped: every dependency failed or was skipped"
+        elif any(x in {"failed", "skipped"} for x in dep_states):
+            return "skipped: a dependency failed"
+        return ""
+
+    def is_ready(tid: int) -> bool:
+        dep_states = [state[d] for d in deps_of(tid)]
+        deps_ok = (all(x in fin for x in dep_states) and "done" in dep_states if partial_review(tid)
+                   else all(x == "done" for x in dep_states))
+        return deps_ok and all(state[a] in fin for a in afters_of(tid))
 
     def run_one(tid: int) -> bool:
         with slots:
@@ -104,17 +134,16 @@ def run_dag(task_ids: list[int], worker: Callable[[int], bool], worktree: str,
             for tid, st in state.items():
                 if st != "queued":
                     continue
-                dep_states = [state[d] for d in deps_of(tid)]
-                if any(x in {"failed", "skipped"} for x in dep_states):
+                reason = skip_reason(tid)
+                if reason:
                     state[tid] = "skipped"
-                    set_status(tid, "skipped", output="skipped: a dependency failed")
+                    set_status(tid, "skipped", output=reason)
             if cancelled():
                 for tid, st in state.items():
                     if st == "queued":
                         state[tid] = "skipped"
                         set_status(tid, "skipped", output="skipped: goal cancelled")
-            ready = sorted((tid for tid, st in state.items() if st == "queued"
-                            and all(state[d] == "done" for d in deps_of(tid))),
+            ready = sorted((tid for tid, st in state.items() if st == "queued" and is_ready(tid)),
                            key=lambda t: (tasks[t][2], t))
             for tid in ready[:max(0, cap - len(running))]:
                 state[tid] = "running"

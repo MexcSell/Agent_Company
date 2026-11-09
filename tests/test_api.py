@@ -103,6 +103,7 @@ def test_models_and_dashboard(app):
     assert r.status_code == 200 and r.json()["available"] is False
     assert app.put("/api/routes/qa", json={"model_name": "Local Qwen"}).status_code == 200
     assert app.put("/api/routes/qa", json={"model_name": "nope"}).status_code == 400
+    assert "no model is usable" in app.post("/api/routes/auto").json()["detail"], "Assign models needs a usable one"
     assert app.patch(f"/api/models/{r.json()['id']}", json={"name": "Claude Code"}).status_code == 400
     assert app.patch(f"/api/models/{r.json()['id']}", json={"name": "Qwen"}).json()["name"] == "Qwen"
     assert app.get("/api/models").json()["routes"]["qa"] == "Qwen"

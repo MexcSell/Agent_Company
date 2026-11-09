@@ -965,6 +965,8 @@ def set_case(proposal_id: int, kind: str | None = None, case: dict[str, Any] | N
             raise KeyError(proposal_id)
         if p.status != "pending":
             raise ValueError(f"proposal is already {p.status}")
+        if p.kind == "rule":
+            raise ValueError("a rule proposal has no documented case")
         if kind is not None:
             if kind not in PROPOSAL_KINDS:
                 raise ValueError(f"kind must be one of {', '.join(PROPOSAL_KINDS)}")
@@ -1015,6 +1017,38 @@ def _to_project(proposal_id: int, decided_by: str) -> dict[str, Any]:
     return out
 
 
+def _to_rule(proposal_id: int, decided_by: str) -> dict[str, Any]:
+    """EL-R-04: an approved rule proposal becomes an enabled catalog rule, which `catalog.export_claude` (and `gm
+    configure`) write to .claude/rules/<name>.md. Called after the checks in `decide`, outside any session."""
+    from agent_company import catalog
+
+    with session() as s:
+        p = s.get(Proposal, proposal_id)
+        description, case = p.description, dict(p.case or {})
+    cause = case.get("cause") or {}
+    goals = ", ".join(f"#{g}" for g in case.get("goals") or [])
+    line = case.get("rule") or description.splitlines()[0]
+    args = dict(description=f"From RCA: {cause.get('layer', '')}/{cause.get('check', '')} in goals {goals}",
+                content=f"- {line}\n\nEvidence: {description}", source=f"proposal:{proposal_id}",
+                created_by=decided_by)
+    name = case.get("name") or f"rca-rule-{proposal_id}"
+    try:
+        item = catalog.add("rule", name, **args)
+    except ValueError:  # the name exists (another project's proposal for the same cause)
+        item = catalog.add("rule", f"{name[:56]}-{proposal_id}", **args)
+    with session() as s:
+        p = s.get(Proposal, proposal_id)
+        p.status, p.decided_by = "approved", decided_by
+        p.case = {**case, "catalog_id": item["id"], "name": item["name"]}  # a new dict: in-place changes are lost
+        out = proposal_dict(p, dict(s.execute(select(Agent.id, Agent.name)).all()))
+    if out["project_id"]:
+        post(out["project_id"], f"Proposal approved by {decided_by}: rule '{item['name']}' added to the catalog.",
+             kind="proposal")
+    log_event("proposal", f"proposal {proposal_id} approved by {decided_by} as catalog rule '{item['name']}'",
+              goal_id=out["goal_id"])
+    return out
+
+
 def list_proposals(user: dict[str, Any], status: str = "") -> list[dict[str, Any]]:
     with session() as s:
         names = dict(s.execute(select(Agent.id, Agent.name)).all())
@@ -1035,6 +1069,24 @@ def _root(s, goal: Goal) -> Goal:  # noqa: ANN001
             break
         goal = parent
     return goal
+
+
+def _eval_source(s, goal: Goal | None) -> Goal | None:  # noqa: ANN001
+    """Find the nearest benchmark ancestor, or recognise a legacy eval workspace."""
+    origin, seen = goal, set()
+    while goal is not None and goal.id not in seen:
+        seen.add(goal.id)
+        if goal.origin == "eval":
+            return goal
+        goal = s.get(Goal, goal.parent_goal_id) if goal.parent_goal_id else None
+    if origin is not None and origin.repo_path:
+        try:
+            relative = Path(origin.repo_path).resolve().relative_to(settings().workspaces_dir.resolve())
+            if relative.parts and relative.parts[0].startswith("eval-"):
+                return origin
+        except (ValueError, OSError):
+            pass
+    return None
 
 
 def _spawned_from(s, root_id: int) -> int:  # noqa: ANN001
@@ -1072,10 +1124,24 @@ def restricted(title: str, description: str = "") -> bool:
     return bool(RESTRICTED.search(f"{title}\n{description}"))
 
 
-def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = True) -> dict[str, Any]:
+def chain_block(s, origin: Goal | None) -> str | None:  # noqa: ANN001
+    """Why the goal-chain guards refuse another goal spawned from `origin`'s family, or None."""
+    if origin is None:
+        return None
+    limit = settings().max_proposal_goals
+    if _spawned_from(s, _root(s, origin).id) >= limit:
+        return f"limit of {limit} proposal goals reached"
+    if _depth(s, origin) >= settings().max_goal_depth:
+        return f"goal chain depth {settings().max_goal_depth} reached"  # S04-R-08
+    return None
+
+
+def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = True,
+           hold: bool = False) -> dict[str, Any]:
     """Approve (spawning a goal, within the loop guards) or reject a proposal. An agent (`by_human=False`)
     cannot approve a restricted proposal. A product or project proposal (S10-R-01) is approved only by a person and
-    only with its documented case complete; it becomes a project, not a goal."""
+    only with its documented case complete; it becomes a project, not a goal. `hold` (the owner policy): an approval
+    the chain guards or the parent's budget refuse leaves the proposal pending, with the reason in 'held'."""
     from agent_company import loop
 
     spawn: dict[str, Any] | None = None
@@ -1087,7 +1153,6 @@ def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = Tr
             raise ValueError(f"proposal is already {p.status}")
         origin = s.get(Goal, p.goal_id)
         note = ""
-        limit = settings().max_proposal_goals
         if approve and not by_human and restricted(p.title, p.description):
             raise PermissionError("this proposal touches authority, budgets or safety controls: a person decides it")
         kind = p.kind or "follow_up"
@@ -1102,15 +1167,38 @@ def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = Tr
             if s.scalars(select(Project.id).where(func.lower(Project.name) == name.lower())).first():
                 raise ValueError(f"a project named '{name}' exists; rename the proposal's title first")
             kind = "project"
-        if kind == "project":  # the goal-chain guards limit spawned goals; a project is a person's own decision
+        if approve and kind == "rule" and not by_human:  # EL-R-04: the catalog rule reaches every agent
+            raise PermissionError("a project rule changes every agent's instructions: a person decides it")
+        if kind in ("project", "rule"):  # the goal-chain guards limit spawned goals; neither spawns one
             pass
-        elif approve and origin is not None and _spawned_from(s, _root(s, origin).id) >= limit:
-            approve, note = False, f" (limit of {limit} proposal goals reached)"
-        elif approve and origin is not None and _depth(s, origin) >= settings().max_goal_depth:
-            approve, note = False, f" (goal chain depth {settings().max_goal_depth} reached)"  # S04-R-08
-        if kind != "project":
+        elif approve and (blocked := chain_block(s, origin)):
+            if hold:  # stays pending: no status, no decider, no rejection post
+                return {**proposal_dict(p, dict(s.execute(select(Agent.id, Agent.name)).all())), "held": blocked}
+            approve, note = False, f" ({blocked})"
+        if kind != "project" and not (kind == "rule" and approve):
             p.status, p.decided_by = ("approved" if approve else "rejected"), decided_by + note
-        if approve and kind != "project":
+        if kind == "rule":
+            pass
+        elif approve and kind != "project" and (src := _eval_source(s, origin)) is not None:
+            # Benchmark descendants also belong to the platform (2026-11-08: 21 descendant goals,
+            # e.g. #178, #180, #185, inherited eval seed repos). Keep chain guards above this branch.
+            plat = s.scalars(select(Project).where(Project.protected).order_by(Project.id)).first()
+            from agent_company.config import REPO_ROOT
+
+            if src is not origin:
+                context = f"goal #{origin.id}, which descends from benchmark goal #{src.id}"
+            elif src.origin == "eval":
+                context = f"benchmark goal #{origin.id}, which ran in a scratch repository"
+            else:
+                context = f"goal #{origin.id}, which ran in the scratch repository {origin.repo_path}"
+            spawn = {"title": p.title,
+                     "description": f"{p.description or p.title}\n\n(Raised by an agent during {context}; "
+                                    "the change belongs to the Agent Company platform.)",
+                     "repo": (plat.path if plat and plat.path else str(REPO_ROOT)),
+                     "checks": list(plat.quality_commands or []) if plat else [],
+                     "project_id": plat.id if plat else None, "parent": None, "created_by": origin.created_by,
+                     "topic": GENERAL, "classification": ""}
+        elif approve and kind != "project":
             spawn = {"title": p.title, "description": p.description or p.title,
                      "repo": origin.repo_path if origin else "",
                      "checks": list(origin.quality_commands) if origin else [], "project_id": p.project_id,
@@ -1120,6 +1208,8 @@ def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = Tr
         out = proposal_dict(p, dict(s.execute(select(Agent.id, Agent.name)).all()))
     if kind == "project":
         return _to_project(proposal_id, decided_by)
+    if kind == "rule" and approve:
+        return _to_rule(proposal_id, decided_by)
     if spawn is not None:
         try:
             gid = loop.create_goal(spawn["title"], spawn["description"], spawn["repo"],
@@ -1129,8 +1219,14 @@ def decide(proposal_id: int, approve: bool, decided_by: str, by_human: bool = Tr
         except ValueError as e:  # e.g. the parent goal's budget is used (S04-R-09): recorded, not turned into a goal
             with session() as s:
                 p = s.get(Proposal, proposal_id)
-                p.status, p.decided_by = "rejected", f"{p.decided_by} ({e})"[:128]
+                if hold:  # the owner policy leaves it for a person
+                    p.status, p.decided_by = "pending", ""  # the column's undecided value (not nullable)
+                else:
+                    p.status, p.decided_by = "rejected", f"{p.decided_by} ({e})"[:128]
                 out = proposal_dict(p, dict(s.execute(select(Agent.id, Agent.name)).all()))
+            if hold:
+                log_event("proposal", f"proposal {proposal_id} stays pending: {e}", goal_id=out["goal_id"])
+                return {**out, "held": str(e)}
             log_event("proposal", f"proposal {proposal_id} not turned into a goal: {e}", goal_id=out["goal_id"])
             return out
         with session() as s:
@@ -1157,17 +1253,24 @@ def settle_proposals(goal_id: int, only: list[int] | None = None) -> None:
             select(Proposal).where(Proposal.goal_id == goal_id, Proposal.status == "pending"))
             if only is None or p.id in only]
         projects_ = {p.id for p in s.scalars(select(Proposal).where(Proposal.goal_id == goal_id,
-                                                                     Proposal.kind.in_(CASE_KINDS)))}
+                                                                     Proposal.kind.in_((*CASE_KINDS, "rule"))))}
+        rules = {p.id for p in s.scalars(select(Proposal).where(Proposal.goal_id == goal_id, Proposal.kind == "rule"))}
         g = s.get(Goal, goal_id)
         gm = s.scalars(select(Agent).where(Agent.role == "general_manager", Agent.parent_id.is_(None))).first()
         goal_title = g.title if g else ""
     if not pending:
         return
+    if settings().auto_approve_proposals:  # owner policy: held ones are posted and notified there
+        from agent_company import ownerpolicy
+
+        ownerpolicy.approve_pending(goal_id, ids=[x[0] for x in pending])
+        return
     if settings().proposal_policy == "superiors" and gm is not None:  # the GM decides only unrestricted ones
         human = [x for x in pending if restricted(x[1], x[2]) or x[0] in projects_]
         pending = [x for x in pending if x not in human]
         for pid, title, why in human:
-            reason = "a new product or project" if pid in projects_ else "it touches authority or safety controls"
+            reason = ("a project rule" if pid in rules else "a new product or project" if pid in projects_
+                      else "it touches authority or safety controls")
             post_for_goal(goal_id, f"Proposal (needs a person: {reason}): {title}"
                           + (f"\n{why}" if why else ""), kind="proposal", proposal_id=pid)
         if human:

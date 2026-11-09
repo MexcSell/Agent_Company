@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import itertools
 import json
@@ -25,11 +26,11 @@ from typing import Any
 
 from sqlalchemy import select
 
-from agent_company import (adr, blackboard, budgets, contracts, decisions, executors, learning, network, quality,
+from agent_company import (adr, blackboard, bridge, budgets, contracts, decisions, executors, learning, network, quality,
                            rca, recruitment, registry, requirements, research, router, sandbox, specs, strategies,
                            teams, teststrategy, usage, workflow, worktrees)
 from agent_company.config import settings
-from agent_company.db import Agent, Event, Goal, Task, log_event, session
+from agent_company.db import Agent, Event, Goal, Task, event_iteration, log_event, session
 from agent_company.org import ROLES
 
 OUTPUT_CAP = 6000
@@ -279,7 +280,7 @@ def _stopped_result(why: str) -> tuple[executors.Result, router.Choice]:
 def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | None = None,
              goal_id: int | None = None, escalate: bool = False,
              avoid_provider: str | None = None, timeout: int | None = None,
-             deadline: float | None = None) -> tuple[executors.Result, router.Choice]:
+             deadline: float | None = None, other_cli: bool = False) -> tuple[executors.Result, router.Choice]:
     """Run the request on the role's best model. Transient errors are retried with backoff; then the next
     model in the chain is tried. Nothing starts while an emergency stop covers the agent, its room, its
     goal's project or the executor (S14-R-01). `timeout` caps one run (the task's deadline); `deadline` is
@@ -303,8 +304,9 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
     req.permissions, req.autonomy = list(agent.permissions or []), agent.autonomy or ""  # the tool gateway's inputs
     try:  # only models cleared for the goal's classification (S14-R-05)
         # a code review on another family's CLI cannot run the tests yet (Codex's read-only sandbox writes nothing,
-        # not even uv's cache; goal 93 hands QA the gate's own output): until then an API model of another family
-        chain = router.resolve_chain(agent.role, pref, escalate, avoid_provider, level, other_cli=False)
+        # not even uv's cache; goal 112 hands QA the gate's own output): until then an API model of another family;
+        # a diff critic runs no tests, so it may be another family's CLI (`other_cli`, EL-R-03/EL-R-06)
+        chain = router.resolve_chain(agent.role, pref, escalate, avoid_provider, level, other_cli=other_cli)
     except router.NotCleared as e:
         log_event("security", f"{agent.name}: {e}", goal_id=goal_id, agent_id=agent.id, classification=level)
         return (executors.Result(text="", ok=False, error=str(e)),
@@ -315,7 +317,12 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
         return (executors.Result(text="", ok=False, error=f"usage limit: {limited[:500]}"),
                 router.Choice(name="(usage limit)", kind="offline", model_id="", reason=limited))
     if req.workdir is None:  # CLI agents only run inside a worktree
-        chain = [c for c in chain if c.kind not in executors.CLI_KINDS]
+        if not req.writes and any(c.kind in executors.CLI_KINDS for c in chain):
+            # a request that changes nothing (a lesson, a study visit) is answered read-only in a scratch folder,
+            # as router.run does: with only CLI models usable the simulator would otherwise stand in for them
+            req.workdir = router.scratch_dir(agent.role)
+        else:
+            chain = [c for c in chain if c.kind not in executors.CLI_KINDS]
     if chain and chain[0].kind != "offline":
         # The simulator stands in only when no real model is usable. Once a real model is tried,
         # its failure must stand: placeholder work must never pass the gate in place of real work.
@@ -340,7 +347,13 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
         fresh_session_tried = False
         attempt = 0
         while True:
-            res = executors.for_choice(choice, run_timeout).run(req)
+            # EL-R-09: a fresh bridge token per attempt (a task run only), revoked when the attempt ends
+            token = bridge.attach(req, purpose, goal_id, task_id, agent.id)
+            try:
+                res = executors.for_choice(choice, run_timeout).run(req)
+            finally:
+                if token:
+                    bridge.revoke(token)
             usage.record(model_name=choice.name, kind=choice.kind, input_tokens=res.input_tokens,
                          output_tokens=res.output_tokens, cost=res.cost, duration=res.duration, ok=res.ok,
                          error=res.error, task_id=task_id, agent_id=agent.id, purpose=purpose, goal_id=goal_id,
@@ -526,7 +539,11 @@ Optional task fields: "in_scope"/"out_of_scope" (path globs; changing an out_of_
 acceptance condition may also carry "requirement_keys": the requirements that test checks, and "stage":
 "unit|integration|security|static": the quality gate then runs it again as a check of that stage),
 "decision_topic": "..." (tasks that must each recommend on one question; disagreements are reviewed),
-"weight": 1 (its share of the goal's progress), "estimated_minutes": 20 (how long you expect the task to take).
+"weight": 1 (its share of the goal's progress), "estimated_minutes": 20 (how long you expect the task to take),
+"after": ["key"] (order only: start once those tasks finished, whatever their outcome; never in depends_on too),
+"requires": [{"type": "file_exists", "path": "..."} | {"type": "contains", "value": "...", "path": "..."}]
+(checked in the worktree before the run; unmet → the task is skipped). A QA/security review runs once all its
+depends_on finished and at least one is done, and reviews what was delivered.
 Optionally add "estimated_cost_usd" (the whole goal's expected model cost) and "decisions": [{"topic": "...", "question": "...", "alternatives": ["..."],
   "criteria": ["what the options are compared on"], "recommendation": "...", "reasoning": "...",
   "evidence": [{"ref": "file, source URL, task or K<id>", "class": "FACT|MEASURED|INFERENCE|HYPOTHESIS|PREDICTION"}],
@@ -547,7 +564,7 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
     """The task contracts for this iteration, and the id of the agent that planned them."""
     from agent_company.performance import cost_note
 
-    gm = registry.staff("general_manager", ["planning"], goal.id)
+    gm = registry.staff("general_manager", ["planning"], goal.id, prefer=_project_manager(goal))
     try:
         rooms, project_note = _project_context(goal)
         tmpl = dict(goal.strategy or {}) if strategies.enforced(goal) else None  # S04-R-11
@@ -590,8 +607,6 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                 data = contracts.extract_json(res.text)
                 tasks = data["tasks"] if isinstance(data, dict) else data
                 plan = contracts.validate_plan(tasks)
-                if fixed := specs.check_plan(goal, plan):  # K54: only this goal's spec folder, no loop files
-                    log_event("plan", "Spec paths corrected: " + "; ".join(fixed), goal_id=goal.id, agent_id=gm.id)
                 named = str(data.get("kind") or "").strip().lower() if isinstance(data, dict) else ""
                 if tmpl is None and named in strategies.KINDS:  # the planner picks the template (S04-R-11)
                     tmpl = strategies.choose(goal.id, named, "planner", str(data.get("summary", ""))[:200])
@@ -603,6 +618,8 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                     plan = strategies.with_review(tmpl, plan)
                 _in_rooms(plan, rooms)
                 plan = _risk_based(goal, iteration, plan)
+                if fixed := specs.check_plan(goal, plan):  # K54, on the final plan: only this goal's spec folder
+                    log_event("plan", "Spec paths normalised: " + "; ".join(fixed), goal_id=goal.id, agent_id=gm.id)
                 break
             except (ValueError, KeyError, TypeError) as e:
                 if attempt == 0 and res.ok:
@@ -615,12 +632,15 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
                           goal_id=goal.id, agent_id=gm.id)
                 kind = (tmpl or {}).get("kind", "")
                 plan = contracts.validate_plan(strategies.fallback_plan(goal.title, kind)["tasks"])
-                specs.check_plan(goal, plan)
                 try:
                     _in_rooms(plan, rooms)
                 except ValueError as e:  # nothing to fall back to inside the project's rooms
                     raise RuntimeError(f"no valid plan within the project's rooms: {e}") from e
                 plan = _risk_based(goal, iteration, plan)
+                try:
+                    specs.check_plan(goal, plan)
+                except ValueError as e:
+                    raise RuntimeError(f"no valid standard plan: {e}") from e
                 if tmpl is None:
                     strategies.choose(goal.id, strategies.infer(goal.title, plan), "inferred")
                 _board_plan(goal, iteration, plan, "standard plan", gm.id)
@@ -647,9 +667,20 @@ def _plan(goal: Goal, iteration: int, feedback: str, notes: str) -> tuple[list[c
         registry.release(gm.id, goal.id)
 
 
+def _project_manager(goal: Goal) -> int | None:
+    """The agent the goal's project names as its General Manager (`Project.manager_id`), who plans its goals."""
+    if goal.project_id is None:
+        return None
+    from agent_company.db import Project
+
+    with session() as s:
+        p = s.get(Project, goal.project_id)
+        return p.manager_id if p is not None else None
+
+
 def _project_context(goal: Goal) -> tuple[list[str], str]:
-    """The project's participating rooms and a note for the planner: stack, required skills, deadline, priority,
-    budget (ASEAO05 S05-R-06)."""
+    """The project's participating rooms and a note for the planner: its description (what it was registered with,
+    verification phase 6), stack, required skills, deadline, priority, budget (ASEAO05 S05-R-06)."""
     from agent_company.db import Project, now
     from agent_company.projects import _aware, project_spend
 
@@ -660,8 +691,10 @@ def _project_context(goal: Goal) -> tuple[list[str], str]:
         if p is None:
             return [], ""
         rooms, stack, skills = list(p.rooms or []), list(p.stack or []), list(p.required_skills or [])
+        about = (p.description or "").strip()
         deadline, priority, budget = _aware(p.deadline), p.priority or "normal", p.budget_usd or 0.0
-    lines = ([f"Technology stack: {', '.join(stack)} (use it; do not switch technologies)"] if stack else []) + (
+    lines = ([f"Description (as registered): {about[:2000]}" + ("…" if len(about) > 2000 else "")] if about else []) + (
+        [f"Technology stack: {', '.join(stack)} (use it; do not switch technologies)"] if stack else []) + (
         [f"Required skills: {', '.join(skills)} (name them in the tasks' skills)"] if skills else []) + (
         [f"Participating rooms: {', '.join(rooms)} (only their roles are listed below)"] if rooms else []) + (
         [f"Deadline: {deadline.date().isoformat()} ({(deadline - now()).days} day(s) left)"] if deadline else []) + (
@@ -758,7 +791,8 @@ def _board_plan(goal: Goal, iteration: int, plan: list[contracts.TaskContract], 
     """The planner's part of the blackboard: the objective and the breakdown with its dependencies."""
     blackboard.put(goal.id, "objective", "goal", goal.title + (f"\n\n{goal.description}"
                                                                if goal.description.strip() != goal.title.strip() else "")
-                   + (f"\n\nAllowed paths: {', '.join(goal.allowed_paths)}" if goal.allowed_paths else ""),
+                   + (f"\n\nAllowed paths: {', '.join(goal.allowed_paths)}"
+                      " (and a WORKLOG.md a writing task's acceptance asks for)" if goal.allowed_paths else ""),
                    author_agent_id=gm_id)
     lines = [f"Iteration {iteration}: {summary}".strip()]
     lines += [f"- {c.key} ({c.role}): {c.title}" + (f" after {', '.join(c.depends_on)}" if c.depends_on else "")
@@ -780,7 +814,7 @@ def _configure(goal: Goal) -> None:
     in the worktree; changes outside .claude/ and .mcp.json are put back. API models and the simulator skip this."""
     from agent_company.learning import goal_level
 
-    gm = registry.staff("general_manager", ["planning"], goal.id)
+    gm = registry.staff("general_manager", ["planning"], goal.id, prefer=_project_manager(goal))
     try:
         with session() as s:
             level = goal_level(s, s.get(Goal, goal.id))
@@ -807,24 +841,7 @@ def _configure(goal: Goal) -> None:
         registry.release(gm.id, goal.id)
 
 
-ANSWER_FILES = (".md", ".markdown", ".txt", ".rst")
-
-
-def _save_answer(worktree: Path, contract: contracts.TaskContract, text: str) -> list[str]:
-    """A task that may not write files (an architect's spec) but whose acceptance names a document to exist: its
-    whole answer becomes that document, so the check measures the work, not the file permission. Only text
-    documents inside the worktree (never under .git) that do not exist yet; returns the paths written."""
-    root, saved = worktree.resolve(), []
-    for cond in contract.acceptance:
-        if cond.type != "file_exists" or not (cond.path or "").lower().endswith(ANSWER_FILES) or not text.strip():
-            continue
-        target = (root / cond.path).resolve()
-        if root not in target.parents or ".git" in target.relative_to(root).parts or target.exists():
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text.rstrip() + "\n", encoding="utf-8")
-        saved.append(cond.path)
-    return saved
+ANSWER_FILES = specs.ANSWER_FILES  # a task's answer saved as a document: specs.save_answer
 
 
 def _chat_plan(goal: Goal, iteration: int, plan: list[contracts.TaskContract], summary: str, gm_id: int) -> None:
@@ -882,22 +899,31 @@ def _plan_commit(goal: Goal, iteration: int) -> str:
     return worktrees.git(goal.worktree, "rev-parse", "HEAD")
 
 
-def _checkpoint(goal_id: int, iteration: int, key: str) -> tuple[str, list[str]]:
+def _checkpoint(goal_id: int, iteration: int, key: str, paths: list[str] | None = None) -> tuple[str, list[str] | None]:
     """Commit what a writing task changed and record the commit as the goal's checkpoint (S04-R-05).
     Returns (commit, files changed since the previous checkpoint): the task's own changes, also when the
-    agent committed some of them itself."""
+    agent committed some of them itself; None when the checkpoint failed (the changes are unknown).
+    `paths` commits only those files (a task's saved answer); the caller holds the worktree's write lock."""
     from agent_company.gitsync import identity_for
 
     g = _goal(goal_id)
     wt = Path(g.worktree)
-    before = (g.checkpoint or {}).get("commit") or worktrees.git(wt, "rev-parse", "HEAD")
+    message, author = f"Goal {goal_id} iteration {iteration}: {key}", identity_for(g.created_by)
     try:
-        worktrees.commit_all(wt, f"Goal {goal_id} iteration {iteration}: {key}", author=identity_for(g.created_by))
+        before = (g.checkpoint or {}).get("commit") or worktrees.git(wt, "rev-parse", "HEAD")
+        if paths is None:
+            worktrees.commit_all(wt, message, author=author)
+        else:
+            worktrees.ensure_sandboxed(wt)
+            worktrees.git(wt, "add", "--", *paths)
+            if worktrees.git(wt, "diff", "--cached", "--name-only", "--", *paths):
+                worktrees.git(wt, "commit", "-q", "-m", message, "--", *paths, env=worktrees.identity_env(author))
         head = worktrees.git(wt, "rev-parse", "HEAD")
-        changed = [p for p in worktrees.git(wt, "diff", "--name-only", before, head).splitlines() if p]
+        changed = [p for p in worktrees.git(wt, "-c", "core.quotepath=off", "diff", "--name-only",
+                                            before, head).splitlines() if p]
     except worktrees.WorktreeError as e:  # a broken checkpoint must not lose the task's result
         log_event("error", f"checkpoint after task {key}: {e}", goal_id=goal_id)
-        return "", []
+        return "", None
     with session() as s:
         row = s.get(Goal, goal_id)
         row.checkpoint = {**(row.checkpoint or {}), "commit": head}
@@ -931,14 +957,18 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             assert t is not None
             contract = contracts.TaskContract.model_validate(t.contract)
             iteration = t.iteration
-            deps = {d.key: d.output for d in s.scalars(select(Task).where(
+            deps = {d.key: (d.status, d.output) for d in s.scalars(select(Task).where(
                 Task.goal_id == t.goal_id, Task.iteration == t.iteration, Task.key.in_(contract.depends_on)))}
         from agent_company.quality import REVIEW_CHECKLIST, REVIEW_ROLES
+        from agent_company.scheduler import set_status
+
+        # K237: preconditions on the worktree decide the task before any agent is staffed
+        if _skip_unmet(goal.id, task_id, contract, Path(goal.worktree)):
+            return False
 
         role, note = registry.resolve_role(contract.role, goal.id)
         if note:
             log_event("staff", note, goal_id=goal.id)
-        from agent_company.scheduler import set_status
 
         try:
             agent = registry.staff(role, contract.skills, goal.id, writes=contract.writes,
@@ -970,16 +1000,20 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
             except BudgetExhausted as e:
                 set_status(task_id, "skipped", stage="blocked", output=f"{BUDGET_SKIP}{e}")
                 return False
-            dep_text = "\n\n".join(f"### Output of '{k}'\n{v[-OUTPUT_CAP:]}" for k, v in deps.items())
+            dep_text = "\n\n".join(f"### Output of '{k}'\n{(v or '')[-OUTPUT_CAP:]}"
+                                   for k, (st, v) in deps.items() if st == "done")
+            missing = [f"{k} ({st})" for k, (st, _) in deps.items() if st != "done"]
+            if role in REVIEW_ROLES and missing:  # a review of partial work (K237)
+                dep_text = (f"Not delivered (failed or skipped): {', '.join(missing)}. Review only what was "
+                            "delivered; the gate already fails this iteration for them.\n\n" + dep_text).strip()
             accept = "\n".join(f"- {json.dumps(c.model_dump(exclude_none=True))}" for c in contract.acceptance)
-            prompt = (f"Overall goal: {goal.title}\n{goal.description}\n\n## Your task: {contract.title}\n"
-                      f"{contract.description}\n\nInputs: {json.dumps(contract.inputs)}\n\n"
-                      f"Acceptance conditions (checked automatically):\n{accept}\n\n"
-                      + _contract_note(contract)
-                      + (f"{dep_text}\n\n" if dep_text else "")
-                      + (f"Research notes:\n{notes}\n\n" if notes else "")
-                      + (f"Findings from the last failed attempt:\n{feedback}\n\n" if feedback else "")
-                      + handover
+            head = (f"Overall goal: {goal.title}\n{goal.description}\n\n## Your task: {contract.title}\n"
+                    f"{contract.description}\n\nInputs: {json.dumps(contract.inputs)}\n\n"
+                    f"Acceptance conditions (checked automatically):\n{accept}\n\n"
+                    + _contract_note(contract)
+                    + (f"{dep_text}\n\n" if dep_text else "")
+                    + (f"Research notes:\n{notes}\n\n" if notes else ""))
+            tail = (handover
                       + blackboard.context_for(goal.id, role, exclude={contract.key, *contract.depends_on})
                       + blackboard.inbox(goal.id, role, agent.id)
                       + learning.experience_context(agent.id, goal_id=goal.id, query=" ".join(
@@ -990,19 +1024,53 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                          else "\n\nDo not change files; answer in text.")
                       + ("\n\n" + REVIEW_CHECKLIST if role in REVIEW_ROLES else "")
                       + "\n\n" + PROPOSAL_HELP + "\n" + blackboard.MESSAGE_HELP + budget)
-            req = executors.Request(purpose="task", role=role, system=_system_for(agent), prompt=prompt,
+
+            def compose(fb: str) -> str:
+                return head + (f"Findings from the last failed attempt:\n{fb}\n\n" if fb else "") + tail
+
+            req = executors.Request(purpose="task", role=role, system=_system_for(agent), prompt=compose(feedback),
                                     workdir=Path(goal.worktree), writes=writes,
                                     data={"title": contract.title, "description": contract.description,
                                           "feedback": feedback, "resume": _resumable_session(goal.id, agent.id),
                                           "max_turns": contract.budget.turns})
             avoid = _developer_provider(goal.id, goal.iteration) if role in REVIEW_ROLES else None
-            res, choice = _execute(agent, req, "task", task_id=task_id, goal_id=goal.id,
-                                   escalate=goal.iteration >= 2, avoid_provider=avoid,
-                                   timeout=contract.deadline or None, deadline=_deadline(started))
-            output = res.text if res.ok else f"{res.text}\n\nERROR: {res.error}"
-            # a finished writing task is committed, so a restart can drop a later task's partial edits (S04-R-05);
-            # the scheduler's write lock is held here, so the commit holds this task's changes only
-            commit, changed = _checkpoint(goal.id, goal.iteration, contract.key) if contract.writes else ("", [])
+            # EL-R-06: a critic of another model family reviews the task's diff before its dependants start (they wait
+            # for this worker); a FAIL returns the task to the same agent, at most CRITIC_RETRIES times
+            critic_on = bool(settings().task_critic and contract.writes and writes)
+            base = _critic_base(goal) if critic_on else ""
+            critics: list[dict[str, Any]] = []
+            for attempt in range(1, CRITIC_RETRIES + 2):
+                res, choice = _execute(agent, req, "task", task_id=task_id, goal_id=goal.id,
+                                       escalate=goal.iteration >= 2, avoid_provider=avoid,
+                                       timeout=contract.deadline or None, deadline=_deadline(started))
+                output = res.text if res.ok else f"{res.text}\n\nERROR: {res.error}"
+                # a finished writing task is committed, so a restart can drop a later task's partial edits
+                # (S04-R-05); the scheduler's write lock is held here, so the commit holds this task's changes only
+                commit, step = _checkpoint(goal.id, goal.iteration, contract.key) if contract.writes else ("", [])
+                if attempt == 1:
+                    changed, files = step, list(res.files or [])
+                else:  # a retry: the task's change is the union of its attempts
+                    changed = None if changed is None or step is None else sorted(set(changed) | set(step))
+                    files = sorted(set(files) | set(res.files or []))
+                if not (critic_on and base and res.ok and commit and changed and choice.kind != "offline"):
+                    break
+                entry = _critic(goal, contract, task_id, agent, choice, base, commit, attempt, started)
+                critics.append(entry)
+                if entry["verdict"] != "FAIL":
+                    break
+                points = "\n".join(entry["points"])
+                if attempt > CRITIC_RETRIES:  # the gate and QA decide; the dependent review sees the points
+                    output += f"\n\nCritic (attempt {attempt}, {entry['model']}): VERDICT: FAIL\n{points}"
+                    break
+                try:
+                    _budget_note(goal, started)
+                except BudgetExhausted as e:
+                    log_event("critic", f"no retry of '{contract.title}': {e}", goal_id=goal.id, agent_id=agent.id,
+                              task_id=task_id)
+                    break
+                fb = (f"A critic of another model family ({entry['model']}) failed your change (attempt {attempt}):\n"
+                      + points + (f"\n\n{feedback}" if feedback else ""))
+                req.prompt, req.data["feedback"], req.data["resume"] = compose(fb), fb, res.session_id or ""
             if "WorktreeError" in (res.error or ""):  # rule: writing outside the goal's worktree (S14-R-03)
                 from agent_company.governance import open_incident
 
@@ -1011,24 +1079,57 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
                               evidence=[{"type": "task", "id": task_id, "error": res.error[:500]}])
             from agent_company.governance import on_command_refused
 
-            if res.ok and not contract.writes:  # a read-only task's document (a spec): the loop writes its answer
-                saved = _save_answer(Path(goal.worktree), contract, res.text)
-                if saved:
-                    log_event("task", f"saved {agent.name}'s answer as {', '.join(saved)}", goal_id=goal.id,
-                              agent_id=agent.id)
+            saved: list[str] = []
+            if res.ok:  # a document the acceptance names (a spec): the loop writes the answer where agents cannot
+                # its own commit under the worktree's write lock, so no writing task's commit or `changed` holds it;
+                # a writing task already holds the lock (not reentrant), a read-only one takes it
+                from agent_company.scheduler import write_lock
+
+                with contextlib.nullcontext() if contract.writes else write_lock(goal.worktree):
+                    try:
+                        saved = specs.save_answer(goal, contract, res.text, writes=writes, changed=changed)
+                        if saved:
+                            commit = _checkpoint(goal.id, goal.iteration, f"{contract.key} answer", saved)[0] or commit
+                            log_event("task", f"saved {agent.name}'s answer as {', '.join(saved)}", goal_id=goal.id,
+                                      agent_id=agent.id)
+                    except Exception as e:  # noqa: BLE001 - fail-open: the acceptance check reports the missing file
+                        log_event("error", f"saving the answer of task {contract.key}: {e}", goal_id=goal.id)
             set_task_stage(task_id, "review", "acceptance conditions and contract limits")
             # the planner wrote the acceptance commands: a refusal counts against it
             acceptance = contracts.check(contract, output, Path(goal.worktree), settings().command_timeout,
                                          on_refused=lambda cmd, why: on_command_refused(goal.id, planner_id, cmd, why),
                                          mode=sandbox.mode_for(goal))
-            acceptance += contracts.limits(contract, changed or res.files, usage.task_spend(task_id))
+            acceptance += contracts.limits(contract, changed or files, usage.task_spend(task_id))
+            # a loop-saved answer counts as a change; `changed` only, the executor's `res.files` are not the diff
+            acceptance += contracts.requires_change(contract, None if changed is None
+                                                    else sorted(set(changed) | set(saved)))
+            infra = next((c["infra"] for c in acceptance if c.get("infra")), "")
+            if infra:  # the sandbox did not start: not this task's failure, no attempt (S14-R-03)
+                set_status(task_id, "skipped", stage="blocked", output=f"{INFRA_SKIP}{infra}", model_name=choice.name,
+                           gate={"acceptance": acceptance, "files": changed or files, "commit": commit,
+                                 "saved_answer": saved}, session_id=res.session_id, critic=critics)
+                log_event("task", f"'{contract.title}' skipped: the sandbox did not start ({infra})", goal_id=goal.id,
+                          agent_id=agent.id)
+                return False
+            # `changed` None: the checkpoint failed and the change is unknown, so it is not an empty diff; a saved
+            # answer is a change
+            blocked = contracts.blockers(output) if contract.writes and changed == [] and not saved else []
+            if blocked:  # a build that changed nothing and names a BLOCKER: a person clears it, no review of nothing
+                set_status(task_id, "skipped", stage="blocked", output=f"{BLOCKER_SKIP}{'; '.join(blocked)}",
+                           model_name=choice.name, gate={"acceptance": acceptance, "files": changed or files,
+                                                         "commit": commit, "saved_answer": saved, "blockers": blocked},
+                           session_id=res.session_id, critic=critics)
+                log_event("task", f"'{contract.title}' skipped: blocked with no change ({'; '.join(blocked)})"[:1000],
+                          goal_id=goal.id, agent_id=agent.id)
+                return False
             ok = res.ok and all(c["passed"] for c in acceptance)
             set_status(task_id, "done" if ok else "failed", output=output[-50_000:], model_name=choice.name,
-                       gate={"acceptance": acceptance, "files": changed or res.files, "commit": commit,
+                       gate={"acceptance": acceptance, "files": changed or files, "commit": commit,
+                             "saved_answer": saved,
                              "findings": contracts.findings(output), "next_actions": contracts.next_actions(output),
                              "blockers": contracts.blockers(output),
                              "recommendation": contracts.recommendation(output) if contract.decision_topic else ""},
-                       session_id=res.session_id)
+                       session_id=res.session_id, critic=critics)
             log_event("task", f"{agent.name} {'finished' if ok else 'failed'} '{contract.title}' "
                               f"with {choice.name}", goal_id=goal.id, agent_id=agent.id)
             from agent_company.projects import extract_proposals, post_for_goal
@@ -1055,6 +1156,82 @@ def _make_worker(goal: Goal, notes: str, feedback: str, started: float,  # noqa:
 
 
 RESUME_WINDOW_MINUTES = 60
+
+CRITIC_RETRIES = 2  # EL-R-06: a task the critic fails goes back to its author at most this often
+CRITIC_DIFF_CHARS = 40_000
+_CRITIC_VERDICT = re.compile(r"VERDICT:\s*\**\s*(PASS|FAIL)", re.I)  # as quality.py, without the logic section
+
+
+def _critic_base(goal: Goal) -> str:
+    """The commit a writing task starts from: the critic reviews everything the task changed since then."""
+    try:
+        return (_goal(goal.id).checkpoint or {}).get("commit") or worktrees.git(goal.worktree, "rev-parse", "HEAD")
+    except worktrees.WorktreeError as e:
+        log_event("error", f"critic: no base commit: {e}", goal_id=goal.id)
+        return ""
+
+
+def _critic(goal: Goal, contract: contracts.TaskContract, task_id: int, author: Agent, author_choice: router.Choice,
+            base: str, commit: str, attempt: int, started: float) -> dict[str, Any]:
+    """EL-R-06: a critic of another model family than the author's (EL-R-03) reviews the task's diff. Returns the
+    entry recorded on `Task.critic`; verdict PASS|FAIL, `skipped` when no critic or no other family is usable,
+    `error` when the run failed or gave no verdict. Only FAIL sends the task back."""
+    from agent_company.db import Run
+
+    provider = author_choice.provider
+    entry: dict[str, Any] = {"attempt": attempt, "model": "", "provider": "", "verdict": "skipped", "points": [],
+                             "reason": "", "run_id": None}
+    try:
+        critic = registry.staff("qa", ["review"], goal.id, writes=False, task_id=task_id)
+    except Exception as e:  # noqa: BLE001 - no critic never blocks the task
+        entry["reason"] = f"no critic staffed: {e}"[:500]
+        log_event("critic", f"no critic for '{contract.title}' attempt {attempt}: {entry['reason']}", goal_id=goal.id,
+                  task_id=task_id)
+        return entry
+    try:
+        if critic.id == author.id:
+            entry["reason"] = "the only critic is the author"
+        else:
+            wt = Path(goal.worktree)
+            try:
+                stat = worktrees.git(wt, "diff", "--stat", base, commit)
+                diff = worktrees.git(wt, "-c", "core.quotepath=off", "diff", base, commit)
+            except worktrees.WorktreeError as e:
+                stat, diff = "", ""
+                entry["reason"] = f"no diff: {e}"[:500]
+            if diff:
+                if len(diff) > CRITIC_DIFF_CHARS:
+                    diff = (diff[:CRITIC_DIFF_CHARS]
+                            + f"\n[diff truncated, {len(diff) - CRITIC_DIFF_CHARS} more characters]")
+                accept = "\n".join(f"- {json.dumps(c.model_dump(exclude_none=True))}" for c in contract.acceptance)
+                prompt = (f"Overall goal: {goal.title}\n\n## Task under review: {contract.title}\n{contract.description}"
+                          f"\n\nAcceptance conditions:\n{accept}\n\n## Changed files\n{stat}\n\n## Diff\n{diff}\n\n"
+                          "Review this change of another agent. List each defect as `FINDING: <file:line> | <risk> | "
+                          "<fix>`. FAIL only for defects that break the task's contract or its acceptance. End with "
+                          "exactly one line `VERDICT: PASS` or `VERDICT: FAIL`.")
+                req = executors.Request(purpose="critic", role="qa", prompt=prompt, workdir=wt, writes=False,
+                                        system=_system_for(critic) + " You did not write this change.")
+                res, choice = _execute(critic, req, "critic", task_id=task_id, goal_id=goal.id,
+                                       avoid_provider=provider, other_cli=True, deadline=_deadline(started))
+                entry.update(model=choice.name, provider=choice.provider)
+                if choice.provider in (provider, "offline"):
+                    entry["reason"] = "no usable model of another family"
+                else:
+                    found = _CRITIC_VERDICT.findall(res.text or "") if res.ok else []
+                    entry["verdict"] = found[-1].upper() if found else "error"
+                    entry["points"] = contracts.findings(res.text) or ([res.text[-1500:]] if res.text else [])
+                    if not found:
+                        entry["reason"] = (res.error or "no verdict")[:500]
+                with session() as s:
+                    entry["run_id"] = s.scalar(select(Run.id).where(Run.task_id == task_id, Run.purpose == "critic")
+                                               .order_by(Run.id.desc()).limit(1))
+        log_event("critic", f"{critic.name} ({entry['model'] or '-'}) on '{contract.title}' attempt {attempt}: "
+                  f"{entry['verdict']}" + (f" ({entry['reason']})" if entry["reason"] else ""), goal_id=goal.id,
+                  agent_id=critic.id, task_id=task_id, provider=entry["provider"], author_provider=provider,
+                  points=entry["points"][:10])
+        return entry
+    finally:
+        registry.release(critic.id, goal.id)
 
 
 def _resumable_session(goal_id: int, agent_id: int) -> str:
@@ -1237,6 +1414,8 @@ def run_goal(goal_id: int) -> dict[str, Any]:
         return {"status": goal.status}
     if emergency():  # E5: the goal stays queued until the stop is lifted
         return {"status": "queued", "held": "emergency stop"}
+    if not _claim(goal_id, goal.status):  # another worker took it between the read and now
+        return {"status": _goal(goal_id).status}
     try:
         out = _run(goal_id)
     finally:
@@ -1259,7 +1438,39 @@ def run_goal(goal_id: int) -> dict[str, Any]:
         except Exception as e:  # noqa: BLE001
             log_event("error", f"merging clones failed: {e}", goal_id=goal_id)
     _chat_outcome(goal_id, out)
+    _store_label_counts(goal_id)
     return out
+
+
+def _claim(goal_id: int, status: str) -> bool:
+    """Take a queued or recovering goal for this worker with one conditional UPDATE, the first statement of its
+    transaction (SQLite's write lock decides): a goal handed out twice, by a submit and the watcher or by two
+    processes, runs once (verification phase 4)."""
+    from sqlalchemy import update
+
+    from agent_company.db import GoalTransition
+
+    with session() as s:
+        if s.execute(update(Goal).where(Goal.id == goal_id, Goal.status == status)
+                     .values(status="planning", label_counts={})).rowcount != 1:
+            return False
+        s.add(GoalTransition(goal_id=goal_id, from_status=status, to_status="planning", reason="started"))
+    return True
+
+
+def _store_label_counts(goal_id: int) -> None:
+    """What the Simple overview and RCA read, stored after the outcome message so that report() never delays it;
+    only for a finished goal (a paused one is stored when it finishes); never changes the goal's outcome."""
+    from agent_company import mission
+
+    try:
+        g = _goal(goal_id)
+        if g.status not in workflow.ACTIVE and g.origin != "eval":
+            mission.store_label_counts(goal_id)  # fail-open itself
+    except Exception as e:  # noqa: BLE001 - the cache never changes a goal's outcome
+        with contextlib.suppress(Exception):
+            log_event("error", f"label counts of goal #{goal_id} not stored: {type(e).__name__}: {e}",
+                      goal_id=goal_id)
 
 
 def _chat_outcome(goal_id: int, out: dict[str, Any]) -> None:
@@ -1340,7 +1551,9 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
             base = quality.baseline(goal_id)
             failing = [c for c, r in base.items() if not r["passed"]]
             if failing:
-                log_event("gate", "already failing before any change: " + ", ".join(failing), goal_id=goal_id)
+                # iteration 0: the baseline runs before any change of the first iteration
+                log_event("gate", "already failing before any change: " + ", ".join(failing), goal_id=goal_id,
+                          iteration=0)
         started = time.monotonic()
         feedback, report = "", {}
         first = max(1, goal.iteration)
@@ -1382,7 +1595,7 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                     return _out_of_quota(goal_id, str(e), report)
                 goal = _goal(goal_id)  # the plan may have chosen the workflow template (S04-R-11)
                 _cleared_for(goal_id, plan)
-                ids = _persist(goal_id, iteration, plan)
+                ids = _persist(goal_id, iteration, plan, planned_by=planner_id)
                 _spec_step(specs.write_plan, goal, iteration, plan)
                 _update_goal(goal_id, checkpoint={"iteration": iteration, "planned": True, "notes": notes,
                                                   "feedback": feedback, "planner_id": planner_id,
@@ -1406,12 +1619,18 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
             halted = _halted(goal_id)
             if halted:
                 return {"status": halted}
+            infra = _skipped_with(goal_id, iteration, INFRA_SKIP)
+            if infra:  # the sandbox did not start: the iteration is incomplete, do not judge it; before quota, which
+                return _out_for_infrastructure(goal_id, infra, report)  # resumes by itself into the same sandbox
             quota = _quota_skipped(goal_id, iteration)
             if quota:  # an agent it needs is out of quota: the iteration is incomplete, do not judge it
                 return _out_of_quota(goal_id, quota, report)
             waiting = _skipped_with(goal_id, iteration, RECRUIT_SKIP)
             if waiting:  # a recruit it needs waits for approval: the iteration is incomplete, do not judge it
                 return _out_for_recruitment(goal_id, waiting, report)
+            blocker = _skipped_with(goal_id, iteration, BLOCKER_SKIP)
+            if blocker:  # a writing task changed nothing and named a BLOCKER: a person clears it, nothing to judge
+                return _out_for_blocker(goal_id, blocker, report)
             if _budget_skipped(goal_id, iteration):  # the iteration is incomplete: do not judge it
                 try:
                     _budget_note(_goal(goal_id), started)
@@ -1462,6 +1681,14 @@ def _run_steps(goal_id: int) -> dict[str, Any]:
                 _notify_goal(goal_id, status)
                 if status == "approved":
                     _push(goal_id)
+                elif status == "awaiting_approval":  # owner policy auto_merge: approve() decides, never fails it
+                    try:
+                        from agent_company import ownerpolicy
+
+                        if (ownerpolicy.on_awaiting_approval(goal_id) or {}).get("merged"):
+                            status = "approved"
+                    except Exception as e:  # noqa: BLE001
+                        log_event("error", f"owner policy auto-merge: {type(e).__name__}: {e}", goal_id=goal_id)
                 return {"status": status, "iterations": iteration, "report": report}
             feedback = report["feedback"]
         goal = _goal(goal_id)
@@ -1625,6 +1852,21 @@ QUOTA_SKIP = "skipped (quota): "
 
 
 RECRUIT_SKIP = "skipped (recruitment): "
+INFRA_SKIP = "skipped (infrastructure): "  # the L3 sandbox did not start (`sandbox.startup_failure`)
+BLOCKER_SKIP = "skipped (blocker): "  # a writing task named a `BLOCKER:` and changed no file
+REQUIRES_SKIP = "skipped (precondition): "  # a contract's `requires` was not met in the worktree (K237)
+
+
+def _skip_unmet(goal_id: int, task_id: int, contract: contracts.TaskContract, worktree: Path) -> bool:
+    """Skip the task with REQUIRES_SKIP when a `requires` precondition is unmet in the worktree; True if skipped."""
+    from agent_company.scheduler import set_status
+
+    unmet = contracts.unmet_requires(contract, worktree) if contract.requires else []
+    if unmet:
+        set_status(task_id, "skipped", output=REQUIRES_SKIP + "; ".join(unmet))
+        log_event("task", f"'{contract.title}' skipped: precondition not met: {'; '.join(unmet)}"[:500],
+                  goal_id=goal_id)
+    return bool(unmet)
 
 
 def _quota_skipped(goal_id: int, iteration: int) -> str:
@@ -1716,6 +1958,49 @@ def _out_of_quota(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, A
            f"{'room budget (Agents → Rooms)' if room else 'quota'} and resume it.", level="warning", source="goal", goal_id=goal_id,
            project_id=g.project_id, admin_only=True)
     return {"status": "paused", "iterations": g.iteration, "report": report, "quota": why}
+
+
+def _out_for_infrastructure(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, Any]:
+    """The L3 sandbox did not start (`sandbox.INFRA_RE`): one incident per goal (S07-R-02 evidence), the goal pauses
+    until a person fixes the host and resumes it. Benchmark runs end instead."""
+    from agent_company.governance import notify, open_incident
+
+    g = _goal(goal_id)
+    open_incident("infrastructure", "SEV-3", f"The sandbox could not start for goal #{goal_id}",
+                  "rule:sandbox_startup", rule="sandbox_startup", goal_id=goal_id,
+                  evidence=[{"type": "sandbox", "iteration": g.iteration, "line": why[:500]}])
+    if g.origin == "eval":
+        _update_goal(goal_id, status="failed", result=f"Stopped: infrastructure: {why}.")
+        return {"status": "failed", "iterations": g.iteration, "report": report, "infrastructure": why}
+    _update_goal(goal_id, status="paused", reason=f"infrastructure: {why}"[:500])
+    with session() as s:
+        row = s.get(Goal, goal_id)
+        row.checkpoint = {**(row.checkpoint or {}), "paused_for": "infrastructure", "paused_why": why}
+    log_event("goal", f"paused: the sandbox did not start: {why}", goal_id=goal_id)
+    notify(f"Goal #{goal_id} paused: the sandbox could not start"[:256],
+           f"{g.title}\n{why}\nFix the host (bubblewrap, user namespaces, the bound paths, systemd-run) and resume "
+           "the goal.", level="warning", source="goal", goal_id=goal_id, project_id=g.project_id, admin_only=True)
+    return {"status": "paused", "iterations": g.iteration, "report": report, "infrastructure": why}
+
+
+def _out_for_blocker(goal_id: int, why: str, report: dict[str, Any]) -> dict[str, Any]:
+    """A writing task reported a `BLOCKER:` and changed no file: the goal pauses for a person instead of reviewing
+    nothing and starting another iteration; a resume requeues the same iteration. Benchmark runs end instead."""
+    from agent_company.governance import notify
+
+    g = _goal(goal_id)
+    if g.origin == "eval":
+        _update_goal(goal_id, status="failed", result=f"Stopped: blocker: {why}.")
+        return {"status": "failed", "iterations": g.iteration, "report": report, "blocker": why}
+    _update_goal(goal_id, status="paused", reason=f"blocker: {why}"[:500])
+    with session() as s:
+        row = s.get(Goal, goal_id)
+        row.checkpoint = {**(row.checkpoint or {}), "paused_for": "blocker", "paused_why": why}
+    log_event("goal", f"paused: a task is blocked with no change: {why}", goal_id=goal_id)
+    notify(f"Goal #{goal_id} paused: a task is blocked"[:256],
+           f"{g.title}\n{why}\nClear the blocker and resume the goal.", level="warning", source="goal",
+           goal_id=goal_id, project_id=g.project_id)
+    return {"status": "paused", "iterations": g.iteration, "report": report, "blocker": why}
 
 
 def resume_after_quota() -> list[int]:
@@ -1813,7 +2098,8 @@ def _keep_best(goal_id: int) -> str:
     worktrees.git(worktrees.ensure_sandboxed(g.worktree), "reset", "-q", "--hard", best["commit"])
     msg = (f"\nKept iteration {best['iteration']} (score {best['score']:.0%}) instead of the last one "
            f"({last['score']:.0%}): the branch was reset to {best['commit'][:10]}.")
-    log_event("gate", msg.strip(), goal_id=goal_id)
+    # the message stays as it is: performance.report counts these events by "Kept iteration %"
+    log_event("gate", msg.strip(), goal_id=goal_id, iteration=last["iteration"], kept_iteration=best["iteration"])
     return msg
 
 
@@ -1876,7 +2162,9 @@ def _discard_iteration(goal_id: int, iteration: int) -> None:
                 s.delete(t)
 
 
-def _persist(goal_id: int, iteration: int, plan: list[contracts.TaskContract]) -> list[int]:
+def _persist(goal_id: int, iteration: int, plan: list[contracts.TaskContract],
+             planned_by: int | None = None) -> list[int]:
+    """Store the plan's tasks; `planned_by` is the planning agent, each task's sender (None: the loop's own)."""
     with session() as s:
         failed = set(s.scalars(select(Task.key).where(Task.goal_id == goal_id, Task.iteration == iteration - 1,
                                                       Task.status.in_(("failed", "skipped")))))
@@ -1884,7 +2172,7 @@ def _persist(goal_id: int, iteration: int, plan: list[contracts.TaskContract]) -
         for c in plan:
             t = Task(goal_id=goal_id, iteration=iteration, key=c.key, title=c.title, role=c.role,
                      contract=c.model_dump(mode="json"), depends_on=c.depends_on, priority=c.priority,
-                     writes=c.writes)
+                     writes=c.writes, planned_by=planned_by)
             workflow.set_stage(t, "reopened" if c.key in failed else "planned",
                                f"iteration {iteration - 1} did not finish it" if c.key in failed else "")
             s.add(t)
@@ -2047,6 +2335,8 @@ def trace(goal_id: int) -> dict[str, Any]:
             raise KeyError(goal_id)
         names = dict(s.execute(select(Agent.id, Agent.name)).all())
         tasks = [{"id": t.id, "iteration": t.iteration, "key": t.key, "title": t.title, "role": t.role,
+                  "planned_by": names.get(t.planned_by), "planned_by_id": t.planned_by,
+                  "created_at": t.created_at.isoformat() if t.created_at else None,
                   "agent": names.get(t.agent_id), "agent_id": t.agent_id, "model": t.model_name, "status": t.status,
                   "stage": workflow.task_stage(t),
                   "started_at": t.started_at.isoformat() if t.started_at else None,
@@ -2063,9 +2353,11 @@ def trace(goal_id: int) -> dict[str, Any]:
                  "tokens": r.input_tokens + r.output_tokens, "at": r.started_at.isoformat(),
                  "isolation": r.isolation or "", "tools": list(r.tools or []), "permissions": list(r.permissions or []),
                  "withheld": list(r.dropped or []), "denied_tools": list(r.denied_tools or []),
-                 "tool_calls": list(r.tool_calls or [])}
+                 "tool_calls": list(r.tool_calls or []), "trace": dict(r.trace or {}),
+                 "trace_issues": router.trace_issues(r.trace or {})}
                 for r in s.scalars(select(Run).where(Run.goal_id == goal_id).order_by(Run.id))]
-        gates = [{"at": e.created_at.isoformat(), "passed": e.data.get("passed"), "commit": e.data.get("commit"),
+        gates = [{"at": e.created_at.isoformat(), "iteration": event_iteration(e),
+                  "passed": e.data.get("passed"), "commit": e.data.get("commit"),
                   "checks": e.data.get("checks", []), "message": e.message}
                  for e in s.scalars(select(Event).where(Event.goal_id == goal_id, Event.kind == "gate")
                                     .order_by(Event.id)) if "checks" in (e.data or {})]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import threading
 import time
@@ -25,6 +26,7 @@ from agent_company import (
     agentdefs,
     auth,
     blackboard,
+    bridge,
     budgets,
     catalog,
     containers,
@@ -454,7 +456,7 @@ class McpServerBody(BaseModel):
     url: str = ""
     env: dict[str, str] = Field(default_factory=dict)
     headers: dict[str, str] = Field(default_factory=dict)
-    everyone: bool = True
+    everyone: bool = False
     enabled: bool = True
 
 
@@ -1248,6 +1250,27 @@ def create_app(start_background: bool = True) -> FastAPI:
             else:
                 threading.Thread(target=_run_quietly, args=(goal,), daemon=True, name=f"goal-{goal}").start()
         headers = {"WWW-Authenticate": 'Bearer realm="a2a"'} if status == 401 else None
+        return JSONResponse(out, status_code=status, headers=headers)
+
+    @app.post("/api/bridge/call")
+    async def bridge_call(request: Request) -> JSONResponse:
+        """EL-R-09: a CLI agent's bridge shim. The per-run bearer token is the only credential, never a cookie."""
+        raw = await request.body()
+        if len(raw) > bridge.MAX_BODY:
+            status, out = await asyncio.to_thread(bridge.refuse, 413, "refused: the request is too large")
+            return JSONResponse(out, status_code=status)
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            status, out = await asyncio.to_thread(bridge.refuse, 400, "refused: the body is not a JSON object")
+            return JSONResponse(out, status_code=status)
+        forwarded = bool(request.headers.get("x-forwarded-for") or request.headers.get("x-forwarded-proto"))
+        status, out = await asyncio.to_thread(bridge.handle, request.headers.get("authorization"), body.get("tool"),
+                                              body.get("arguments"), forwarded,
+                                              request.client.host if request.client else None)
+        headers = {"WWW-Authenticate": 'Bearer realm="bridge"'} if status == 401 else None
         return JSONResponse(out, status_code=status, headers=headers)
 
     @app.get("/api/a2a/clients")
@@ -2364,8 +2387,8 @@ def create_app(start_background: bool = True) -> FastAPI:
                 out["running"].append(c)
             elif len(out["delivered"]) < 20:
                 try:
-                    labels = mission.report(gid)["tasks"]["labels"]
-                except (KeyError, ValueError):
+                    labels = mission.label_counts(gid)  # stored per finished goal, not the full report
+                except Exception:  # noqa: BLE001 - one goal's counts never break the overview
                     labels = {}
                 out["delivered"].append(c | {"finished_at": updated.isoformat(), "labels": labels,
                                              "report": f"/api/goals/{gid}/report"})
@@ -2944,8 +2967,12 @@ def create_app(start_background: bool = True) -> FastAPI:
         return router.models_info()
 
     @app.get("/api/models/cli/{tool}")
-    def model_cli_status(tool: str, _: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
-        return router.cli_status(tool)
+    def model_cli_status(tool: str, account: str = "", _: dict[str, Any] = Depends(allowed("manage_models"))
+                         ) -> dict[str, Any]:
+        try:
+            return router.cli_status(tool, account)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
 
     @app.post("/api/models/cli/{tool}/install")
     def model_cli_install(tool: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
@@ -2954,6 +2981,56 @@ def create_app(start_background: bool = True) -> FastAPI:
         except RuntimeError as e:
             raise HTTPException(400, str(e)) from e
         _audit(admin, "cli_install", tool, after={"ok": out["ok"], "version": out["version"]})
+        return out
+
+    # The GitHub sign-in of the Copilot CLI and the ChatGPT sign-in of Codex (into its own account folder) from the
+    # website: start it (the page shows the code), follow it, cancel it.
+    @app.post("/api/models/cli/{tool}/login")
+    def model_cli_login(tool: str, body: dict[str, Any] | None = None, admin: dict[str, Any] = Depends(admin_user)
+                        ) -> dict[str, Any]:
+        account = (body or {}).get("account") or ""
+        if not isinstance(account, str):
+            raise HTTPException(422, "account must be a folder name")
+        try:
+            out = router.cli_login(tool, by=admin["name"], account=account.strip())
+        except KeyError as e:
+            raise HTTPException(404, f"{tool} has no sign-in from the website") from e
+        except (RuntimeError, OSError, ValueError) as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "cli_login", tool, after={"state": out["state"], "folder": out.get("folder", "")})
+        return out
+
+    @app.get("/api/models/cli/{tool}/login")
+    def model_cli_login_state(tool: str, _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            return router.login_state(tool)
+        except KeyError as e:
+            raise HTTPException(404, f"{tool} has no sign-in from the website") from e
+
+    # Without a system keychain the CLI keeps the token only as plain text in its config: the person decides.
+    @app.post("/api/models/cli/{tool}/login/consent")
+    def model_cli_login_consent(tool: str, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                                ) -> dict[str, Any]:
+        store = body.get("store")
+        if not isinstance(store, bool):
+            raise HTTPException(422, "store must be true or false")
+        try:
+            out = router.answer_login(tool, store)
+        except KeyError as e:
+            raise HTTPException(404, f"{tool} has no sign-in from the website") from e
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+        _audit(admin, "cli_login_consent", tool, after={"store_plaintext_token": store},
+               severity="warning" if store else "info")
+        return out
+
+    @app.delete("/api/models/cli/{tool}/login")
+    def model_cli_login_cancel(tool: str, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = router.cancel_login(tool)
+        except KeyError as e:
+            raise HTTPException(404, f"{tool} has no sign-in from the website") from e
+        _audit(admin, "cli_login_cancel", tool)
         return out
 
     @app.patch("/api/models/{model_id}")
@@ -2978,7 +3055,19 @@ def create_app(start_background: bool = True) -> FastAPI:
 
     @app.post("/api/models/{model_id}/test")
     def model_test(model_id: int, admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
-        return router.test_model(model_id)
+        out = router.test_model(model_id)  # a Test sends a request, at the provider's cost
+        _audit(admin, "model_test", model_id, after={"ok": out["ok"], "error": out["error"][:200]})
+        return out
+
+    @app.post("/api/routes/auto")
+    def routes_auto(admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
+        before = {r: {"model": m, "fallback": router.list_fallbacks().get(r, [])} for r, m in router.list_routes().items()}
+        try:
+            plan = router.auto_routes()
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "routes_auto", "routes", before=before, after=plan)
+        return {"routes": plan}
 
     @app.put("/api/routes/{role}")
     def route_set(role: str, body: RouteBody, admin: dict[str, Any] = Depends(allowed("manage_models"))) -> dict[str, Any]:
@@ -3655,6 +3744,43 @@ def create_app(start_background: bool = True) -> FastAPI:
                        ) -> dict[str, Any]:
         out = agentdefs.study(agent_id)
         _audit(admin, "learning_study", out.get("studied") or "", after=out)
+        return out
+
+    # G-R-19: a study rewrite is a candidate a person applies after seeing the diff
+    @app.get("/api/agents/{agent_id}/definition/candidates")
+    def definition_candidates(agent_id: int, status: str | None = None,
+                              admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> list[dict[str, Any]]:
+        out = agentdefs.candidates(agent_id, status)
+        _audit(admin, "definition_candidates_read", agent_id, after={"count": len(out)})
+        return out
+
+    @app.get("/api/definition-candidates/{cid}")
+    def definition_candidate(cid: int, admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        try:
+            out = agentdefs.candidate(cid)
+        except KeyError as e:
+            raise HTTPException(404, "no such candidate") from e
+        _audit(admin, "definition_candidate_read", cid, after={"agent_id": out["agent_id"]})
+        return out
+
+    @app.post("/api/definition-candidates/{cid}/apply")
+    def definition_candidate_apply(cid: int, admin: dict[str, Any] = Depends(allowed("manage_agents"))
+                                   ) -> dict[str, Any]:
+        try:
+            out = agentdefs.apply_candidate(cid, f"user:{admin['name']}")
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+        _audit(admin, "definition_candidate_apply", cid, after={"agent_id": out["agent_id"]}, severity="high")
+        return out
+
+    @app.post("/api/definition-candidates/{cid}/discard")
+    def definition_candidate_discard(cid: int, body: NoteBody | None = None,
+                                     admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
+        try:
+            out = agentdefs.discard_candidate(cid, f"user:{admin['name']}", body.note if body else "")
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+        _audit(admin, "definition_candidate_discard", cid, after={"agent_id": out["agent_id"], "note": out["note"]})
         return out
 
     @app.get("/api/hooks")
