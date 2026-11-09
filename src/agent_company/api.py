@@ -3286,6 +3286,19 @@ def create_app(start_background: bool = True) -> FastAPI:
                "cancelled" else "info")
         return out
 
+    @app.post("/api/projects/{project_id}/members/remove")
+    def project_members_remove(project_id: int, body: dict[str, Any], user: dict[str, Any] = Depends(current_user)
+                               ) -> dict[str, Any]:
+        """Take agents off the project's Agents panel ({"agent_ids": [...]}, or every one without it); they stay
+        in the company."""
+        p = projects.get(project_id, user)
+        if not user["is_admin"] and p.created_by != user["id"]:
+            raise HTTPException(403, "only an administrator or the project's owner removes its agents")
+        ids = body.get("agent_ids")
+        removed = projects.remove_members(project_id, None if ids is None else [int(i) for i in ids])
+        _audit(user, "project_members_remove", p.name, after={"agents": removed})
+        return {"removed": removed}
+
     @app.post("/api/projects/delete")
     def project_delete(body: IdsBody, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
         done = projects.delete(body.ids)

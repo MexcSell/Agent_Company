@@ -455,23 +455,49 @@ def post_for_goal(goal_id: int, content: str, kind: str = "chat", agent_id: int 
 
 
 def members(project_id: int, only: list[int] | None = None) -> list[dict[str, Any]]:
-    """Agents that worked on the project's goals (or exactly `only`, a topic's agents), busy ones first."""
+    """Agents that worked on the project's goals (or exactly `only`, a topic's agents), busy ones first. An agent
+    removed from the project (`remove_members`) is left out until it gets a task of the project after its removal;
+    the manager until any task of the project is created after it."""
+    from datetime import datetime
+
     from agent_company.registry import agent_dict
 
     with session() as s:
+        running = dict(s.execute(select(Task.agent_id, Task.title).join(Goal, Goal.id == Task.goal_id)
+                                 .where(Goal.project_id == project_id, Task.status == "running")).all())
         if only is not None:
             ids = set(only)
         else:
-            ids = set(s.scalars(select(Task.agent_id).join(Goal, Goal.id == Task.goal_id)
-                                .where(Goal.project_id == project_id, Task.agent_id.is_not(None))))
+            last = dict(s.execute(select(Task.agent_id, func.max(Task.created_at)).join(Goal, Goal.id == Task.goal_id)
+                                  .where(Goal.project_id == project_id, Task.agent_id.is_not(None))
+                                  .group_by(Task.agent_id)).all())
+            ids = set(last)
             p = s.get(Project, project_id)
             if p and p.manager_id:
                 ids.add(p.manager_id)
-        running = dict(s.execute(select(Task.agent_id, Task.title).join(Goal, Goal.id == Task.goal_id)
-                                 .where(Goal.project_id == project_id, Task.status == "running")).all())
+                last[p.manager_id] = s.scalar(select(func.max(Task.created_at)).join(Goal, Goal.id == Task.goal_id)
+                                              .where(Goal.project_id == project_id))
+            for aid, at in ((p.removed_members or {}) if p else {}).items():
+                t = _aware(last.get(int(aid)))
+                if int(aid) not in running and (t is None or t <= datetime.fromisoformat(at)):
+                    ids.discard(int(aid))
         agents = s.scalars(select(Agent).where(Agent.id.in_(ids))).all()
         out = [agent_dict(a) | {"current_task": running.get(a.id)} for a in agents]
         return sorted(out, key=lambda a: (a["current_task"] is None, a["status"] != "busy", a["id"]))
+
+
+def remove_members(project_id: int, agent_ids: list[int] | None = None) -> list[int]:
+    """Take agents (None: every one shown now) off the project's Agents panel. They stay in the company and keep
+    their history; an agent comes back once it works on the project again. Returns the ids removed."""
+    shown = {a["id"] for a in members(project_id)}
+    ids = sorted(shown if agent_ids is None else shown & {int(i) for i in agent_ids})
+    with session() as s:
+        p = s.get(Project, project_id)
+        if p is None:
+            raise KeyError(project_id)
+        at = now().isoformat()
+        p.removed_members = {**(p.removed_members or {}), **{str(i): at for i in ids}}
+    return ids
 
 
 # --- uploads ----------------------------------------------------------------------

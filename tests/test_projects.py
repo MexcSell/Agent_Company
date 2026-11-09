@@ -247,9 +247,11 @@ def test_project_api_flow():
         assert any("rejected" in m["content"] for m in msgs)
         after = msgs[-1]["id"]
         assert app.get(f"/api/projects/{pid}/messages?after={after}").json() == []
+        assert app.post(f"/api/projects/{pid}/members/remove", json={}).json()["removed"]
+        assert app.get(f"/api/projects/{pid}").json()["members"] == []
         assert app.post("/api/projects/delete", json={"ids": [pid]}).json()["deleted"] == [pid]
         actions = {r["action"] for r in app.get("/api/audit").json()["records"]}
-        assert {"project_create", "proposal_reject", "project_delete"} <= actions
+        assert {"project_create", "proposal_reject", "project_members_remove", "project_delete"} <= actions
 
 
 def test_permissions_limit_what_a_member_can_see_and_do():
@@ -294,3 +296,32 @@ def test_goal_commits_use_the_ordering_users_git_identity():
     assert worktrees.git(g.worktree, "log", "-1", "--format=%an <%ae>") == "Mex Cell <sellmexc9@example.com>"
     loop.approve(g.id)
     assert worktrees.git(p["path"], "log", "-1", "--format=%an") == "Mex Cell"
+
+
+def test_removed_agents_leave_the_project_panel_until_they_work_on_it_again():
+    from datetime import timedelta
+
+    from agent_company.db import Agent, Goal, Task, now
+
+    p = projects.create("Panel")
+    with session() as s:
+        a1, a2 = (a.id for a in s.scalars(select(Agent).where(Agent.role != "general_manager").limit(2)))
+        g = Goal(title="work", description="", repo_path="", project_id=p["id"])
+        s.add(g)
+        s.flush()
+        old = now() - timedelta(minutes=5)
+        s.add_all([Task(goal_id=g.id, iteration=1, key=f"t{i}", title="t", role="developer", agent_id=a,
+                        status="done", created_at=old) for i, a in enumerate((a1, a2))])
+        gid = g.id
+    shown = {a["id"] for a in projects.members(p["id"])}
+    assert {a1, a2} <= shown
+    assert projects.remove_members(p["id"], [a1]) == [a1]
+    assert a1 not in {a["id"] for a in projects.members(p["id"])}
+    assert sorted(projects.remove_members(p["id"])) == sorted(shown - {a1}), "all: every agent still shown"
+    assert projects.members(p["id"]) == []
+    assert {a["id"] for a in projects.members(p["id"], [a1, a2])} == {a1, a2}, "a topic's own agents stay"
+    with session() as s:
+        assert s.get(Agent, a1) is not None, "the agent stays in the company"
+        s.add(Task(goal_id=gid, iteration=2, key="t9", title="again", role="developer", agent_id=a2, status="done"))
+    back = {a["id"] for a in projects.members(p["id"])}
+    assert a2 in back and a1 not in back, "an agent comes back when it works on the project again"

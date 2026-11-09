@@ -413,11 +413,23 @@ async function projectRail(d) {
   const kids = new Map();
   [...inOrg].forEach((id) => { const a = byId.get(id), p = inOrg.has(a.superior_id) ? a.superior_id : 0; if (!kids.has(p)) kids.set(p, []); kids.get(p).push(a); });
   const tree = (a) => `<li><span class="porg ${mine.has(a.id) ? "on" : ""} ${a.status === "busy" ? "busy" : ""}" data-aid="${a.id}">${roleIcon(a.role)}<span>${esc(a.name)}</span></span>${(kids.get(a.id) || []).length ? `<ul>${kids.get(a.id).map(tree).join("")}</ul>` : ""}</li>`;
-  const html = `<div class="proj-rail-top"><div class="row nowrap"><h2 class="grow" style="margin:0">Agents</h2><span class="pill ${busy.length ? "running" : ""}">${busy.length} working</span><span class="pill">${d.members.length}</span></div>
-    <div class="list" style="margin-top:8px">${d.members.map((a) => `<div class="list-item agent-row" data-aid="${a.id}"><div class="row nowrap"><span class="avatar" style="width:26px;height:26px">${roleIcon(a.role)}</span><strong class="grow">${esc(a.name)}</strong>${pill(a.current_task ? "running" : a.status)}</div>${a.current_task ? `<div class="muted ellipsis">${esc(a.current_task)}</div>` : `<div class="muted">${esc(a.role)} · L${a.level}</div>`}</div>`).join("") || '<p class="muted">Agents appear here when they work on this project.</p>'}</div></div>
+  // Removing takes an agent off this panel only: it stays in the company and comes back when it works here again.
+  const canRemove = me.is_admin || d.created_by === me.id;
+  const rm = (a) => canRemove && !a.current_task ? ib("x", `Remove ${a.name} from this project (it stays on the Agents list)`, `data-rm="${a.id}"`, "sm") : "";
+  const html = `<div class="proj-rail-top"><div class="row nowrap"><h2 class="grow" style="margin:0">Agents</h2><span class="pill ${busy.length ? "running" : ""}">${busy.length} working</span><span class="pill">${d.members.length}</span>${canRemove && d.members.length ? ib("trash", "Remove every agent from this project (they stay on the Agents list)", 'data-rm="all"', "sm") : ""}</div>
+    <div class="list" style="margin-top:8px">${d.members.map((a) => `<div class="list-item agent-row" data-aid="${a.id}"><div class="row nowrap"><span class="avatar" style="width:26px;height:26px">${roleIcon(a.role)}</span><strong class="grow">${esc(a.name)}</strong>${pill(a.current_task ? "running" : a.status)}${rm(a)}</div>${a.current_task ? `<div class="muted ellipsis">${esc(a.current_task)}</div>` : `<div class="muted">${esc(a.role)} · L${a.level}</div>`}</div>`).join("") || '<p class="muted">Agents appear here when they work on this project.</p>'}</div></div>
     <div class="proj-rail-org"><h3>Organisation</h3><ul class="porg-tree">${(kids.get(0) || []).map(tree).join("")}</ul></div>`;
   const rail = $("#proj-rail");
-  if (rail && rail.dataset.html !== html) { rail.innerHTML = html; rail.dataset.html = html; rail.querySelectorAll("[data-aid]").forEach((el) => (el.onclick = () => agentModal(Number(el.dataset.aid)))); }
+  if (rail && rail.dataset.html !== html) {
+    rail.innerHTML = html; rail.dataset.html = html;
+    rail.querySelectorAll("[data-aid]").forEach((el) => (el.onclick = () => agentModal(Number(el.dataset.aid))));
+    rail.querySelectorAll("[data-rm]").forEach((b) => (b.onclick = async (e) => {
+      e.stopPropagation();
+      const all = b.dataset.rm === "all";
+      if (all && !confirm(`Remove all ${d.members.length} agent(s) from this project? They stay on the Agents list and come back when they work here again.`)) return;
+      try { await api(`/api/projects/${d.id}/members/remove`, { method: "POST", body: all ? {} : { agent_ids: [Number(b.dataset.rm)] } }); projectMain(d.id, true); } catch (err) { toast(err.message); }
+    }));
+  }
 }
 
 // The file panel: browse the project's folder, open a file in the viewer.

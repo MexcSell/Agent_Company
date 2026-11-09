@@ -541,6 +541,8 @@ class Project(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     # its own, stricter rules (SPEC-01 S01-R-05, policies.PROJECT_KEYS): {"goal_budget_usd": 2.0, ...}
     policy: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # agents taken off the project's Agents panel: {"<agent id>": "<iso time>"}; back once they work on it again
+    removed_members: Mapped[dict[str, Any]] = mapped_column(default=dict)
 
 
 class Message(Base):
