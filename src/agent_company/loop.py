@@ -343,7 +343,7 @@ def _execute(agent: Agent, req: executors.Request, purpose: str, task_id: int | 
             req.data["mcp"] = ({}, [])
     res, choice = None, chain[0]
     attempts = max(1, settings().retry_max_attempts)
-    run_timeout = min(timeout, settings().command_timeout) if timeout else settings().command_timeout
+    run_timeout = min((t for t in (timeout, settings().command_timeout) if t), default=0)  # 0 = no limit
     for choice in chain[:MAX_FALLBACKS]:
         fresh_session_tried = False
         attempt = 0

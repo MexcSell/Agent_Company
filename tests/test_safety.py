@@ -290,6 +290,24 @@ def test_the_task_deadline_caps_the_run_timeout(monkeypatch):
     assert seen == [30, 600], "a task deadline shortens a run; it never extends the command timeout"
 
 
+def test_a_command_timeout_of_0_is_no_limit(monkeypatch, tmp_path):
+    from agent_company import prefs, sandbox
+
+    prefs.set_value("command_timeout", 0, actor="user:admin")
+    seen = []
+    real = executors.for_choice
+    monkeypatch.setattr(executors, "for_choice", lambda choice, timeout: (seen.append(timeout), real(choice, timeout))[1])
+    gm = registry.staff("general_manager")
+    loop._execute(gm, plan_request(), "plan", timeout=30)
+    loop._execute(gm, plan_request(), "plan")
+    assert seen == [30, 0], "a task deadline still applies; without one the run has no configured limit"
+    off = executors.OfflineExecutor(router.Choice("Offline", "offline", "", "t"), 0)
+    assert off.run(executors.Request(purpose="report", role="research", system="", prompt="p")).ok
+    assert off.timeout == executors.TOOL_CONTRACTS["offline"].max_seconds, "only the executor's own cap is left"
+    res = sandbox.run(["/bin/sh", "-c", "sleep 0.2; echo ok"], tmp_path, 0, mode="off")
+    assert res.returncode == 0 and not res.timed_out and "ok" in res.output
+
+
 def test_policy_refusals_are_not_retried(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     calls = []

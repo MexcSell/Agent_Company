@@ -16,7 +16,8 @@ SCHEMA: dict[str, tuple[type, str]] = {
     "max_iterations": (int, "Rounds of the goal loop before a goal fails (1-10)"),
     "max_parallel": (int, "Tasks running at once across all goals (1-16)"),
     "require_approval": (bool, "Work that passes the gate waits for an administrator before merging"),
-    "command_timeout": (int, "Seconds a quality command or agent run may take"),
+    "command_timeout": (int, "Seconds a quality command or agent run may take (0 = no limit; an agent run still "
+                             "ends after its executor's own 2-hour cap)"),
     "rotation_interval": (int, "Seconds between rotation visits of the external-data room (0 = manual); restart to apply"),
     "proposal_policy": (str, "Who decides agent proposals: 'user' (administrator) or 'superiors' (the GM)"),
     "max_proposal_goals": (int, "Goals a single goal may spawn through approved proposals"),
@@ -118,7 +119,7 @@ SCHEMA: dict[str, tuple[type, str]] = {
 }
 RETRIEVAL_KEYS = {k for k in SCHEMA if k.startswith("retrieval_w_")}
 LIMITS: dict[str, tuple[float, float]] = {
-    "max_iterations": (1, 10), "max_parallel": (1, 16), "command_timeout": (10, 7200),
+    "max_iterations": (1, 10), "max_parallel": (1, 16), "command_timeout": (0, 7200),
     "rotation_interval": (0, 86400), "max_proposal_goals": (0, 20), "rule_proposal_min_goals": (2, 20), "goal_budget_usd": (0, 10_000),
     "goal_time_budget": (0, 7 * 86400), "study_interval": (0, 7 * 86400),
     "goal_token_budget": (0, 1_000_000_000), "goal_agent_limit": (0, 16),

@@ -490,7 +490,8 @@ class Executor:
             if why:
                 raise PermissionError(f"emergency stop: {why}")
             req.grant, req.writes = grant, grant.writes
-            self.timeout = min(self.timeout, TOOL_CONTRACTS.get(self.kind, ToolContract((), 600)).max_seconds)
+            cap = TOOL_CONTRACTS.get(self.kind, ToolContract((), 600)).max_seconds
+            self.timeout = min(self.timeout or cap, cap)  # 0: no configured limit, only the executor's own cap
             res = self._run(req)
         except Exception as e:  # noqa: BLE001 - an executor failure is a task failure, not a crash
             res = Result(text="", ok=False, error=f"{type(e).__name__}: {e}")

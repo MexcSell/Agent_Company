@@ -268,7 +268,7 @@ def _execute(cmd: list[str], cwd: Path, env: dict[str, str] | None, timeout: int
     proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, env=env, start_new_session=True)
     try:
-        out, _ = proc.communicate(timeout=timeout)
+        out, _ = proc.communicate(timeout=timeout or None)  # 0: no limit (setting command_timeout)
         return proc.returncode, out or "", False
     except subprocess.TimeoutExpired:
         try:
