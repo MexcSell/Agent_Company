@@ -38,7 +38,10 @@ feature came from.
   each edited .py/.js file is parsed, a syntax error goes back to the agent; a read-only run with `shell` at G2+ and
   a worktree, also the GM's plan run, gets a `Grant.checks` list (CLAUDE_CHECK/COPILOT_CHECK): pytest, git status/diff
   (`git diff --output` denied), ls and the syntax-check wrapper `python3 -I edit_check.py <files>` (node --check per
-  .js file, compile() per .py file); a raw `node` command stays refused); Codex runs without its own web tools (`CODEX_NO_WEB`: web search, apps, browser, computer use); `terminate` for stops; `gate`, the tool gateway every run passes: permissions and
+  .js file, compile() per .py file); a raw `node` command stays refused); every CLI run and gate command gets
+  `PYTHONDONTWRITEBYTECODE=1` and `-p no:cacheprovider` in `PYTEST_ADDOPTS` (`sandbox.no_cache_env`), so pytest
+  leaves no `__pycache__/`/`.pytest_cache/` in a worktree (so `--lf/--ff/--sw/--nf/--cache-clear` are unavailable
+  there; `tests/test_cache_free_runs.py` checks L2, L3 and `_spawn`); Codex runs without its own web tools (`CODEX_NO_WEB`: web search, apps, browser, computer use); `terminate` for stops; `gate`, the tool gateway every run passes: permissions and
   `Agent.autonomy` G0-G4 decide writes, Bash and MCP tools, the isolation level L0-L2 and every tool call (Claude Code
   stream-json, Codex `--json`) are recorded on the `Run`; FW-R-02 `StuckWatch` reads the stream while it runs and ends a run
   that repeats the same call `stuck_repeat_limit` times or fails the same way `stuck_error_limit` times), `dependencies.py` (S08-R-05: dependency changes per goal from git objects, `pip-audit`/`npm audit` at the gate's

@@ -146,8 +146,28 @@ def env_for(extra: dict[str, str] | None = None, home_dir: Path | str | None = N
     env["HOME"] = str(home_dir or user)
     env.setdefault("LANG", "C.UTF-8")
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTEST_ADDOPTS"] = _no_cacheprovider(env.get("PYTEST_ADDOPTS", ""))
     env.update(extra or {})
     return env
+
+
+NO_CACHEPROVIDER = "-p no:cacheprovider"
+
+
+def _no_cacheprovider(addopts: str) -> str:
+    """`addopts` with pytest's cache plugin switched off, an operator's options kept, the option never twice."""
+    if "no:cacheprovider" in addopts:
+        return addopts
+    return f"{addopts} {NO_CACHEPROVIDER}".strip()
+
+
+def no_cache_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    """A copy of `env` (else of the server's environment) in which Python and pytest leave no `__pycache__/`
+    or `.pytest_cache/` behind in the directory they run in."""
+    out = dict(os.environ if env is None else env)
+    out["PYTHONDONTWRITEBYTECODE"] = "1"
+    out["PYTEST_ADDOPTS"] = _no_cacheprovider(out.get("PYTEST_ADDOPTS", ""))
+    return out
 
 
 def build(argv: list[str], cwd: Path, *, writable: list[Path], readonly: list[Path] | None = None,
