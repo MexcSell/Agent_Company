@@ -155,6 +155,9 @@ def test_a_models_own_key_never_leaves_the_server(app):
         assert key not in json.dumps([[a.before, a.after] for a in s.query(AuditEvent).all()], default=str)
     st = app.get("/api/models/cli/codex").json()
     assert st["label"] == "OpenAI Codex" and st["steps"][0] == "npm install -g @openai/codex"
+    assert st["steps"][-1].startswith("codex login --device-auth ")  # a server has no browser for the sign-in
+    st = app.get("/api/models/cli/codex?account=codex-7").json()  # into the model's own sign-in folder
+    assert st["steps"][-1].startswith("CODEX_HOME=") and "codex-accounts/codex-7 codex login --device-auth" in st["steps"][-1]
     assert app.get("/api/models/cli/nope").status_code == 404
     assert app.post("/api/models/local_probe", json={"url": "file:///etc/passwd"}).status_code == 400
 

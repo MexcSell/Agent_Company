@@ -1256,8 +1256,8 @@ def local_models(url: str, key: str = "", client: httpx.Client | None = None) ->
 CLI_TOOLS: dict[str, dict[str, Any]] = {
     "codex": {"label": "OpenAI Codex", "kind": "codex", "exe": "codex", "package": "@openai/codex",
               "steps": ["npm install -g @openai/codex", "codex --version",
-                        "codex   # choose Sign in with ChatGPT, sign in with your ChatGPT account and finish the "
-                        "browser sign-in; on a server without a browser: codex login --device-auth"],
+                        "codex login --device-auth   # open the address it prints, sign in with the ChatGPT account "
+                        "this model should use and enter the one-time code"],
               "enable": "enable_codex"},
     "copilot": {"label": "GitHub Copilot", "kind": "copilot", "exe": "copilot", "package": "@github/copilot",
                 "steps": ["npm install -g @github/copilot", "copilot --version",
@@ -1316,11 +1316,14 @@ def cli_status(tool: str, account: str = "") -> dict[str, Any]:
     t = CLI_TOOLS[tool]
     exe = shutil.which(t["exe"])
     version = _version(exe)
+    steps = t["steps"]
+    if tool == "codex" and account:  # the sign-in goes into that account's folder, its CODEX_HOME
+        steps = [f"CODEX_HOME={codex_home(account)} {x}" if x.startswith("codex login") else x for x in steps]
     return {"tool": tool, "label": t["label"], "kind": t["kind"], "installed": bool(exe), "version": version,
             "signed_in": bool(exe) and _signed_in(tool, account), "enabled": bool(getattr(settings(), t["enable"])),
             "account": cli_signin(t["kind"], account) if exe else {}, "can_login": tool in LOGIN_CMDS,
             "site": LOGIN_SITES.get(tool, ""), "next_account": next_account(tool) if tool == "codex" else "",
-            "enable_setting": t["enable"], "steps": t["steps"]}
+            "enable_setting": t["enable"], "steps": steps}
 
 
 def install_cli(tool: str) -> dict[str, Any]:

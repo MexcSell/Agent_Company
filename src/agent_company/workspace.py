@@ -79,7 +79,7 @@ def available() -> dict[str, Any]:
                  "install": "npm i -g @anthropic-ai/claude-code"},
                 {"id": "codex", "label": "Codex", "available": codex is not None, "models": CODEX_MODELS,
                  "catalog": catalog["codex"], "efforts": CODEX_EFFORTS, "version": _version(codex),
-                 "install": "npm i -g @openai/codex, then `codex login`"},
+                 "install": "npm i -g @openai/codex, then `codex login --device-auth`"},
                 {"id": "copilot", "label": "GitHub Copilot", "available": copilot is not None, "models": ["default"],
                  "efforts": ["default"], "version": _version(copilot), "install": "npm i -g @github/copilot, then `copilot` to sign in"}]}
 
