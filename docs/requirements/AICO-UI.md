@@ -334,8 +334,12 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   decided definition rewrites (`GET /api/definition-candidates`, diff drawer with Apply / Discard, Versions & restore
   on the agent card) and experiments with the six-step stepper, baseline vs candidate figures with sample sizes and
   regressions; a study rewrite's Experiment and Regression steps show "not run"; tab Learning & experiments = the
-  former Evolution page). EVO-03 per agent version: the experiment comparison and the agent card's Evaluation tab;
-  no per-version time series (open).
+  former Evolution page). EVO-03 per agent version: the experiment comparison and the agent card's Evaluation tab,
+  whose Per version table (follow-ups) lists each definition version (`agentdefs.history`, the agent file's git log)
+  with task success and failure rate, runs, cost, mean run time and tool-call failure rate and their sample sizes;
+  runs do not record the version, so work is attributed by time (a task to the version current when it finished, a
+  run to the one current when it started; `performance.version_metrics`, `GET /api/agents/{id}/version-metrics`,
+  `tests/test_version_metrics.py`). Evaluation score and regressions per version stay with the experiments.
 
 ## 10. Organization Evolution (P1)
 

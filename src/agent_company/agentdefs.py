@@ -126,6 +126,29 @@ def sync_all(reason: str = "registered") -> int:
     return sum(sync(i, reason) for i in ids)
 
 
+VERSION_RE = re.compile(r" v(\d+): ")
+
+
+def history(agent_id: int, limit: int = 500) -> list[dict[str, Any]]:
+    """The agent's definition versions, oldest first: {version, commit, at, reason} from its file's git history
+    (UI-EVO-03); `version` is None for a commit whose message names none."""
+    with session() as s:
+        a = s.get(Agent, agent_id)
+        if a is None:
+            raise KeyError(agent_id)
+        p = path_for(a)
+    log = _git(repo(), "log", "--format=%h\t%cI\t%s", "-n", str(limit), "--", p.name).stdout
+    out = []
+    for ln in reversed(log.splitlines()):
+        if ln.count("\t") < 2:
+            continue
+        commit, at, msg = ln.split("\t", 2)
+        m = VERSION_RE.search(msg)
+        out.append({"version": int(m.group(1)) if m else None, "commit": commit, "at": at,
+                    "reason": msg[m.end():] if m else msg})
+    return out
+
+
 def read(agent_id: int) -> dict[str, Any]:
     with session() as s:
         a = s.get(Agent, agent_id)

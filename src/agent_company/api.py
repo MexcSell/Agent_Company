@@ -1524,6 +1524,11 @@ def create_app(start_background: bool = True) -> FastAPI:
     def agent_versions(agent_id: int, _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         return evolution.versions(agent_id)
 
+    @app.get("/api/agents/{agent_id}/version-metrics")
+    def agent_version_metrics(agent_id: int, _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        """UI-EVO-03: tasks, runs, cost, run time and tool-call failures per definition version (time-attributed)."""
+        return performance.version_metrics(agent_id)
+
     @app.post("/api/agents/{agent_id}/versions/{version}/restore")
     def agent_restore(agent_id: int, version: int, admin: dict[str, Any] = Depends(allowed("manage_agents"))) -> dict[str, Any]:
         out = evolution.restore(agent_id, version)

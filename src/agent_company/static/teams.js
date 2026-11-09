@@ -71,6 +71,22 @@ async function agentEvaluationTab(box, a) {
         .map(([l, v]) => `<div class="card kpi"><div class="value" style="font-size:${String(v) === "not measured" ? "13px;color:var(--muted)" : "20px"}">${esc(String(v))}</div><div class="label">${l}</div></div>`).join("")}</div>
     <p class="muted dash-meta">From the agent's tasks and runs (performance.py); certification and trials are on the Evolution page.</p>`
     : `<div class="empty"><p class="empty-title">Not measured</p><p class="muted">The agent has no task or run yet.</p></div>`;
+  const vm = await api(`/api/agents/${a.id}/version-metrics`).catch(() => null);
+  if (vm && vm.versions.length) {
+    box.insertAdjacentHTML("beforeend", '<div id="ag-vm"></div>');
+    agentVersionTable($("#ag-vm"), vm, false);
+  }
+}
+// UI-EVO-03: per definition version, what the agent did while it was current (time-attributed, sample sizes shown)
+function agentVersionTable(el, vm, all) {
+  const rate = (r) => (r.rate == null ? '<span class="muted">–</span>' : `${Math.round(r.rate * 100)}% <span class="muted">(${r.hits}/${r.n})</span>`);
+  const bar = (r) => (r.rate == null ? "" : `<div class="progress" style="height:4px;margin-top:3px"><span style="width:${Math.round(r.rate * 100)}%"></span></div>`);
+  const worked = vm.versions.filter((v) => v.tasks || v.runs), rows = (all ? vm.versions : worked).slice(0, all ? 500 : 30);
+  el.innerHTML = `<div class="row nowrap" style="margin-top:16px"><h3 class="grow" style="margin:0">Per version</h3><label class="plug"><input type="checkbox" id="ag-vm-all" ${all ? "checked" : ""}><span>versions without work</span></label></div>
+    <p class="muted dash-meta">${worked.length} of ${vm.versions.length} definition versions did work. Attributed by ${esc(vm.basis)}.${vm.unattributed.tasks || vm.unattributed.runs ? ` Before the first recorded version: ${vm.unattributed.tasks} task(s), ${vm.unattributed.runs} run(s).` : ""}</p>
+    <div class="table-wrap"><table><tr><th>Version</th><th>From</th><th>Task success</th><th>Failure rate</th><th class="num">Runs</th><th class="num">Cost</th><th class="num">Mean run</th><th>Tool-call failures</th><th>Change</th></tr>
+      ${rows.map((v) => `<tr><td class="num"><code title="${esc(v.commit)}">v${v.version ?? "?"}</code></td><td class="nowrap muted">${esc(new Date(v.at).toLocaleString(undefined, inTz({ dateStyle: "short", timeStyle: "short" })))}</td><td>${rate(v.task_success)}${bar(v.task_success)}</td><td>${rate(v.failure_rate)}</td><td class="num">${v.runs}</td><td class="num">${v.runs ? money(v.cost) : "–"}</td><td class="num">${v.mean_run_seconds == null ? "–" : dur(v.mean_run_seconds)}</td><td>${rate(v.tool_call_failure_rate)}</td><td class="muted ellipsis" style="max-width:240px" title="${esc(v.reason)}">${esc(v.reason)}</td></tr>`).join("") || '<tr><td colspan="9" class="muted">No version did work yet.</td></tr>'}</table></div>`;
+  $("#ag-vm-all").onchange = (e) => agentVersionTable(el, vm, e.target.checked);
 }
 async function agentMemoryTab(box, a) {
   if (!me.is_admin) { box.innerHTML = '<p class="muted">Knowledge items are shown to administrators.</p>'; return; }

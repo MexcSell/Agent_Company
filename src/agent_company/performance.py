@@ -348,6 +348,59 @@ def _rate(hits: int, n: int) -> dict[str, Any]:
     return {"rate": round(hits / n, 3) if n else None, "hits": hits, "n": n}
 
 
+def version_metrics(agent_id: int) -> dict[str, Any]:
+    """UI-EVO-03: what the agent did under each definition version, newest first. Runs do not record the version, so
+    work is attributed by time: a task to the version current when it finished, a run to the one current when it
+    started. Per version: tasks done/failed (success and failure rate), runs, cost, mean run time and the tool-call
+    failure rate, each with its sample size; a version without work is listed with zeros, never estimated."""
+    from bisect import bisect_right
+    from datetime import UTC, datetime
+
+    from agent_company import agentdefs
+
+    versions = agentdefs.history(agent_id)
+    starts = [datetime.fromisoformat(v["at"]).astimezone(UTC) for v in versions]
+
+    def slot(at: Any) -> int | None:  # index of the version current at `at` (stored times are UTC)
+        if at is None:
+            return None
+        i = bisect_right(starts, at if at.tzinfo else at.replace(tzinfo=UTC)) - 1
+        return i if i >= 0 else None
+
+    rows = [{"done": 0, "failed": 0, "runs": 0, "cost": 0.0, "seconds": 0.0, "calls": 0, "failed_calls": 0}
+            for _ in versions]
+    early = {"tasks": 0, "runs": 0}  # work before the first recorded version is not attributed to any
+    with session() as s:
+        for status, at in s.execute(select(Task.status, Task.finished_at).where(
+                Task.agent_id == agent_id, Task.status.in_(("done", "failed")))):
+            if (i := slot(at)) is not None:
+                rows[i][status] += 1
+            elif at is not None:
+                early["tasks"] += 1
+        for cost, duration, calls, at in s.execute(select(Run.cost, Run.duration, Run.tool_calls, Run.started_at)
+                                                   .where(Run.agent_id == agent_id)):
+            if (i := slot(at)) is None:
+                early["runs"] += 1
+            else:
+                r = rows[i]
+                r["runs"] += 1
+                r["cost"] += cost or 0.0
+                r["seconds"] += duration or 0.0
+                r["calls"] += len(calls or [])
+                r["failed_calls"] += sum(1 for c in calls or [] if isinstance(c, dict) and c.get("ok") is False)
+    out = []
+    for i, v in enumerate(versions):
+        r, tasks = rows[i], rows[i]["done"] + rows[i]["failed"]
+        out.append({**v, "until": versions[i + 1]["at"] if i + 1 < len(versions) else None,
+                    "tasks": tasks, "task_success": _rate(r["done"], tasks), "failure_rate": _rate(r["failed"], tasks),
+                    "runs": r["runs"], "cost": round(r["cost"], 4),
+                    "mean_run_seconds": round(r["seconds"] / r["runs"], 1) if r["runs"] else None,
+                    "tool_call_failure_rate": _rate(r["failed_calls"], r["calls"])})
+    return {"agent_id": agent_id, "versions": list(reversed(out)), "unattributed": early,
+            "basis": "time: a task counts for the version current when it finished, a run for the one current "
+                     "when it started"}
+
+
 def _median(values: list[float]) -> dict[str, Any]:
     """The median and the 95th percentile (nearest rank: the tail a median hides, G-R-16)."""
     tail = sorted(values)[max(0, math.ceil(0.95 * len(values)) - 1)] if values else None
