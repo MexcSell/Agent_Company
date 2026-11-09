@@ -3,6 +3,7 @@
 The checks are AG-01..AG-10; AG-05 (reasoning) needs a real model and is in the live run.
 Report: docs/verification/phase-3-agents.md."""
 import json
+from pathlib import Path
 import os
 import stat
 import sys
@@ -183,20 +184,28 @@ READ = ["Read", "Grep", "Glob"]
 EXPECTED_TOOLS = {  # role -> (its own work changes files, the tools that work is given)
     "research": (False, READ),
     "architect": (False, READ),
-    "developer": (True, READ + ["Edit", "Write", *executors.CLAUDE_BASH]),
+    "developer": (True, READ + ["EDITS", *executors.CLAUDE_BASH]),  # EDITS: Edit/Write bound to its worktree
     "qa": (False, READ + executors.CLAUDE_CHECK),
     "security": (False, READ),
     "general_manager": (False, READ),  # seeded with `read` only (this server's GM was given write and shell)
-    "frontend": (True, READ + ["Edit", "Write", *executors.CLAUDE_BASH]),
+    "frontend": (True, READ + ["EDITS", *executors.CLAUDE_BASH]),
 }
+
+
+def _expected(role):
+    """EXPECTED_TOOLS with the writers' Edit/Write rules for the worktree _claude_run gives them (V29)."""
+    writes, tools = EXPECTED_TOOLS[role]
+    wt = (settings().worktrees_dir / f"p3-{role}").resolve()
+    return writes, [x for t in tools for x in ([f"Edit(/{wt}/**)", f"Write(/{wt}/**)"] if t == "EDITS" else [t])]
 
 
 @pytest.mark.parametrize("role", AGENTS)
 def test_each_agent_gets_exactly_the_tools_of_its_permissions(tmp_path, monkeypatch, role):
     agent = _agent(role, None)
-    writes, expected = EXPECTED_TOOLS[role]
+    writes, expected = _expected(role)
     res, argv, allowed = _claude_run(agent, tmp_path, monkeypatch, writes)
     assert res.ok and allowed == expected and res.tools == expected
+    assert not {"Edit", "Write"} & set(allowed), "a bare Edit/Write rule writes anywhere on the host (V29)"
     assert "--dangerously-skip-permissions" not in argv
     # V14: no acceptEdits (it approves `rm -r` in the worktree); writers get Edit/Write by name and the syntax hook
     assert "--permission-mode" not in argv and ("--settings" in argv) == writes
@@ -210,7 +219,7 @@ def test_each_agent_gets_exactly_the_tools_of_its_permissions(tmp_path, monkeypa
 def test_an_agent_asked_to_write_without_the_permission_gets_no_write_tool(tmp_path, monkeypatch, role):
     agent = _agent(role, None)
     res, argv, allowed = _claude_run(agent, tmp_path, monkeypatch, writes=True)
-    assert not {"Edit", "Write"} & set(allowed) and "--permission-mode" not in argv
+    assert not any(t.startswith(("Edit", "Write")) for t in allowed) and "--permission-mode" not in argv
     if "write" not in agent.permissions:
         assert "write: no write permission" in res.dropped, "the refusal is recorded on the run"
     if "shell" not in agent.permissions:
@@ -355,3 +364,22 @@ def test_writers_delete_and_rename_only_through_git(tmp_path, monkeypatch, role)
     shell = any(t == "Bash(uv run:*)" for t in allowed)
     assert (set(executors.CLAUDE_FILES) <= set(allowed)) == shell and (executors.FILES_HINT in system) == shell
     assert not any(t in allowed for t in ("Bash(rm:*)", "Bash(mv:*)"))
+
+
+@pytest.mark.parametrize("role", AGENTS)
+def test_every_run_reads_the_host_but_not_its_secrets(tmp_path, monkeypatch, role):
+    """V13, the owner's decision of 2026-11-09: every model reads the whole host (bare Read/Grep/Glob); the server's
+    secrets are denied to every Claude Code run (a Read rule keeps Grep and Glob out too, checked live)."""
+    agent = _agent(role, None)
+    writes, _ = _expected(role)
+    res, argv, allowed = _claude_run(agent, tmp_path, monkeypatch, writes)
+    assert allowed[:3] == ["Read", "Grep", "Glob"]
+    denied = argv[argv.index("--disallowedTools") + 1].split(",")
+    assert set(executors.secret_rules()) <= set(denied)
+    paths = executors.secret_paths()
+    data = settings().data_dir.resolve()
+    for p in ("secret.key", "claude-accounts/**", "codex-accounts/**", "git-keys/**", "tls/**", "*.db"):
+        assert f"{data}/{p}" in paths
+    assert f"{Path.home()}/.ssh/**" in paths and any(p.endswith("/.env") for p in paths)
+    assert not any(str(settings().worktrees_dir.resolve()).startswith(p.rstrip("*/")) for p in paths), \
+        "the worktrees themselves stay readable"

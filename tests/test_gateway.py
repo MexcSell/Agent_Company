@@ -58,7 +58,8 @@ def req(wt, perms, autonomy="G3", **kw):
 def test_an_agent_without_shell_never_gets_bash(claude, wt):  # SEC-011
     res = cc(req(wt, ["read", "write"]))
     tools = allowed(claude[0])
-    assert "Edit" in tools and not any(t.startswith("Bash") for t in tools)
+    assert any(t.startswith("Edit(//") and t.endswith("/worktrees/gw/**)") for t in tools)  # bound to it (V29)
+    assert not any(t.startswith("Bash") for t in tools)
     assert res.isolation == "L2" and res.permissions == ["read", "write"] and "shell: no shell permission" in res.dropped
     cc(req(wt, ["read", "write", "shell"]))
     assert any(t.startswith("Bash(pytest") for t in allowed(claude[1]))
@@ -108,7 +109,8 @@ def test_the_configure_step_writes_without_write_permission_but_gets_no_bash(cla
     res = cc(executors.Request(purpose="configure", role="general_manager", system="", prompt="p", workdir=wt,
                                writes=True, permissions=["read"], autonomy="G3"))
     tools = allowed(claude[0])
-    assert "Edit" in tools and not any(t.startswith("Bash") for t in tools)
+    assert any(t.startswith("Edit(//") and t.endswith("/worktrees/gw/**)") for t in tools)  # bound to it (V29)
+    assert not any(t.startswith("Bash") for t in tools)
     assert res.permissions == ["read", "write:.claude"] and res.dropped == []
     res = cc(executors.Request(purpose="task", role="general_manager", system="", prompt="p", workdir=wt,
                                writes=True, permissions=["read"], autonomy="G3"))

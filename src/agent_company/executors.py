@@ -722,13 +722,35 @@ def with_check_hint(system: str, grant: Grant) -> str:
     return f"{system}\n\n{CHECK_HINT}" if (grant.shell or grant.checks) and CHECK_OK else system
 
 
+def secret_paths() -> list[str]:
+    """V13: every model reads the whole host (the owner's decision of 2026-11-09), except what the security rules keep
+    from every agent: the server's keys, sign-ins, database and TLS keys, and the server user's own credentials.
+    Gitignore-style patterns of absolute paths."""
+    from agent_company.config import REPO_ROOT, settings
+
+    repo, d, home = REPO_ROOT.resolve(), settings().data_dir.resolve(), Path.home()
+    return [f"{repo}/.env", f"{repo}/.env.*", f"{d}/secret.key", f"{d}/*.db", f"{d}/*.db-*", f"{d}/claude-accounts/**",
+            f"{d}/codex-accounts/**", f"{d}/git-keys/**", f"{d}/tls/**", f"{d}/machines/**", f"{home}/.claude/**",
+            f"{home}/.claude.json", f"{home}/.codex/**", f"{home}/.copilot/**", f"{home}/.ssh/**", f"{home}/.config/gh/**",
+            f"{home}/.git-credentials", f"{home}/.netrc", "/etc/shadow", "/etc/gshadow", "/etc/ssh/*_key"]
+
+
+def secret_rules() -> list[str]:
+    """Claude Code deny rules for `secret_paths`: a Read rule also keeps Grep and Glob out, also when they search a
+    folder above (checked live on Claude Code 2.1.310)."""
+    return [f"Read(/{p})" for p in secret_paths()]
+
+
 class ClaudeCodeExecutor(Executor):
     kind = "claude_code"
 
-    def tools(self, grant: Grant) -> list[str]:
-        """--allowedTools: Edit/Write need `write`, Bash needs `shell` (SEC-011), MCP tools autonomy G3; a run
-        without writes gets at most the check list."""
-        return (["Read", "Grep", "Glob"] + (["Edit", "Write"] if grant.writes else [])
+    def tools(self, grant: Grant, cwd: Path | None = None) -> list[str]:
+        """--allowedTools: Read/Grep/Glob read the whole host (V13, the owner's decision; `secret_rules` are denied);
+        Edit/Write need `write` and are bound to the run's worktree `cwd` (a bare `Edit`/`Write` rule writes anywhere on
+        the host, V29); Bash needs `shell` (SEC-011), MCP tools autonomy G3; a run without writes gets at most the
+        check list."""
+        edits = [f"Edit(/{cwd}/**)", f"Write(/{cwd}/**)"] if grant.writes and cwd is not None else []
+        return (["Read", "Grep", "Glob"] + edits
                 + (list(CLAUDE_BASH) if grant.shell else list(CLAUDE_CHECK) if grant.checks else []))
 
     def _run(self, req: Request) -> Result:
@@ -736,16 +758,15 @@ class ClaudeCodeExecutor(Executor):
             raise RuntimeError("Claude Code needs a worktree")
         cwd = ensure_sandboxed(req.workdir)
         grant = req.grant or Grant()
-        tools = self.tools(grant)
+        tools = self.tools(grant, cwd)
         system = with_check_hint(req.system, grant) + (f"\n{FILES_HINT}" if grant.shell else "")
         cmd = ["claude", "-p", req.prompt, "--output-format", "stream-json", "--verbose",
                "--append-system-prompt", system, "--allowedTools", ",".join(tools)]
         # V14: a run whose allow-list holds no Bash pattern gets no Bash at all; otherwise Claude Code runs its own
         # read-only commands (`git log`, `cat`, `ls` inside the worktree) without asking
-        deny = (CLAUDE_CHECK_DENY if grant.checks and not grant.shell else []) + (
+        deny = secret_rules() + (CLAUDE_CHECK_DENY if grant.checks and not grant.shell else []) + (
             [] if any(t.startswith("Bash") for t in tools) else ["Bash"])
-        if deny:
-            cmd += ["--disallowedTools", ",".join(deny)]
+        cmd += ["--disallowedTools", ",".join(deny)]
         if req.writes:  # V14: no `--permission-mode acceptEdits`: Edit/Write are allowed by name, and that mode would
             # also approve file commands (`rm -r`, `mv`) in the worktree the allow-list does not hold
             cmd += ["--settings", json.dumps(EDIT_CHECK_SETTINGS)]

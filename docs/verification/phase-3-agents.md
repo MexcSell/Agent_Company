@@ -96,9 +96,12 @@ Full list: `docs/known-issues.md`, V11–V16.
   them instead of the platform's screened tools. Decision: `CodexExecutor` always disables them
   (`executors.CODEX_NO_WEB`), because agents get no web tools and the research room's web is the platform's. Live
   rerun: UI/UX made no web calls, and research used `fetch_url`.
-- **V13 (open):** Codex's read-only sandbox runs any program for an agent without `shell` (`python3 -c`, as root), and
+- **V13 (decided 2026-11-09):** Codex's read-only sandbox runs any program for an agent without `shell` (`python3 -c`, as root), and
   it can read outside the worktree. Codex reads files through these commands, so they cannot simply be turned
-  off. The threat model's known gap is updated.
+  off. The threat model's known gap is updated. The owner decided that every model may read the whole host; Claude
+  Code runs are denied the server's secrets (`executors.secret_rules`), Codex runs cannot be.
+- **V29 (fixed 2026-11-09, found re-checking V13):** bare `Edit`/`Write` rules let a writing Claude Code run write
+  anywhere on the host; they are now bound to the run's worktree.
 - **V14 (fixed 2026-11-09):** Claude Code's `acceptEdits` mode (writing runs) auto-approves file commands in the worktree
   (`rm -r __pycache__`, run 2101) and read-only commands (`git log`, `cat`) that are not in the run's allow-list.
   This stays inside the worktree, but `Run.tools` understates what the run could do.
@@ -132,7 +135,8 @@ Architect, Developer, QA and UI/UX pass. Research passes after the V12 fix. The 
 runs on the role route's model, not the model it is assigned (V15, the owner's decision). Security does good work,
 but its permissions are not enforced on Codex (V13). It stays disabled for goals, as it is today, until the owner
 decides how a Codex agent without `shell` should run, or moves the agent to a Claude Code model, where `read` gives
-Read/Grep/Glob only.
+Read/Grep/Glob only. (2026-11-09: the owner decided every model reads the whole host, V13; whether Security is enabled
+stays a question of its room's trial, G-R-04.)
 
 ## Phase 4 starts from here
 

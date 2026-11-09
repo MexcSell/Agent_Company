@@ -71,7 +71,7 @@ def test_a_read_only_grant_has_no_edit_or_write(claude, wt):  # (b)
     assert grant.checks and not grant.shell and not grant.writes
     run(wt, "qa", ["read", "write", "shell"], autonomy="G4")
     tools = allowed(claude[0])
-    assert not {"Edit", "Write", "MultiEdit"} & set(tools)
+    assert not any(t.startswith(("Edit", "Write", "MultiEdit")) for t in tools)
     assert "Bash(uv run:*)" not in tools and "Bash(npm run:*)" not in tools and "Bash(npm test:*)" not in tools
     assert "--permission-mode" not in claude[0] and "--settings" not in claude[0]
     assert executors.CopilotExecutor.tools(None, grant) == executors.COPILOT_CHECK
@@ -102,8 +102,9 @@ def test_git_diff_output_is_denied_to_read_only_runs(claude, wt):
     run(wt, "qa", ["read", "shell"])
     run(wt, "developer", ["read", "write", "shell"], writes=True)
     qa, dev = claude
-    assert qa[qa.index("--disallowedTools") + 1].split(",") == ["Bash(git diff --output:*)"]
-    assert "--disallowedTools" not in dev
+    qa_deny, dev_deny = (x[x.index("--disallowedTools") + 1].split(",") for x in (qa, dev))
+    assert qa_deny == [*executors.secret_rules(), "Bash(git diff --output:*)"]
+    assert dev_deny == executors.secret_rules(), "a writing run with shell: only the secrets are denied"
     assert executors.COPILOT_CHECK_DENY == ["shell(git diff --output)"]
 
 

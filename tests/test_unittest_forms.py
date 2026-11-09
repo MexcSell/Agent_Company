@@ -37,7 +37,7 @@ def test_read_only_grants_get_the_unittest_forms_and_no_writes():
     copilot = executors.CopilotExecutor.tools(None, grant)
     for form in FORMS:
         assert f"Bash({form}:*)" in claude and f"shell({form})" in copilot
-    assert not {"Edit", "Write"} & set(claude) and "write" not in copilot
+    assert not any(t.startswith(("Edit", "Write")) for t in claude) and "write" not in copilot
     assert "Bash(uv run:*)" not in claude and "shell(uv run)" not in copilot
     assert not set(BARE_BASH) & set(claude) and not set(BARE_SHELL) & set(copilot)
 
