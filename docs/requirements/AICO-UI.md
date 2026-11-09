@@ -45,9 +45,9 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   Audit log, Settings and Users stay top-bar buttons (CLAUDE.md rule kept); Notifications remains also a full page
   reached from its button and from every notification link.
 - **UI-D-03 Palette: update_5's tokens** (the newest folder; update_3's and update_4's differ). Dark (default):
-  app background `#0B1220`, sidebar `#111C2D`, panel `#142033`, elevated panel `#1E293B`, border `#24324A`, text
-  `#F9FAFB`, secondary text `#9CA3AF`, primary `#2563EB`, success `#16A34A`, warning `#D97706`, error `#DC2626`,
-  info `#0EA5E9`. Light theme uses the same semantic tokens with light values; both share one layout.
+  app background `#0B1220`, sidebar `#111C2D`, panel `#142033`, elevated panel `#1E293B`, text `#F9FAFB`, secondary text
+  `#9CA3AF` (text colours from the update_4 PDF p20), primary `#2563EB`, success `#16A34A`, warning `#D97706`, error
+  `#DC2626`. Border `#24324A` and info `#0EA5E9` are GM-chosen (no source names them). Light theme uses the same semantic tokens with light values; both share one layout.
   Accent is selectable (update_3 Screenshot_1: indigo, violet, blue, green, amber, rose, grey), per browser.
 - **UI-D-04 Three experience levels** (update_5 Screenshot_2) map onto the existing modes: Level 1 *Owner Command
   Center* (company status, GM communication, approvals, deliverables) = Simple mode and the top of the Dashboard;
