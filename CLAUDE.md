@@ -66,7 +66,7 @@ feature came from.
   for older goals, never for a goal active at write time, cleared by any status change; a failed store still returns
   the counts), read by the Simple overview and RCA;
   REQ-003 Simple mode: `User.ui_mode` simple|advanced, `/api/simple/missions` and `/api/simple/overview`); `workflow.py` (goal
-  state machine, `goal_transitions`; task lifecycle stages `Task.stage` beside the execution status, S05-R-08); `strategies.py` (S04-R-11 workflow templates per goal kind
+  state machine, `goal_transitions`; task lifecycle stages `Task.stage` beside the execution status, S05-R-08; `TASK_TRANSITIONS`: forward along the lifecycle, waiting, reopened, never out of `completed`/`cancelled`, an illegal move refused and logged, raised with AGENT_COMPANY_STRICT_STAGES=1); `strategies.py` (S04-R-11 workflow templates per goal kind
   bugfix|feature|refactor|research|docs, versioned: roles, writes, checks, iteration limit, execution mode, review
   policy; the order or the planner picks, a plan must fit it) + `teams.py` (a goal's team: joined/added/released
   history, released agents not staffed for that goal) + `orchestration.py` (S04-R-13 self-evaluation per template

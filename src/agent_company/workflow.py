@@ -25,10 +25,12 @@ A task keeps two fields (ASEAO05 S05-R-08). `Task.status` is what the scheduler 
             cancelled (the goal was cancelled or rejected)
 
 Tasks written before stages existed read as the stage of their status (`STATUS_STAGE`).
+`set_stage` allows only the moves of `TASK_TRANSITIONS`; `completed` and `cancelled` are final.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from sqlalchemy import select
@@ -59,6 +61,23 @@ TASK_STAGES = ("created", "planned", "assigned", "in_progress", "review", "appro
 STATUS_STAGE = {"queued": "planned", "running": "in_progress", "done": "approved", "failed": "failed",
                 "skipped": "skipped"}
 TASK_CLOSED = ("completed", "failed", "cancelled", "skipped")  # a goal's later state does not change these
+# the task lifecycle's moves (verification phase 6, V24): forward along LIFECYCLE (steps may be skipped: a task set
+# done directly), to a waiting or ending stage, reopened for a retry. `completed` and `cancelled` are final: a worker
+# still running when its goal was cancelled records its result, but the task stays cancelled
+LIFECYCLE = ("created", "planned", "assigned", "in_progress", "review", "approved", "completed")
+_WAIT = {"blocked", "skipped", "cancelled", "failed", "reopened"}
+TASK_TRANSITIONS: dict[str, set[str]] = {
+    **{st: set(LIFECYCLE[i + 1:]) | _WAIT for i, st in enumerate(LIFECYCLE[:-2])},
+    "reopened": set(LIFECYCLE[1:]) | _WAIT - {"reopened"},
+    "approved": {"completed", "reopened", "cancelled"},
+    "blocked": set(LIFECYCLE[1:]) | _WAIT - {"blocked"},
+    "skipped": {"planned", "reopened", "cancelled"},
+    "failed": {"reopened", "cancelled"},
+    "completed": set(),
+    "cancelled": set(),
+}
+# a test run may make an illegal move raise (AGENT_COMPANY_STRICT_STAGES=1); the server only refuses and logs it
+STRICT_TASK_STAGES = os.environ.get("AGENT_COMPANY_STRICT_STAGES") == "1"
 
 
 class IllegalTransition(ValueError):
@@ -70,6 +89,17 @@ def set_stage(t: Task, stage: str, reason: str = "") -> bool:
     if stage not in TASK_STAGES:
         raise ValueError(f"unknown task stage {stage!r}")
     if t.stage == stage:
+        return False
+    cur = t.stage or "created"
+    if stage not in TASK_TRANSITIONS.get(cur, set()):
+        if STRICT_TASK_STAGES:
+            raise IllegalTransition(f"task #{t.id}: {cur} → {stage} ({reason})")
+        from sqlalchemy.orm import object_session
+
+        from agent_company.db import log_event
+
+        log_event("task", f"task {t.key} stays {cur}: {cur} → {stage} is not a task transition"
+                  + (f" ({reason[:200]})" if reason else ""), goal_id=t.goal_id, s=object_session(t))
         return False
     t.stage_log = [*(t.stage_log or []), {"from": t.stage or "created", "to": stage, "reason": reason[:200],
                                           "at": now().isoformat()}][-50:]

@@ -16,7 +16,7 @@ import time
 
 from sqlalchemy import select
 
-from agent_company import blackboard, loop, prefs, projects, router
+from agent_company import blackboard, evolution, loop, prefs, projects, router
 from agent_company.config import settings
 from agent_company.db import Agent, Event, LiveProcess, Proposal, Run, Task, session
 
@@ -30,6 +30,9 @@ TWO = ("\n\nThis is a two-agent communication test: plan exactly one task, for t
 def main(mode: str) -> None:
     prefs.load()  # the DB settings: enable_claude_code and the rest (memory: CLI scripts need prefs.load)
     settings().auto_approve_proposals = False  # this process only; the server's setting is unchanged
+    # a smoke trial started here would die with this process and leave its eval goal in `planning` (V25); the
+    # server's own sweep (evolution: "smoke trials a restart cut off") starts it instead
+    evolution._spawn = lambda fn: None
     if mode == "two":
         settings().task_critic = False  # a critic would be a third agent
         loop._research = lambda goal, iteration, feedback: ""  # so would the research lead

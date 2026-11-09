@@ -196,3 +196,14 @@ isolated (users, goals, messages, files); offline only.
 |---|---------|--------|
 | V21 | A project's General Manager (`Project.manager_id`) did not plan its goals: the best-ranked GM did. | fixed (`registry.staff(prefer=…)`; `loop._plan`, `_configure` and `rca` pass the project's manager) |
 | V22 | A topic's agent list (the plan's "assigned developer/QA") is shown but staffing ignores it; workers come from the project's rooms, and every core agent is in `development`. | open (owner: should a listed agent constrain staffing?) |
+
+## Added 2026-11-09 (verification phase 6, project task execution)
+
+See `docs/verification/phase-6-execution.md`. TEST-PROJECT-003 (project #2, archived) on this server: the order through
+the command window, goal #332 (architect → developer → QA, 682 s), a working calculator in its repository.
+
+| # | Problem | Status |
+|---|---------|--------|
+| V23 | A project's description (its registered requirements) reached no agent; the planner got stack, rooms, deadline, priority, budget and formal requirements only. | fixed (`loop._project_context`: "Description (as registered)") |
+| V24 | Task stages had no transition table: a late worker moved a cancelled task on (goal #111, task 691: cancelled → review → failed). | fixed (`workflow.TASK_TRANSITIONS`; `completed`/`cancelled` final; illegal moves refused and logged) |
+| V25 | A goal run in a process that ends while a background thread works on it stays `planning` until the next server restart: the phase 4/6 live scripts left smoke-trial eval goals #331 and #333 (cancelled by hand). | open (low; the live scripts no longer start smoke trials; a fix records the owning process on the goal) |

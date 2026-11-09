@@ -679,8 +679,8 @@ def _project_manager(goal: Goal) -> int | None:
 
 
 def _project_context(goal: Goal) -> tuple[list[str], str]:
-    """The project's participating rooms and a note for the planner: stack, required skills, deadline, priority,
-    budget (ASEAO05 S05-R-06)."""
+    """The project's participating rooms and a note for the planner: its description (what it was registered with,
+    verification phase 6), stack, required skills, deadline, priority, budget (ASEAO05 S05-R-06)."""
     from agent_company.db import Project, now
     from agent_company.projects import _aware, project_spend
 
@@ -691,8 +691,10 @@ def _project_context(goal: Goal) -> tuple[list[str], str]:
         if p is None:
             return [], ""
         rooms, stack, skills = list(p.rooms or []), list(p.stack or []), list(p.required_skills or [])
+        about = (p.description or "").strip()
         deadline, priority, budget = _aware(p.deadline), p.priority or "normal", p.budget_usd or 0.0
-    lines = ([f"Technology stack: {', '.join(stack)} (use it; do not switch technologies)"] if stack else []) + (
+    lines = ([f"Description (as registered): {about[:2000]}" + ("…" if len(about) > 2000 else "")] if about else []) + (
+        [f"Technology stack: {', '.join(stack)} (use it; do not switch technologies)"] if stack else []) + (
         [f"Required skills: {', '.join(skills)} (name them in the tasks' skills)"] if skills else []) + (
         [f"Participating rooms: {', '.join(rooms)} (only their roles are listed below)"] if rooms else []) + (
         [f"Deadline: {deadline.date().isoformat()} ({(deadline - now()).days} day(s) left)"] if deadline else []) + (
