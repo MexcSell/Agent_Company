@@ -13,8 +13,11 @@ Plan → Build → Review → Fix (docs/1.claude-code-multi-agent.jpg). The loop
 They are committed with the goal's branch, so the approved merge carries them into the project.
 `check_plan()` rejects (never rewrites) a plan whose acceptance names another spec folder or a loop-written file;
 the GM is told why and plans again (K54).
-`save_answer()` writes a finished task's answer to its .md/.txt file_exists path: in the goal's own spec folder also
-over a stale file (read-only) or where the run made none (writing), never a loop file, another goal's folder or .git.
+`save_answer()` writes a finished task's answer to its .md/.txt file_exists path and to the documents of the goal's own
+spec folder its command conditions name; a `=== FILE: <path> ===` … `=== END FILE ===` block gives one path its own
+content, and a block for another own-folder document (.md/.txt/.json/.yaml) is placed too. In the goal's own spec
+folder also over a stale file (read-only) or where the run made none (writing), never a loop file, another goal's
+folder or .git. `task_note()` tells the agent so.
 `configure()` lets a CLI General Manager (Claude Code / Codex) update the project's `.claude/` configuration
 in the worktree; anything it changes outside `.claude/` and `.mcp.json` is put back.
 """
@@ -22,6 +25,7 @@ in the worktree; anything it changes outside `.claude/` and `.mcp.json` is put b
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 from pathlib import Path
 from typing import Any
@@ -36,6 +40,10 @@ LOOP_FILES = ("requirements.md", "tasks.md", "review.md", "sa-review.md", "decis
 # A `.claude/specs/<X>` folder, with or without a trailing slash; check_plan rejects any <X> but the goal's own (K54).
 SPEC_DIR = re.compile(r"\.claude/specs/([^/\s'\"`;|&<>()]+)")
 LOOP_FILE = re.compile(rf"\.claude/specs/[^/\s'\"`;|&<>()]+/({'|'.join(map(re.escape, LOOP_FILES))})(?![\w.-])")
+SPEC_PATH = re.compile(r"\.claude/specs/[^\s'\"`;|&<>()]+")  # a spec file a command condition names
+BLOCK_FILES = ANSWER_FILES + (".json", ".yaml", ".yml")  # an unnamed FILE block may also be one of these
+FILE_OPEN = re.compile(r"=== FILE: (.+?) ===")
+FILE_END = "=== END FILE ==="
 
 
 def slug(title: str, goal_id: int) -> str:
@@ -138,41 +146,149 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
 
 
+def _blocks(text: str) -> tuple[list[tuple[str, str]], str, list[str]]:
+    """The answer's `=== FILE: <path> ===` … `=== END FILE ===` blocks in order (markers are whole lines after
+    trimming; the content is exactly the lines between them), the text outside them, and the paths of open markers
+    without an end, whose lines stay in that text. An end marker outside a block is text."""
+    lines = text.splitlines()
+    pairs: list[tuple[str, str]] = []
+    rest: list[str] = []
+    i = 0
+    while i < len(lines):
+        m = FILE_OPEN.fullmatch(lines[i].strip())
+        end = next((j for j in range(i + 1, len(lines)) if lines[j].strip() == FILE_END), None) if m else None
+        if m is None or end is None:
+            rest.append(lines[i])
+            i += 1
+            continue
+        pairs.append((m.group(1).strip(), "\n".join(lines[i + 1:end])))
+        i = end + 1
+    unterminated = [m.group(1).strip() for line in rest if (m := FILE_OPEN.fullmatch(line.strip()))]
+    return pairs, "\n".join(rest), unterminated
+
+
+def documents(text: str) -> dict[str, str]:
+    """The answer's FILE blocks, path → content; the first block of a path wins, an unterminated one is ignored."""
+    found: dict[str, str] = {}
+    for path, body in _blocks(text)[0]:
+        found.setdefault(path, body)
+    return found
+
+
+def _command_paths(run: str) -> list[str]:
+    """The `.claude/specs/` files a command condition names, without globs, variables or brace expansions."""
+    return [m.group(0) for m in SPEC_PATH.finditer(run) if not any(ch in m.group(0) for ch in "*?[${")]
+
+
+def _named_paths(goal: Any, contract: Any) -> list[tuple[str, bool]]:
+    """Each path the acceptance names, normalised, with whether a command condition named it."""
+    found = []
+    for cond in contract.acceptance:
+        if cond.type == "file_exists" and cond.path:
+            found.append((_normalise(goal, cond.path), False))
+        elif cond.type == "command" and cond.run:
+            found += [(_normalise(goal, p), True) for p in _command_paths(cond.run)]
+    return found
+
+
+def _inside(root: Path, goal: Any, path: str) -> tuple[Path, str] | None:
+    """The resolved target and its worktree-relative path, or None outside the worktree or in `.git`."""
+    target = (root / _normalise(goal, path)).resolve()
+    if root not in target.parents or ".git" in target.relative_to(root).parts:
+        return None
+    return target, target.relative_to(root).as_posix()
+
+
 def save_answer(goal: Any, contract: Any, text: str, *, writes: bool, changed: list[str] | None) -> list[str]:
-    """A finished task's acceptance names a document to exist: its whole answer becomes that document, so the check
-    measures the work, not the file permission (agents cannot write `.claude/`). In the goal's own spec folder a
-    read-only task's answer replaces a stale file from an earlier iteration (K336) and a writing task's answer fills
-    a path its run did not change (`changed` None: unknown, so none); loop files are never written. Another goal's
-    spec folder and `.git` are never
-    written, nor anything outside the worktree. Elsewhere only a read-only task writes, and only a new file.
+    """A finished task's acceptance names a document to exist: its answer becomes that document, so the check
+    measures the work, not the file permission (agents cannot write `.claude/`). The documents are its .md/.txt
+    file_exists paths and the ones in the goal's own spec folder a command condition names. A FILE block for one of
+    them is its content, the text outside the blocks the others'; without blocks the whole answer is each. A block
+    for another document (BLOCK_FILES) in the own spec folder is placed too; any other block is ignored and logged.
+    In the goal's own spec folder a read-only task's answer replaces a stale file from an earlier iteration (K336)
+    and a writing task's answer fills a path its run did not change (`changed` None: unknown, so none); loop files
+    are never written. Another goal's spec folder and `.git` are never written, nor anything outside the worktree.
+    Elsewhere only a read-only task writes, and only a new file (named ones only).
     Returns the worktree-relative paths written; a path that cannot be written is logged and skipped."""
     if not text.strip() or not goal.worktree:
         return []
     root = Path(goal.worktree).resolve()
     own = relative_folder(goal) + "/"
+    pairs, rest, unterminated = _blocks(text)
+    ignored = [(path, f"no {FILE_END} line") for path in unterminated]
+    blocks: dict[str, str] = {}  # worktree-relative path → content, the first block of a path
+    spelled: dict[str, str] = {}  # worktree-relative path → the block's path as written, for the log
+    for path, body in pairs:
+        where = _inside(root, goal, path)
+        if where is None:
+            ignored.append((path, "outside the goal's spec folder"))
+        elif where[1] in blocks:
+            ignored.append((path, "a second block for the same file"))
+        else:
+            blocks[where[1]], spelled[where[1]] = body, path
+    answer = rest if pairs else text
+    targets: list[tuple[Path, str]] = []
+    for path, by_command in _named_paths(goal, contract):
+        where = _inside(root, goal, path) if path.lower().endswith(ANSWER_FILES) else None
+        if where and not (by_command and not where[1].startswith(own)):  # a command names only own documents
+            targets.append(where)
+    named = {rel for _, rel in targets}
+    for rel in blocks:
+        if rel in named:
+            continue
+        if not rel.startswith(own):
+            if not (writes and changed and rel in changed):  # else a writing executor applied it: not the loop's
+                ignored.append((spelled[rel], "outside the goal's spec folder"))
+        elif not rel.lower().endswith(BLOCK_FILES):
+            ignored.append((spelled[rel], "not a document"))
+        else:
+            targets.append((root / rel, rel))
     saved: list[str] = []
-    for cond in contract.acceptance:
-        path = _normalise(goal, cond.path or "")
-        if cond.type != "file_exists" or not path.lower().endswith(ANSWER_FILES):
+    seen: set[str] = set()
+    for target, rel in targets:
+        if rel in seen:
             continue
-        target = (root / path).resolve()
-        if root not in target.parents:
-            continue
-        rel = target.relative_to(root).as_posix()
-        if ".git" in target.relative_to(root).parts or rel in saved:
-            continue
+        seen.add(rel)
+        body = blocks.get(rel, answer)
+        why = ""
         if rel.startswith(own):
-            if target.name in LOOP_FILES or (writes and (changed is None or rel in changed)):  # a folder: _write logs
-                continue
+            if target.name in LOOP_FILES:
+                why = "loop file"
+            elif writes and (changed is None or rel in changed):  # a folder: _write logs
+                why = "changed by the run"
         elif rel.split("/")[:2] == [".claude", "specs"] or writes or target.exists():
+            why = "outside the goal's spec folder"
+        if not why and not body.strip():
+            why = "empty"
+        if why:
+            if rel in blocks:
+                ignored.append((spelled[rel], why))
             continue
         try:
-            _write(target, text)
+            _write(target, body)
         except OSError as e:
             log_event("error", f"saving the answer of task {contract.key} as {rel}: {e}", goal_id=goal.id)
             continue
         saved.append(rel)
+    for path, why in ignored:
+        log_event("task", f"block {path} of task {contract.key} ignored: {why}", goal_id=goal.id)
     return saved
+
+
+def task_note(goal: Any, contract: Any) -> str:
+    """For the task prompt: the acceptance names a file in the goal's own spec folder, which the loop writes from
+    the answer (agent sessions are refused `.claude/`); how a FILE block gives one file its own content. Depends only
+    on `contract.writes` (the run kind is chosen later). "" when no own-folder path is named."""
+    d = relative_folder(goal)
+    if not any(posixpath.normpath(p).startswith(d + "/") for p, _ in _named_paths(goal, contract)):
+        return ""
+    lead = (f"Claude Code sessions are refused edits under `.claude/`, so do not spend turns trying; the loop writes "
+            f"files in `{d}/` from your answer. If your tool did write such a file, the loop keeps yours."
+            if contract.writes else
+            f"This session has no write tool for `{d}/`; the loop writes those files from your answer.")
+    return (f"{lead} To give a file its own content, put it in a block: a line `=== FILE: <worktree-relative path> "
+            f"===`, the content, then a line `{FILE_END}`. Without blocks, your whole answer becomes each named "
+            f"document; with blocks, the text outside them. {', '.join(LOOP_FILES)} are never written.\n\n")
 
 
 def write_plan(goal: Goal, iteration: int, plan: list[Any], summary: str = "") -> None:
