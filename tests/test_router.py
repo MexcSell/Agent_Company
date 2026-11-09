@@ -384,6 +384,26 @@ def test_auto_routes_assign_models_usable_now(monkeypatch):
     assert all(p["model"] != "Claude Fable 5.1" for p in plan.values())
 
 
+def test_auto_routes_put_agents_on_their_roles_model(monkeypatch):
+    """Assign models clears an agent's own model (or another agent's), so its card and its runs show the role's
+    assigned model; each change is a configuration version."""
+    from agent_company import registry
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    qa = next(a for a in registry.list_agents() if a["role"] == "qa")
+    arch = next(a for a in registry.list_agents() if a["role"] == "architect")
+    registry.update_agent(qa["id"], {"model_pref": "Claude Haiku 5.5"})
+    registry.update_agent(arch["id"], {"model_pref": f"agent:{qa['id']}"})
+    version = registry.agent_detail(qa["id"])["config_version"]
+    plan = router.auto_routes("admin")
+    assert qa["name"] in plan["qa"]["agents_reset"] and arch["name"] in plan["architect"]["agents_reset"]
+    after = registry.agent_detail(qa["id"])
+    assert after["model_pref"] is None and registry.agent_detail(arch["id"])["model_pref"] is None
+    assert after["config_version"] == version + 1
+    assert router.resolve("qa").name == plan["qa"]["model"]
+    assert router.auto_routes()["qa"]["agents_reset"] == []
+
+
 def test_auto_routes_review_in_another_family(monkeypatch):
     from agent_company.db import ModelEntry, session
 

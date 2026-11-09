@@ -783,12 +783,25 @@ def plan_routes() -> dict[str, dict[str, Any]]:
         return plan
 
 
-def auto_routes() -> dict[str, dict[str, Any]]:
-    """Apply plan_routes to every route; returns the plan."""
+def auto_routes(actor: str = "system") -> dict[str, dict[str, Any]]:
+    """Apply plan_routes to every route and clear the own model (or another agent's) of every agent of those roles,
+    so each agent runs its role's assigned model; returns the plan, each role with the agents it reset."""
+    from agent_company import agentdefs, registry
+    from agent_company.db import Agent
+
     plan = plan_routes()
     for role, p in plan.items():
         set_route(role, p["model"], p["escalation"])
         set_fallback(role, p["fallback"])
+        p["agents_reset"] = []
+    with session() as s:
+        own = [(a.id, a.name, a.role) for a in s.scalars(select(Agent).where(
+            Agent.lifecycle != "retired", Agent.model_pref.is_not(None), Agent.model_pref != "",
+            Agent.role.in_(list(plan))).order_by(Agent.id))]
+    for aid, name, role in own:
+        registry.update_agent(aid, {"model_pref": None}, actor)
+        agentdefs.sync(aid, f"Assign models by {actor}: runs its role's route")
+        plan[role]["agents_reset"].append(name)
     return plan
 
 
