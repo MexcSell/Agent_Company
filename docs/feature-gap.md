@@ -16,7 +16,7 @@ Status: `done` = implemented in this repository, `skip` = deliberately not taken
 | Agent proposals, approved by the user or by superiors, become new goals (with loop guard) | done (`projects.extract_proposals`, `decide`, `settle_proposals`) |
 | Notifications (badge count, read state, admin notices) and audit log | done (`governance.py`, Notifications and Audit views) |
 | Evolution: versioned playbooks, candidate experiment over an evaluation window, promote or roll back; restore any version | done (`evolution.py`, Evolution view) |
-| Clone merge and retirement after a mission; consolidate a role | done (`evolution.merge_clone`, `retire_goal_clones`, `consolidate`) |
+| Clone merge and retirement once a clone is released idle (`registry.release`), a sweep after a mission; consolidate a role | done (`evolution.merge`, `merge_clone`, `retire_goal_clones`, `consolidate`) |
 | Git sync: push approved work (source-only .gitignore, files over 50 MB refused); per-user Git identity (commit author) and branch; AUTO_PUSH | done (`gitsync.py`, `/sync`, Users page → Git) |
 | File manager: panes, Ctrl/Shift multi-select, drag to move, copy/cut/paste, rename, delete, upload, viewer with syntax colours and Markdown preview, editor; folder picker for project creation | done (`files.py`, `static/files.js`) |
 | System metrics and status; safe self-restart supervisor (syntax check, candidate boot, health check, wait for idle, swap) | done (`system.py`, `supervisor.py`, `supervise` CLI, System view) |

@@ -7,7 +7,7 @@ feature came from.
 ## Layout
 
 - `src/agent_company/` – one module per service:
-  `registry.py` + `org.py` (agents, rooms; each role's kit of catalog plugins/skills `org.KITS`, `reestablish` (CLI `agents reestablish [--dry-run]`) brings agents back to their role's baseline: missing template rights, gated roles' G2, kit, one spelling per skill; clones per original are not capped; a project's goals are planned, configured and analysed by its own GM, `Project.manager_id` via `staff(prefer=…)`; configuration versions with rollback, health: degraded/inactive; a degraded
+  `registry.py` + `org.py` (agents, rooms; each role's kit of catalog plugins/skills `org.KITS`, `reestablish` (CLI `agents reestablish [--dry-run]`) brings agents back to their role's baseline: missing template rights, gated roles' G2, kit, one spelling per skill; clones per original are not capped; a clone released idle (`release`) merges into its original and retires at once, `evolution.merge`, and experience credited to it later goes to the original, `learning.merged_into`; a project's goals are planned, configured and analysed by its own GM, `Project.manager_id` via `staff(prefer=…)`; configuration versions with rollback, health: degraded/inactive; a degraded
   agent's model is probed again, `recover_degraded`, S02-FR-18),
   `kpis.py` (SPEC-01 FR-08 department KPIs: formula from `METRICS`, target, interval, values with evidence in
   `kpi_values`, measured by the `KpiThread`; Performance → Department KPIs),

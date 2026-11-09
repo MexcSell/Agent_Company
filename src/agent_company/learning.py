@@ -674,6 +674,14 @@ def credit(a: Agent, success: bool, skills: list[str]) -> None:
         a.skills = grown
 
 
+def merged_into(s: Any, a: Agent | None) -> Agent | None:
+    """The agent experience is credited to: a clone merges into its original once released
+    (`registry.release`), so what its task earns afterwards (the iteration's lesson, the goal's outcome) goes there."""
+    if a is not None and a.parent_id is not None and a.lifecycle == "retired":
+        return s.get(Agent, a.parent_id) or a
+    return a
+
+
 def credit_planners(s: Any, g: Any, success: bool) -> list[int]:
     """A planner's work is measured by its goal: the agents that planned the goal's current iteration
     (`Task.planned_by`) get XP when the goal passes its gate or fails (`workflow.set_status`). Executing agents
@@ -682,7 +690,7 @@ def credit_planners(s: Any, g: Any, success: bool) -> list[int]:
     ids = sorted({i for i in s.scalars(select(Task.planned_by).where(Task.goal_id == g.id,
                                                                      Task.iteration == g.iteration)) if i})
     for aid in ids:
-        a = s.get(Agent, aid)
+        a = merged_into(s, s.get(Agent, aid))
         if a is not None:
             credit(a, success, ["planning"])
     return ids
@@ -695,9 +703,10 @@ def learn(agent_id: int, goal_id: int | None, lesson: str, success: bool, skills
     if rep:
         rep["reusable_lesson"] = text[:400]
     with session() as s:
-        a = s.get(Agent, agent_id)
+        a = merged_into(s, s.get(Agent, agent_id))
         if a is None:
             return
+        agent_id = a.id
         g = s.get(Goal, goal_id) if goal_id else None
         is_eval = bool(g and g.origin == "eval")
         classification = goal_level(s, g)

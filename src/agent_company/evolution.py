@@ -400,31 +400,37 @@ def merge_clone(clone_id: int) -> dict[str, Any] | None:
     """Fold an idle clone's experience into its original and retire the clone."""
     with session() as s:
         c = s.get(Agent, clone_id)
-        if c is None or c.parent_id is None or c.lifecycle == "retired" or c.status == "busy":
-            return None
-        o = s.get(Agent, c.parent_id)
-        from agent_company.learning import add_xp
-
-        add_xp(o, c.xp or 0)
-        o.tasks_done += c.tasks_done
-        o.tasks_failed += c.tasks_failed
-        skills = dict(o.skills or {})
-        for k, v in (c.skills or {}).items():
-            skills[k] = max(int(skills.get(k, 0)), int(v))
-        o.skills = skills
-        moved = 0
-        for lesson in s.scalars(select(Lesson).where(Lesson.agent_id == c.id)):
-            lesson.agent_id = o.id
-            moved += 1
-        c.lifecycle, c.enabled, c.xp, c.tasks_done, c.tasks_failed = "retired", False, 0, 0, 0
-        from agent_company.registry import record_version
-
-        record_version(s, o, "system", f"merged clone {c.name}")
-        record_version(s, c, "system", f"merged into {o.name} and retired")
-        _event(s, "merge", o.id, f"{c.name} merged into {o.name} ({moved} lesson(s)) and retired")
-        out = {"clone": c.name, "into": o.name, "lessons": moved}
-    log_event("staff", f"{out['clone']} merged into {out['into']}")
+        out = merge(s, c) if c is not None else None
+    if out:
+        log_event("staff", f"{out['clone']} merged into {out['into']}")
     return out
+
+
+def merge(s: Session, c: Agent) -> dict[str, Any] | None:
+    """`merge_clone` in the caller's session `s` (`registry.release` merges a clone the moment it is idle)."""
+    if c.parent_id is None or c.lifecycle == "retired" or c.status == "busy":
+        return None
+    o = s.get(Agent, c.parent_id)
+    from agent_company.learning import add_xp
+
+    add_xp(o, c.xp or 0)
+    o.tasks_done += c.tasks_done
+    o.tasks_failed += c.tasks_failed
+    skills = dict(o.skills or {})
+    for k, v in (c.skills or {}).items():
+        skills[k] = max(int(skills.get(k, 0)), int(v))
+    o.skills = skills
+    moved = 0
+    for lesson in s.scalars(select(Lesson).where(Lesson.agent_id == c.id)):
+        lesson.agent_id = o.id
+        moved += 1
+    c.lifecycle, c.enabled, c.xp, c.tasks_done, c.tasks_failed = "retired", False, 0, 0, 0
+    from agent_company.registry import record_version
+
+    record_version(s, o, "system", f"merged clone {c.name}")
+    record_version(s, c, "system", f"merged into {o.name} and retired")
+    _event(s, "merge", o.id, f"{c.name} merged into {o.name} ({moved} lesson(s)) and retired")
+    return {"clone": c.name, "into": o.name, "lessons": moved}
 
 
 def retire_goal_clones(goal_id: int) -> list[dict[str, Any]]:

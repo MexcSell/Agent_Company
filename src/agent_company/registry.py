@@ -740,7 +740,7 @@ def staff(role: str, skills: list[str] | None = None, goal_id: int | None = None
         if trainee is not None and (trainee in idle or (trainee not in pool and _free(trainee, goal_id)
                                                          and not quota[trainee.id])):
             agent, action = trainee, "assigned"
-        elif trainee is not None and not quota[trainee.id]:  # busy: its clone, which merges back after the goal
+        elif trainee is not None and not quota[trainee.id]:  # busy: its clone, which merges back once released
             agent, action = _clone(s, trainee), "cloned"  # the measured agent itself
         elif preferred is not None:
             agent, action = (preferred, "assigned") if preferred in idle else (_clone(s, preferred), "cloned")
@@ -973,8 +973,10 @@ def _recruit(s: Session, rec: Any) -> Agent:
 
 
 def release(agent_id: int, goal_id: int | None = None) -> None:
-    """One task of the agent ended (for `goal_id`): its slot is free; it is idle once no task is left."""
-    name = None
+    """One task of the agent ended (for `goal_id`): its slot is free; it is idle once no task is left. A clone
+    that is idle is no longer in use: it merges into its original and retires (`evolution.merge`), under the
+    staffing lock so no staffing call takes it in between."""
+    name = merged = None
     with _staff_lock, session() as s:
         a = s.get(Agent, agent_id)
         if a is None:
@@ -989,10 +991,16 @@ def release(agent_id: int, goal_id: int | None = None) -> None:
         if not active and a.status == "busy":
             a.status = "idle"
             name = a.name
+        if not active and a.parent_id is not None:
+            from agent_company.evolution import merge
+
+            merged = merge(s, a)
     if name:
         from agent_company import hooks
 
         hooks.emit("TeammateIdle", agent_id=agent_id, agent=name)
+    if merged:
+        log_event("staff", f"{merged['clone']} released and merged into {merged['into']}")
 
 
 def list_agents() -> list[dict[str, Any]]:

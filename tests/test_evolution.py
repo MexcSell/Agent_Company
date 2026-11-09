@@ -159,6 +159,28 @@ def test_clones_merge_back_and_retire_after_a_goal(monkeypatch):
     assert "merge" in stages
 
 
+def test_a_released_clone_merges_into_its_original_at_once():
+    orig = dev_id()
+    registry.staff("developer")  # the original is busy: the next one is a clone
+    clone = registry.staff("developer")
+    assert clone.parent_id == orig
+    with session() as s:
+        s.get(Agent, clone.id).xp = 7
+        before = s.get(Agent, orig).xp or 0
+    registry.release(clone.id)
+    with session() as s:
+        c, o = s.get(Agent, clone.id), s.get(Agent, orig)
+        assert c.lifecycle == "retired" and not c.enabled and c.xp == 0
+        assert o.xp == before + 7
+    learning.learn(clone.id, None, "Learned after the release.", True, [])  # the iteration's lesson comes later
+    with session() as s:
+        assert s.scalars(select(Lesson).where(Lesson.agent_id == clone.id)).first() is None
+        assert s.scalars(select(Lesson).where(Lesson.agent_id == orig)).first() is not None
+        assert s.get(Agent, orig).tasks_done == 1 and s.get(Agent, clone.id).tasks_done == 0
+    assert registry.staff("developer").id not in (orig, clone.id), "a retired clone is never staffed again"
+    registry.release(orig)
+
+
 def test_handover_package_on_retry(monkeypatch):
     calls = {"n": 0}
     gid = loop.create_goal("Retry me", quality_commands=["false"], max_iterations=2)
