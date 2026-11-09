@@ -21,16 +21,23 @@ from sqlalchemy.exc import IntegrityError
 from agent_company.db import BlackboardEntry, log_event, session
 
 SECTIONS = ("objective", "planning", "research", "engineering", "qa", "reports", "messages")
+_BUILD, _REVIEW, _READ = ("objective", "planning", "engineering"), ("objective", "engineering", "qa"), ("objective", "research")
 ROLE_SECTIONS: dict[str, tuple[str, ...]] = {
-    "developer": ("objective", "planning", "engineering"),
+    **dict.fromkeys(("developer", "frontend", "devops", "tech_scout"), _BUILD),
     "architect": ("objective", "planning", "research", "engineering"),
-    "qa": ("objective", "engineering", "qa"),
-    "security": ("objective", "engineering", "qa"),
-    "research": ("objective", "research"),
+    **dict.fromkeys(("qa", "security", "network_security", "security_guard"), _REVIEW),
+    **dict.fromkeys(("research", "external_data", "student"), _READ),
+    "analyst": ("objective", "research", "reports"),
+    "comprehensive_analyst": ("objective", "research", "qa", "reports"),
     "general_manager": ("objective", "planning", "research", "engineering", "qa", "reports"),
+    **dict.fromkeys(("administrator", "agent_manager"), ("objective", "planning", "reports")),
+    **dict.fromkeys(("tech_introducer", "instructor"), ("objective", "research", "qa", "reports")),
+    "product": ("objective", "planning", "engineering", "reports"),
+    "sales": ("objective", "reports"),
 }
-SECTION_OF_ROLE = {"research": "research", "qa": "qa", "security": "qa", "network_security": "qa",
-                   "general_manager": "planning"}  # everything else writes engineering
+SECTION_OF_ROLE = {"research": "research", "external_data": "research", "analyst": "research",
+                   "comprehensive_analyst": "reports", "qa": "qa", "security": "qa", "network_security": "qa",
+                   "security_guard": "qa", "general_manager": "planning"}  # everything else writes engineering
 ENTRY_CAP, CONTEXT_CAP = 1500, 6000
 MESSAGE_KINDS = ("fact", "assumption", "recommendation", "request", "handoff", "done")
 MESSAGES_PER_TASK = 3  # message budget per task (S04-R-08)

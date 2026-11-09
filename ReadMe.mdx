@@ -60,6 +60,7 @@ uv run python -m agent_company goal "Build a REST API for a todo list with FastA
 uv run python -m agent_company approve 1    # merge goal 1 after review
 uv run python -m agent_company models       # what each role would use right now
 uv run python -m agent_company agents       # agents by room
+uv run python -m agent_company agents reestablish [--dry-run]  # each agent back to its role's baseline
 uv run python -m agent_company crawl https://docs.crewai.com/ --depth 1
 uv run python -m agent_company eval --suite smoke --label v1 --repeats 3   # benchmark the company
 uv run python -m agent_company learn gaps|raise|plans|plan <agent> <skill>|start <id>|experiments|metrics
@@ -299,6 +300,13 @@ disabled agents work only in those eval goals), a smoke run with the room in the
 `eval --gate security` shows what is still missing. Every agent
 reports to a superior (the General Manager at the top). Agent names cannot be edited.
 
+Each role has a baseline: its template's permissions, skills and default autonomy (`org.ROLES`) and a kit of
+catalog plugins and skills (`org.KITS`, e.g. the Developer's code-review, test-driven-development and
+systematic-debugging). `agents reestablish` brings every agent that is not retired back to it: rights the
+template gives that the agent lacks return (rights an administrator added stay), a disabled agent of a gated
+role goes back to G2, the kit is added, and a skill spelled two ways is merged at its higher level. Each
+change is a configuration version, so a rollback undoes it.
+
 Administrators edit rooms on Agents → Rooms: add a room, rename it, place it under a
 parent room (a room can never end up inside itself), give it a lead and switch it
 off. A switched-off room's agents are not staffed, and a room cannot be switched
@@ -324,8 +332,8 @@ route on the Models page.
 | --- | --- | --- |
 | General Manager, Architect | Claude Opus 5.5 | Planning and design decide everything downstream |
 | Developer, Frontend, DevOps, Lab | Claude Code | Real file and tool access in the worktree |
-| QA, Security, Analysts | Claude Sonnet 5.5 | Careful review at a lower price |
-| Research Lead, others | Claude Haiku 5.5 | High-volume summarising |
+| QA, Security, Security Guard, Analysts, Technology Introduction, Instructor | Claude Sonnet 5.5 | Careful review at a lower price |
+| Research Lead, Administrator, Agent Manager, Product, Sales | Claude Haiku 5.5 | High-volume summarising and light work |
 | External Data, Study Room | OpenRouter Free router | Bulk collection at no token cost |
 
 For each agent the router tries, in order: the agent's own model preference, then

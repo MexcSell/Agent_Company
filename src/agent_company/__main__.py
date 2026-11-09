@@ -161,7 +161,9 @@ def main(argv: list[str] | None = None) -> None:
     c.add_argument("--depth", type=int, default=1)
     c.add_argument("--max-pages", type=int, default=20)
     sub.add_parser("models")
-    sub.add_parser("agents")
+    ag = sub.add_parser("agents", help="list agents, or reestablish their role baseline (registry.reestablish)")
+    ag.add_argument("action", nargs="?", choices=["list", "reestablish"], default="list")
+    ag.add_argument("--dry-run", action="store_true", help="show what reestablish would change")
     sub.add_parser("rotate")
     ev = sub.add_parser("eval", help="run a benchmark suite, or compare two labels")
     ev.add_argument("--suite", default="smoke", help="suite name in evals/ or a JSON file")
@@ -444,6 +446,10 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "agents":
         from agent_company import registry
 
+        if args.action == "reestablish":  # bootstrap() seeded the catalog items the kits name
+            out = registry.reestablish("cli", dry_run=args.dry_run)
+            print(json.dumps(out, indent=2, default=str))
+            return
         for a in registry.list_agents():
             flag = "" if a["enabled"] else "  [disabled]"
             print(f"{a['id']:>3} {a['name']:<34} {a['role']:<22} {a['room']:<24} L{a['level']} "

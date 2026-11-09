@@ -54,9 +54,16 @@ DEFAULT_ROUTES: dict[str, str] = {
     "qa": "Claude Sonnet 5.5",
     "security": "Claude Sonnet 5.5",
     "network_security": "Claude Sonnet 5.5",
+    "security_guard": "Claude Sonnet 5.5",
     "analyst": "Claude Sonnet 5.5",
     "comprehensive_analyst": "Claude Sonnet 5.5",
+    "tech_introducer": "Claude Sonnet 5.5",
+    "instructor": "Claude Sonnet 5.5",
     "research": "Claude Haiku 5.5",
+    "administrator": "Claude Haiku 5.5",
+    "agent_manager": "Claude Haiku 5.5",
+    "product": "Claude Haiku 5.5",
+    "sales": "Claude Haiku 5.5",
     "external_data": "OpenRouter Free router",
     "student": "OpenRouter Free router",
 }
@@ -691,6 +698,7 @@ ROLE_TIERS: dict[str, str] = {
     **dict.fromkeys(("frontend", "devops", "tech_scout", "tech_introducer", "qa", "security", "network_security",
                      "security_guard", "analyst", "comprehensive_analyst", "instructor"), "review"),
     **dict.fromkeys(("research", "external_data"), "bulk"),
+    **dict.fromkeys(("administrator", "agent_manager", "product", "sales", "student"), "light"),
 }
 _STRENGTH = [(re.compile(r"haiku|mini|nano|flash|lite|free|small"), 1.0), (re.compile(r"opus|fable|gpt-5|\bo3\b|pro\b"), 3.0),
              (re.compile(r"sonnet|codex|gpt-4"), 2.5)]

@@ -153,6 +153,37 @@ ROLES: dict[str, RoleSpec] = {
     ]
 }
 
+# The catalog plugins and skills (catalog.BUILTIN) each role uses: a seeded agent starts with them and
+# `registry.reestablish` adds the missing ones to every agent of the role (Agents → agent card → Plugins and skills).
+_DEV = ("code-review", "code-simplifier", "commit-cmds", "context7", "superpowers", "git-workflow",
+        "test-driven-development", "systematic-debugging")
+_REVIEW = ("code-review", "pr-review", "sec-guidance", "security-review")
+_RESEARCH = ("concurrent-fetch", "research-with-citations")
+KITS: dict[str, tuple[str, ...]] = {
+    "general_manager": ("superpowers", "feature-dev", "spec-workflow", "git-workflow", "documentation",
+                        "concurrent-fetch", "code-review", "pr-review", "commit-cmds"),
+    "architect": ("feature-dev", "superpowers", "context7", "spec-workflow", "documentation", "threat-modeling"),
+    "developer": (*_DEV, "feature-dev", "spec-workflow"),
+    "qa": ("code-review", "pr-review", "test-driven-development", "systematic-debugging", "security-review"),
+    "research": (*_RESEARCH, "context7", "documentation"),
+    "external_data": _RESEARCH,
+    "analyst": ("data-analysis", "research-with-citations"),
+    "comprehensive_analyst": ("data-analysis", "retrospective"),
+    "frontend": (*_DEV, "frontend-design", "accessibility-review"),
+    "devops": (*_DEV, "ci-pipelines", "deploy-on-aws", "aws-serverless", "aws-amplify", "db-on-aws"),
+    "security": (*_REVIEW, "threat-modeling", "dependency-audit"),
+    "network_security": ("sec-guidance", "dependency-audit", "threat-modeling"),
+    "security_guard": ("sec-guidance", "sandbox-policy"),
+    "administrator": ("budget-reporting",),
+    "agent_manager": ("staffing",),
+    "tech_scout": (*_DEV, "experiment-design"),
+    "tech_introducer": ("experiment-design", "code-review"),
+    "instructor": ("teaching-playbooks", "experiment-design"),
+    "student": ("study-notes",),
+    "product": ("release-notes", "documentation"),
+    "sales": ("offer-writing",),
+}
+
 # Disabled catalog roles fall back to these when the planner asks for them.
 FALLBACK_WRITE_ROLE = "developer"
 FALLBACK_READ_ROLE = "qa"
