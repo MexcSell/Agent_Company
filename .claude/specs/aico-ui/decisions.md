@@ -28,3 +28,13 @@ with the full suite and headless screenshots; later phases are written and check
 - Off by default (`require_plan_approval`), as the owner's standing order is to approve plans; a project may switch
   it on for itself (stricter only).
 - `_goal_dict` gains `topic` (additive) so the context panel can follow the open topic.
+
+## P0-4 Projects
+- `#/projects` without an id is the portfolio; with an id the existing three-panel workspace. The left list's title
+  links back to the portfolio, so the workspace keeps its fast project switching.
+- New tabs render from `projtabs.js` into the existing tab bar (`projectMain` modes), so Orders & reports, Plan and
+  the console keep their code.
+- The approval policy is the project's existing stricter rules plus `require_plan_approval`, not a second JSON
+  column: one place decides, `policies.effective`.
+- The Evaluation tab's action is labelled Reject, because `loop.reject` ends a goal; a reopen ("return to
+  development") would be a new goal transition and stays open.

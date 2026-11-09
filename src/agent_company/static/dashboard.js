@@ -78,7 +78,7 @@ async function viewDashboard(quiet) {
     $("#dash-goal").onchange = (e) => { dashGoal = Number(e.target.value) || null; render(true); };
     view.querySelectorAll("[data-act]").forEach((b) => (b.onclick = () => {
       const a = b.dataset.act;
-      if (a === "new") { show("projects"); setTimeout(() => typeof projectForm === "function" && projectForm(), 300); }
+      if (a === "new") projectForm();
       else if (a === "status") show("general-manager");
       else if (a === "reports") { goalFilter = "approved"; show("goals"); }
       else show("agents");

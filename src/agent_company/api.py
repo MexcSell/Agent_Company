@@ -726,6 +726,12 @@ class ProjectBody(BaseModel):
     github_url: str = ""
     description: str = ""
     quality_commands: list[str] = Field(default_factory=list)
+    # AICO UI-PROJ-05: the brief (a first draft requirement), its documents (upload ids), outcome and team strategy
+    requirements: str = Field(default="", max_length=20000)
+    attachments: list[str] = Field(default_factory=list, max_length=20)
+    target_outcome: str = Field(default="", max_length=4000)
+    related_project_id: int | None = None
+    team_strategy: str = "gm"
 
 
 class CommandBody(BaseModel):
@@ -1074,6 +1080,17 @@ def create_app(start_background: bool = True) -> FastAPI:
         with session() as s:
             seen = _visible_project_ids(s, user)
         return dashboard.report(user, period, seen)
+
+    @app.get("/api/projects-portfolio")
+    def projects_portfolio(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        """UI-PROJ-01: every project the user may see with phase, progress, team, tasks and last activity."""
+        return dashboard.portfolio(user)
+
+    @app.get("/api/projects/{project_id}/tasks")
+    def project_tasks(project_id: int, user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        """UI-PROJ-02 Tasks tab: the current iteration's tasks of the project's goals (benchmark goals left out)."""
+        projects.get(project_id, user)
+        return dashboard.project_tasks(project_id)
 
     # --- agents ---
     @app.get("/api/rooms")
@@ -3301,10 +3318,17 @@ def create_app(start_background: bool = True) -> FastAPI:
         if not admin["is_admin"] and (body.path or body.quality_commands):
             raise HTTPException(403, "only administrators can choose a work folder or quality commands")
         out = projects.create(body.name, body.path, body.github_url, body.description, body.quality_commands,
-                              created_by=admin["id"])
+                              created_by=admin["id"], target_outcome=body.target_outcome,
+                              related_project_id=body.related_project_id, team_strategy=body.team_strategy or "gm")
         granted = admin["permissions"].get("projects", "own")
         if not admin["is_admin"] and isinstance(granted, list):
             auth.set_permissions(admin["id"], {"projects": [*granted, out["id"]]})
+        if body.requirements.strip():  # the brief becomes the first requirement, a draft a person approves
+            requirements.create(out["id"], body.requirements, source="project registration",
+                                actor=f"user:{admin['name']}", check_conflicts=False)
+        if body.attachments:  # the documents reach the GM in the project's command window
+            projects.post(out["id"], "Project documents for the General Manager.", "user", "command",
+                          user_id=admin["id"], attachments=projects.uploads(body.attachments), author=admin["name"])
         _audit(admin, "project_create", out["name"], after={"path": out["path"], "github_url": out["github_url"]})
         return out
 

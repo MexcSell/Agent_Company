@@ -42,13 +42,13 @@ def phase(status: str, goal_states: list[str], open_blockers: int, milestones: l
     return "active"
 
 
-def _projects(user: dict[str, Any]) -> list[dict[str, Any]]:
+def _projects(user: dict[str, Any], statuses: tuple[str, ...] = ("active", "paused")) -> list[dict[str, Any]]:
     from agent_company import management, projects
     from agent_company.db import Risk
 
     out = []
     with session() as s:
-        rows = s.scalars(projects.visible(user).where(projects.Project.status.in_(("active", "paused")))
+        rows = s.scalars(projects.visible(user).where(projects.Project.status.in_(statuses))
                          .order_by(projects.Project.id)).all()
         for p in rows:
             states = list(s.scalars(select(Goal.status).where(Goal.project_id == p.id, Goal.origin != "eval")))
@@ -144,3 +144,69 @@ def report(user: dict[str, Any], period: str = "24h", visible_projects: set[int]
                           for m, t, r, c in tokens), key=lambda x: -x["tokens"]),
         "rooms": sorted(({"room": k} | v for k, v in perf.items()), key=lambda x: -(x["done"] + x["failed"])),
     }
+
+
+# task board columns (UI-PROJ-02, PDF p10) from a task's status and lifecycle stage
+BOARD = ("queued", "ready", "running", "waiting", "blocked", "failed", "succeeded", "cancelled")
+
+
+def board_column(status: str, stage: str, deps_done: bool = True) -> str:
+    """Queued: not yet planned to run; Ready: queued with its dependencies done; Waiting: queued behind one;
+    Running; Blocked (stage); Failed; Succeeded (done); Cancelled (cancelled or skipped)."""
+    if stage == "blocked":
+        return "blocked"
+    if status == "done":
+        return "succeeded"
+    if status == "failed" or stage == "failed":
+        return "failed"
+    if status == "skipped" or stage == "cancelled":
+        return "cancelled"
+    if status == "running":
+        return "running"
+    if stage == "created":
+        return "queued"
+    return "ready" if deps_done else "waiting"
+
+
+def project_tasks(project_id: int) -> list[dict[str, Any]]:
+    from agent_company import workflow
+
+    with session() as s:
+        names = dict(s.execute(select(Agent.id, Agent.name)).all())
+        out = []
+        for g in s.scalars(select(Goal).where(Goal.project_id == project_id, Goal.origin != "eval")
+                           .order_by(Goal.id.desc()).limit(50)):
+            rows = s.scalars(select(Task).where(Task.goal_id == g.id, Task.iteration == g.iteration)
+                             .order_by(Task.id)).all()
+            done = {t.key for t in rows if t.status in ("done", "skipped")}
+            for t in rows:
+                stage = workflow.task_stage(t)
+                out.append({"id": t.id, "goal_id": g.id, "goal": g.title, "goal_status": g.status, "key": t.key,
+                            "title": t.title, "role": t.role, "agent_id": t.agent_id, "agent": names.get(t.agent_id),
+                            "status": t.status, "stage": stage, "column": board_column(t.status, stage, set(t.depends_on or []) <= done),
+                            "model": t.model_name, "depends_on": list(t.depends_on or []),
+                            "priority": t.priority, "iteration": t.iteration,
+                            "started_at": _iso(t.started_at), "finished_at": _iso(t.finished_at)})
+    return out
+
+
+def portfolio(user: dict[str, Any]) -> list[dict[str, Any]]:
+    """UI-PROJ-01: `_projects` for every status, with manager, tasks done/total and the last activity."""
+    from agent_company import projects
+
+    rows = _projects(user, ("active", "paused", "completed", "archived", "cancelled"))
+    with session() as s:
+        by_id = {p.id: p for p in s.scalars(projects.visible(user))}
+        names = dict(s.execute(select(Agent.id, Agent.name)).all())
+        for x in rows:
+            p = by_id[x["id"]]
+            ids = list(s.scalars(select(Goal.id).where(Goal.project_id == p.id, Goal.origin != "eval")))
+            tasks = dict(s.execute(select(Task.status, func.count()).where(Task.goal_id.in_(ids or [-1]))
+                                   .group_by(Task.status)).all())
+            last = max(filter(None, [s.scalar(select(func.max(Goal.updated_at)).where(Goal.id.in_(ids or [-1]))),
+                                     s.scalar(select(func.max(projects.Message.created_at)).where(
+                                         projects.Message.project_id == p.id))]), default=None)
+            x.update({"manager": names.get(p.manager_id), "protected": p.protected, "description": p.description,
+                      "github_url": p.github_url, "goals": len(ids), "tasks_done": tasks.get("done", 0),
+                      "tasks_total": sum(tasks.values()), "last_activity": _iso(last), "created_at": _iso(p.created_at)})
+    return rows

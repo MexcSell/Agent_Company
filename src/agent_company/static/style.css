@@ -789,3 +789,29 @@ a.kpi:focus-visible, button.kpi:focus-visible, .kpi.clickable:focus-visible { ou
   .gmp .gmp-ctx { height: auto; overflow: visible; }
   .gmp .proj-main { height: 75vh; }
 }
+
+/* ---------- Projects portfolio and workspace tabs (AICO UI-PROJ, projtabs.js) ---------- */
+.pf-tools { gap: var(--space-2); margin-bottom: var(--space-3); flex-wrap: wrap; }
+.pf-tools input[type=search] { flex: 1 1 240px; min-width: 0; }
+.pf-tools select { flex: 0 1 auto; width: auto; }
+.seg { display: inline-flex; flex: 0 0 auto; }
+.seg .btn { border-radius: 0; } .seg .btn:first-child { border-radius: var(--radius-control) 0 0 var(--radius-control); } .seg .btn:last-child { border-radius: 0 var(--radius-control) var(--radius-control) 0; }
+.seg .btn.on { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.pf-cards { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.pf-card { display: flex; flex-direction: column; gap: var(--space-2); color: inherit; text-decoration: none; min-width: 0; }
+.pf-card:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.pf-desc { margin: 0; font-size: var(--fs-meta); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.6em; }
+.pf-facts { display: flex; flex-wrap: wrap; gap: var(--space-3); font-size: var(--fs-meta); color: var(--muted); align-items: center; }
+.pf-facts > span { display: inline-flex; align-items: center; gap: var(--space-1); }
+.pf-table tr[data-href] { cursor: pointer; }
+.pf-back { color: inherit; text-decoration: none; } .pf-back:hover { color: var(--accent); }
+.proj-modes { overflow-x: auto; scrollbar-width: thin; flex-wrap: nowrap; }
+.proj-modes button { white-space: nowrap; }
+.pt-grid { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
+.pt-grid > .card { min-width: 0; }
+.pt-counts { gap: var(--space-2); flex-wrap: wrap; }
+.board { display: grid; grid-template-columns: repeat(8, minmax(180px, 1fr)); gap: var(--space-2); overflow-x: auto; padding-bottom: var(--space-2); }
+.board-col { background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-control); padding: var(--space-2); display: flex; flex-direction: column; gap: var(--space-2); min-height: 120px; }
+.board-head { gap: var(--space-2); }
+.board-card { display: flex; flex-direction: column; gap: 2px; padding: var(--space-2); border-radius: var(--radius-control); background: var(--panel); border: 1px solid var(--border); color: inherit; text-decoration: none; }
+.board-card:hover { border-color: var(--accent); }

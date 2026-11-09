@@ -58,12 +58,14 @@ def project_dict(p: Project, counts: dict[str, int] | None = None) -> dict[str, 
             "deadline": deadline.isoformat() if deadline else None, "overdue": bool(deadline and deadline < now()
                                                                                    and (p.status or "active") in OPEN),
             "priority": p.priority or "normal", "status": p.status or "active", "status_reason": p.status_reason or "",
-            "created_at": p.created_at.isoformat(), **(counts or {})}
+            "target_outcome": p.target_outcome or "", "related_project_id": p.related_project_id,
+            "team_strategy": p.team_strategy or "gm", "created_at": p.created_at.isoformat(), **(counts or {})}
 
 
 # --- registration fields and lifecycle (ASEAO05 S05-R-06) ---------------------------------------
 
 PRIORITIES = ("low", "normal", "high", "critical")
+TEAM_STRATEGIES = ("gm", "reuse", "new")  # UI-PROJ-05: the GM recommends | reuse existing teams | form a new team
 OPEN = ("active", "paused")
 PROJECT_TRANSITIONS = {"active": {"paused", "archived", "cancelled", "completed"},
                        "paused": {"active", "archived", "cancelled"},
@@ -141,6 +143,15 @@ def _fields(s, changes: dict[str, Any], current: list[Any] | None = None) -> dic
             raise ValueError("deadline is an ISO date, e.g. 2026-12-31") from e
     if "priority" in out and out["priority"] not in PRIORITIES:
         raise ValueError(f"priority is one of {', '.join(PRIORITIES)}")
+    if "team_strategy" in out and (out["team_strategy"] or "gm") not in TEAM_STRATEGIES:
+        raise ValueError(f"team_strategy is one of {', '.join(TEAM_STRATEGIES)}")
+    if "target_outcome" in out:
+        out["target_outcome"] = str(out["target_outcome"] or "")[:4000]
+    if "related_project_id" in out:
+        rid = out["related_project_id"]
+        out["related_project_id"] = int(rid) if rid else None
+        if out["related_project_id"] is not None and s.get(Project, out["related_project_id"]) is None:
+            raise ValueError(f"unknown related project #{rid}")
     return out
 
 
@@ -306,7 +317,12 @@ def _check(name: str, path: str, github_url: str, quality_commands: list[str]) -
 
 
 def create(name: str, path: str = "", github_url: str = "", description: str = "",
-           quality_commands: list[str] | None = None, created_by: int | None = None) -> dict[str, Any]:
+           quality_commands: list[str] | None = None, created_by: int | None = None,
+           **registration: Any) -> dict[str, Any]:
+    """`registration`: target_outcome, related_project_id, team_strategy (UI-PROJ-05), validated as in `update`."""
+    bad = set(registration) - {"target_outcome", "related_project_id", "team_strategy"}
+    if bad:
+        raise ValueError(f"unknown field(s): {', '.join(sorted(bad))}")
     path = _check(name, path, github_url, quality_commands or [])
     # A repository already set up with GitHub brings its URL; a URL given for one without a remote becomes its origin.
     remote = repo_remote(path) if path else ""
@@ -320,7 +336,7 @@ def create(name: str, path: str = "", github_url: str = "", description: str = "
         gm = s.scalars(select(Agent).where(Agent.role == "general_manager", Agent.parent_id.is_(None))).first()
         p = Project(name=name.strip(), path=path, github_url=github_url, description=description,
                     quality_commands=list(quality_commands or []), created_by=created_by,
-                    manager_id=gm.id if gm else None)
+                    manager_id=gm.id if gm else None, **_fields(s, registration))
         s.add(p)
         s.flush()
         if not p.path:
@@ -341,7 +357,8 @@ def update(project_id: int, changes: dict[str, Any], actor: str = "system") -> d
     from agent_company.learning import CLASSIFICATIONS
 
     allowed = {"name", "github_url", "description", "quality_commands", "classification", "stack", "required_skills",
-               "rooms", "budget_usd", "deadline", "priority", "manager_id", "manager_reason"}
+               "rooms", "budget_usd", "deadline", "priority", "manager_id", "manager_reason", "target_outcome",
+               "related_project_id", "team_strategy"}
     bad = set(changes) - allowed
     if bad:
         raise ValueError(f"not editable: {', '.join(sorted(bad))}")

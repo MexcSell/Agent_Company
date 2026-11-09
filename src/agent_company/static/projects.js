@@ -21,6 +21,8 @@ const topicOf = (id) => store.get(`ac.project.topic.${id}`) || "general";
 const CLASS_RANK = { public: 0, internal: 1, confidential: 2, restricted: 3, secret: 4 };
 
 async function viewProjects(quiet) {
+  // UI-PROJ-01: #/projects without an id is the portfolio; #/projects/<id> the project workspace
+  if (!/^#\/projects\/\d+/.test(location.hash)) return projectPortfolio(quiet);
   // The selected project's details load alongside the list: one round trip instead of two.
   const guess = selectedProject, early = guess !== null ? api(`/api/projects/${guess}`).catch(() => null) : null;
   const list = await api("/api/projects");
@@ -33,7 +35,7 @@ async function viewProjects(quiet) {
   }
   if (!quiet || !$("#proj-list")) {
     $("#view").innerHTML = `<div class="proj${projectFiles ? " with-files" : ""}">
-      <aside class="card proj-side"><div class="row nowrap"><h2 class="grow" style="margin:0">Projects</h2>${me.is_admin || me.permissions?.create_projects ? ib("plus", "New project", 'id="p-new"', "primary sm") : ""}</div>
+      <aside class="card proj-side"><div class="row nowrap"><h2 class="grow" style="margin:0"><a href="#/projects" class="pf-back" title="All projects (portfolio)">Projects</a></h2>${me.is_admin || me.permissions?.create_projects ? ib("plus", "New project", 'id="p-new"', "primary sm") : ""}</div>
         <div class="list" id="proj-list" style="margin-top:8px"></div>
         ${me.is_admin ? `<div class="row" style="margin-top:8px">${ib("trash", "Delete the selected projects", 'id="p-del" disabled', "danger sm")}</div>` : ""}</aside>
       <section class="card proj-main" id="proj-main"><p class="muted">Create a project to start.</p></section>
@@ -73,12 +75,18 @@ async function projectForm(p = null) {
   const base = p ? "" : await api("/api/projects-defaults").then((d) => d.base).catch(() => "");
   const rooms = p && me.is_admin ? await api("/api/rooms").catch(() => []) : [];
   const rules = p && me.is_admin && !p.protected ? await api(`/api/projects/${p.id}/policy`).catch(() => null) : null;
+  const others = await api("/api/projects").catch(() => []);
   const gms = p && me.is_admin ? (await api("/api/agents").catch(() => [])).filter((a) => a.lifecycle === "active" && (a.role === "general_manager" || a.id === p.manager_id)) : [];
   modal(`<h2>${icon("projects", 18)} ${p ? "Edit project" : "New project"}</h2><form id="pf">
     <label for="pf-name">Name</label><input id="pf-name" required value="${esc(p?.name || "")}" ${p?.protected ? "disabled" : ""}>
     ${p || !me.is_admin ? "" : `<label for="pf-path">Work folder (git repository; by default a new folder next to Agent Company)</label><div class="row nowrap"><input id="pf-path" class="grow" placeholder="${esc(base)}/my-project">${typeof pickFolder === "function" ? ib("folder", "Browse…", 'type="button" id="pf-browse"') : ""}</div>`}
     <label for="pf-gh">GitHub URL (recommended; approved work is pushed here${p ? "" : "; filled in from the folder's git remote"})</label><input id="pf-gh" placeholder="https://github.com/owner/repo.git" value="${esc(p?.github_url || "")}">
     <label for="pf-desc">Description</label><textarea id="pf-desc">${esc(p?.description || "")}</textarea>
+    ${p ? "" : `<label for="pf-req">Requirements (the brief; it becomes the first draft requirement for the General Manager)</label><textarea id="pf-req" placeholder="What must the result do? Constraints, users, acceptance criteria…"></textarea>
+      <label for="pf-docs">Documents (PDF, images, text; they reach the General Manager with the project)</label><input type="file" id="pf-docs" multiple accept="image/*,text/*,.json,.yaml,.yml,.md,.pdf">`}
+    <div class="row"><div class="grow"><label for="pf-outcome">Target outcome</label><input id="pf-outcome" maxlength="4000" placeholder="e.g. a working beta with sign-in" value="${esc(p?.target_outcome || "")}"></div>
+      <div class="grow"><label for="pf-team">Team strategy</label><select id="pf-team">${[["gm", "The General Manager recommends"], ["reuse", "Reuse existing teams"], ["new", "Form a new team"]].map(([v, l]) => `<option value="${v}" ${(p?.team_strategy || "gm") === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+      <div class="grow"><label for="pf-rel">Related project</label><select id="pf-rel"><option value="">None</option>${others.filter((x) => x.id !== p?.id).map((x) => `<option value="${x.id}" ${p?.related_project_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></div></div>
     ${me.is_admin ? `<label for="pf-checks">Quality commands (one per line)</label><textarea id="pf-checks" placeholder="uv run pytest -q">${esc((p?.quality_commands || []).join("\n"))}</textarea>` : ""}
     ${me.is_admin && p ? `<div class="row"><div class="grow"><label for="pf-stack">Stack (comma-separated)</label><input id="pf-stack" placeholder="python, fastapi" value="${esc((p.stack || []).join(", "))}"></div>
       <div class="grow"><label for="pf-skills">Required skills (comma-separated)</label><input id="pf-skills" placeholder="api, testing" value="${esc((p.required_skills || []).join(", "))}"></div></div>
@@ -92,7 +100,8 @@ async function projectForm(p = null) {
       <div class="row"><div class="grow"><label for="pr-cost">Goal budget, $ (company: ${rules.company.goal_budget_usd || "none"})</label><input id="pr-cost" type="number" min="0" step="0.01" value="${rules.own.goal_budget_usd || ""}"></div>
       <div class="grow"><label for="pr-tok">Goal tokens (company: ${rules.company.goal_token_budget || "none"})</label><input id="pr-tok" type="number" min="0" value="${rules.own.goal_token_budget || ""}"></div>
       <div class="grow"><label for="pr-ag">Agents at once (company: ${rules.company.goal_agent_limit || "none"})</label><input id="pr-ag" type="number" min="0" value="${rules.own.goal_agent_limit || ""}"></div></div>
-      <div class="row"><label class="row grow"><input type="checkbox" id="pr-appr" style="width:auto" ${rules.effective.require_approval ? "checked" : ""} ${rules.company.require_approval ? "disabled" : ""}> Merges wait for a person</label>
+      <h3>Approval policy</h3><div class="row"><label class="row grow" title="After planning, a goal waits until a person approves its plan on the General Manager page"><input type="checkbox" id="pr-plan" style="width:auto" ${rules.effective.require_plan_approval ? "checked" : ""} ${rules.company.require_plan_approval ? "disabled" : ""}> Plans wait for a person</label>
+      <label class="row grow"><input type="checkbox" id="pr-appr" style="width:auto" ${rules.effective.require_approval ? "checked" : ""} ${rules.company.require_approval ? "disabled" : ""}> Merges wait for a person</label>
       <div class="grow"><label for="pr-rec">Recruitment approval</label><select id="pr-rec">${["never", "permanent_only", "always"].map((c, i, all) => all.indexOf(rules.company.recruit_requires_approval) <= i ? `<option ${rules.effective.recruit_requires_approval === c ? "selected" : ""}>${c}</option>` : "").join("")}</select></div>
       <div class="grow"><label for="pr-sbx" title="Quality commands of this project's goals run agent code: required = only in the L3 sandbox">Sandbox for agent code</label><select id="pr-sbx">${["off", "auto", "required"].map((c, i, all) => all.indexOf(rules.company.sandbox) <= i ? `<option ${rules.effective.sandbox === c ? "selected" : ""}>${c}</option>` : "").join("")}</select></div></div>
       <label for="pr-stages" title="Every goal of the project must run checks in these gate stages: tag the project's check commands, e.g. [performance] python bench.py, [accessibility] npx pa11y-ci">Required test stages, comma-separated: performance, compatibility, accessibility, integration… (company: ${esc((rules.company.required_test_stages || []).join(", ") || "none")})</label><input id="pr-stages" value="${esc((rules.own.required_test_stages || []).join(", "))}">` : ""}
@@ -118,7 +127,8 @@ async function projectForm(p = null) {
   $("#pf-browse") && ($("#pf-browse").onclick = async () => { const dir = await pickFolder($("#pf-path").value || base); if (dir) { $("#pf-path").value = dir; edited = true; remote(); } });
   $("#pf").onsubmit = async (e) => {
     e.preventDefault();
-    const body = { github_url: $("#pf-gh").value.trim(), description: $("#pf-desc").value };
+    const body = { github_url: $("#pf-gh").value.trim(), description: $("#pf-desc").value, target_outcome: $("#pf-outcome").value.trim(),
+      team_strategy: $("#pf-team").value, related_project_id: Number($("#pf-rel").value) || null };
     if ($("#pf-checks")) body.quality_commands = $("#pf-checks").value.split("\n").map((x) => x.trim()).filter(Boolean);
     if ($("#pf-class")) body.classification = $("#pf-class").value;
     if ($("#pf-prio")) {
@@ -132,9 +142,23 @@ async function projectForm(p = null) {
     try {
       if (p) await api(`/api/projects/${p.id}`, { method: "PATCH", body });
       if (rules) await api(`/api/projects/${p.id}/policy`, { method: "PUT", body: { goal_budget_usd: +$("#pr-cost").value || 0, goal_token_budget: +$("#pr-tok").value || 0,
-        goal_agent_limit: +$("#pr-ag").value || 0, require_approval: $("#pr-appr").checked && !rules.company.require_approval, recruit_requires_approval: $("#pr-rec").value, sandbox: $("#pr-sbx").value,
+        goal_agent_limit: +$("#pr-ag").value || 0, require_approval: $("#pr-appr").checked && !rules.company.require_approval,
+        require_plan_approval: $("#pr-plan").checked && !rules.company.require_plan_approval, recruit_requires_approval: $("#pr-rec").value, sandbox: $("#pr-sbx").value,
         required_test_stages: $("#pr-stages").value.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean) } });
-      else { const r = await api("/api/projects", { method: "POST", body: { ...body, path: $("#pf-path")?.value.trim() || "" } }); selectedProject = r.id; }
+      else {
+        const files = [...($("#pf-docs")?.files || [])], ids = [];
+        for (const f of files) {
+          const fd = new FormData(); fd.append("file", f);
+          const res = await fetch("/api/uploads", { method: "POST", body: fd, credentials: "same-origin" }), up = await res.json();
+          if (!res.ok) throw new Error(`${f.name}: ${up.detail || res.statusText}`);
+          ids.push(up.id);
+        }
+        const r = await api("/api/projects", { method: "POST", body: { ...body, path: $("#pf-path")?.value.trim() || "", requirements: $("#pf-req").value, attachments: ids } });
+        selectedProject = r.id; store.set("ac.project", r.id);
+        $("#modal").hidden = true; lastMessageId = 0;
+        if (current === "projects") location.hash = `#/projects/${r.id}`; else viewProjects();
+        return;
+      }
       $("#modal").hidden = true; lastMessageId = 0; viewProjects();
     } catch (err) { toast(err.message); }
   };
@@ -192,7 +216,7 @@ async function projectMain(id, incremental, early = null) {
   // administrators' tool (CLAUDE.md); with an API model as GM, or for other users, orders go to the agent loop.
   const cli = ["claude_code", "codex"].includes(d.gm?.kind);
   const gmOk = me.is_admin && cli;
-  const mode = projectMode === "plan" ? "plan" : gmOk ? projectMode : "orders";
+  const mode = projectMode === "gm" ? (gmOk ? "gm" : "orders") : ["orders", "plan", ...Object.keys(PROJECT_TABS)].includes(projectMode) ? projectMode : "orders";
   const main = $("#proj-main");
   const gmKey = `${mode}:${d.gm?.kind}:${d.gm?.model}`;
   if (!incremental || main.dataset.pid !== String(id) || main.dataset.mode !== gmKey) {
@@ -200,7 +224,7 @@ async function projectMain(id, incremental, early = null) {
     main.innerHTML = `<div class="row nowrap proj-head"><div class="grow"><h2 style="margin:0">${esc(d.name)} ${d.protected ? '<span class="pill">protected</span>' : ""}${d.status !== "active" ? ` <span class="pill pending" title="${esc(d.status_reason || "")}">${esc(d.status)}</span>` : ""}${d.priority && d.priority !== "normal" ? ` <span class="pill info">${esc(d.priority)}</span>` : ""}${d.deadline ? ` <span class="pill ${d.overdue ? "failed" : ""}" title="deadline">${esc(d.deadline.slice(0, 10))}${d.overdue ? " overdue" : ""}</span>` : ""}${d.budget_usd ? ` <span class="pill ${d.spent_usd >= d.budget_usd ? "failed" : ""}" title="budget used">${money(d.spent_usd)} / ${money(d.budget_usd)}</span>` : ""}</h2><div class="muted mono ellipsis">${esc(d.path)}${d.github_url ? " · " + esc(d.github_url) : ""}</div></div>
         ${me.is_admin ? ib("edit", "Edit the project", 'id="p-edit"', "sm") + ib("download", "Write the company catalog into this project's .claude/ (agents, rules, skills, commands, hooks, .mcp.json)", 'id="p-config"', "sm") + ib("git", d.github_url ? "Sync to GitHub" : "Set a GitHub URL first", `id="p-sync" ${d.github_url ? "" : "disabled"}`, "sm") + ib("workspace", "Open the folder in the Workspace", 'id="p-wsp"', "sm") : ""}
         ${ib("folder", projectFiles ? "Hide files" : "Show files", 'id="p-files"', `sm ${projectFiles ? "on" : ""}`)}${ib("stop", "Stop the project's running goals", 'id="p-stop"', "sm danger")}${(me.is_admin || d.created_by === me.id) && !d.protected && LIFE[d.status]?.length ? `<select id="p-life" aria-label="Project status" title="Pause, resume, archive, complete or cancel the project" style="width:auto"><option value="">${esc(d.status)}…</option>${LIFE[d.status].map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select>` : ""}</div>
-      <div class="ag-tabs small proj-modes" role="tablist"><button role="tab" data-pmode="orders" aria-selected="${mode === "orders"}" title="Your orders, the General Manager's instructions to the agents and their reports">${icon("send", 14)} Orders &amp; reports</button><button role="tab" data-pmode="plan" aria-selected="${mode === "plan"}">${icon("goals", 14)} Plan</button>${gmOk ? `<button role="tab" data-pmode="gm" aria-selected="${mode === "gm"}" title="Your own ${d.gm.kind === "codex" ? "Codex" : "Claude Code"} session in the project's folder (administrators). Orders for the company go to Orders &amp; reports.">${icon("general_manager", 14)} ${d.gm.kind === "codex" ? "Codex" : "Claude Code"}</button>` : ""}
+      <div class="ag-tabs small proj-modes" role="tablist"><button role="tab" data-pmode="overview" aria-selected="${mode === "overview"}">${icon("dashboard", 14)} Overview</button><button role="tab" data-pmode="orders" aria-selected="${mode === "orders"}" title="Your orders, the General Manager's instructions to the agents and their reports">${icon("send", 14)} Orders &amp; reports</button><button role="tab" data-pmode="requirements" aria-selected="${mode === "requirements"}">${icon("files", 14)} Requirements</button><button role="tab" data-pmode="tasks" aria-selected="${mode === "tasks"}">${icon("check", 14)} Tasks</button><button role="tab" data-pmode="plan" aria-selected="${mode === "plan"}">${icon("goals", 14)} Plan</button><button role="tab" data-pmode="evaluation" aria-selected="${mode === "evaluation"}">${icon("performance", 14)} Evaluation</button><button role="tab" data-pmode="reports" aria-selected="${mode === "reports"}">${icon("book", 14)} Reports</button>${gmOk ? `<button role="tab" data-pmode="gm" aria-selected="${mode === "gm"}" title="Your own ${d.gm.kind === "codex" ? "Codex" : "Claude Code"} session in the project's folder (administrators). Orders for the company go to Orders &amp; reports.">${icon("general_manager", 14)} ${d.gm.kind === "codex" ? "Codex" : "Claude Code"}</button>` : ""}
         <span class="grow"></span><span class="muted gm-is" title="${esc(d.gm?.reason || "")}">GM: ${esc(d.gm?.model || "–")}</span></div>
       <div id="p-props"></div><div class="proj-body" id="proj-body"></div>`;
     main.querySelectorAll("[data-pmode]").forEach((b) => (b.onclick = () => { projectMode = b.dataset.pmode; store.set("ac.project.view", projectMode); projectMain(id); }));
@@ -223,6 +247,8 @@ async function projectMain(id, incremental, early = null) {
       body.replaceChildren(g.el);
     } else if (mode === "plan") {
       body.innerHTML = '<div class="plan" id="plan"><p class="muted">Loading…</p></div>';
+    } else if (PROJECT_TABS[mode]) {
+      body.innerHTML = '<div class="plan" id="ptab"><p class="muted">Loading…</p></div>';
     } else {
       body.innerHTML = `<div class="row nowrap topic-bar"><div class="ag-tabs small grow" role="tablist" id="topics"></div>
           <input type="search" id="p-search" class="topic-search" placeholder="Search all topics" aria-label="Search this project's messages" value="${esc(projectSearch)}"></div>
@@ -256,6 +282,7 @@ async function projectMain(id, incremental, early = null) {
     $("#p-running").textContent = `${d.goals.filter((g) => GOAL_ACTIVE.includes(g.status) && g.status !== "paused").length} goal(s) running`;
   }
   if (mode === "plan" && $("#plan")) await projectPlan(id);
+  if (PROJECT_TABS[mode] && $("#ptab")) await projectTab(mode, id, d);
   const pending = d.proposals.filter((p) => p.status === "pending");
   // ASEAO10 S10-R-01: a product or project proposal shows its case; it becomes a project only once the case is complete
   const caseNote = (p) => p.kind === "follow_up" ? "" : ` · <span title="Becomes a project, not a goal">${p.kind === "product" ? "product" : "new project"}</span>${p.case_missing.length ? ` · <span class="muted" title="A product or project needs its documented case before it can become a project">case incomplete: ${p.case_missing.length} of 6 missing</span>` : " · case complete"}`;

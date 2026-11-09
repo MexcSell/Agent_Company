@@ -209,7 +209,15 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
 - **UI-PROJ-06 Approval policy** per project: which steps need the owner — plan, merge, new agents (existing
   `recruit_requires_approval`), dependency changes, org changes. Merge approval keeps the owner-policy `auto_merge`
   rule; a project may only be stricter (`policies.effective`).
-- Status: partial (3-panel page, form, plan tab exist; tabs, portfolio filters/sort, new fields open).
+- Status: **done** (P0-4) but Teams, Workflow and Files as tabs (the Agents panel, P1-2 and the Files toggle stand in):
+  `static/projtabs.js` (portfolio at `#/projects`: cards/table, search, phase filter, sort; tabs Overview,
+  Requirements (traceability), Tasks (board/table by `dashboard.board_column`), Evaluation (the gate's latest history
+  per goal, defects, Reject), Reports (mission reports, decisions/ADRs)), `GET /api/projects-portfolio`, `GET
+  /api/projects/{id}/tasks`, project columns `target_outcome`, `related_project_id`, `team_strategy`; registration
+  takes `requirements` (a first draft requirement) and `attachments` (posted to the command window). Approval policy
+  = the project's stricter rules: plan (`require_plan_approval`), merge (`require_approval`), new agents
+  (`recruit_requires_approval`); dependency and org-change approval have no enforcement yet (open).
+  `tests/test_projects_workspace.py`. "Return to development" is a Reject: `loop.reject` ends the goal (no reopen).
 
 ## 5. Teams & Agents (P1)
 

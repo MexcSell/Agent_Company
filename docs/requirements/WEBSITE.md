@@ -170,6 +170,21 @@ specification in [WORKSPACE.md](WORKSPACE.md); §15 here summarises it and lists
 
 ## 6. Projects
 
+- **WEB-PROJ-00** `#/projects` is the portfolio: cards or table (kept per browser), search over name, id, description
+  and repository, filter by phase (Open, All, Draft, Planning, Active, Blocked, QA / Review, Release ready, Paused,
+  Completed, Archived, Cancelled), sort (priority, last activity, deadline, created, progress), *New project*. A card
+  shows phase, progress, manager, agents working, tasks done/total, priority, next milestone, deadline and last
+  activity (`GET /api/projects-portfolio`). `#/projects/<id>` opens the workspace below; its list's title links back.
+- **WEB-PROJ-00a** Workspace tabs: Overview (status with outcome, team strategy, budget, deadline; milestones;
+  current tasks; blockers and risks; team; goals), Orders & reports, Requirements (traceability per kind with
+  acceptance and links), Tasks (board by Queued, Ready, Waiting, Running, Blocked, Failed, Succeeded, Cancelled, or a
+  table; `GET /api/projects/{id}/tasks`), Plan, Evaluation (each goal's latest gate: stages, failed checks; defects;
+  Reject for a goal awaiting approval), Reports (mission reports, decisions and ADRs), and the GM console for
+  administrators.
+- **WEB-PROJ-00b** New project also asks for Requirements (the brief, a draft requirement), Documents (posted to the
+  command window), Target outcome, Team strategy and Related project; Edit has the last three and, under the
+  project's stricter rules, "Plans wait for a person".
+
 ### 6.1 Project list
 - **WEB-PROJ-01** A left list of the projects the user may see; the first one, protected, is the platform itself.
   **New project** (admins and `create_projects`), checkboxes and **Delete the selected projects** (confirm: running

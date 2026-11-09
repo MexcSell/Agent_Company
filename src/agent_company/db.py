@@ -543,6 +543,10 @@ class Project(Base):
     policy: Mapped[dict[str, Any]] = mapped_column(default=dict)
     # agents taken off the project's Agents panel: {"<agent id>": "<iso time>"}; back once they work on it again
     removed_members: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # AICO UI-PROJ-05: the outcome the owner wants, a related project, how its team is formed (reuse|new|gm)
+    target_outcome: Mapped[str] = mapped_column(Text, default="")
+    related_project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    team_strategy: Mapped[str] = mapped_column(String(16), default="gm")
 
 
 class Message(Base):
