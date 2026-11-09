@@ -3,13 +3,13 @@
 // labels, width, floating cards) and the Projects page (panel order, sizes, hidden panels,
 // orientation). Chosen per browser; panel widths dragged by hand override the preset's sizes.
 
-const LAYOUT_BASE = { scale: 1, density: "cozy", radius: 12, rail: "left", maxWidth: null, floating: false,
+const LAYOUT_BASE = { scale: 1, density: "cozy", radius: 16, rail: "left", maxWidth: null, floating: false,
   project: { orientation: "horizontal", order: ["list", "chat", "agents"], sizes: { list: 20, chat: 55, agents: 25 }, hide: [] } };
 const L = (id, name, hint, over = {}) => ({ ...LAYOUT_BASE, ...over, id, name, hint, project: { ...LAYOUT_BASE.project, ...(over.project || {}) } });
 const LAYOUTS = [
   L("standard", "Standard", "Editor style"),
   L("compact", "Compact", "More on screen", { scale: 0.93, density: "compact", radius: 6 }),
-  L("comfortable", "Comfortable", "Roomy spacing", { scale: 1.05, density: "comfortable", radius: 12 }),
+  L("comfortable", "Comfortable", "Roomy spacing", { scale: 1.05, density: "comfortable" }),
   L("focus", "Focus", "Command window only", { project: { hide: ["list", "agents"] } }),
   L("zen", "Zen", "Centred, quiet", { maxWidth: 1240, project: { hide: ["list"], sizes: { chat: 70, agents: 30 } } }),
   L("wide-chat", "Wide chat", "Conversation first", { project: { sizes: { list: 16, chat: 66, agents: 18 } } }),
@@ -29,7 +29,9 @@ const LAYOUTS = [
   L("labeled", "Labelled rail", "Rail with names", { labels: true }),
   L("square", "Square", "No rounded corners", { radius: 0, density: "compact" }),
 ];
-const DENSITY = { compact: { pad: "8px", gap: "8px", view: "12px" }, cozy: { pad: "12px", gap: "12px", view: "20px" }, comfortable: { pad: "16px", gap: "16px", view: "24px" } };
+// cozy (the default) is the design file's "comfortable": 16 px card padding, 12 px gaps, 40 px controls
+const DENSITY = { compact: { pad: "8px", gap: "8px", view: "12px", control: "32px" }, cozy: { pad: "16px", gap: "12px", view: "24px", control: "40px" },
+  comfortable: { pad: "16px", gap: "16px", view: "24px", control: "40px" } };
 
 function currentLayout() { return LAYOUTS.find((l) => l.id === store.get("ac.layout")) || LAYOUTS[0]; }
 
@@ -41,9 +43,9 @@ function sidebarState(l = currentLayout()) {
 matchMedia("(max-width: 1279px)").addEventListener("change", () => applyLayout());
 function applyLayout() {
   const l = currentLayout(), d = DENSITY[l.density], root = document.documentElement.style;
-  root.setProperty("--pad", d.pad); root.setProperty("--gap", d.gap); root.setProperty("--view-pad", d.view);
+  root.setProperty("--pad", d.pad); root.setProperty("--gap", d.gap); root.setProperty("--view-pad", d.view); root.setProperty("--control-height", d.control);
   root.setProperty("--radius", `${l.radius}px`); root.setProperty("--radius-card", `${l.radius}px`);
-  root.setProperty("--radius-control", `${Math.round(l.radius * 2 / 3)}px`); root.setProperty("--max-width", l.maxWidth ? `${l.maxWidth}px` : "100%");
+  root.setProperty("--radius-control", `${Math.round(l.radius / 2)}px`); root.setProperty("--max-width", l.maxWidth ? `${l.maxWidth}px` : "100%");
   const shell = $("#app");
   shell.dataset.rail = l.rail; shell.dataset.labels = sidebarState(l) ? "1" : ""; shell.dataset.floating = l.floating ? "1" : "";
   shell.style.zoom = l.scale === 1 ? "" : String(l.scale);

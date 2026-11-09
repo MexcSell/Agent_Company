@@ -192,6 +192,15 @@ Machines code):
 | Guardrails, termination conditions, checkpoints, interrupts, SOP documents, middleware, declarative agents, evaluations, memory, trajectories | crewAI, AutoGen, LangGraph, MetaGPT, Agent Framework, Flowise, SWE-agent | done, adapted (see FRAMEWORKS.md §2) |
 | Visual canvas, vector RAG, annotation replies, harness emulation, voice/IDE watch | Dify, Flowise, Open Interpreter, aider | skip (reasons in FRAMEWORKS.md §2) |
 
+## From the design sources (`/home/luca/update/_webdesign`, `/home/luca/update/100-free-admin-dashboards`)
+
+| Feature | Status |
+| --- | --- |
+| DESIGN.md tokens (Lumen Desk): colours per theme, radii, shadows, 40 px controls, focus ring, motion, table and tag rules | done (`static/style.css`, `static/layouts.js`, AICO-UI UI-D-09) |
+| Status pills with a dot, tinted table header row, soft-accent active sidebar item (admin dashboards, MIT) | done (`static/style.css`) |
+| Diff viewer inline and side by side | done for agent-definition candidates (`diffView` in `static/agents.js`) |
+| Google Fonts, analytics tags, sample business pages of the templates | skip: the site loads nothing from a CDN; the pages are other businesses' |
+
 ## Requested directly (Workspace home page, VS Code + Claude Code style)
 
 | Feature | Status |

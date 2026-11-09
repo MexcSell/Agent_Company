@@ -100,13 +100,56 @@ def test_root_defines_new_tokens_and_old_names():
     assert not missing, missing
 
 
-def test_root_holds_the_update_5_dark_values():
-    css = (STATIC / "style.css").read_text()
-    for token, value in [("--color-bg", "#0B1220"), ("--color-sidebar", "#111C2D"), ("--color-panel", "#142033"),
-                         ("--color-elevated", "#1E293B"), ("--color-border", "#24324A"), ("--color-text", "#F9FAFB"),
-                         ("--color-muted", "#9CA3AF"), ("--color-primary", "#2563EB"), ("--color-success", "#16A34A"),
-                         ("--color-warning", "#D97706"), ("--color-error", "#DC2626"), ("--color-info", "#0EA5E9")]:
-        assert re.search(rf"{token}:\s*{value};", css), token
+# UI-D-09: the _webdesign "Lumen Desk" DESIGN.md colours (background, surface, border, text, muted, primary, accent);
+# status colours are not in that file and keep the AICO values where they pass 4.5:1 on the surface.
+DARK = {"--color-bg": "#0B1016", "--color-sidebar": "#151C24", "--color-panel": "#151C24", "--color-border": "#2B323B",
+        "--color-text": "#F0F3F7", "--color-muted": "#A9B2BE", "--color-primary": "#74B1FF", "--color-on-primary": "#111111",
+        "--color-accent": "#A79FFF", "--color-success": "#16A34A", "--color-warning": "#D97706", "--color-error": "#F87171",
+        "--color-info": "#0EA5E9"}
+LIGHT = {"--color-bg": "#F6F9FE", "--color-sidebar": "#E8EFF9", "--color-panel": "#E8EFF9", "--color-border": "#C5CFDB",
+         "--color-text": "#1B232C", "--color-muted": "#5A6471", "--color-primary": "#046ACD", "--color-on-primary": "#FFFFFF",
+         "--color-accent": "#7E73D4", "--color-success": "#166534", "--color-warning": "#92400E", "--color-error": "#B91C1C",
+         "--color-info": "#0369A1"}
+DESIGN_TOKENS = ["--radius-sm", "--radius-md", "--radius-lg", "--radius-full", "--shadow-sm", "--shadow-md", "--shadow-lg",
+                 "--duration-fast", "--duration-base", "--duration-slow", "--ease", "--control-height", "--text-xs",
+                 "--text-sm", "--text-base", "--text-lg", "--text-xl", "--border-width"]
+
+
+def block(selector: str) -> str:
+    return "".join(body for sel, body in parsed("style.css") if sel == selector)
+
+
+def contrast(a: str, b: str) -> float:
+    def lum(h: str) -> float:
+        c = [int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        c = [v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4 for v in c]
+        return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    hi, lo = sorted([lum(a), lum(b)], reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+@pytest.mark.parametrize("selector,palette", [(":root", DARK), (':root[data-theme="light"]', LIGHT)])
+def test_theme_holds_the_design_file_values(selector, palette):
+    body = block(selector)
+    for token, value in palette.items():
+        assert re.search(rf"{token}:\s*{value};", body, re.I), (selector, token)
+
+
+@pytest.mark.parametrize("palette", [DARK, LIGHT])
+def test_text_contrast_on_the_surface(palette):
+    """Body, muted and status text 4.5:1 on cards; the primary button's label 4.5:1; the focus ring 3:1."""
+    surface = palette["--color-panel"]
+    for token in ["--color-text", "--color-muted", "--color-success", "--color-warning", "--color-error", "--color-info"]:
+        assert contrast(palette[token], surface) >= 4.5, token
+    assert contrast(palette["--color-on-primary"], palette["--color-primary"]) >= 4.5
+    assert contrast(palette["--color-accent"], palette["--color-bg"]) >= 3
+
+
+def test_design_tokens_focus_ring_and_reduced_motion():
+    assert not [t for t in DESIGN_TOKENS if t not in defined("style.css", ":root")]
+    css = clean((STATIC / "style.css").read_text())
+    assert re.search(r":focus-visible\s*\{\s*outline:\s*2px solid var\(--color-accent\);\s*outline-offset:\s*2px", css)
+    assert "@media (prefers-reduced-motion: reduce)" in css
 
 
 def test_light_theme_defines_the_same_colour_tokens():

@@ -174,6 +174,49 @@ function diffHtml(text) {
   }).join("\n");
 }
 
+// Side by side: per hunk, context on both sides, a run of removed lines paired row by row with the added run after it.
+function diffSplitRows(text) {
+  const rows = [];
+  let a = 0, b = 0, del = [], add = [];
+  const flush = () => {
+    for (let i = 0; i < Math.max(del.length, add.length); i++) rows.push([del[i] ? [a + i, del[i], "del"] : null, add[i] ? [b + i, add[i], "add"] : null]);
+    a += del.length; b += add.length; del = []; add = [];
+  };
+  for (const ln of text.replace(/\n$/, "").split("\n")) {
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)/.exec(ln);
+    if (h) { flush(); a = +h[1]; b = +h[2]; rows.push({ hunk: ln }); continue; }
+    if (ln.startsWith("---") || ln.startsWith("+++") || ln.startsWith("\\")) continue;
+    if (ln.startsWith("-")) { if (add.length) flush(); del.push(ln.slice(1)); continue; }
+    if (ln.startsWith("+")) { add.push(ln.slice(1)); continue; }
+    flush();
+    if (a || b) { rows.push([[a, ln.slice(1), ""], [b, ln.slice(1), ""]]); a++; b++; }
+  }
+  flush();
+  return rows;
+}
+
+// A diff with an Inline | Side by side switch, remembered in this browser (ac.diffmode).
+function diffView(text) {
+  if (!text) return '<pre class="mono diff"><span class="muted">No change to the file.</span></pre>';
+  const mode = store.get("ac.diffmode") === "split" ? "split" : "inline";
+  const cell = (c) => c ? `<td class="num">${c[0]}</td><td class="${c[2] ? `diff-${c[2]}` : ""}">${esc(c[1])}</td>` : '<td class="num"></td><td class="diff-gap"></td>';
+  const split = diffSplitRows(text).map((r) => r.hunk ? `<tr><td colspan="4" class="diff-hunk">${esc(r.hunk)}</td></tr>` : `<tr>${cell(r[0])}${cell(r[1])}</tr>`).join("");
+  return `<div class="diff-view" data-mode="${mode}"><div class="tabs diff-modes" role="tablist" aria-label="Diff layout">
+    <button type="button" class="tab" role="tab" data-mode="inline" aria-selected="${mode === "inline"}">Inline</button>
+    <button type="button" class="tab" role="tab" data-mode="split" aria-selected="${mode === "split"}">Side by side</button></div>
+    <pre class="mono diff">${diffHtml(text)}</pre>
+    <div class="diff-split"><table class="mono"><colgroup><col class="diff-ln"><col><col class="diff-ln"><col></colgroup><tbody>${split}</tbody></table></div></div>`;
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest(".diff-modes [data-mode]");
+  if (!b) return;
+  store.set("ac.diffmode", b.dataset.mode);
+  document.querySelectorAll(".diff-view").forEach((v) => {
+    v.dataset.mode = b.dataset.mode;
+    v.querySelectorAll(".diff-modes [data-mode]").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.mode === b.dataset.mode)));
+  });
+});
+
 async function definitionCandidate(id) {
   const box = $("#a-cand");
   if (!box) return;
@@ -186,7 +229,7 @@ async function definitionCandidate(id) {
   box.innerHTML = `<h3>Pending candidate #${c.id}</h3>
     <p class="muted">A study visit proposed new ${esc(Object.keys(c.sections || {}).join(" and "))} with ${esc(c.model)} (${esc(c.reason)}, ${ago(c.created_at)}). The file changes only when you apply it.</p>
     ${c.stale ? `<p class="diff-stale">${esc(c.stale_note)}</p>` : ""}
-    <pre class="mono diff">${c.diff ? diffHtml(c.diff) : '<span class="muted">No change to the file.</span>'}</pre>
+    ${diffView(c.diff)}
     <div class="row" style="margin-top:8px">${ib("check", "Apply the candidate: one commit", 'id="a-cand-apply"', "primary")}${ib("x", "Discard the candidate", 'id="a-cand-discard"', "danger")}<span class="grow"></span></div>`;
   $("#a-cand-apply").onclick = async () => {
     try { const r = await api(`/api/definition-candidates/${c.id}/apply`, { method: "POST" }); toast(`Candidate #${r.id} applied`); agentModal(id, "definition"); } catch (e) { toast(e.message); }

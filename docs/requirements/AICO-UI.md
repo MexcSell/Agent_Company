@@ -64,6 +64,25 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   lead, enabled, budget); a project-specific team = a goal's team (`teams.py`). No third team model.
 - **UI-D-08 Evidence before claims** (update_3 §5, PDF p13, BR-010): every progress, completion and acceptance shown
   comes from the gate (`Task.gate`, checks, review verdicts, `mission.py` labels), never from an agent's own text.
+- **UI-D-09 Design file tokens** (owner's order of 2026-11-09: "update the UI" from `/home/luca/update/_webdesign` and
+  `/home/luca/update/100-free-admin-dashboards`). `_webdesign` holds 19 distinct DESIGN.md files (`dark/` and `light/`
+  mirror each other) of two products, "Lumen Desk" and "Fernway", that differ only in their seven colours and in the
+  screen they were drawn from. **Lumen Desk's colours** are taken (an AI research assistant; its screens are model
+  providers, AI workspace, AI settings and chat), with every shared rule: radius sm/md/lg/full 4/8/16/9999 px (cards 16,
+  controls 8, tags 4), shadows sm/md/lg (cards/popovers/dialogs), 40 px controls at the default density (32 px in the
+  compact formats; controls inside tables stay compact), 16 px card padding and 12 px gaps, a 2 px accent focus ring
+  with a 2 px offset on everything interactive, motion tokens (120/200/320 ms, one easing, short slides, no bounce) and
+  reduced motion, table headers in the muted 12 px 600 style, numbers right-aligned in the mono face. UI-D-03's values
+  are replaced; the token names and old aliases stay. Kept from AICO because the design file has none: the status
+  colours (dark error `#F87171` and light success/warning `#166534`/`#92400E` instead, where the AICO value fell below
+  4.5:1 on the new surface), the accent picker, brand and syntax colours, dark as the default theme, and 14 px body text
+  (an operations console of dense tables; titles use the file's scale). From the admin dashboards (MIT, Tokenwise is the
+  closest: AI usage and cost): status pills with a leading dot, the tinted table header row, the soft-accent active item
+  with an indicator bar. Not taken: their Google Fonts and analytics tags (the site loads nothing from a CDN), sample
+  data and pages for other businesses. The `_webdesign` screens include side-by-side and inline diff viewers: agent
+  definition candidates (agents.js, evolution.js) now switch Inline | Side by side (`diffView`, `ac.diffmode`).
+  Tests: `tests/test_ui_tokens.py` (values per theme, 4.5:1 text on the surface, focus ring, design tokens),
+  `tests/test_diff_view.py`.
 - Status (P0-1, goal 337; paths under `src/agent_company/`):
   - UI-D-02 **done**: `static/app.js` (`NAV_DEFAULT` groups; pages added later slot into their group by id),
     `static/layouts.js`, `static/style.css`.

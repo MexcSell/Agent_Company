@@ -57,7 +57,7 @@ async function viewAgentEvolution(quiet) {
   box.querySelectorAll("[data-cand]").forEach((b) => (b.onclick = async () => {
     const c = await api(`/api/definition-candidates/${b.dataset.cand}`), a = names[c.agent_id];
     openDrawer(`${a?.name || "Agent"}: candidate #${c.id}`, `${evoStepper(4, -1, [2, 3])}<p class="muted dash-meta">Current definition v${c.base_version} against the file the candidate would write. ${esc(c.reason || "")}</p>${c.stale ? `<p class="diff-stale">${esc(c.stale_note)}</p>` : ""}
-      <pre class="mono diff">${c.diff ? diffHtml(c.diff) : '<span class="muted">No change to the file.</span>'}</pre>
+      ${diffView(c.diff)}
       <div class="row nowrap" style="margin-top:8px"><button class="btn primary" id="evo-apply">Apply (one commit)</button><button class="btn danger" id="evo-discard">Discard</button><a class="btn" href="#/agents/${c.agent_id}">Versions &amp; restore</a></div>`);
     $("#evo-apply").onclick = async () => { try { await api(`/api/definition-candidates/${c.id}/apply`, { method: "POST" }); toast(`Candidate #${c.id} applied`); closeDrawer(); box.dataset.html = ""; viewAgentEvolution(true); updateBadges(); } catch (e) { toast(e.message); } };
     $("#evo-discard").onclick = async () => { const note = prompt("Why discard it? (optional)", ""); if (note === null) return; try { await api(`/api/definition-candidates/${c.id}/discard`, { method: "POST", body: { note } }); toast(`Candidate #${c.id} discarded`); closeDrawer(); box.dataset.html = ""; viewAgentEvolution(true); } catch (e) { toast(e.message); } };
