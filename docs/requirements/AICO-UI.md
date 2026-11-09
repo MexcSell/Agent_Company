@@ -340,12 +340,17 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
 - **UI-ORG-03 Compare** two versions side by side with the differences highlighted (added, removed, moved).
 - **UI-ORG-04 Restore** a previous version (admin, confirm, audited): rooms' parent, lead and enabled state are set back;
   agents are not deleted.
-- Status: **done** but UI-ORG-02 (P1-5): table `org_versions`, `organization.record_version` on room create and
+- Status: **done** (P1-5, UI-ORG-02 in the follow-ups): table `org_versions`, `organization.record_version` on room create and
   structural room changes (parent, lead, enabled, name, budget) and on an agent's superior or enabled change; a
   baseline is recorded on the first read; `compare_versions`, `restore_version` (rooms only; a room with running goals
   stays enabled; cycle check); `GET /api/org/versions[/{v}]`, `GET /api/org/compare`, `POST
-  /api/org/versions/{v}/restore` (admin, audited); `#/organization`; `tests/test_org_versions.py`. Open: UI-ORG-02
-  org-change proposals of kind `org` (a proposal row needs a goal today).
+  /api/org/versions/{v}/restore` (admin, audited); `#/organization`; `tests/test_org_versions.py`. UI-ORG-02 (follow-ups): table `org_proposals`
+  (not a `proposals` row, which needs a goal): `organization.propose` (changes create_room / update_room /
+  update_agent superior or enabled, checked against today's organisation, the current snapshot stored beside them),
+  `decide_proposal` (a person only: applied in order through the organisation's own calls, recorded as a version; a
+  failing change marks it `failed` and names the version before it), `review_outcome`; `/api/org/proposals` (admin,
+  audited), `gm org-propose`, queue kind `org`, the Organization page's Change proposals (current vs proposed);
+  `tests/test_org_proposals.py`.
 
 ## 11. Change History (P2)
 

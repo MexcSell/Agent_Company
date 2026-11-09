@@ -1376,6 +1376,30 @@ class Notification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
 
+class OrgProposal(Base):
+    """AICO UI-ORG-02: a proposed change of the organisation (rooms, leads, reporting lines) with its reason, expected
+    impact, evidence and migration plan; applied only when a person approves it (organization.decide_proposal), which
+    records an organisation version; the outcome review is written afterwards."""
+
+    __tablename__ = "org_proposals"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(256))
+    changes: Mapped[list[Any]] = mapped_column(default=list)  # [{"op": "create_room"|"update_room"|"update_agent", ...}]
+    current: Mapped[dict[str, Any]] = mapped_column(default=dict)  # the organisation when it was proposed
+    reason: Mapped[str] = mapped_column(Text, default="")
+    impact: Mapped[str] = mapped_column(Text, default="")
+    evidence: Mapped[list[Any]] = mapped_column(default=list)
+    migration: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|approved|rejected|failed
+    proposed_by: Mapped[str] = mapped_column(String(128), default="")
+    decided_by: Mapped[str] = mapped_column(String(128), default="")
+    decision_note: Mapped[str] = mapped_column(Text, default="")
+    version: Mapped[int | None] = mapped_column(Integer, nullable=True)  # the org version the approval produced
+    outcome: Mapped[str] = mapped_column(Text, default="")  # the review once it has been in effect
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class OrgVersion(Base):
     """AICO UI-ORG-01: a snapshot of the organisation after a structural change (rooms with parent, lead, enabled,
     budget; agents with room, superior, enabled, lifecycle), with why and who (organization.record_version)."""

@@ -72,3 +72,9 @@ with the full suite and headless screenshots; later phases are written and check
   it plans, and the tasks it would run on its best assumption are stored (then discarded on the re-plan). One round
   per goal (`clarified` survives checkpoint rewrites), so a model that always asks cannot stall a goal; the answers
   stay in the planner's feedback for every later iteration. Goals nobody ordered by hand never wait.
+- UI-ORG-02 proposals live in their own table `org_proposals`, not as `proposals` rows of kind `org`: a proposal row
+  needs a goal (`goal_id` NOT NULL, SQLite cannot relax it without rebuilding the table) and becomes a goal or a
+  project when approved, while an organisation change is applied directly. The approvals queue still lists them
+  (kind `org`). Only a `user:` actor can decide; the GM proposes through `gm org-propose`. Changes cover what the
+  organisation API can apply (rooms, leads, parents, budgets, an agent's superior or enabled); moving an agent to
+  another room has no API yet.

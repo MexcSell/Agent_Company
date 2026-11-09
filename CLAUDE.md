@@ -159,7 +159,8 @@ feature came from.
   passed and failed; `static/evaluation.js` with the Performance page as a tab, `nav: false` keeps a view off the
   sidebar); `static/evolution.js` (UI-EVO/UI-ORG: Agent Evolution candidates with the six-step stepper,
   Organization Evolution versions; `organization.record_version` keeps table `org_versions` at each structural change,
-  `compare_versions`, `restore_version` (rooms only)); `search.py` (UI-SRCH: `GET /api/search`, grouped, visible
+  `compare_versions`, `restore_version` (rooms only); UI-ORG-02 `org_proposals`: `propose` (also `gm org-propose`),
+  applied only by a person's `decide_proposal` as a new version, `review_outcome`); `search.py` (UI-SRCH: `GET /api/search`, grouped, visible
   projects only; the top-bar search); `static/notifications.js` (UI-NOTE: tabs, categories from
   `governance.category`, grouped repeats, detail pane); `changes.py` (UI-HIST: `GET /api/changes`, the change timeline
   from the version tables; `static/changes.js`); Settings in sections (`SET_SECTIONS` in admin.js);

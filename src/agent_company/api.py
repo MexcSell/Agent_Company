@@ -1217,6 +1217,45 @@ def create_app(start_background: bool = True) -> FastAPI:
         _audit(admin, "org_restore", version, after=out, severity="high")
         return out
 
+    # --- organisation change proposals (AICO UI-ORG-02): applied only by a person's approval ---
+    @app.get("/api/org/proposals")
+    def org_proposals(status: str = "", _: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
+        return organization.list_proposals(status)
+
+    @app.post("/api/org/proposals")
+    def org_propose(body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = organization.propose(str(body.get("title") or ""), body.get("changes") or [],
+                                       str(body.get("reason") or ""), str(body.get("impact") or ""),
+                                       body.get("evidence") or [], str(body.get("migration") or ""),
+                                       f"user:{admin['name']}")
+        except (ValueError, TypeError) as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "org_propose", out["id"], after={"title": out["title"], "changes": out["changes"]})
+        return out
+
+    @app.post("/api/org/proposals/{proposal_id}/decide")
+    def org_decide(proposal_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                   ) -> dict[str, Any]:
+        try:
+            out = organization.decide_proposal(proposal_id, bool(body.get("approve")), f"user:{admin['name']}",
+                                               str(body.get("note") or ""))
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+        _audit(admin, "org_proposal_" + ("approve" if body.get("approve") else "reject"), proposal_id,
+               after={"status": out["status"], "version": out["version"]}, severity="high" if body.get("approve") else "info")
+        return out
+
+    @app.post("/api/org/proposals/{proposal_id}/outcome")
+    def org_outcome(proposal_id: int, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)
+                    ) -> dict[str, Any]:
+        try:
+            out = organization.review_outcome(proposal_id, str(body.get("outcome") or ""), f"user:{admin['name']}")
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+        _audit(admin, "org_proposal_outcome", proposal_id)
+        return out
+
     @app.get("/api/org/export")
     def org_export(format: str = "json", table: str = "agents", admin: dict[str, Any] = Depends(admin_user)
                    ) -> Any:  # noqa: A002

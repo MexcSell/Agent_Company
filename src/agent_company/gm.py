@@ -81,6 +81,8 @@ How you run the company (shell commands; GM below stands for: {gm}):
   GM hypothesis-status <id> <investigating|testing|rejected|inconclusive|archived> [--note "…"]
   GM decision <id>                  a decision report: options, criteria, evidence by class, limitations, reviews
   GM decision-review <id> <agree|concerns|disagree> --note "…"   review a decision you did not take
+  GM org-propose "<title>" --changes '[{{"op": "update_room", "key": "…", "changes": {{"lead_agent_id": 3}}}}]' --reason "…" [--impact "…"] [--evidence "…"] [--migration "…"]
+                                    propose an organisation change (rooms, leads, reporting lines); a person applies it
 
 Rules:
 - Small requests (questions, explanations, a quick config edit) you handle yourself here.
@@ -219,6 +221,13 @@ def main(argv: list[str]) -> None:
     sc.add_argument("--kind", default="", choices=["", "feature", "bugfix", "refactor", "research", "docs"])
     sl = sub.add_parser("schedules")
     sl.add_argument("project_id", type=int, nargs="?")
+    op = sub.add_parser("org-propose", help="UI-ORG-02: propose an organisation change; a person approves it")
+    op.add_argument("title")
+    op.add_argument("--changes", required=True, help='JSON list: [{"op": "create_room"|"update_room"|"update_agent", ...}]')
+    op.add_argument("--reason", required=True)
+    op.add_argument("--impact", default="")
+    op.add_argument("--evidence", action="append", default=[])
+    op.add_argument("--migration", default="")
     dr = sub.add_parser("decision")
     dr.add_argument("decision_id", type=int)
     dv = sub.add_parser("decision-review")
@@ -304,6 +313,11 @@ def main(argv: list[str]) -> None:
             out = schedules.create(a.project_id, a.title, a.every, a.details, a.check, a.kind)
         else:
             out = schedules.list_schedules(a.project_id)
+    elif a.cmd == "org-propose":
+        from agent_company import organization
+
+        out = organization.propose(a.title, json.loads(a.changes), a.reason, a.impact, a.evidence, a.migration,
+                                   "agent:general_manager")
     elif a.cmd == "decision":
         from agent_company import decisions
 

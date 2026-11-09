@@ -65,7 +65,7 @@ async function viewAgentEvolution(quiet) {
 }
 
 async function viewOrgEvolution(quiet) {
-  const [vs, agents] = await Promise.all([api("/api/org/versions"), api("/api/agents").catch(() => [])]);
+  const [vs, agents, props] = await Promise.all([api("/api/org/versions"), api("/api/agents").catch(() => []), me.is_admin ? api("/api/org/proposals").catch(() => []) : []]);
   const names = Object.fromEntries(agents.map((a) => [a.id, a.name]));
   if (orgB == null || !vs.some((v) => v.version === orgB)) orgB = vs[0]?.version ?? null;
   if (orgA == null || !vs.some((v) => v.version === orgA) || orgA === orgB) orgA = vs[1]?.version ?? orgB;
@@ -77,16 +77,53 @@ async function viewOrgEvolution(quiet) {
   const html = `<div id="orgv"><div class="page-head"><div class="page-head-text"><h2 class="page-title">Organization Evolution</h2><p class="muted page-sub">Every structural change of the company is a version: rooms (parent, lead, enabled, budget) and agents (room, superior, enabled). Compare two; an administrator restores the rooms of an earlier one.</p></div></div>
     <div class="grid evo-org"><section class="card"><div class="card-head"><h3>Versions</h3><span class="muted">${vs.length}</span></div><ol class="timeline">${vs.map((v) => `<li class="${v.reason.startsWith("restored") ? "warn" : "info"}"><div class="row nowrap"><strong class="grow">v${v.version}</strong>${me.is_admin && v.version !== vs[0].version ? `<button class="btn sm" data-restore="${v.version}">Restore</button>` : ""}<button class="btn sm${v.version === orgA ? " on" : ""}" data-a="${v.version}" title="Compare from">A</button><button class="btn sm${v.version === orgB ? " on" : ""}" data-b="${v.version}" title="Compare to">B</button></div><div class="dash-meta">${esc(v.reason)}</div><time>${esc(v.actor)} · ${ago(v.at)} · ${v.rooms} rooms · ${v.agents} agents</time></li>`).join("")}</ol></section>
       <div><h3 class="team-h">${cmp ? `v${orgA} → v${orgB}` : "Pick two versions (A and B) to compare"}</h3>${cmp ? `<div class="grid evo-grid">${part("Rooms", cmp.rooms, (x) => `${x.name || x.key} (${x.key})`)}${part("Agents", cmp.agents, (x) => `${x.name} · ${x.role || ""} in ${x.room || "–"}`)}</div>` : ""}
-      <p class="muted dash-meta">Proposals to change the structure come from the General Manager and agents as proposals and are applied only by a person (Rooms on Teams &amp; Agents).</p></div></div></div>`;
+      ${me.is_admin ? orgProposals(props, names) : ""}</div></div></div>`;
   const view = $("#view");
   if ($("#orgv")?.dataset.html === html) return;
   view.innerHTML = html; $("#orgv").dataset.html = html; iconize(view);
   view.querySelectorAll("[data-a]").forEach((b) => (b.onclick = () => { orgA = Number(b.dataset.a); $("#orgv").dataset.html = ""; viewOrgEvolution(true); }));
   view.querySelectorAll("[data-b]").forEach((b) => (b.onclick = () => { orgB = Number(b.dataset.b); $("#orgv").dataset.html = ""; viewOrgEvolution(true); }));
+  const reload = () => { $("#orgv").dataset.html = ""; viewOrgEvolution(true); };
+  view.querySelectorAll("[data-op-ok],[data-op-no]").forEach((b) => (b.onclick = async () => {
+    const approve = !!b.dataset.opOk, id = b.dataset.opOk || b.dataset.opNo;
+    if (approve && !confirm(`Apply organisation proposal #${id}? Its changes are made now and recorded as a new version.`)) return;
+    const note = approve ? "" : prompt("Why is it rejected?"); if (!approve && note === null) return;
+    try { const r = await api(`/api/org/proposals/${id}/decide`, { method: "POST", body: { approve, note: note || "" } }); toast(`Proposal #${id} ${r.status}`); reload(); updateBadges(); } catch (e) { toast(e.message); }
+  }));
+  view.querySelectorAll("[data-op-outcome]").forEach((b) => (b.onclick = async () => {
+    const outcome = prompt("Outcome review: did the change have the expected impact?"); if (!outcome || !outcome.trim()) return;
+    try { await api(`/api/org/proposals/${b.dataset.opOutcome}/outcome`, { method: "POST", body: { outcome } }); reload(); } catch (e) { toast(e.message); }
+  }));
+  const form = $("#op-form");
+  if (form) form.onsubmit = async (e) => {
+    e.preventDefault(); const f = new FormData(form);
+    try {
+      const changes = JSON.parse(f.get("changes") || "[]");
+      await api("/api/org/proposals", { method: "POST", body: { title: f.get("title"), reason: f.get("reason"), impact: f.get("impact"), migration: f.get("migration"), evidence: String(f.get("evidence") || "").split("\n").map((x) => x.trim()).filter(Boolean), changes } });
+      toast("Proposed; it waits for approval"); reload(); updateBadges();
+    } catch (err) { toast(err instanceof SyntaxError ? "Changes: not valid JSON" : err.message); }
+  };
   view.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = async () => {
     if (!confirm(`Restore the rooms of version ${b.dataset.restore}? Parents, leads, switches and budgets are set back; no agent is deleted. The result is a new version.`)) return;
     try { const r = await api(`/api/org/versions/${b.dataset.restore}/restore`, { method: "POST" }); toast(`Restored: ${r.changed.length} room(s) changed${r.skipped.length ? `, ${r.skipped.length} skipped` : ""}`); $("#orgv").dataset.html = ""; viewOrgEvolution(true); } catch (e) { toast(e.message); }
   }));
+}
+// UI-ORG-02: proposed changes with current vs proposed, reason, impact, evidence, migration; a person applies them
+function orgProposals(props, names) {
+  const desc = (c) => c.op === "create_room" ? `new room ${c.name} (${c.key}) in ${c.division}${c.parent_key ? ` under ${c.parent_key}` : ""}`
+    : c.op === "update_room" ? `room ${c.key}: ${Object.entries(c.changes).map(([k, v]) => `${k} → ${k === "lead_agent_id" ? names[v] || v : v}`).join(", ")}`
+    : `${names[c.agent_id] || `agent #${c.agent_id}`}: ${Object.entries(c.changes).map(([k, v]) => `${k} → ${k === "superior_id" ? names[v] || v : v}`).join(", ")}`;
+  const now = (p, c) => { const cur = p.current || {}; if (c.op === "update_room") { const r = (cur.rooms || {})[c.key] || {}; return Object.keys(c.changes).map((k) => { const f = { parent_key: "parent", lead_agent_id: "lead" }[k] || k; const v = r[f]; return `${k}: ${v == null ? "–" : f === "lead" ? names[v] || v : v}`; }).join(", "); }
+    if (c.op === "update_agent") { const a = (cur.agents || {})[String(c.agent_id)] || {}; return Object.keys(c.changes).map((k) => `${k}: ${k === "superior_id" ? names[a.superior] || a.superior || "–" : a[k] ?? "–"}`).join(", "); } return "does not exist"; };
+  const tone = { pending: "warn", approved: "ok", rejected: "neutral", failed: "bad" };
+  return `<section class="card" style="margin-top:12px"><div class="card-head"><h3>Change proposals</h3><span class="muted">${props.filter((p) => p.status === "pending").length} pending</span></div>
+    ${props.length ? props.map((p) => `<div class="gm-card"><div class="row nowrap"><strong class="grow">#${p.id} ${esc(p.title)}</strong><span class="badge ${tone[p.status] || "neutral"}">${esc(p.status)}</span></div>
+      <table class="dash-meta"><tr><th>Current</th><th>Proposed</th></tr>${p.changes.map((c) => `<tr><td>${esc(now(p, c))}</td><td>${esc(desc(c))}</td></tr>`).join("")}</table>
+      <div class="gm-kv"><span class="muted">Reason</span><span>${esc(p.reason)}</span><span class="muted">Expected impact</span><span>${esc(p.impact || "–")}</span><span class="muted">Evidence</span><span>${p.evidence.length ? p.evidence.map(esc).join("<br>") : "–"}</span><span class="muted">Migration</span><span>${esc(p.migration || "–")}</span>${p.decided_by ? `<span class="muted">Decision</span><span>${esc(p.decided_by)}${p.version ? ` · v${p.version}` : ""}${p.decision_note ? ` · ${esc(p.decision_note)}` : ""}</span>` : ""}${p.outcome ? `<span class="muted">Outcome</span><span>${esc(p.outcome)}</span>` : ""}</div>
+      <div class="muted dash-meta">by ${esc(p.proposed_by)} · ${ago(p.created_at)}</div>
+      ${p.status === "pending" ? `<div class="row nowrap"><button class="btn sm primary" data-op-ok="${p.id}">Approve and apply</button><button class="btn sm" data-op-no="${p.id}">Reject</button></div>` : ["approved", "failed"].includes(p.status) && !p.outcome ? `<button class="btn sm" data-op-outcome="${p.id}">Review the outcome</button>` : ""}</div>`).join("") : gmEmpty("No change proposed. The General Manager proposes with `gm org-propose`; an administrator below.")}
+    <details><summary class="muted dash-meta">Propose a change</summary><form id="op-form" class="stack"><input name="title" placeholder="Title" required><textarea name="reason" rows="2" placeholder="Reason" required></textarea><textarea name="impact" rows="2" placeholder="Expected impact"></textarea><textarea name="evidence" rows="2" placeholder="Evidence (one per line)"></textarea><textarea name="migration" rows="2" placeholder="Migration plan"></textarea>
+      <textarea name="changes" rows="4" class="mono" placeholder='[{"op": "update_room", "key": "research", "changes": {"parent_key": "development"}}]' required></textarea><button class="btn primary">Propose</button></form></details></section>`;
 }
 registerView({ id: "evolution", title: "Agent Evolution", icon: "evolution" }, viewAgentEvolution);
 registerView({ id: "organization", title: "Organization Evolution", icon: "sitemap" }, viewOrgEvolution);

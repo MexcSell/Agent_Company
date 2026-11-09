@@ -17,7 +17,7 @@ from agent_company.db import (Agent, Decision, DefinitionCandidate, Experiment, 
                               Requirement, session)
 
 OPEN_DECISION = ("submitted", "under_review", "escalated")
-KINDS = ("goal", "plan", "questions", "decision", "proposal", "definition", "recruitment", "experiment", "requirements", "user")
+KINDS = ("goal", "plan", "questions", "org", "decision", "proposal", "definition", "recruitment", "experiment", "requirements", "user")
 
 
 def _at(t: datetime | None) -> str | None:
@@ -63,6 +63,10 @@ def queue(user: dict[str, Any], visible_projects: set[int] | None = None) -> lis
         if not admin:
             return sorted(out, key=lambda x: x["at"] or "", reverse=True)
 
+        from agent_company.db import OrgProposal
+
+        for o in s.scalars(select(OrgProposal).where(OrgProposal.status == "pending")):  # UI-ORG-02
+            item("org", o.id, f"Organisation: {o.title}", o.created_at, "#/organization", None, o.proposed_by)
         for d in s.scalars(select(Decision).where(Decision.requires_human_approval,
                                                   Decision.status.in_(OPEN_DECISION))):
             item("decision", d.id, d.topic, d.created_at,
