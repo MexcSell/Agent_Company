@@ -668,7 +668,8 @@ def start(exp_id: int) -> dict[str, Any]:
                                  "points). Wait for live outcomes or lower min_improvement")
             a.experiment = {"playbook": e.candidate["playbook"], "baseline": rate, "outcomes": [], "stage": "smoke",
                             "experiment_id": e.id, "suite": e.dataset.get("suite", "smoke"),
-                            "repeats": int(e.dataset.get("repeats", 1))}
+                            "repeats": int(e.dataset.get("repeats") or settings().candidate_repeats or 1),
+                            "window": max(3, settings().canary_window)}  # V28, as evolution's own candidates
             e.baseline_version = f"v{a.playbook_version}"
             agent_id = a.id
         e.status = "baseline"

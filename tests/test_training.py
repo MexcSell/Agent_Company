@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from agent_company import evaluation, evolution, experiments, learning, loop, performance, prefs, registry, router
 from agent_company import specs, training
+from agent_company.config import settings
 from agent_company.api import create_app
 from agent_company.db import Agent, EvolutionEvent, Goal, Lesson, Run, Task, now, session
 
@@ -282,11 +283,11 @@ def test_evolution_candidates_are_experiments_with_both_sides_and_a_canary(monke
     assert all(c["trial"] == {"trainee_id": aid, "side": c["trial"]["side"], "experiment_id": exp_id} for c in calls)
     e = experiments.get(exp_id)
     assert e["status"] == "canary" and e["results"]["candidate"]["pass_rate"] == 0.5
-    assert e["results"]["baseline"]["runs"] == 2
-    learning.learn(aid, None, "Live failure 1.", False, [])
-    learning.learn(aid, None, "Live failure 2.", False, [])  # 0/2 of 3: the rest cannot reach the baseline + 10
+    assert e["results"]["baseline"]["runs"] == 2 * settings().candidate_repeats  # V28: 2 repeats per side
+    for i in range(3):  # 0/3 of 5: the rest cannot reach the 50 % floor (V28)
+        learning.learn(aid, None, f"Live failure {i}.", False, [])
     e = experiments.get(exp_id)
-    assert e["status"] == "rolled_back" and e["results"]["canary"]["outcomes"] == [False, False]
+    assert e["status"] == "rolled_back" and e["results"]["canary"]["outcomes"] == [False, False, False]
     with session() as s:
         assert s.get(Agent, aid).experiment == {}
     assert training.metrics()["benchmark_by_playbook_version"][0]["candidate"] == 0.5
@@ -306,10 +307,10 @@ def test_a_users_playbook_experiment_runs_the_same_path(monkeypatch):
     fake_suite(monkeypatch, {"baseline": 0.5, "candidate": 0.5})
     spawned[0]()
     assert experiments.get(e["id"])["status"] == "canary", "a tie on the suite may go on to the canary"
-    for i in range(3):
+    for i in range(settings().canary_window):
         learning.learn(aid, None, f"Live pass {i}.", True, [])
     e = experiments.get(e["id"])
-    assert e["status"] == "rolled_out" and e["results"]["canary"]["outcomes"] == [True, True, True]
+    assert e["status"] == "rolled_out" and e["results"]["canary"]["outcomes"] == [True] * settings().canary_window
     with session() as s:
         assert s.get(Agent, aid).playbook == "DO: write the test first."
 
