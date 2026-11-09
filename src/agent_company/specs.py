@@ -70,13 +70,30 @@ def _normalise(goal: Any, path: str) -> str:
     return path.rstrip("/")
 
 
-def check_plan(goal: Any, plan: list[Any]) -> list[str]:
+def _out_of_scope(goal: Any, path: str, allowed: list[str]) -> bool:
+    """A file_exists path no task may create: outside the allowed paths, not exempt from the scope gate and not
+    already in the worktree, so the condition can never pass."""
+    from agent_company import adr, checks
+
+    if path.startswith(CONFIG_PATHS) or path.startswith(adr.FOLDER + "/"):  # the scope gate's own exemptions
+        return False
+    if any(checks.in_scope(path, pat) for pat in allowed):
+        return False
+    return not (goal.worktree and (Path(goal.worktree) / path).exists())
+
+
+def check_plan(goal: Any, plan: list[Any], *, drop_out_of_scope: bool = False) -> list[str]:
     """Reject a plan whose acceptance conditions name a `.claude/specs/<X>` folder other than this goal's, or a file
-    the loop writes itself in any spec folder (K54): such a plan can never pass. Paths are not rewritten; the only
-    change is the harmless normalisation of a spec file_exists path (`_normalise`), returned as `<key>: <old> -> <new>`. Every problem of the plan is listed in one ValueError, one per line."""
+    the loop writes itself in any spec folder (K54), or a file_exists path outside the goal's allowed paths: such a
+    plan can never pass. Paths are not rewritten; the only change is the harmless normalisation of a spec file_exists
+    path (`_normalise`), returned as `<key>: <old> -> <new>`. Every problem of the plan is listed in one ValueError,
+    one per line. With `drop_out_of_scope` (the fallback plan) out-of-scope file_exists conditions are removed and
+    reported instead; the K54 problems still raise."""
     own = slug(goal.title, goal.id)
     rel = relative_folder(goal)
+    allowed = list(getattr(goal, "allowed_paths", None) or [])
     report, problems, fixes = [], [], []
+    outside: list[tuple[Any, Any, str]] = []
 
     def scan(key: str, text: str, whole: bool = False) -> None:  # a file_exists path is named whole
         for m in SPEC_DIR.finditer(text):
@@ -97,12 +114,22 @@ def check_plan(goal: Any, plan: list[Any]) -> list[str]:
                 if path != cond.path and SPEC_DIR.match(path):
                     report.append(f"{c.key}: {cond.path} -> {path}")
                     fixes.append((cond, path))
+                if allowed and _out_of_scope(goal, path, allowed):
+                    outside.append((c, cond, path))
             elif cond.type == "command" and cond.run:
                 scan(c.key, cond.run)
+    if outside and not drop_out_of_scope:
+        problems.append("file_exists acceptance outside the goal's allowed paths can never pass: "
+                        + "; ".join(f"task {c.key}: {path}" for c, _, path in outside)
+                        + f". Allowed paths: {', '.join(allowed)}. Use a path inside them, or a contains, regex or "
+                        "command condition instead.")
     if problems:
         raise ValueError("\n".join(problems))
     for cond, path in fixes:
         cond.path = path
+    for c, cond, path in outside:
+        c.acceptance = [a for a in c.acceptance if a is not cond]
+        report.append(f"{c.key}: dropped file_exists {path} (outside the allowed paths)")
     return report
 
 
