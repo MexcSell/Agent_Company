@@ -71,7 +71,7 @@ async function viewDashboard(quiet) {
         <section class="card"><div class="card-head"><h3>Model usage</h3><a class="view-all" href="#/models">View details →</a></div><div id="dash-models"></div></section>
       </div>
       <div class="grid dash-row two-wide">
-        <section class="card"><div class="card-head"><h3>Team performance</h3><a class="view-all" href="#/performance">View details →</a></div><div id="dash-teams"></div></section>
+        <section class="card"><div class="card-head"><h3>Team performance</h3><a class="view-all" href="#/evaluation">View details →</a></div><div id="dash-teams"></div></section>
         <section class="card"><div class="card-head"><h3>Recent completions</h3><a class="view-all" href="#/goals">View all →</a></div><div id="dash-done"></div></section>
       </div></div>`;
     $("#dash-period").onchange = (e) => { dashPeriod = e.target.value; store.set("ac.dashPeriod", dashPeriod); render(true); };

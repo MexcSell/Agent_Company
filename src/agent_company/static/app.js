@@ -253,7 +253,7 @@ const VIEW_GROUP = Object.assign(Object.fromEntries(NAV_DEFAULT.groups.flatMap(g
 let navLayout = null, navDefault = NAV_DEFAULT, railEditing = false, lastOverview = null;
 function navGroups() {
   const lay = navLayout?.groups ? navLayout : navDefault;
-  const vis = VIEWS.filter(v => (!v.admin || me.is_admin) && !TOPBAR.includes(v.id) && (v.id !== "simple" || me.ui_mode === "simple"));
+  const vis = VIEWS.filter(v => (!v.admin || me.is_admin) && v.nav !== false && !TOPBAR.includes(v.id) && (v.id !== "simple" || me.ui_mode === "simple"));
   const by = Object.fromEntries(vis.map(v => [v.id,v]));
   // The editor's rule (placeNav): a default page the layout lacks goes after its predecessor; an unknown id goes last.
   const groups = placeNav(lay.groups, navDefault.groups, [], lay.hidden);

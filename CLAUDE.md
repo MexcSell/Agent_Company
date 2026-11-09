@@ -150,7 +150,9 @@ feature came from.
   live goals' teams) and Agents grid, the agent card's Evaluation and Memory tabs); `static/workflows.js` (UI-WF: execution graph per goal from
   `depends_on`, gate and approval nodes, node drawer, agent messages, templates; read-only); `deliverables.py` (UI-DEL:
   one release record per merged goal with its completion report and SHA-256, stored by `loop._record_release` before
-  completion is reported; a newer one supersedes; `static/deliverables.js`);
+  completion is reported; a newer one supersedes; `static/deliverables.js`); `qa.py` (UI-QA: `GET /api/qa` from gate events, flaky = same commit
+  passed and failed; `static/evaluation.js` with the Performance page as a tab, `nav: false` keeps a view off the
+  sidebar);
   `a2a.py` (G-R-06: the A2A 1.0 agent card and JSON-RPC `SendMessage`/`GetTask`/`ListTasks`/`CancelTask` for
   issued bearer clients (`a2a_clients`, `a2a_tasks`); tasks become `origin="a2a"` goals that always wait for approval);
   `marketplace.py` (REQ-002 agent marketplace: a repository URL or uploaded package fetched as untrusted data into

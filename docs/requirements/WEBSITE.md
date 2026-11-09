@@ -445,6 +445,12 @@ Tabs: Organisation, Agent network, Tools & MCP, Skills & plugins, Marketplace (a
 
 ## 12. Performance
 
+- **WEB-PERF-00** The sidebar's **Evaluation & QA** (`#/evaluation`) holds this page as its tab *Performance &
+  benchmarks*; `#/performance` still opens it alone (off the sidebar). Its other tabs: **Overview** (test executions,
+  passed, failed, blocked tasks, goals pending a gate, gate pass rate; passed vs failed per day; pass share by stage;
+  flaky checks; open defects by priority) and **Latest evaluation** (each goal's latest gate by Functional,
+  Integration, Security, Final acceptance, Static, with the failing checks), over 24 h / 7 d / 30 d.
+
 - **WEB-PERF-01** Open defects (priority, severity, status, check, goal, iterations); rooms (agents, tasks,
   completion, cost); agents (done, rework, reliable, goals passed, Weighted Agent Score 0–100); certification (skill
   family, level, evidence); recruitment effectiveness (recruit, role, probation, passed, failed).

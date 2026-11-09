@@ -91,12 +91,13 @@ function kpisWire(kp) {
   });
 }
 
-async function viewPerformance(quiet) {
+// `root`: the Evaluation & QA page's Performance tab; the old #/performance route draws into the page itself.
+async function viewPerformance(quiet, root = $("#view")) {
   if (quiet && $("#ev-form")) return;
   const [r, defects, certs, evals, rec, kp] = await Promise.all([api("/api/performance"), api("/api/defects?status=open"), api("/api/certifications"), api("/api/evals"), api("/api/recruitment/effectiveness"), api("/api/kpis").catch(() => null)]);
   const c = r.company;
   const k = (label, value) => `<div class="card kpi"><div class="label">${label}</div><div class="value">${value}</div></div>`;
-  $("#view").innerHTML = `<div class="grid kpis">${k("Goals finished", `${c.finished} / ${c.goals}`)}${k("Pass rate", pct(c.pass_rate))}${k("Iterations to pass", c.avg_iterations_to_pass ?? "–")}${k("Cost per passed goal", c.cost_per_passed_goal === null ? "–" : money(c.cost_per_passed_goal))}${k("Open defects", c.open_defects)}</div>
+  root.innerHTML = `<div class="grid kpis">${k("Goals finished", `${c.finished} / ${c.goals}`)}${k("Pass rate", pct(c.pass_rate))}${k("Iterations to pass", c.avg_iterations_to_pass ?? "–")}${k("Cost per passed goal", c.cost_per_passed_goal === null ? "–" : money(c.cost_per_passed_goal))}${k("Open defects", c.open_defects)}</div>
     <div class="grid halves" style="margin-top:12px">
       <div class="grid"><div class="card"><h2>Open defects</h2><p class="muted">Detected → assigned (a writing task of the next iteration) → fix submitted → retested (the gate or a retest ran the check again in a fresh process) → closed at the merge. Priority 1 comes first.</p><div class="table-wrap"><table><tr><th>Priority</th><th>Severity</th><th>Status</th><th>Check</th><th>Goal</th><th>Iterations</th></tr>${defects.slice(0, 40).map((d) => `<tr><td>${me.is_admin ? `<select data-dprio="${d.id}" style="width:auto">${[1, 2, 3, 4, 5].map((p) => `<option ${p === d.priority ? "selected" : ""}>${p}</option>`).join("")}</select>` : `P${Number(d.priority)}`}</td><td>${pill(d.severity === "critical" || d.severity === "high" ? "failed" : "pending").replace(/>[^<]+</, `>${esc(d.severity)}<`)}</td><td>${pill(d.status)}${d.assignee ? `<div class="muted">${esc(d.assignee)}</div>` : ""}</td><td>${esc(d.check)}<div class="muted ellipsis" style="max-width:320px">${esc(d.detail.split("\n")[0])}</div>${me.is_admin ? `<div class="row" style="gap:4px;margin-top:4px">${defectActions(d)}</div>` : ""}</td><td><a href="#" data-goal="${d.goal_id}">#${d.goal_id}</a></td><td class="num">${d.first_iteration}–${d.last_iteration}</td></tr>`).join("") || '<tr><td colspan="6" class="muted">No open defects.</td></tr>'}</table></div></div>
       <div class="card"><h2>Rooms</h2><table><tr><th>Room</th><th class="num">Agents</th><th class="num">Tasks</th><th class="num">Completion</th><th class="num">Cost</th></tr>${r.rooms.map((x) => `<tr><td>${esc(x.name)}</td><td class="num">${x.agents}</td><td class="num">${x.tasks}</td><td class="num">${pct(x.completion_rate)}</td><td class="num">${money(x.cost)}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No work yet.</td></tr>'}</table></div>
@@ -113,7 +114,7 @@ async function viewPerformance(quiet) {
   document.querySelectorAll("[data-goal]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); goalModal(Number(a.dataset.goal)); }));
   kp && kpisWire(kp);
   document.querySelectorAll("[data-agent]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); agentModal(Number(a.dataset.agent)); }));
-  bindDefectActions($("#view"), viewPerformance);
+  bindDefectActions(root, () => (current === "evaluation" ? viewEvaluation() : viewPerformance()));
   document.querySelectorAll("[data-label]").forEach((a) => (a.onclick = async (e) => { e.preventDefault(); evalSummary(await api(`/api/evals/${encodeURIComponent(a.dataset.label)}`)); }));
   $("#cmp-go") && ($("#cmp-go").onclick = async () => {
     const r2 = await api(`/api/evals/compare?a=${encodeURIComponent($("#cmp-a").value)}&b=${encodeURIComponent($("#cmp-b").value)}`);
@@ -143,4 +144,5 @@ function dimTable(d) {
   return `<table><tr><th>Dimension</th><th class="num">n</th><th>Result</th></tr>${rows.map(([name, x, text]) => `<tr><td>${name}</td><td class="num">${x.n}</td><td>${esc(text)}</td></tr>`).join("")}</table>`;
 }
 
-registerView({ id: "performance", title: "Performance", icon: "performance" }, viewPerformance, 5);
+// Its content is the Evaluation & QA page's Performance tab; the route stays for old links, off the sidebar.
+registerView({ id: "performance", title: "Performance", icon: "performance", nav: false }, viewPerformance, 5);

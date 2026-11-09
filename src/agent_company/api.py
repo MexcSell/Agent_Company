@@ -59,6 +59,7 @@ from agent_company import (
     policies,
     prefs,
     projects,
+    qa,
     rca,
     recruitment,
     registry,
@@ -1114,6 +1115,15 @@ def create_app(start_background: bool = True) -> FastAPI:
                 "Content-Disposition": f'attachment; filename="sbom-{d["merge_commit"][:12]}.cdx.json"'})
         return Response(d["report_md"], media_type="text/markdown; charset=utf-8", headers={
             "Content-Disposition": f'attachment; filename="completion-goal-{d["goal_id"]}.md"'})
+
+    @app.get("/api/qa")
+    def qa_report(period: str = "7d", user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        """UI-QA-01/02: gate executions, flaky checks, defects and the latest evaluation per goal (qa.py)."""
+        if period not in dashboard.PERIODS:
+            raise HTTPException(400, f"period is one of {', '.join(dashboard.PERIODS)}")
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        return qa.report(period, seen)
 
     @app.get("/api/projects-portfolio")
     def projects_portfolio(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:

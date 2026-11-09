@@ -706,10 +706,10 @@ a.kpi:focus-visible, button.kpi:focus-visible, .kpi.clickable:focus-visible { ou
 @media(max-width:699px) { .top-search { order:3; flex-basis:100%; } }
 
 /* ---------- Dashboard — Company Control Hub (AICO UI-DASH, dashboard.js) ---------- */
-.dash .dash-kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-@media (max-width: 1279px) { .dash .dash-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 699px) { .dash .dash-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .dash .kpi .value { font-size: 22px; } .dash .kpi-icon { width: 26px; height: 26px; } }
-.dash .kpi { min-width: 0; }
+.dash-kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+@media (max-width: 1279px) { .dash-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 699px) { .dash-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .dash .kpi .value { font-size: 22px; } .dash .kpi-icon { width: 26px; height: 26px; } }
+.dash-kpis .kpi { min-width: 0; }
 .dash .page-head select, .dash .card-head select { flex: 0 1 auto; width: auto; max-width: 60%; min-width: 0; }
 .dash .page-head .row { flex: 0 1 auto; gap: var(--space-2); }
 .dash .page-head .row > * { flex: 0 1 auto; }
@@ -861,3 +861,10 @@ button.wf-node:hover { border-color: var(--accent); border-left-color: var(--c);
 .del-actions { gap: var(--space-2); flex-wrap: wrap; }
 .del-actions .btn { flex: 0 0 auto; text-decoration: none; }
 .del-md { max-height: 65vh; overflow: auto; }
+
+/* ---------- Evaluation & QA (AICO UI-QA, evaluation.js) ---------- */
+.qa-body { margin-top: var(--space-3); }
+.qa-chart { overflow-x: auto; padding-bottom: var(--space-1); }
+.qa-axis { fill: var(--muted); font-size: 10px; }
+.qa-table td { vertical-align: top; }
+.qa-fail td { background: color-mix(in srgb, var(--bad) 6%, transparent); }

@@ -294,7 +294,11 @@ call, quiet live updates, no UI state in a second store, Workspace stays the adm
   (= reject with reason, which reopens it, AT-014).
 - **UI-QA-04 Eval runs and benchmarks** (existing `eval` results, suites, dimension summaries, no combined score).
 - The existing Performance page's content moves here (rooms, KPIs, operational metrics stay as tabs).
-- Status: partial.
+- Status: **done** (P1-4) but "return to development" (reject only, see P0-4): `qa.py` + `GET /api/qa?period=` (gate
+  events: executions passed/failed per day and by stage, gate pass rate, blocked tasks, goals pending a gate, flaky =
+  the same check passed and failed on one commit, open defects by priority, latest gate per goal by area);
+  `static/evaluation.js` (`#/evaluation`: Overview, Latest evaluation, Performance & benchmarks = the former
+  Performance page, whose route stays off the sidebar, `registerView(... nav: false)`); `tests/test_qa_report.py`.
 
 ## 9. Agent Evolution (P1)
 
