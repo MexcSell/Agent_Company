@@ -905,6 +905,10 @@ def create_app(start_background: bool = True) -> FastAPI:
     async def _bad(_: Request, e: ValueError) -> JSONResponse:
         return JSONResponse({"detail": str(e)}, status_code=400)
 
+    @app.exception_handler(router.NotCleared)  # also NoModel: no real model and the simulator switched off
+    async def _no_model(_: Request, e: router.NotCleared) -> JSONResponse:
+        return JSONResponse({"detail": str(e)}, status_code=409)
+
     # --- public ---
     @app.get("/api/health")
     def health() -> dict[str, Any]:
@@ -3301,8 +3305,11 @@ def create_app(start_background: bool = True) -> FastAPI:
             with session() as s:
                 a = s.get(Agent, p.manager_id)
                 pref = a.model_pref if a else None
-            c = router.resolve("general_manager", pref)
-            gm = {"model": c.name, "kind": c.kind, "reason": c.reason}
+            try:
+                c = router.resolve("general_manager", pref)
+                gm = {"model": c.name, "kind": c.kind, "reason": c.reason}
+            except router.NotCleared as e:  # NoModel: the page still opens and says why
+                gm = {"model": "(no model)", "kind": "", "reason": str(e)}
         return projects.project_dict(p) | {"gm": gm, "members": projects.members(p.id), "goals": goals,
                                            "proposals": [x for x in projects.list_proposals(user)
                                                          if x["project_id"] == p.id][:30]}

@@ -65,3 +65,21 @@ def _models() -> list[ModelEntry]:
         for m in rows:
             s.expunge(m)
         return rows
+
+
+def test_the_project_page_opens_with_no_model_usable():
+    import secrets
+
+    from fastapi.testclient import TestClient
+
+    from agent_company import projects
+    from agent_company.api import create_app
+
+    p = projects.create("No model")
+    router.update_model(_sim(), {"enabled": False})
+    with TestClient(create_app(start_background=False), client=("127.0.0.1", 50000)) as app:
+        app.post("/api/auth/register", json={"name": "luca", "device_secret": secrets.token_urlsafe(32)})
+        r = app.get(f"/api/projects/{p['id']}")
+        assert r.status_code == 200, r.text
+        gm = r.json()["gm"]
+        assert gm and gm["model"] == "(no model)" and "switched off" in gm["reason"]
