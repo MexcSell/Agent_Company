@@ -253,7 +253,7 @@ async function boot() {
 // Keep the legacy top-order export for existing shell consumers. Groups own rendering and persistence.
 // Offline mirror of prefs.DEFAULT_NAV_GROUPS (UI-D-02 order with pages of later phases; ids without a view are dropped),
 // kept equal by tests/test_nav_layout.py.
-const NAV_DEFAULT = { top: ["dashboard", "general-manager"], groups: [
+const NAV_DEFAULT = { top: ["dashboard", "general-manager", "projects", "goals", "workflows", "deliverables", "swarm", "teams", "agents", "companymap"], groups: [
   {key:"command", title:"Command", items:["dashboard","general-manager"]},
   {key:"missions", title:"Missions", items:["projects","goals","workflows","deliverables"]},
   {key:"swarm", title:"Swarm & Organization", items:["swarm","teams","agents","companymap"]},
@@ -660,28 +660,55 @@ function goalModal(id) {
 let goalFocus = false;  // the Command Center's "New mission" opens Missions with the form focused
 const GOAL_FILTERS = { all: "All", active: "Active", awaiting_approval: "Awaiting approval", approved: "Merged",
   failed: "Failed", cancelled: "Cancelled" };
+// UI-G5-MI-01: the mission form. Basic (default): objective, expected deliverable, deadline, budget, project; the
+// General Manager plans, staffs and validates. Advanced adds the kind, research URLs, repository and checks
+// (administrators), scope, change boundaries, iterations, tokens and agents at once. The mode is per browser.
+let missionMode = store.get("ac.mission.mode") === "advanced" ? "advanced" : "basic";
 async function viewGoals(quiet) {
-  const goals = await api("/api/goals");
-  if (!quiet || !$("#goal-list")) {  // a live refresh keeps a half-typed goal
-    $("#view").innerHTML = `<div class="grid two"><div class="card"><h2>New goal</h2><form id="goal-form">
-      <label for="g-title">Goal</label><input id="g-title" required minlength="3" maxlength="256" placeholder="Build a REST API for a todo list">
-      <label for="g-desc">Details</label><textarea id="g-desc" placeholder="Constraints, acceptance criteria, tech choices"></textarea>
+  const [goals, projs] = await Promise.all([api("/api/goals"), api("/api/projects").catch(() => [])]);
+  if (!quiet || !$("#goal-list")) {  // a live refresh keeps a half-typed mission
+    const adv = missionMode === "advanced";
+    $("#view").innerHTML = `<div class="grid two"><div class="card"><div class="row"><h2 class="grow" style="margin:0">New mission</h2>
+        <div class="seg" role="group" aria-label="Form mode"><button type="button" class="btn sm keep-text${adv ? "" : " on"}" data-mode="basic" aria-pressed="${!adv}">Basic</button><button type="button" class="btn sm keep-text${adv ? " on" : ""}" data-mode="advanced" aria-pressed="${adv}">Advanced</button></div></div>
+      <p class="muted dash-meta">${adv ? "Set the mission's contract yourself: scope, checks, limits and change boundaries." : "Say what you want, by when and for how much. The General Manager researches, plans, assembles the team, executes and validates."}</p>
+      <form id="goal-form">
+      <label for="g-title">Objective</label><input id="g-title" required minlength="3" maxlength="256" placeholder="Build a REST API for a todo list">
+      <label for="g-deliv">Expected deliverable</label><textarea id="g-deliv" rows="2" maxlength="4000" placeholder="A tested API in src/api with a README section"></textarea>
+      <div class="mi-pair"><div><label for="g-deadline">Deadline (optional)</label><input id="g-deadline" type="datetime-local"></div>
+        <div><label for="g-budget">Budget in USD (optional)</label><input id="g-budget" type="number" min="0" max="10000" step="0.5" placeholder="no limit"></div></div>
+      <label for="g-project">Project</label><select id="g-project"><option value="">none (a new workspace)</option>${projs.filter((p) => p.status === "active").map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
+      ${adv ? `<label for="g-desc">Details</label><textarea id="g-desc" placeholder="Constraints, acceptance criteria, tech choices"></textarea>
       <label for="g-kind">Kind</label><select id="g-kind"><option value="">the planner picks</option>${["bugfix", "feature", "refactor", "research", "docs"].map((k) => `<option>${k}</option>`).join("")}</select>
       <label for="g-urls">Research URLs (one per line)</label><textarea id="g-urls" rows="2" placeholder="https://docs.example.com/guide"></textarea>
-      ${me.is_admin ? `<label for="g-repo">Existing git repository (optional; default: new workspace)</label><input id="g-repo" placeholder="/home/you/project">
-      <label for="g-checks">Quality commands (one per line, run in the worktree)</label><textarea id="g-checks" rows="2" placeholder="uv run pytest -q"></textarea>` : ""}
+      ${me.is_admin ? `<label for="g-repo">Existing git repository (optional; default: the project's, else a new workspace)</label><input id="g-repo" placeholder="/home/you/project">
+      <label for="g-checks">Quality commands (one per line, run in the worktree)</label><textarea id="g-checks" rows="2" placeholder="uv run pytest -q"></textarea>
+      <label>Change boundaries lifted</label><div class="row">${["dependencies", "config", "skip_tests"].map((k) => `<label class="row nowrap" style="gap:4px"><input type="checkbox" data-permit="${k}" style="width:auto"> ${k.replace("_", " ")}</label>`).join("")}</div>` : ""}
       <label for="g-allow">Allowed paths (globs, one per line; empty = anywhere)</label><textarea id="g-allow" rows="2" placeholder="src/*"></textarea>
       <label class="row" style="margin-top:8px"><input type="checkbox" id="g-protect" style="width:auto"> Protect existing tests (agents may add tests, not change them)</label>
-      <label for="g-iter">Max iterations</label><input id="g-iter" type="number" min="1" max="10" value="3">
-      <div class="row" style="margin-top:12px"><button class="btn primary">Start</button></div></form></div>
-      <div class="card"><div class="row"><h2 class="grow" style="margin:0">Goals</h2><select id="goal-filter" style="width:auto">${Object.entries(GOAL_FILTERS).map(([k, l]) => `<option value="${k}"${k === goalFilter ? " selected" : ""}>${l}</option>`).join("")}</select></div>
+      <div class="mi-pair"><div><label for="g-iter">Max iterations</label><input id="g-iter" type="number" min="1" max="10" value="3"></div>
+        <div><label for="g-est">Cost estimate in USD (twice it pauses)</label><input id="g-est" type="number" min="0" max="10000" step="0.5" placeholder="none"></div>
+        <div><label for="g-tokens">Token budget</label><input id="g-tokens" type="number" min="0" step="1000" placeholder="no limit"></div>
+        <div><label for="g-agents">Agents at once</label><input id="g-agents" type="number" min="0" max="50" placeholder="no limit"></div></div>` : ""}
+      <div class="row" style="margin-top:12px"><button class="btn primary keep-text">Start mission</button></div></form></div>
+      <div class="card"><div class="row"><h2 class="grow" style="margin:0">Missions</h2><select id="goal-filter" style="width:auto">${Object.entries(GOAL_FILTERS).map(([k, l]) => `<option value="${k}"${k === goalFilter ? " selected" : ""}>${l}</option>`).join("")}</select></div>
       <div class="list" id="goal-list" style="margin-top:8px"></div></div></div>`;
+    $("#view").querySelectorAll("[data-mode]").forEach((b) => (b.onclick = () => {
+      if (b.dataset.mode === missionMode) return;
+      missionMode = b.dataset.mode; store.set("ac.mission.mode", missionMode); viewGoals();
+    }));
     $("#goal-form").onsubmit = async (e) => {
       e.preventDefault();
-      const lines = (id) => ($(id)?.value || "").split("\n").map((x) => x.trim()).filter(Boolean);
+      const lines = (id) => ($(id)?.value || "").split("\n").map((x) => x.trim()).filter(Boolean), num = (id) => Number($(id)?.value) || 0;
+      const when = $("#g-deadline").value, project = Number($("#g-project").value) || null;
+      const body = { title: $("#g-title").value.trim(), deliverable: $("#g-deliv").value, description: $("#g-desc")?.value || "", kind: $("#g-kind")?.value || "",
+        urls: lines("#g-urls"), repo_path: $("#g-repo")?.value.trim() || "", quality_commands: lines("#g-checks"), allowed_paths: lines("#g-allow"),
+        protect_tests: !!$("#g-protect")?.checked, max_iterations: num("#g-iter") || null, estimated_cost_usd: num("#g-est"), budget_usd: num("#g-budget"),
+        budget_tokens: num("#g-tokens"), max_active_agents: num("#g-agents"), project_id: project,
+        permits: [...document.querySelectorAll("#goal-form [data-permit]:checked")].map((x) => x.dataset.permit),
+        deadline: when ? new Date(when).toISOString() : null };
       try {
-        const r = await api("/api/goals", { method: "POST", body: { title: $("#g-title").value.trim(), description: $("#g-desc").value, kind: $("#g-kind").value, urls: lines("#g-urls"), repo_path: $("#g-repo")?.value.trim() || "", quality_commands: lines("#g-checks"), allowed_paths: lines("#g-allow"), protect_tests: $("#g-protect").checked, max_iterations: Number($("#g-iter").value) || null } });
-        e.target.reset(); toast(`Goal #${r.id} started`); viewGoals(true); goalModal(r.id);
+        const r = await api("/api/goals", { method: "POST", body });
+        e.target.reset(); toast(`Mission #${r.id} started`); viewGoals(true); goalModal(r.id);
       } catch (err) { toast(err.message); }
     };
     $("#goal-filter").onchange = (e) => { goalFilter = e.target.value; viewGoals(true); };
@@ -689,7 +716,7 @@ async function viewGoals(quiet) {
   if (goalFocus) { goalFocus = false; $("#g-title")?.focus(); }
   const shown = goals.filter((g) => goalFilter === "all" || (goalFilter === "active" ? GOAL_ACTIVE.includes(g.status) : g.status === goalFilter));
   $("#goal-list").innerHTML = shown.map((g) => `<div class="list-item" data-id="${Number(g.id)}"><div class="row"><strong class="grow">${esc(g.title)}</strong>${pill(g.status)}</div><div class="muted">#${Number(g.id)}${g.kind ? ` · ${esc(g.kind)}` : ""} · ${esc(g.origin || "user")} · iteration ${Number(g.iteration)}/${Number(g.max_iterations)} · ${ago(g.updated_at)}</div></div>`).join("")
-    || `<p class="muted">${goals.length ? "No goal with this status." : "No goals yet."}</p>`;
+    || `<p class="muted">${goals.length ? "No mission with this status." : "No missions yet."}</p>`;
   $("#goal-list").querySelectorAll(".list-item").forEach((el) => (el.onclick = () => goalModal(Number(el.dataset.id))));
 }
 async function goalDetail(id, openIds = new Set()) {
@@ -717,6 +744,17 @@ async function goalDetail(id, openIds = new Set()) {
     <p class="muted">Iteration ${g.iteration}/${g.max_iterations} · branch <code>${esc(g.branch || "-")}</code> · worktree <code>${esc(g.worktree || "-")}</code>${g.estimated_cost_usd ? ` · estimate ${money(g.estimated_cost_usd)}` : ""}</p>
     ${g.time ? `<p class="muted" title="S05-R-05: estimate = the planner's estimated_minutes of this iteration's tasks; active = time in agent runs; waiting = queued or awaiting approval; blocked = paused">Time: ${g.time.estimated ? `estimated ${dur(g.time.estimated)} · ` : ""}active ${dur(g.time.active)} · waiting ${dur(g.time.waiting)} · blocked ${dur(g.time.blocked)}</p>` : ""}
     ${g.digest && !["queued", "planning", "running", "recovering"].includes(g.status) ? `<p class="muted" title="G-R-09 mission digest: the last iteration's tasks, time since the order, tokens and cost of every run, merge state">Digest: ${Number(g.digest.tasks_done)}/${Number(g.digest.tasks)} task(s) passed · ${Number(g.digest.tokens).toLocaleString()} tokens · $${Number(g.digest.cost).toFixed(4)} · ${esc(g.digest.merge)}</p>` : ""}
+    ${g.contract ? (() => { const c = g.contract, li = (xs) => xs.map((x) => esc(x)).join(" · ");  // UI-G5-MI-02
+      return `<details class="mi-contract" data-id="contract" ${openIds.has("contract") || !openIds.size ? "open" : ""}><summary><strong>Mission contract</strong> <span class="muted">what was ordered and what decides it is done</span></summary><div class="gm-kv">
+        <span class="muted">Objective</span><span style="white-space:pre-wrap">${esc(c.objective.slice(0, 600))}</span>
+        <span class="muted">Deliverable</span><span style="white-space:pre-wrap">${c.deliverable ? esc(c.deliverable) : "the change the objective describes, merged after the gate"}</span>
+        <span class="muted">Deadline</span><span>${c.deadline ? esc(new Date(c.deadline).toLocaleString(undefined, inTz({}))) : "none"}</span>
+        <span class="muted">Budget</span><span>${budgetLine || "no limit"}</span>
+        <span class="muted">Constraints</span><span>${li(c.constraints)}</span>
+        <span class="muted">Success criteria</span><span>${li(c.success_criteria)}</span>
+        <span class="muted">Capabilities</span><span>${c.capabilities.length ? li(c.capabilities.map((r) => r.replace(/_/g, " "))) : "decided by the plan"}</span>
+        <span class="muted">Risk</span><span>${c.risk.level ? `<span class="pill ${c.risk.level === "high" ? "failed" : c.risk.level === "medium" ? "pending" : "done"}">${esc(c.risk.level)}</span> ${li(c.risk.reasons)}` : "assessed after planning"}</span>
+        <span class="muted">Approval</span><span>${li(c.approvals)}</span></div></details>`; })() : ""}
     ${budgetLine ? `<p class="muted">Budget: ${budgetLine}${g.parent_goal_id ? ` · shared from goal #${Number(g.parent_goal_id)}` : ""}</p>` : ""}
     ${g.status === "paused" && g.paused_for ? `<p class="muted">${g.paused_for === "cost_overrun" ? "Paused: it cost more than twice its estimate. Resuming accepts the cost so far as the new estimate." : "Paused: its budget is used up. Raise the goal's budget (the settings button above, or Settings for every goal) before resuming."}</p>` : ""}
     ${g.result ? `<pre>${esc(g.result)}</pre>` : ""}

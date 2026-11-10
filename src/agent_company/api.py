@@ -233,6 +233,13 @@ class GoalBody(BaseModel):
     permits: list[str] = Field(default_factory=list)  # change boundaries lifted (admins): dependencies, config
     estimated_cost_usd: float = Field(default=0.0, ge=0, le=10_000)  # twice this pauses the goal (S14-R-03)
     kind: str = ""  # S04-R-11: bugfix|feature|refactor|research|docs; "" = the planner picks
+    # UI-G5-MI-01 mission fields: the Basic form's deliverable, deadline and budget, the Advanced form's limits
+    deliverable: str = Field(default="", max_length=4000)
+    deadline: datetime | None = None
+    budget_usd: float = Field(default=0.0, ge=0, le=10_000)
+    budget_tokens: int = Field(default=0, ge=0, le=1_000_000_000)
+    max_active_agents: int = Field(default=0, ge=0, le=50)
+    project_id: int | None = None
 
 
 class MissionResources(BaseModel):
@@ -2487,12 +2494,31 @@ def create_app(start_background: bool = True) -> FastAPI:
         if (body.repo_path or body.quality_commands or body.permits) and not user["is_admin"]:
             _audit(user, "goal_create_denied", "", after={"needs": "administrator"}, severity="warning")
             raise HTTPException(403, "only administrators can set a repository, quality commands or permits")
+        repo, checks = body.repo_path, list(body.quality_commands)
+        if body.project_id is not None:  # a project's mission works in its repository with its checks by default
+            with session() as s:
+                seen = _visible_project_ids(s, user)
+                p = s.get(projects.Project, body.project_id)
+                if p is None or (seen is not None and p.id not in seen):
+                    raise HTTPException(404, f"project {body.project_id} not found")
+                repo, checks = repo or p.path or "", checks or list(p.quality_commands or [])
+        deadline = None
+        if body.deadline is not None:
+            deadline = body.deadline if body.deadline.tzinfo else body.deadline.replace(tzinfo=now().tzinfo)
+            if deadline <= now():
+                raise HTTPException(400, "the deadline must be in the future")
+        description = body.description
+        if body.deliverable.strip():
+            description = f"{description.strip() or body.title.strip()}\n\n{hub.DELIVERABLE_HEAD}\n{body.deliverable.strip()}"
         try:
-            gid = loop.create_goal(body.title, body.description, body.repo_path, body.urls,
-                                   body.quality_commands, body.max_iterations, created_by=user["id"],
+            gid = loop.create_goal(body.title, description, repo, body.urls,
+                                   checks, body.max_iterations, created_by=user["id"],
                                    allowed_paths=body.allowed_paths, protect_tests=body.protect_tests,
                                    extract_checks=user["is_admin"], permits=body.permits,
-                                   estimated_cost_usd=body.estimated_cost_usd, kind=body.kind)
+                                   estimated_cost_usd=body.estimated_cost_usd, kind=body.kind,
+                                   project_id=body.project_id, budget_usd=body.budget_usd,
+                                   budget_tokens=body.budget_tokens, max_active_agents=body.max_active_agents,
+                                   deadline=deadline)
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
         if body.repo_path or body.quality_commands or body.permits:
@@ -2529,6 +2555,7 @@ def create_app(start_background: bool = True) -> FastAPI:
         d["decisions"] = decisions.list_decisions(goal_id=goal_id)
         d["blackboard"] = blackboard.read(goal_id)
         d["budget"] = budgets.summary(goal_id)
+        d["contract"] = hub.mission_contract(goal_id)  # UI-G5-MI-02
         d["team"] = teams.history(goal_id)
         d["time"] = management.goal_time(goal_id)  # S05-R-05
         d["rca"] = rca.list_analyses(goal_id=goal_id)  # S07-R-02

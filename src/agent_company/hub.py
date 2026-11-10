@@ -406,3 +406,64 @@ def observability(period: str = "24h", admin: bool = True) -> dict[str, Any]:
         out["sandbox"].pop("home", None)
         out["sandbox"].pop("toolchain", None)
     return out
+
+
+# --- Mission contract ---------------------------------------------------------------------------------------------
+
+DELIVERABLE_HEAD = "## Expected deliverable"
+
+
+def mission_contract(goal_id: int) -> dict[str, Any]:
+    """UI-G5-MI-02: a mission's contract read from the goal (G5-D-03): objective, deliverable, constraints, success
+    criteria, required capabilities, risk and who must approve, with the rules in force for its project."""
+    from agent_company import policies, sandbox
+
+    st = settings()
+    with session() as s:
+        g = s.get(Goal, goal_id)
+        if g is None:
+            raise KeyError(goal_id)
+        tasks = list(s.scalars(select(Task).where(Task.goal_id == g.id, Task.iteration == g.iteration)))
+        desc = g.description or ""
+        objective, _, rest = desc.partition(DELIVERABLE_HEAD)
+        deliverable = rest.split("\n## ", 1)[0].strip()
+        mode = sandbox.mode_for(g, s=s)
+        plan_approval = bool(policies.effective("require_plan_approval", g.project_id, s=s))
+        merge_approval = bool(policies.effective("require_approval", g.project_id, s=s))
+        acceptance = sum(len((t.contract or {}).get("acceptance") or []) for t in tasks)
+        roles = sorted({t.role for t in tasks} | set((g.strategy or {}).get("roles") or []))
+    constraints = [f"at most {g.max_iterations} iteration(s)"]
+    if g.allowed_paths:
+        constraints.append("changes only in " + ", ".join(g.allowed_paths))
+    if g.protect_tests:
+        constraints.append("existing tests protected")
+    constraints.append("change boundaries lifted: " + ", ".join(g.permits) if g.permits
+                       else "no dependency or configuration changes unless permitted")
+    constraints.append(f"sandbox {mode}")
+    if g.max_active_agents:
+        constraints.append(f"at most {g.max_active_agents} agents at once")
+    if g.classification and g.classification != "internal":
+        constraints.append(f"classification {g.classification}")
+    criteria = [f"`{c}` passes" for c in g.quality_commands or []] or ["the quality gate's checks pass"]
+    if acceptance:
+        criteria.append(f"{acceptance} acceptance check(s) of this iteration's tasks")
+    criteria += [f"stage {x} passes" for x in (g.test_strategy or {}).get("mandatory") or []
+                 if isinstance(x, str)]
+    held = g.origin in ("a2a", "github", "improvement")
+    approvals = []
+    if plan_approval:
+        approvals.append("a person approves the plan before work starts")
+    if held:
+        approvals.append(f"a person approves the merge (work from {g.origin} always waits)")
+    elif st.auto_merge:
+        approvals.append("merged by the owner policy once the gate passes")
+    elif merge_approval:
+        approvals.append("a person approves the merge")
+    else:
+        approvals.append("merged when the quality gate passes")
+    approvals.append("decisions marked for a person block the merge")
+    ts = g.test_strategy or {}
+    return {"objective": objective.strip()[:2000] or g.title, "deliverable": deliverable[:2000],
+            "deadline": _iso(g.deadline), "constraints": constraints, "success_criteria": criteria,
+            "capabilities": roles, "risk": {"level": ts.get("risk") or "", "reasons": ts.get("reasons") or []},
+            "approvals": approvals, "status": g.status, "sandbox": mode}
