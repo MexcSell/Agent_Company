@@ -898,6 +898,12 @@ a.kpi:focus-visible, button.kpi:focus-visible, .kpi.clickable:focus-visible { ou
 .mi-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--space-3); }
 .mi-contract { margin: var(--space-2) 0 var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--panel-2); }
 .mi-contract summary { cursor: pointer; margin-bottom: var(--space-2); }
+/* G5 external sources (UI-G5-KN): Discord connector cards and form */
+.dc-card { min-width: 0; }
+.dc-why { color: var(--warn); }
+.dc-steps { margin: 0 0 var(--space-2); padding-left: 1.2em; }
+.dc-chans { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow: auto; padding: var(--space-1); border: 1px solid var(--border); border-radius: var(--radius-control); }
+.dc-msg { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* G5 Evolution Lab lifecycle (UI-G5-EV-03): the stepper with a count and a bar per step */
 .lab-steps > li { padding-bottom: var(--space-1); }
 .lab-step-n { font-size: 20px; color: var(--text); font-variant-numeric: tabular-nums; }

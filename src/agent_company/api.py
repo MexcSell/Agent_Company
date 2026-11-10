@@ -35,6 +35,7 @@ from agent_company import (
     dashboard,
     deliverables,
     decisions,
+    discord,
     evaluation,
     evolution,
     executors,
@@ -3580,7 +3581,7 @@ def create_app(start_background: bool = True) -> FastAPI:
 
     @app.get("/api/research/search")
     def search(q: str, limit: int = 10, _: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
-        return research.search(q, min(limit, 50))
+        return research.search(q, min(limit, 50), audience="people")
 
     @app.get("/api/research/documents")
     def documents(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
@@ -3591,6 +3592,54 @@ def create_app(start_background: bool = True) -> FastAPI:
                      "version": d.version or 1, "license": d.license or "", "language": d.language or "",
                      "published_at": d.published_at.isoformat() if d.published_at else None}
                     for d in s.scalars(select(research.Document).order_by(research.Document.id.desc()).limit(300))]
+
+    # --- G5 UI-G5-KN-02: Discord as an external source (administrators; every change audited) ---
+    @app.get("/api/discord")
+    def discord_list(_: dict[str, Any] = Depends(admin_user)) -> list[dict[str, Any]]:
+        return discord.list_connectors()
+
+    @app.post("/api/discord")
+    def discord_create(body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = discord.create(body, f"user:{admin['name']}")
+        except (ValueError, TypeError) as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "discord_create", out["id"], after={k: out[k] for k in ("name", "guild_id", "agent_access")}
+               | {"token": out["token_hint"]})
+        return out
+
+    @app.patch("/api/discord/{cid}")
+    def discord_update(cid: int, body: dict[str, Any], admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        try:
+            out = discord.update(cid, body)
+        except (ValueError, TypeError) as e:
+            raise HTTPException(400, str(e)) from e
+        _audit(admin, "discord_update", cid, after={k: v for k, v in body.items() if k != "token"}
+               | ({"token": out["token_hint"]} if body.get("token") else {}))
+        return out
+
+    @app.post("/api/discord/{cid}/test")
+    def discord_test(cid: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = discord.test(cid)
+        _audit(admin, "discord_test", cid, after={"state": out["state"]})
+        return out
+
+    @app.post("/api/discord/{cid}/sync")
+    def discord_sync(cid: int, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = discord.sync(cid, f"user:{admin['name']}")
+        _audit(admin, "discord_sync", cid, after={"ok": out["ok"], "new": out["new"], "state": out["state"]})
+        return out
+
+    @app.get("/api/discord/{cid}/messages")
+    def discord_messages(cid: int, limit: int = 50, q: str = "", _: dict[str, Any] = Depends(admin_user)
+                         ) -> list[dict[str, Any]]:
+        return discord.messages(cid, limit, q)
+
+    @app.delete("/api/discord/{cid}")
+    def discord_delete(cid: int, purge: bool = False, admin: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        out = discord.delete(cid, purge)
+        _audit(admin, "discord_delete", cid, after=out, severity="warning")
+        return out
 
     @app.get("/api/research/sources")
     def sources(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:

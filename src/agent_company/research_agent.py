@@ -36,7 +36,8 @@ At most %d tasks. Set "sufficient": true with no tasks once the material below a
 def _search_knowledge(args: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     from agent_company import research
 
-    docs = [d for d in research.search(args["query"], limit=5, goal_id=ctx.get("goal_id")) if not d["flags"]]
+    docs = [d for d in research.search(args["query"], limit=5, goal_id=ctx.get("goal_id"), audience="research")
+            if not d["flags"]]
     return {"documents": [d["id"] for d in docs], "titles": [d["title"] or d["url"] for d in docs]}
 
 
@@ -204,7 +205,7 @@ def gather(question: str, keywords: list[str], agent: Any, goal_id: int | None =
     found: list[int] = []
     terms = _terms(question, keywords)
     for rnd in range(1, rounds + 1):
-        docs = research.search(" ".join([*keywords, question]), limit=8, goal_id=goal_id)
+        docs = research.search(" ".join([*keywords, question]), limit=8, goal_id=goal_id, audience="research")
         # what the loop fetched itself first, even when the search ranks it lower (V16)
         seen = list(dict.fromkeys([*found, *(d["id"] for d in docs if not d["flags"])]))[:MAX_MATERIAL]
         notes = "\n".join(f"Round {s['round']}: " + "; ".join(

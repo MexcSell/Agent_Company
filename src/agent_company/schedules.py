@@ -206,3 +206,9 @@ class ScheduleThread(threading.Thread):
                 ownerpolicy.retry_refused()
             except Exception as e:  # noqa: BLE001
                 log_event("error", f"merge retry: {type(e).__name__}: {e}")
+            try:  # G5 UI-G5-KN-02: Discord sources whose sync interval is due
+                from agent_company import discord
+
+                discord.tick()
+            except Exception as e:  # noqa: BLE001
+                log_event("error", f"discord sync: {type(e).__name__}: {e}")

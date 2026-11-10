@@ -1137,6 +1137,33 @@ class Source(Base):
     not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # Retry-After
 
 
+class DiscordConnector(Base):
+    """A Discord server as an external knowledge source (G5 UI-G5-KN-02, discord.py): a bot token stored encrypted,
+    the selected channels, incremental cursors, the access state Discord answered and the sync history."""
+
+    __tablename__ = "discord_connectors"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    token_enc: Mapped[str] = mapped_column(Text, default="")  # transport.encrypt_text, never sent to a browser
+    token_hint: Mapped[str] = mapped_column(String(16), default="")
+    guild_id: Mapped[str] = mapped_column(String(32), default="")
+    guild_name: Mapped[str] = mapped_column(String(128), default="")
+    channels: Mapped[list[Any]] = mapped_column(default=list)  # selected [{"id", "name", "type"}]
+    discovered: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"guilds": [...], "channels": [...]}
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)  # sync on its interval
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=60)  # 0 = only by hand
+    agent_access: Mapped[str] = mapped_column(String(16), default="none")  # none|research|all
+    state: Mapped[str] = mapped_column(String(24), default="unconfigured")  # discord.STATES
+    state_detail: Mapped[str] = mapped_column(Text, default="")
+    cursors: Mapped[dict[str, Any]] = mapped_column(default=dict)  # channel or thread id -> last message id
+    imported: Mapped[int] = mapped_column(Integer, default=0)
+    history: Mapped[list[Any]] = mapped_column(default=list)  # the last syncs: {"at", "ok", "imported", "detail"}
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # a 429's retry
+    created_by: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class ResearchShift(Base):
     """One agent's shift on the research rotation (SPEC-12 S12-R-05, ASEAO06 S06-R-05). `state` holds the shift's
     objective, visited sources, findings, open questions and known problems; the next shift starts from it, so an

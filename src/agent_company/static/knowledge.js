@@ -89,7 +89,15 @@ function kCard(i, extra = "") {
     ${i.status_reason ? `<div class="muted">${esc(i.status_reason)}${i.reviewed_by ? ` (${esc(i.reviewed_by)})` : ""}</div>` : ""}${kReport(i)}${extra}</div>`;
 }
 
+// G5 UI-G5-KN-01: Items | External sources (sources.js); the tab is per browser
+function kTabs(active) {
+  return `<div class="tabs" role="tablist" style="margin-bottom:12px">${[["items", "Knowledge items"], ["sources", "External sources"]].map(([k, l]) => `<button class="tab${k === active ? " active" : ""}" role="tab" aria-selected="${k === active}" data-ktab="${k}">${l}</button>`).join("")}</div>`;
+}
+function kWireTabs() {
+  document.querySelectorAll("[data-ktab]").forEach((b) => (b.onclick = () => { store.set("ac.k.tab", b.dataset.ktab); viewKnowledge(); }));
+}
 async function viewKnowledge() {
+  if (store.get("ac.k.tab") === "sources" && typeof viewSources === "function") return viewSources();
   const qs = new URLSearchParams({ q: kState.q, status: kState.status, kind: kState.kind, limit: "300", ...kScopeParams(kState.scope) });
   const [items, pairs, queue, hyps, rs, projects, rooms, agents] = await Promise.all([api(`/api/knowledge?${qs}`), api("/api/knowledge/contradictions"), api("/api/knowledge?status=draft,quarantined,rejected&limit=50"), api("/api/hypotheses"), api("/api/knowledge/retrieval").catch(() => null), api("/api/projects").catch(() => []), api("/api/rooms").catch(() => []), api("/api/agents").catch(() => [])]);
   const actions = (i) => [
@@ -100,7 +108,7 @@ async function viewKnowledge() {
     ib("trash", "Delete the item and its links", `data-kdel="${i.id}"`, "sm danger")].join("");
   const kTile = (ic, v, l) => `<div class="card kpi"><span class="kpi-icon">${icon(ic, 18)}</span><div class="value">${v}</div><div class="label">${l}</div></div>`;
   // UI-KN-01: page head and counts; search, filters, review queue, contradictions and the graph follow
-  $("#view").innerHTML = `<div class="page-head"><div class="page-head-text"><h2 class="page-title">Knowledge &amp; Memory</h2><p class="muted page-sub">What the company learned, with its provenance: lessons, experience reports, research and imports. A person approves an item before agents use it.</p></div></div>
+  $("#view").innerHTML = `<div class="page-head"><div class="page-head-text"><h2 class="page-title">Knowledge &amp; Memory</h2><p class="muted page-sub">What the company learned, with its provenance: lessons, experience reports, research and imports. A person approves an item before agents use it.</p></div></div>${kTabs("items")}
     <div class="grid dash-kpis" style="margin-bottom:12px">${kTile("book", items.length, "Items shown")}${kTile("check", items.filter((i) => i.status === "approved").length, "Approved")}${kTile("pause", queue.length, "Waiting for review")}${kTile("emergency", pairs.length, "Contradictions")}${kTile("goals", (hyps || []).length ?? 0, "Hypotheses")}${kTile("research", items.filter((i) => i.kind === "research").length, "From research")}</div>
     <div class="card"><form id="k-search" class="row"><input id="k-q" class="grow" placeholder="Search the text or a technology…" value="${esc(kState.q)}">
       <select id="k-status" style="width:auto">${K_STATUSES.map(([v, l]) => `<option value="${v}" ${kState.status === v ? "selected" : ""}>${l}</option>`).join("")}</select>
@@ -118,6 +126,7 @@ async function viewKnowledge() {
       <div class="card"><h2>Items <span class="muted">${items.length}${items.length >= 300 ? "+" : ""}</span></h2><div class="table-wrap"><table><tr><th>#</th><th>Item</th><th>Status</th><th>Source</th><th></th></tr>
         ${items.map((i) => `<tr><td class="num">K${i.id}${i.version > 1 ? `<div class="muted">v${i.version}</div>` : ""}</td><td>${esc(i.text)}<div class="muted"><span class="pill">${esc(i.kind)}</span> ${esc(i.evidence_class)} · ${esc(i.agent || "?")} · ${ago(i.at)}${(i.technologies || []).length ? " · " + esc(i.technologies.join(", ")) : ""}</div>${i.contradicted_by.length ? `<div class="pill pending" title="an open contradiction">disputed by ${i.contradicted_by.map((c) => "K" + c).join(", ")}</div>` : ""}${kReport(i)}</td>
           <td>${kStatusPill(i.status)}<div class="muted">${esc(i.classification)}</div></td><td class="muted">${(i.sources || []).map(kSource).join("<br>")}</td><td class="nowrap">${actions(i)}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No items match.</td></tr>'}</table></div></div></div>`;
+  kWireTabs();
   $("#k-gform").onsubmit = (e) => { e.preventDefault(); const ent = $("#k-gent").value.trim(); if (ent) kGraph(ent); };
   $("#k-search").onsubmit = (e) => { e.preventDefault(); kState.q = $("#k-q").value.trim(); kState.status = $("#k-status").value; kState.kind = $("#k-kind").value; kState.scope = $("#k-scope").value; viewKnowledge(); };
   ["#k-status", "#k-kind", "#k-scope"].forEach((sel) => ($(sel).onchange = () => $("#k-search").requestSubmit()));
