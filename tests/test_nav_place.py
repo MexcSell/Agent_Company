@@ -37,16 +37,16 @@ def test_future_pages_keep_design_positions():
     registered = [i for g in groups for i in g['items']]
     result = place(groups, defaults, registered)
     assert result == defaults  # Includes consecutive missing pages in their specified order.
-    assert result[0]['items'][:3] == ['dashboard', 'general-manager', 'projects']
-    assert result[0]['items'][4:] == ['teams', 'agents', 'companymap', 'workflows', 'deliverables']
-    assert result[1]['items'][-2:] == ['evaluation', 'models']
-    assert result[2]['items'] == ['evolution', 'organization', 'changes']
+    assert result[0]['items'] == ['dashboard', 'general-manager']
+    assert result[1]['items'] == ['projects', 'goals', 'workflows', 'deliverables']
+    assert result[3]['items'][-2:] == ['evaluation', 'models']
+    assert result[4]['items'] == ['evolution-lab', 'evolution', 'organization', 'changes']
 
 
 def test_missing_predecessors_start_at_zero_and_keep_order():
-    defaults = prefs.nav_default()['groups'][2:3]
+    defaults = prefs.nav_default()['groups'][4:5]
     groups = [{'key': 'evolution', 'title': 'Evolution', 'items': []}]
-    assert place(groups, defaults, ['evolution'])[0]['items'] == ['organization', 'changes']
+    assert place(groups, defaults, ['evolution'])[0]['items'] == ['evolution-lab', 'organization', 'changes']
 
 
 def test_unknown_page_remains_at_its_groups_end():
@@ -58,9 +58,9 @@ def test_unknown_page_remains_at_its_groups_end():
 
 
 def test_hidden_and_registered_pages_are_not_restored():
-    defaults = prefs.nav_default()['groups'][2:3]
+    defaults = prefs.nav_default()['groups'][4:5]
     groups = [{'key': 'evolution', 'title': 'Custom', 'items': ['changes']}]
-    assert place(groups, defaults, ['evolution'], ['organization']) == groups
+    assert place(groups, defaults, ['evolution', 'evolution-lab'], ['organization']) == groups
 
 
 def sidebar(layout, views):
@@ -87,27 +87,28 @@ console.log(JSON.stringify(g.groups.map(x => x.items.map(v => v.id))));
 def test_sidebar_places_new_pages_like_the_editor():
     """navGroups (rendering) and placeNav (saving) agree, also in a group the administrator reordered."""
     layout = prefs.nav_default()
-    layout['groups'][0]['items'] = ['projects', 'dashboard', 'goals', 'agents', 'companymap']
-    layout['groups'][1]['items'] = ['research', 'knowledge', 'performance', 'models']
-    layout['groups'][2]['items'] = ['evolution']
+    layout['groups'][1]['items'] = ['goals', 'projects']
+    layout['groups'][2]['items'] = ['agents', 'swarm', 'companymap']
+    layout['groups'][3]['items'] = ['research', 'knowledge', 'performance', 'models']
+    layout['groups'][4]['items'] = ['evolution']
     views = [i for g in prefs.DEFAULT_NAV_GROUPS for i in g['items']] + ['custom-page']
     groups = sidebar(layout, views)
-    # general-manager follows dashboard (its predecessor), not "before projects" at the top
-    assert groups[0] == ['projects', 'dashboard', 'general-manager', 'goals', 'teams', 'agents', 'companymap',
-                         'workflows', 'deliverables']
-    assert groups[1] == ['research', 'knowledge', 'performance', 'evaluation', 'models']
-    assert groups[2] == ['evolution', 'organization', 'changes']
-    assert groups[3][-1] == 'custom-page'  # an unknown id goes to its group's end (system by default)
+    # a missing page follows its predecessor, not "at the top"
+    assert groups[1] == ['goals', 'workflows', 'deliverables', 'projects']
+    assert groups[2] == ['agents', 'swarm', 'teams', 'companymap']
+    assert groups[3] == ['research', 'knowledge', 'performance', 'evaluation', 'models']
+    assert groups[4] == ['evolution-lab', 'evolution', 'organization', 'changes']
+    assert groups[6][-1] == 'custom-page'  # an unknown id goes to its group's end (observability by default)
     editor = place(layout['groups'], prefs.nav_default()['groups'], [])
-    assert groups[:3] == [g['items'] for g in editor[:3]]
+    assert groups[:5] == [g['items'] for g in editor[:5]]
 
 
 def test_sidebar_without_any_predecessor_starts_at_zero():
     layout = prefs.nav_default()
-    layout['groups'][1]['items'] = ['dashboard']  # every intelligence page moved away, dashboard moved in
-    for group in (layout['groups'][0], layout['groups'][3]):
+    layout['groups'][3]['items'] = ['dashboard']  # every intelligence page moved away, dashboard moved in
+    for group in (layout['groups'][0], layout['groups'][6]):
         group['items'] = [i for i in group['items'] if i not in ('dashboard',)]
-    layout['groups'][3]['items'] += ['research', 'knowledge', 'performance', 'models']
+    layout['groups'][6]['items'] += ['research', 'knowledge', 'performance', 'models']
     groups = sidebar(layout, ['dashboard', 'evaluation', 'research', 'knowledge', 'performance', 'models', 'system'])
-    assert groups[1] == ['evaluation', 'dashboard']
-    assert 'evaluation' not in groups[3]
+    assert groups[3] == ['evaluation', 'dashboard']
+    assert 'evaluation' not in groups[6]

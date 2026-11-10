@@ -33,8 +33,8 @@ def legacy_expected(*hidden):
 def test_roundtrip_and_audit(app):
     layout = prefs.nav_default()
     layout['groups'][0]['title'] = 'Work'
-    layout['groups'][1]['items'].remove('models')
-    layout['groups'][1]['items'].remove('knowledge')
+    layout['groups'][3]['items'].remove('models')  # intelligence
+    layout['groups'][3]['items'].remove('knowledge')
     layout['groups'][-1]['items'] += ['models', 'future-page']
     layout['groups'].reverse()
     layout['hidden'] = ['knowledge', 'settings']
@@ -57,19 +57,20 @@ def test_permissions_and_bad_request(app):
 
 
 def test_limits():
-    value = {'groups': [{'key': 'company', 'title': 'x'*60,
+    value = {'groups': [{'key': 'command', 'title': 'x'*60,
                         'items': ['Bad Id', 'a'*33, 'settings', 'notifications', 'audit', 'users'] +
                                  [f'page-{i}' for i in range(50)]},
-                       {'key': 'system', 'title': '', 'items': ['page-0', 'custom']}],
+                       {'key': 'observability', 'title': '', 'items': ['page-0', 'custom']}],
              'hidden': ['settings', 'custom', 'hidden', 'hidden']}
     result = prefs.normalise_nav(value)
     assert len(result['groups'][0]['items']) == 40
     assert result['groups'][0]['title'] == 'x'*40
-    assert result['groups'][1] == {'key': 'system', 'title': 'System', 'items': ['custom']}
+    assert result['groups'][1] == {'key': 'observability', 'title': 'Observability', 'items': ['custom']}
     assert result['hidden'] == ['hidden']
-    assert [g['key'] for g in result['groups']] == ['company', 'system', 'intelligence', 'evolution']
-    for bad in (None, [], {}, {'groups': None}, {'groups': [{'key': 'unknown'}]},
-                {'groups': [{'key': 'company'}, {'key': 'company'}]}, {'groups': [], 'hidden': None}):
+    assert [g['key'] for g in result['groups']] == ['command', 'observability', 'missions', 'swarm', 'intelligence',
+                                                    'evolution', 'governance']
+    for bad in (None, [], {}, {'groups': None}, {'groups': [{'key': 'unknown'}]}, {'groups': [{'key': 'company'}]},
+                {'groups': [{'key': 'command'}, {'key': 'command'}]}, {'groups': [], 'hidden': None}):
         with pytest.raises(ValueError):
             prefs.normalise_nav(bad)
 
@@ -78,7 +79,7 @@ def test_malformed_values_are_400_and_change_nothing(app):
     saved = prefs.nav_default()
     saved['groups'][0]['title'] = 'Work'
     assert app.put('/api/ui/nav_layout', json={'value': saved}).status_code == 200
-    company = {'key': 'company', 'items': []}
+    company = {'key': 'command', 'items': []}
     bad = [{'groups': [{'key': key, 'items': []}]} for key in ([], {}, 1, None, ['company'], {'company': 1})]
     bad += [{'groups': [{'items': []}]}, {'groups': ['company']}, {'groups': [['company']]}, {'groups': [None]},
             {'groups': [{**company, 'items': 'dashboard'}]}, {'groups': [{**company, 'items': {'dashboard': 1}}]},
@@ -96,7 +97,7 @@ def test_malformed_values_are_400_and_change_nothing(app):
 def test_non_string_entries_are_400_and_change_nothing(app, entry, field):
     saved = prefs.nav_default()
     assert app.put('/api/ui/nav_layout', json={'value': saved}).status_code == 200
-    value = {'groups': [{'key': 'company', 'items': ['projects']}], 'hidden': ['models']}
+    value = {'groups': [{'key': 'command', 'items': ['projects']}], 'hidden': ['models']}
     if field == 'items':
         value['groups'][0]['items'].append(entry)
     else:
@@ -122,18 +123,33 @@ def test_legacy_non_string_entries_are_skipped(app):
     assert app.get('/api/ui/nav_layout').json()['value'] == expected
 
 
-def test_default_groups_follow_ui_d_02():
+def test_default_groups_follow_g5_d_02():
     assert prefs.DEFAULT_NAV_GROUPS == [
-        {'key': 'company', 'title': 'Company', 'items': ['dashboard', 'general-manager', 'projects', 'goals', 'teams',
-                                                         'agents', 'companymap', 'workflows', 'deliverables']},
+        {'key': 'command', 'title': 'Command', 'items': ['dashboard', 'general-manager']},
+        {'key': 'missions', 'title': 'Missions', 'items': ['projects', 'goals', 'workflows', 'deliverables']},
+        {'key': 'swarm', 'title': 'Swarm & Organization', 'items': ['swarm', 'teams', 'agents', 'companymap']},
         {'key': 'intelligence', 'title': 'Intelligence',
          'items': ['research', 'knowledge', 'performance', 'evaluation', 'models']},
-        {'key': 'evolution', 'title': 'Evolution', 'items': ['evolution', 'organization', 'changes']},
-        {'key': 'system', 'title': 'System', 'items': ['workspace', 'machines', 'security', 'system']},
+        {'key': 'evolution', 'title': 'Evolution Lab', 'items': ['evolution-lab', 'evolution', 'organization', 'changes']},
+        {'key': 'governance', 'title': 'Governance', 'items': ['governance', 'security']},
+        {'key': 'observability', 'title': 'Observability', 'items': ['observability', 'system', 'machines', 'workspace']},
     ]
-    assert prefs.VIEW_GROUP['simple'] == 'company'
+    assert prefs.VIEW_GROUP['simple'] == 'command'
     assert 'simple' not in {i for g in prefs.DEFAULT_NAV_GROUPS for i in g['items']}
     assert prefs.nav_default() == {'groups': prefs.DEFAULT_NAV_GROUPS, 'hidden': []}
+
+
+def test_a_layout_saved_with_the_aico_groups_reads_as_the_new_default_keeping_hidden(app):
+    """G5-D-02: the AICO keys (company/system) are no longer valid to save, but a stored one still reads."""
+    with session() as s:
+        s.add(Setting(key='ui:nav_layout', value={'v': {
+            'groups': [{'key': 'company', 'title': 'Work', 'items': ['projects', 'dashboard']},
+                       {'key': 'system', 'title': 'System', 'items': ['system']}], 'hidden': ['models']}}))
+    value = app.get('/api/ui/nav_layout').json()['value']
+    assert value['hidden'] == ['models']
+    assert [g['key'] for g in value['groups']] == [g['key'] for g in prefs.DEFAULT_NAV_GROUPS]
+    assert 'models' not in value['groups'][3]['items']
+    assert app.put('/api/ui/nav_layout', json={'value': {'groups': [{'key': 'company', 'items': []}]}}).status_code == 400
 
 
 def test_app_js_mirror_equals_prefs():

@@ -30,6 +30,7 @@ from agent_company import (
     bridge,
     budgets,
     catalog,
+    command,
     containers,
     dashboard,
     deliverables,
@@ -1107,6 +1108,16 @@ def create_app(start_background: bool = True) -> FastAPI:
         with session() as s:
             seen = _visible_project_ids(s, user)
         return dashboard.report(user, period, seen)
+
+    @app.get("/api/command-center")
+    def command_center(period: str = "24h", user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        """UI-G5-CC: the Command Center's operational metrics, alerts and risks, resource and budget monitor
+        (command.py); the Dashboard's own figures stay at /api/dashboard."""
+        if period not in dashboard.PERIODS:
+            raise HTTPException(400, f"period is one of {', '.join(dashboard.PERIODS)}")
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        return command.center(user, period, seen)
 
     @app.get("/api/deliverables")
     def deliverables_list(project_id: int | None = None, user: dict[str, Any] = Depends(current_user)

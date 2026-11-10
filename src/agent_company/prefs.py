@@ -420,18 +420,22 @@ UI_KEYS = {"nav_layout"}
 
 # UI-D-02 order, including pages added in later phases: the dashboard drops ids without a registered view, and a
 # page registered later takes its place here. static/app.js NAV_DEFAULT mirrors this (tests/test_nav_layout.py).
-DEFAULT_NAV_GROUPS = [
-    {"key": "company", "title": "Company", "items": ["dashboard", "general-manager", "projects", "goals", "teams",
-                                                     "agents", "companymap", "workflows", "deliverables"]},
+DEFAULT_NAV_GROUPS = [  # G5-D-02: the Control Hub's sections (docs/requirements/G5-CONTROL-HUB.md)
+    {"key": "command", "title": "Command", "items": ["dashboard", "general-manager"]},
+    {"key": "missions", "title": "Missions", "items": ["projects", "goals", "workflows", "deliverables"]},
+    {"key": "swarm", "title": "Swarm & Organization", "items": ["swarm", "teams", "agents", "companymap"]},
     {"key": "intelligence", "title": "Intelligence",
      "items": ["research", "knowledge", "performance", "evaluation", "models"]},
-    {"key": "evolution", "title": "Evolution", "items": ["evolution", "organization", "changes"]},
-    {"key": "system", "title": "System", "items": ["workspace", "machines", "security", "system"]},
+    {"key": "evolution", "title": "Evolution Lab", "items": ["evolution-lab", "evolution", "organization", "changes"]},
+    {"key": "governance", "title": "Governance", "items": ["governance", "security"]},
+    {"key": "observability", "title": "Observability", "items": ["observability", "system", "machines", "workspace"]},
 ]
+# group keys of the AICO layout (UI-D-02): a layout saved with them is read like a legacy one (G5-D-02)
+LEGACY_NAV_GROUPS = {"company", "system"}
 NAV_DEFAULT_GROUPS = DEFAULT_NAV_GROUPS
 NAV_TOPBAR = {"notifications", "audit", "settings", "users"}
 VIEW_GROUP = {item: group["key"] for group in DEFAULT_NAV_GROUPS for item in group["items"]}
-VIEW_GROUP["simple"] = "company"
+VIEW_GROUP["simple"] = "command"
 _NAV_ID = re.compile(r"[a-z][a-z0-9-]{0,31}")
 
 
@@ -497,6 +501,9 @@ def get_ui(key: str) -> Any:
         value = (row.value or {}).get("v") if row else None
     if value is None:
         return nav_default()
+    if (isinstance(value, dict) and isinstance(value.get("groups"), list)
+            and any(isinstance(g, dict) and g.get("key") in LEGACY_NAV_GROUPS for g in value["groups"])):
+        value = {"hidden": value.get("hidden", [])}  # saved with the AICO groups: keep what was hidden, new order
     try:
         return normalise_nav(value)
     except ValueError:

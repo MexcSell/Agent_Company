@@ -253,13 +253,16 @@ async function boot() {
 // Keep the legacy top-order export for existing shell consumers. Groups own rendering and persistence.
 // Offline mirror of prefs.DEFAULT_NAV_GROUPS (UI-D-02 order with pages of later phases; ids without a view are dropped),
 // kept equal by tests/test_nav_layout.py.
-const NAV_DEFAULT = { top: ["dashboard", "general-manager", "projects", "goals", "teams", "agents", "companymap", "workflows", "deliverables"], groups: [
-  {key:"company", title:"Company", items:["dashboard","general-manager","projects","goals","teams","agents","companymap","workflows","deliverables"]},
+const NAV_DEFAULT = { top: ["dashboard", "general-manager"], groups: [
+  {key:"command", title:"Command", items:["dashboard","general-manager"]},
+  {key:"missions", title:"Missions", items:["projects","goals","workflows","deliverables"]},
+  {key:"swarm", title:"Swarm & Organization", items:["swarm","teams","agents","companymap"]},
   {key:"intelligence", title:"Intelligence", items:["research","knowledge","performance","evaluation","models"]},
-  {key:"evolution", title:"Evolution", items:["evolution","organization","changes"]},
-  {key:"system", title:"System", items:["workspace","machines","security","system"]}], hidden:[] };
+  {key:"evolution", title:"Evolution Lab", items:["evolution-lab","evolution","organization","changes"]},
+  {key:"governance", title:"Governance", items:["governance","security"]},
+  {key:"observability", title:"Observability", items:["observability","system","machines","workspace"]}], hidden:[] };
 const TOPBAR = ["notifications", "audit", "settings", "users"];
-const VIEW_GROUP = Object.assign(Object.fromEntries(NAV_DEFAULT.groups.flatMap(g => g.items.map(id => [id,g.key]))), {simple:"company"});
+const VIEW_GROUP = Object.assign(Object.fromEntries(NAV_DEFAULT.groups.flatMap(g => g.items.map(id => [id,g.key]))), {simple:"command"});
 let navLayout = null, navDefault = NAV_DEFAULT, railEditing = false, lastOverview = null;
 function navGroups() {
   const lay = navLayout?.groups ? navLayout : navDefault;
@@ -270,7 +273,7 @@ function navGroups() {
   const saved = new Set([...groups.flatMap(g => g.items), ...lay.hidden]);
   vis.forEach(v => {
     if (saved.has(v.id)) return;
-    (groups.find(g => g.key === (v.group || VIEW_GROUP[v.id] || "system")) || groups.at(-1)).items.push(v.id);
+    (groups.find(g => g.key === (v.group || VIEW_GROUP[v.id] || "observability")) || groups.at(-1)).items.push(v.id);
   });
   return {groups:groups.map(g => ({...g,items:g.items.filter(id => by[id] && !lay.hidden.includes(id)).map(id => by[id])})), hidden:lay.hidden.filter(id => by[id]).map(id => by[id])};
 }
@@ -544,7 +547,7 @@ window.setCrumbs = function setCrumbs(items) {
   if (root.dataset.key === key) return;  // a live redraw sets the same trail: keep the links in place
   root.dataset.key = key;
   const title = document.createElement("h1");
-  title.id = "view-title"; title.textContent = VIEWS.find(v => v.id === current)?.title || "Dashboard";
+  title.id = "view-title"; title.textContent = VIEWS.find(v => v.id === current)?.title || "Command Center";
   const first = document.createElement("li");
   if (items.length) { const a = document.createElement("a"); a.href = "#/" + current; a.append(title); first.append(a); }
   else { first.append(title); first.setAttribute("aria-current", "page"); }
@@ -654,6 +657,7 @@ function goalModal(id) {
     if (selectedGoal === id && $("#goal-detail")) $("#goal-detail").innerHTML = `<p class="muted">${esc(e.message)}</p>`;
   });
 }
+let goalFocus = false;  // the Command Center's "New mission" opens Missions with the form focused
 const GOAL_FILTERS = { all: "All", active: "Active", awaiting_approval: "Awaiting approval", approved: "Merged",
   failed: "Failed", cancelled: "Cancelled" };
 async function viewGoals(quiet) {
@@ -682,6 +686,7 @@ async function viewGoals(quiet) {
     };
     $("#goal-filter").onchange = (e) => { goalFilter = e.target.value; viewGoals(true); };
   }
+  if (goalFocus) { goalFocus = false; $("#g-title")?.focus(); }
   const shown = goals.filter((g) => goalFilter === "all" || (goalFilter === "active" ? GOAL_ACTIVE.includes(g.status) : g.status === goalFilter));
   $("#goal-list").innerHTML = shown.map((g) => `<div class="list-item" data-id="${Number(g.id)}"><div class="row"><strong class="grow">${esc(g.title)}</strong>${pill(g.status)}</div><div class="muted">#${Number(g.id)}${g.kind ? ` · ${esc(g.kind)}` : ""} · ${esc(g.origin || "user")} · iteration ${Number(g.iteration)}/${Number(g.max_iterations)} · ${ago(g.updated_at)}</div></div>`).join("")
     || `<p class="muted">${goals.length ? "No goal with this status." : "No goals yet."}</p>`;
@@ -1016,7 +1021,7 @@ function setFavicon(o) {
   document.title = parts.length ? `(${parts.join(" · ")}) ${COMPANY.name}` : COMPANY.name;
 }
 
-registerView({ id: "goals", title: "Goals", icon: "goals" }, viewGoals);
+registerView({ id: "goals", title: "Missions", icon: "goals" }, viewGoals);
 registerView({ id: "research", title: "Research", icon: "research" }, viewResearch);
 registerView({ id: "users", title: "Users", icon: "users", admin: true }, viewUsers);
 
