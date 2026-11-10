@@ -652,7 +652,7 @@ function goalModal(id) {
   selectedGoal = id;
   writeHash("#/goals/" + id);
   modal(`<div id="goal-detail"><div class="cc-working"><span class="spin"></span> Loading goal #${Number(id)}…</div></div>`);
-  setCrumbs([...pageCrumbs, {label: "Goal #" + id}]);
+  setCrumbs([...pageCrumbs, {label: "Mission #" + id}]);
   goalDetail(id).catch((e) => {
     if (selectedGoal === id && $("#goal-detail")) $("#goal-detail").innerHTML = `<p class="muted">${esc(e.message)}</p>`;
   });

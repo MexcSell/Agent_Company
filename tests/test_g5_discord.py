@@ -191,3 +191,19 @@ def test_topics_are_a_marked_keyword_rule():
     assert discord.topic("Traceback: CUDA error") == "errors and troubleshooting"
     assert discord.topic("anyone running a validator?") in ("miner strategy", "question")
     assert discord.topic("hello") == "discussion"
+
+
+def test_purge_removes_the_messages_with_their_earlier_versions(fake):
+    from agent_company.db import DocumentVersion
+
+    c = client(ADMIN)
+    cid = connect(c)["id"]
+    c.post(f"/api/discord/{cid}/sync")
+    with session() as s:
+        doc = s.scalars(select(Document).where(Document.source_url.like(f"discord://{cid}/%"))).first()
+        s.add(DocumentVersion(document_id=doc.id, version=1, title="old", text="old", content_hash="x"))
+    out = c.delete(f"/api/discord/{cid}?purge=true").json()
+    assert out["documents_removed"] == 4
+    with session() as s:
+        assert not s.scalars(select(Document).where(Document.source_url.like(f"discord://{cid}/%"))).all()
+        assert s.get(DiscordConnector, cid) is None

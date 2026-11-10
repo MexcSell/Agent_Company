@@ -103,7 +103,7 @@ const CC_ALERT_ICON = { stop: "shield", incident: "shield", agent: "agents", mod
 
 async function viewDashboard(quiet) {
   const [o, d, ev, q, c] = await Promise.all([api("/api/overview"), api(`/api/dashboard?period=${dashPeriod}`), api("/api/events"),
-    api("/api/approvals").catch(() => ({ items: [], total: 0 })), api(`/api/command-center?period=${dashPeriod}`)]);
+    api("/api/approvals").catch(() => ({ items: [], total: 0 })), api(`/api/command-center?period=${dashPeriod}`).catch(() => null)]);
   const view = $("#view");
   if (!quiet || !$("#dash")) {
     view.innerHTML = `<div id="dash" class="dash">
@@ -163,7 +163,11 @@ async function viewDashboard(quiet) {
   dashFill("dash-status", `<span class="badge ${tone}">● ${state}</span>`);
   applyStatus?.(o);
   const g = o.goals || {}, live = (g.running || 0) + (g.planning || 0) + (g.recovering || 0);
-  // UI-G5-CC-01: the six Command Center KPIs
+  // UI-G5-CC-01: the six Command Center KPIs (without /api/command-center the AICO figures still show)
+  if (!c) {
+    dashFill("dash-kpis", dashKpi("goals", (g.running || 0) + (g.planning || 0), "Active missions", "#/goals") + dashKpi("check", q.total, "Pending approvals", "#/governance"));
+    ["cc-metrics", "cc-alerts", "cc-budget"].forEach((id) => dashFill(id, `<p class="muted dash-meta">Not available right now.</p>`));
+  } else {
   const m = c.metrics, pm = c.previous, sr = m.mission_success_rate, util = m.agent_utilisation, bd = c.budget;
   const warns = c.alerts.length - c.critical;
   dashFill("dash-kpis", [
@@ -179,6 +183,7 @@ async function viewDashboard(quiet) {
   dashFill("cc-alerts", c.alerts.length ? `<div class="dash-list">${c.alerts.slice(0, 8).map((a) => `<a class="dash-appr cc-alert" href="${esc(a.link)}"><span class="kpi-icon cc-${a.level}">${icon(CC_ALERT_ICON[a.kind] || "bolt", 16)}</span><div class="grow" style="min-width:0"><div class="ellipsis-2">${esc(a.title)}</div><div class="muted dash-meta">${esc(a.level)} · ${esc(a.kind)}${a.at ? " · " + ago(a.at) : ""}</div></div></a>`).join("")}${c.alerts.length > 8 ? `<p class="muted dash-meta">and ${c.alerts.length - 8} more</p>` : ""}</div>`
     : `<div class="empty"><p class="empty-title">No alert</p><p class="muted">No stop, incident, degraded agent, limited model, blocker or failed mission.</p></div>`);
   dashFill("cc-budget", ccBudget(bd));
+  }
   // General Manager card (UI-DASH-03)
   const gm = d.general_manager;
   dashFill("dash-gm-state", gm ? `<span class="badge ${gm.health === "degraded" ? "warn" : gm.status === "busy" ? "info" : "ok"}">● ${gm.health === "degraded" ? "Degraded" : gm.status === "busy" ? "Working" : "Online"}</span>` : "");

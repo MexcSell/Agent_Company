@@ -203,7 +203,7 @@ def delete(cid: int, purge: bool = False) -> dict[str, Any]:
         if c is None:
             raise KeyError(cid)
         removed = 0
-        if purge:
+        if purge:  # document_versions go with their document (ON DELETE CASCADE)
             for d in s.scalars(select(Document).where(Document.source_url.like(f"discord://{cid}/%"))):
                 s.delete(d)
                 removed += 1
