@@ -298,7 +298,7 @@ function renderRail() {
   rail.classList.add("sidebar");
   rail.innerHTML = `<div class="sb-brand"><span class="sb-logo">${icon("network", 20)}</span><div class="sb-brand-text"><strong>${esc(COMPANY.name)}</strong><span title="Autonomous Engineering Organization">Autonomous Engineering Org.</span></div><button class="sb-collapse" id="sb-collapse" aria-label="Toggle sidebar" title="Collapse or expand the sidebar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button></div><div class="sb-groups">${groupedMarkup(g)}${railEditing ? `<section class="sb-group"><h3>Hidden</h3><div class="sb-items" data-group="hidden">${g.hidden.map(railButton).join("")}</div></section>` : ""}</div>
     ${me.is_admin ? `<button class="rail-edit" id="rail-edit" title="Edit navigation">${icon(railEditing ? "check" : "grip",18)}</button>` : ""}${sidebarDetails()}
-    <div class="sb-bottom">${(g.groups[0]?.items || []).slice(0,4).map(railButton).join("")}<button id="sb-more">More</button></div>`;
+    <div class="sb-bottom">${g.groups.flatMap(x => x.items).slice(0,4).map(railButton).join("")}<button id="sb-more">More</button></div>`;
   wireSidebar(rail);
   $("#sb-collapse").onclick = () => { store.set("ac.sidebar", $("#app").dataset.labels === "1" ? "collapsed" : "expanded"); applyLayout(); };
   $("#rail-edit") && ($("#rail-edit").onclick = async () => { const lay = railEditing ? readNav(rail) : null; railEditing = !railEditing; if (lay) await saveNav(lay); else renderRail(); applyLayout(); });
