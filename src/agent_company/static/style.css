@@ -894,6 +894,12 @@ a.kpi:focus-visible, button.kpi:focus-visible, .kpi.clickable:focus-visible { ou
 .ag-card .avatar { width: 34px; height: 34px; flex: none; }
 
 /* ---------- Workflows (AICO UI-WF, workflows.js): execution graph per goal ---------- */
+/* G5 Evolution Lab lifecycle (UI-G5-EV-03): the stepper with a count and a bar per step */
+.lab-steps > li { padding-bottom: var(--space-1); }
+.lab-step-n { font-size: 20px; color: var(--text); font-variant-numeric: tabular-nums; }
+.lab-step-bar { display: block; width: 70%; height: 4px; border-radius: 999px; background: var(--color-elevated); overflow: hidden; }
+.lab-step-bar > span { display: block; height: 100%; background: var(--accent); }
+.dash h4 { margin: var(--space-3) 0 var(--space-1); font-size: var(--fs-meta); color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
 /* G5 Swarm Control (UI-G5-SW): the workflow graph's nodes and edges, four columns per mission */
 .sw-mission { margin-top: var(--space-3); }
 .sw-mission .card-head h3 a { color: inherit; text-decoration: none; }

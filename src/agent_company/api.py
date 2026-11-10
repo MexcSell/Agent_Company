@@ -43,6 +43,7 @@ from agent_company import (
     githooks,
     gitsync,
     governance,
+    hub,
     hypotheses,
     kgraph,
     kpis,
@@ -1128,6 +1129,29 @@ def create_app(start_background: bool = True) -> FastAPI:
         with session() as s:
             seen = _visible_project_ids(s, user)
         return swarm.topology(user, seen, recent, goal_id)
+
+    @app.get("/api/evolution-lab")
+    def evolution_lab(period: str = "30d", _: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        """UI-G5-EV: the Evolution Lab's eight questions, the lifecycle counts and the capability table (hub.py)."""
+        if period not in hub.LAB_PERIODS:
+            raise HTTPException(400, f"period is one of {', '.join(hub.LAB_PERIODS)}")
+        return hub.evolution_lab(period)
+
+    @app.get("/api/governance")
+    def governance_overview(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        """UI-G5-GV: autonomy matrix from the live settings, agents per autonomy level, the approval queue with
+        costs, budgets and the ten safety mechanisms with their state (hub.py)."""
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        return hub.governance_overview(user, seen)
+
+    @app.get("/api/observability")
+    def observability(period: str = "24h", _: dict[str, Any] = Depends(admin_user)) -> dict[str, Any]:
+        """UI-G5-OB: sandboxes, tool calls, MCP servers, models and tokens, network and the host (hub.py),
+        administrators."""
+        if period not in dashboard.PERIODS:
+            raise HTTPException(400, f"period is one of {', '.join(dashboard.PERIODS)}")
+        return hub.observability(period)
 
     @app.get("/api/deliverables")
     def deliverables_list(project_id: int | None = None, user: dict[str, Any] = Depends(current_user)
