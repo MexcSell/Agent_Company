@@ -894,6 +894,22 @@ a.kpi:focus-visible, button.kpi:focus-visible, .kpi.clickable:focus-visible { ou
 .ag-card .avatar { width: 34px; height: 34px; flex: none; }
 
 /* ---------- Workflows (AICO UI-WF, workflows.js): execution graph per goal ---------- */
+/* G5 Swarm Control (UI-G5-SW): the workflow graph's nodes and edges, four columns per mission */
+.sw-mission { margin-top: var(--space-3); }
+.sw-mission .card-head h3 a { color: inherit; text-decoration: none; }
+.sw-meta { margin-bottom: var(--space-2); }
+.sw-approvals { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-bottom: var(--space-2); }
+.sw-approvals .badge { text-decoration: none; }
+.sw-legend { margin: var(--space-3) 0 0; display: flex; flex-wrap: wrap; gap: var(--space-1); align-items: center; }
+.sw-node strong { font-size: var(--fs-body); }
+.sw-iso { flex: 0 0 auto; font-size: 10px; padding: 0 6px; }
+.sw-fail { color: var(--bad); }
+.sw-dep { stroke-dasharray: 4 3; }
+.sw-arrow { fill: var(--muted); }
+.wf-dot.sw-live { animation: sw-pulse 1.4s ease-in-out infinite; }
+@keyframes sw-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .wf-dot.sw-live { animation: none; } }
+.sw-toggle { gap: var(--space-1); font-size: var(--fs-meta); color: var(--muted); }
 .wf-legend { display: inline-flex; flex-wrap: wrap; gap: var(--space-1); }
 .wf-goal { margin-bottom: var(--space-3); }
 .wf-goal-head { gap: var(--space-2); cursor: pointer; }

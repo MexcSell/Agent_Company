@@ -70,6 +70,7 @@ from agent_company import (
     router,
     selfevolve,
     strategies,
+    swarm,
     teams,
     terminal,
     training,
@@ -1118,6 +1119,15 @@ def create_app(start_background: bool = True) -> FastAPI:
         with session() as s:
             seen = _visible_project_ids(s, user)
         return command.center(user, period, seen)
+
+    @app.get("/api/swarm")
+    def swarm_topology(recent: int = 0, goal_id: int | None = None, user: dict[str, Any] = Depends(current_user)
+                       ) -> dict[str, Any]:
+        """UI-G5-SW: Swarm Control's topology Mission -> Team -> Agent -> Task of the live missions (and the
+        `recent` last finished ones, at most 20), or of one mission; only projects the user may see (swarm.py)."""
+        with session() as s:
+            seen = _visible_project_ids(s, user)
+        return swarm.topology(user, seen, recent, goal_id)
 
     @app.get("/api/deliverables")
     def deliverables_list(project_id: int | None = None, user: dict[str, Any] = Depends(current_user)
