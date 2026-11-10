@@ -152,7 +152,18 @@ feature came from.
   `approvals.py` (AICO UI-APPR-01: one queue of what waits for a person, `GET /api/approvals`; the list decides only
   decisions and follow-up proposals, the rest open their page) + `dashboard.py` (UI-DASH: `GET /api/dashboard?period=`
   counted figures with the period before, project phase `phase` derived per UI-D-06, live goals, token share, room
-  accept rates, finished goals; `static/dashboard.js`); `static/gm.js` (UI-GM: the General Manager page, conversations |
+  accept rates, finished goals; `static/dashboard.js`); G5 Control Hub (docs/requirements/G5-CONTROL-HUB.md: the
+  sidebar's sections Command, Missions, Swarm & Organization, Intelligence, Evolution Lab, Governance, Observability,
+  `prefs.DEFAULT_NAV_GROUPS`; a layout saved with the AICO group keys reads as the new default): `command.py`
+  (`GET /api/command-center`: the nine operational metrics with n and basis, alerts & risks, budget monitor; the
+  Dashboard is the Command Center), `swarm.py` (`GET /api/swarm`: Mission → Team (room) → Agent → Task from tasks,
+  runs, live processes and the approval queue, never simulated; `static/swarm.js`), `hub.py` (`/api/evolution-lab`,
+  `/api/governance` autonomy matrix L1/L2/L3 from the live settings, `/api/observability` admin-only;
+  `mission_contract` = the goal response's `contract`; `static/hub.js`), the Missions form Basic/Advanced
+  (`POST /api/goals` also takes deliverable, deadline, budget_usd, budget_tokens, max_active_agents, project_id),
+  `discord.py` (Knowledge → External sources, `static/sources.js`: bot token encrypted, pinned GETs to discord.com,
+  states only as Discord answered, `agent_access` none|research|all applied by `research.search(audience=)`, syncs
+  from the ScheduleThread, failed syncs are `source_sync` events and alerts); `static/gm.js` (UI-GM: the General Manager page, conversations |
   `projectMain` | context cards from stored records; setting `require_plan_approval` (company or a project's stricter
   rule) pauses a goal after planning with `paused_for="plan"`: `loop.approve_plan` / `loop.revise_plan`; the plan's optional `questions` pause it with
   `paused_for="clarification"` until `loop.answer_questions`, one round per goal); `static/projtabs.js`

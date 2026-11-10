@@ -57,8 +57,10 @@ requirements here — the same stance as AICO-UI's UI-D-01.
   `recruit_requires_approval`, `sandbox`, `dependency_audit`, `task_critic`, `qualify_recruits`), the agents'
   G0–G4 autonomy and the hard rules (merging, new tool permissions, security boundaries always a person).
 - **G5-D-06 Read-only overview endpoints, no new state except the Discord connector.** Command Center, Swarm
-  Control, Evolution Lab, Governance and Observability are new GET endpoints composing existing tables; actions
-  link to the pages that already perform them (and their permission checks and audit).
+  Control, Evolution Lab, Governance and Observability are new GET endpoints composing existing tables (`command.py`,
+  `swarm.py`, `hub.py`); actions link to the pages that already perform them (and their permission checks and audit).
+  The only new table is `discord_connectors`; the goal API gains optional fields and the goal response a `contract`
+  key, no existing response shape changes.
 - **G5-D-07 Discord is a research source kind.** Knowledge → External sources lists every source; Discord is added
   as a connector with its own encrypted bot token, pinned connections to discord.com, and an explicit access state.
 
@@ -98,8 +100,8 @@ requirements here — the same stance as AICO-UI's UI-D-01.
   improved (certified learning plans), new skills (catalog skills added), knowledge acquired (approved items),
   experiments passed/failed, improvements awaiting approval (definition candidates, experiments in review,
   improvement contracts, org proposals), versions deployed (definition versions, applied experiments, deployed
-  contracts), is the ecosystem performing better (gate pass rate and cost per accepted mission, this period vs the
-  one before). `done` — `evolution_lab.py`, `evolution.js`.
+  contracts), is the ecosystem performing better (mission success, task completion and cost per successful mission,
+  this period vs the one before, judged only with 3+ samples on each side). `done` — `hub.evolution_lab`, `hub.js`.
 - **UI-G5-EV-02** capability table: each required skill of active projects → Available / Weak / Missing →
   Reuse / Improve / Develop / Acquire, from verified proficiency (`recruitment.capability_gap`). `done`.
 - **UI-G5-EV-03** the evolution lifecycle Observe → Diagnose → Propose → Experiment → Validate → Release with the
@@ -108,7 +110,7 @@ requirements here — the same stance as AICO-UI's UI-D-01.
 ## 4. Governance (UI-G5-GV)
 
 - **UI-G5-GV-01** autonomy matrix: the activities of link 6af191fa §8 with Autonomous?/Approval computed from the
-  live settings (G5-D-05) and a badge per level. `done` — `governance_view.py`, `governance.js`.
+  live settings (G5-D-05) and a badge per level. `done` — `hub.autonomy_matrix`, `hub.js`.
 - **UI-G5-GV-02** agents per autonomy level G0–G4 and per room; agents with network or shell permission. `done`.
 - **UI-G5-GV-03** approval queue with action, target, evidence link, expected cost and age. `done` (from
   `approvals.queue`).
@@ -120,7 +122,7 @@ requirements here — the same stance as AICO-UI's UI-D-01.
 ## 5. Observability (UI-G5-OB)
 
 - **UI-G5-OB-01** sandboxes: live processes with their goal and isolation, worktrees in use, sandbox setting and
-  bubblewrap availability. `done` — `observability.py`, `observability.js`.
+  bubblewrap availability. `done` — `hub.observability`, `hub.js` (administrators).
 - **UI-G5-OB-02** tools: tool calls in the period, failure rate, the most used tools, MCP servers and their state.
   `done`.
 - **UI-G5-OB-03** resources: CPU load, memory, disk; model and token consumption per model in the period. `done`.
@@ -130,10 +132,10 @@ requirements here — the same stance as AICO-UI's UI-D-01.
 
 - **UI-G5-MI-01** Mission form, Basic mode (default): objective, deadline, budget, expected deliverable; the GM
   plans, staffs and validates. Advanced mode: kind, checks, allowed paths, permits, iterations, tokens, agents at
-  once, sandbox, URLs. `done` — `app.js` goal form.
+  once, cost estimate, URLs. `done` — `app.js` mission form (mode per browser).
 - **UI-G5-MI-02** mission contract card on the mission page: objective, deliverables, deadline, budget (spent /
   limit), constraints, success criteria (checks + acceptance), required capabilities (roles), risk, approval
-  requirements, status. `done`.
+  requirements, status. `done` — `hub.mission_contract`, the goal window.
 
 ## 7. External sources (UI-G5-KN)
 
@@ -143,8 +145,15 @@ requirements here — the same stance as AICO-UI's UI-D-01.
   count, errors, sync history; imported messages become research documents (server, channel, thread, message and
   author ids, timestamp, attachments, link, parent) and are searchable; an explicit state when the bot lacks access
   (`no_access`, `missing_intent`, `invalid_token`), never a pretended success; sync failures appear in the Command
-  Center's alerts; unverified community content is marked as such. `done` — `discord.py`.
+  Center's alerts; unverified community content is marked as such; who may read it is the source's `agent_access`
+  (none by default, research, all). `done` — `discord.py`, `sources.js`. Realtime (Gateway) sync is not built:
+  syncs are incremental on an interval (5 min at the shortest). Slack and Telegram connectors are not built.
 
 ## Status
 
-Delivered 2026-11-10 in one branch (`g5-hub`), one commit per phase, tests in `tests/test_g5_*.py`.
+Delivered 2026-11-10 in one branch (`g5-hub`), one commit per phase (P1 navigation + Command Center, P2 Swarm
+Control, P3 Evolution Lab + Governance + Observability, P4 Missions, P5 External sources), tests in
+`tests/test_g5_*.py`, screenshots checked on a scratch server in the dark theme at 1440 px.
+
+Not built (no source asks for them as requirements, or they are AXoR's): Mining HQ, the AXoR name, Temporal/NATS/
+PostgreSQL/React, Kubernetes, a Discord Gateway listener, Slack/Telegram connectors, Generation 6/7 federation.
