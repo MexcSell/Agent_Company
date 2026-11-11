@@ -6,6 +6,9 @@ Source: the code of 2026-11-05 (HEAD `ed1d51d` plus the working tree; the checks
 — either by copying this repository and following [§2](#2-reproduce-on-another-computer), or by
 rebuilding it from the requirements below.
 
+**Renamed 2026-11-11:** the page is labelled **Developer** in the dashboard; every id, path, key and
+API below keeps the name `workspace`. User guide: [../developer.md](../developer.md).
+
 **What "the Workspace" is.** The dashboard's home page (`registerView({id: "workspace"}, …, 0)`; the
 default view when `ac.view` is unset), admin-only, laid out like an editor:
 

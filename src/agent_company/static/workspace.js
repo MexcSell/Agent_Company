@@ -1,5 +1,6 @@
 "use strict";
-// Workspace - the administrators' home page, laid out like an editor with Claude Code:
+// Developer (view id "workspace", formerly labelled Workspace; docs/developer.md) - the administrators' home page,
+// laid out like an editor with Claude Code:
 // explorer (left) | file viewer over terminal (centre) | Claude Code (right).
 // The DOM is built once and re-attached when the view is shown again, so terminals,
 // open files and the conversation survive switching views and live refreshes.
@@ -751,7 +752,7 @@ window.WSP = window.WSP || {};
     else S.el.querySelector(".we-welcome")?.remove();
   }
   function welcome() {
-    return `<div class="we-welcome"><div class="we-logo">${icon("files", 44)}</div><h2>Workspace</h2>
+    return `<div class="we-welcome"><div class="we-logo">${icon("files", 44)}</div><h2>Developer</h2>
       <ul class="muted"><li>Click a file in the explorer to view it: code, Markdown, PDF, Word, images, CSV, JSON…</li>
       <li>Drag files or folders from your computer onto the explorer to upload them</li><li>Right-click for copy, move, rename, compress, download, extract…</li>
       <li>Drop explorer items onto the terminal or the Claude box to insert their paths</li>
@@ -808,5 +809,5 @@ window.WSP = window.WSP || {};
     });
   }
 
-  registerView({ id: "workspace", title: "Workspace", icon: "workspace", admin: true }, (q) => viewWorkspace(q, false), 0);
+  registerView({ id: "workspace", title: "Developer", icon: "workspace", admin: true }, (q) => viewWorkspace(q, false), 0);
 })();

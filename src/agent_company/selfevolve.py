@@ -87,7 +87,7 @@ COMPONENTS: dict[str, dict[str, Any]] = {
                              "deploy/*"]},
     "data": {"label": "Database and migrations", "protected": True, "paths": [f"{PKG}/db.py", f"{PKG}/prefs.py",
                                                                               f"{PKG}/config.py"]},
-    "host": {"label": "Host tools (Workspace, containers, machines)", "protected": True,
+    "host": {"label": "Host tools (Developer page, containers, machines)", "protected": True,
              "paths": [f"{PKG}/workspace.py", f"{PKG}/terminal.py", f"{PKG}/containers.py", f"{PKG}/machines.py",
                        f"{PKG}/files.py"]},
 }

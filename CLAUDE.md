@@ -207,7 +207,8 @@ feature came from.
   in the task prompt); `hooks.py` (TaskCreated,
   TaskCompleted, TeammateIdle → `data/logs/team-hooks.jsonl`, fail-open);
   `auth.py` (device sign-in, permissions); `transport.py` (HTTPS/HTTP via nginx, own CA, sealed cookie); `terminal.py` (Workspace PTY shells) + `workspace.py`
-  (Workspace Claude Code panel: a tab per conversation of this browser session (new ones on the far right; earlier ones
+  (the Workspace is labelled **Developer** in the dashboard, ids/paths/keys stay `workspace`, guide `docs/developer.md`;
+  Workspace Claude Code panel: a tab per conversation of this browser session (new ones on the far right; earlier ones
   only in the sessions window, opened at their end), titled by Haiku; a model menu (the CLI's aliases + the Models page's `claude_code`/`codex`
   models, `router_model`: their id, sign-in and base URL; the transcript follows a conversation to another sign-in and
   back; `/status`, `/tasks`, `/agents` follow a chosen model's own sign-in: `model_home`) and effort, per prompt, also in a project's GM panel (default: the GM's model); each turn's prompt is a one-line
